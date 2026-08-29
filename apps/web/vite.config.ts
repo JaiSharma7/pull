@@ -31,6 +31,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}'],
+    environment: 'node',
     exclude: ['**/node_modules/**', '**/dist/**'],
     passWithNoTests: true,
   },

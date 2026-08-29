@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Enough, PullCard } from '@wap/ui';
 import { Interrupt, type InterruptAnswer } from '../components/Interrupt.js';
 import * as api from '../lib/api.js';
+import {
+  cachePulls,
+  drainPending,
+  onReconnect,
+  queueMutation,
+  readCachedPulls,
+} from '../lib/offline.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { speak } from '../lib/speech.js';
 import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
@@ -37,6 +44,7 @@ export function Feed({ userId }: { userId: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
   const seenRef = useRef<Set<string>>(new Set());
@@ -50,8 +58,29 @@ export function Feed({ userId }: { userId: string | null }) {
         cardsBefore: session.cardsSeen,
         usedBudget: session.interruptsShown,
       })
-      .then((f) => !cancelled && setFeed(f))
-      .catch((e: unknown) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .then((f) => {
+        if (cancelled) return;
+        setFeed(f);
+        void cachePulls(f.rows);
+      })
+      .catch(async (e: unknown) => {
+        if (cancelled) return;
+        // Offline reading is free and unlimited, so a dropped connection falls
+        // back to what is cached rather than showing an error.
+        const cached = await readCachedPulls();
+        if (cached.length > 0) {
+          setFeed({
+            rows: cached,
+            skippedKnownCount: 0,
+            minutesSaved: 0,
+            interleaveSlots: [],
+            page: 0,
+          });
+          setOffline(true);
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -63,6 +92,19 @@ export function Feed({ userId }: { userId: string | null }) {
       .fetchSavedPullIds(userId)
       .then(setSaved)
       .catch(() => undefined);
+  }, [userId]);
+
+  // Writes made while disconnected replay in order once the connection returns.
+  useEffect(() => {
+    if (!userId) return;
+    return onReconnect(() => {
+      setOffline(false);
+      void drainPending(async ({ kind, pullId }) => {
+        if (kind === 'save') await api.savePull(pullId, userId);
+        else if (kind === 'unsave') await api.unsavePull(pullId, userId);
+        else await api.recordRead(pullId, 0, 0);
+      });
+    });
   }, [userId]);
 
   const items = useMemo(() => (feed ? weave(feed.rows, feed.interleaveSlots) : []), [feed]);
@@ -78,7 +120,9 @@ export function Feed({ userId }: { userId: string | null }) {
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
       } catch {
-        setSaved(saved); // roll back on failure
+        // The write failed, but the reader's intent should survive a tunnel:
+        // keep the optimistic state and replay it on reconnect.
+        await queueMutation(wasSaved ? 'unsave' : 'save', row.id);
       }
     },
     [saved, userId],
@@ -141,6 +185,12 @@ export function Feed({ userId }: { userId: string | null }) {
 
   return (
     <div className="stack" style={{ '--stack-gap': 'var(--space-6)' } as React.CSSProperties}>
+      {offline && (
+        <p className="meta" role="status">
+          Offline — reading from your downloaded copies.
+        </p>
+      )}
+
       {feed.skippedKnownCount > 0 && (
         <p className="meta" data-testid="delta-banner">
           Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
