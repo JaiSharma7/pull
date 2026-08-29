@@ -13,6 +13,7 @@ import {
 } from '../lib/offline.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { speak } from '../lib/speech.js';
+import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
 
@@ -263,7 +264,7 @@ export function Feed({ userId }: { userId: string | null }) {
       if (answer?.stance) {
         const stance = answer.stance;
         const mutationId = crypto.randomUUID();
-        const submittedAt = Date.now();
+        const submittedAt = nextSubmissionStamp();
         writes.push(
           // Nothing to clean up on success. Ordering is the server's: it
           // declines a stance older than the one on record, so a retry that
