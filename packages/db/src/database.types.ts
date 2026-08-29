@@ -10,11 +10,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   public: {
     Tables: {
       artworks: {
@@ -1716,6 +1711,7 @@ export type Database = {
       get_feed: {
         Args: {
           p_cards_before?: number
+          p_last_placed?: number
           p_limit?: number
           p_page?: number
           p_seed?: number
@@ -1750,6 +1746,7 @@ export type Database = {
       plan_interleave: {
         Args: {
           p_cards_before?: number
+          p_last_placed?: number
           p_page: number
           p_page_size: number
           p_seed: number
@@ -2038,4 +2035,6 @@ export const Constants = {
     },
   },
 } as const
+
+
 

@@ -40,9 +40,16 @@ describe('planInterleave — parity with SQL', () => {
   // SQL is authoritative. These fixtures came from the database itself, so a
   // divergence here means the mirror drifted, not that the fixtures are wrong.
   it.each(fixtures.cases)(
-    'seed $seed page $page (before=$cardsBefore used=$usedBudget)',
-    ({ seed, page, pageSize, cardsBefore, usedBudget, expected }) => {
-      const actual = planInterleave({ seed, page, pageSize, cardsBefore, usedBudget });
+    'seed $seed page $page (before=$cardsBefore used=$usedBudget last=$lastPlaced)',
+    ({ seed, page, pageSize, cardsBefore, usedBudget, lastPlaced, expected }) => {
+      const actual = planInterleave({
+        seed,
+        page,
+        pageSize,
+        cardsBefore,
+        usedBudget,
+        lastPlaced,
+      });
       expect(actual).toEqual(expected as InterleaveSlot[]);
     },
   );
@@ -91,6 +98,40 @@ describe('planInterleave — the guarantees that make randomness tolerable', () 
     expect(share('say_it_back')).toBeCloseTo(CFG.weightSayItBack / 100, 1);
     expect(share('conviction')).toBeCloseTo(CFG.weightConviction / 100, 1);
     expect(share('delta_probe')).toBeCloseTo(CFG.weightDeltaProbe / 100, 1);
+  });
+
+  it('holds the minimum gap across a page boundary', () => {
+    // Found by review: without carrying the previous placement, an interrupt on
+    // the last card of one page left slot 0 of the next immediately eligible —
+    // an observed gap of 1 against a configured minimum of 4. Single-page tests
+    // could not see it.
+    const PAGE = 20;
+    let violations = 0;
+    let checked = 0;
+
+    for (let seed = 0; seed < 3000; seed++) {
+      const first = planInterleave({ seed, page: 0, pageSize: PAGE });
+      const lastOfFirst = first.at(-1)?.slotIndex;
+      if (lastOfFirst === undefined) continue;
+
+      const second = planInterleave({
+        seed,
+        page: 1,
+        pageSize: PAGE,
+        cardsBefore: PAGE,
+        usedBudget: first.length,
+        lastPlaced: lastOfFirst,
+      });
+      const firstOfSecond = second[0];
+      if (!firstOfSecond) continue;
+
+      checked += 1;
+      const gap = PAGE + firstOfSecond.slotIndex - lastOfFirst;
+      if (gap <= CFG.minGapCards) violations += 1;
+    }
+
+    expect(checked).toBeGreaterThan(0);
+    expect(violations).toBe(0);
   });
 
   it('is reproducible: the same seed always yields the same plan', () => {

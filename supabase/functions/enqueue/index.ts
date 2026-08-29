@@ -47,6 +47,24 @@ Deno.serve(async (req) => {
 
   if (error) return new Response(JSON.stringify({ error: error.message }), { status: 400 });
 
+  // Without this the job sits in `queued` forever: the worker only ever reads
+  // the queue, and nothing else puts the first step on it.
+  const { error: queueError } = await supabase.schema('pgmq_public').rpc('send', {
+    queue_name: 'generation',
+    message: { jobId: job.id, step: 'resolve_identity' },
+    sleep_seconds: 0,
+  });
+
+  if (queueError) {
+    // The row exists but nothing will ever pick it up, so fail it now rather
+    // than leaving a job that looks pending and never moves.
+    await supabase
+      .from('generation_jobs')
+      .update({ status: 'failed', error: `could not enqueue: ${queueError.message}` })
+      .eq('id', job.id);
+    return new Response(JSON.stringify({ error: 'could not queue the job' }), { status: 503 });
+  }
+
   return new Response(
     JSON.stringify({
       jobId: job.id,

@@ -74,24 +74,38 @@ export async function queueMutation(
 }
 
 /**
- * Drain queued writes in the order they were made. A handler that throws stops
- * the drain rather than skipping ahead: replaying a save after a later unsave
- * would resurrect something the reader removed.
+ * Drain queued writes, oldest first.
+ *
+ * Ordering only has to hold *per pull*: replaying a save after a later unsave
+ * would resurrect something the reader removed, but a stuck write for one pull
+ * says nothing about another. So a failure blocks only that pull's remaining
+ * writes and the drain continues elsewhere — otherwise one permanently invalid
+ * item (a save for a pull deleted while offline, say) would wedge the queue for
+ * every pull, forever.
  */
 export async function drainPending(
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
 ): Promise<number> {
   let drained = 0;
+  const blocked = new Set<string>();
   try {
     const database = await db();
     const items = (await database.getAll('pending')).sort((a, b) => a.at - b.at);
     for (const item of items) {
-      await apply(item);
+      if (blocked.has(item.pullId)) continue;
+      try {
+        await apply(item);
+      } catch {
+        // Keep it queued and skip the rest of this pull's writes, preserving
+        // their relative order for the next attempt.
+        blocked.add(item.pullId);
+        continue;
+      }
       if (item.id !== undefined) await database.delete('pending', item.id);
       drained += 1;
     }
   } catch {
-    /* stop at the first failure; the rest stay queued for the next attempt */
+    /* IndexedDB itself is unavailable — nothing to drain */
   }
   return drained;
 }

@@ -84,7 +84,12 @@ export function Feed({ userId }: { userId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [session.seed, session.cardsSeen, session.interruptsShown]);
+    // Deliberately keyed on the seed alone. Including the interrupt budget
+    // would refetch page 0 every time a question is answered, replacing the
+    // list while the reader is partway down it — and cards already seen are by
+    // then recorded as impressions, so they would not even come back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.seed]);
 
   useEffect(() => {
     if (!userId) return;
@@ -97,14 +102,22 @@ export function Feed({ userId }: { userId: string | null }) {
   // Writes made while disconnected replay in order once the connection returns.
   useEffect(() => {
     if (!userId) return;
-    return onReconnect(() => {
+
+    const drain = () => {
       setOffline(false);
       void drainPending(async ({ kind, pullId }) => {
         if (kind === 'save') await api.savePull(pullId, userId);
         else if (kind === 'unsave') await api.unsavePull(pullId, userId);
         else await api.recordRead(pullId, 0, 0);
       });
-    });
+    };
+
+    // Writes can be queued by a transient server failure that never flips
+    // navigator.onLine, and a reload while already online fires no `online`
+    // event at all. Either way they would sit unapplied forever, so drain once
+    // on mount as well as on reconnect.
+    if (typeof navigator === 'undefined' || navigator.onLine) drain();
+    return onReconnect(drain);
   }, [userId]);
 
   const items = useMemo(() => (feed ? weave(feed.rows, feed.interleaveSlots) : []), [feed]);
@@ -132,7 +145,11 @@ export function Feed({ userId }: { userId: string | null }) {
     if (seenRef.current.has(row.id)) return;
     seenRef.current.add(row.id);
     setReadCount((n) => n + 1);
-    api.recordRead(row.id, 0, index).catch(() => undefined);
+    api.recordRead(row.id, 0, index).catch(() => {
+      // Offline reading should still produce history, impressions and knowledge
+      // states once the connection returns.
+      void queueMutation('read', row.id);
+    });
   }, []);
 
   const onInterrupt = useCallback(

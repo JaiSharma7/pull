@@ -21,7 +21,17 @@ const types = execFileSync('pnpm', ['exec', 'supabase', 'gen', 'types', 'typescr
   maxBuffer: 32 * 1024 * 1024,
 });
 
+// The hosted generator emits an `__InternalSupabase` / `PostgrestVersion` block
+// that the local CLI does not, so a file generated from the hosted project can
+// never match one generated locally. Strip it in both directions: it is only a
+// typing hint for a generic default, and determinism across generation sources
+// is worth more than the hint.
+const normalised = types.replace(
+  /\n\s*\/\/ Allows to automatically instantiate[\s\S]*?__InternalSupabase: \{[\s\S]*?\n\s*\}\n/,
+  '\n',
+);
+
 mkdirSync(dirname(OUT), { recursive: true });
 // The CLI emits a trailing blank line; preserve it exactly.
-writeFileSync(OUT, HEADER + types.replace(/\n*$/, '\n\n'));
+writeFileSync(OUT, HEADER + normalised.replace(/\n*$/, '\n\n'));
 console.log(`wrote ${OUT} (${types.length} chars from the schema)`);

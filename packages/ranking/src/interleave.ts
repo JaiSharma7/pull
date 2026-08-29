@@ -47,6 +47,14 @@ export interface InterleaveInput {
   cardsBefore?: number;
   /** Interrupts already shown this session. */
   usedBudget?: number;
+  /**
+   * Absolute card position of the last interrupt shown this session, or null.
+   *
+   * Without it the minimum gap cannot span a page boundary: an interrupt on the
+   * final card of one page would leave slot 0 of the next immediately eligible,
+   * putting two questions one card apart.
+   */
+  lastPlaced?: number | null;
   /** 0..1 — how much recall work is waiting. */
   duePressure?: number;
   /** 0.25..1 — lowered by repeated dismissals, so the system backs off. */
@@ -81,6 +89,7 @@ export function planInterleave(input: InterleaveInput): InterleaveSlot[] {
     pageSize,
     cardsBefore = 0,
     usedBudget = 0,
+    lastPlaced: lastPlacedInput = null,
     duePressure = 0,
     dismissalDamping = 1,
     preferenceRate = 1,
@@ -98,8 +107,10 @@ export function planInterleave(input: InterleaveInput): InterleaveSlot[] {
   );
 
   const slots: InterleaveSlot[] = [];
-  // Sentinel far enough back that the first eligible card is never gap-blocked.
-  let lastPlaced = -1000;
+  // Carry the previous page's placement so the gap spans page boundaries. The
+  // sentinel must be far enough back that the first eligible card of a fresh
+  // session is never gap-blocked.
+  let lastPlaced = lastPlacedInput ?? -1000;
 
   for (let i = 0; i < pageSize; i++) {
     if (budgetLeft <= 0) break;

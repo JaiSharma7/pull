@@ -53,25 +53,31 @@ describe('pending mutation queue', () => {
     expect(applied).toEqual(['save:x', 'unsave:x', 'save:y']);
   });
 
-  it('stops at the first failure instead of skipping ahead', async () => {
-    await queueMutation('save', 'first');
+  it('blocks only the failing pull, so one bad write cannot wedge the queue', async () => {
+    // 'stuck' is permanently invalid; 'other' is fine. Ordering matters within
+    // a pull, not across pulls, so 'other' must still get through.
+    await queueMutation('save', 'stuck');
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation('save', 'second');
+    await queueMutation('unsave', 'stuck');
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation('save', 'other');
 
     const applied: string[] = [];
-    await drainPending(async ({ pullId }) => {
-      applied.push(pullId);
-      if (pullId === 'first') throw new Error('network');
+    const drained = await drainPending(async ({ kind, pullId }) => {
+      applied.push(`${kind}:${pullId}`);
+      if (pullId === 'stuck') throw new Error('gone');
     });
 
-    // The failing item must not be consumed, and nothing after it may run.
-    expect(applied).toEqual(['first']);
+    // The failing write is attempted, its follow-up is skipped to preserve
+    // order, and the unrelated pull proceeds.
+    expect(applied).toEqual(['save:stuck', 'save:other']);
+    expect(drained).toBe(1);
 
-    // It is still queued, so a later attempt replays it in the right order.
+    // Both of the stuck pull's writes are still queued, still in order.
     const retried: string[] = [];
-    await drainPending(async ({ pullId }) => {
-      retried.push(pullId);
+    await drainPending(async ({ kind, pullId }) => {
+      retried.push(`${kind}:${pullId}`);
     });
-    expect(retried).toEqual(['first', 'second']);
+    expect(retried).toEqual(['save:stuck', 'unsave:stuck']);
   });
 });
