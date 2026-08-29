@@ -4,10 +4,16 @@ import { seededUnit } from './prng.js';
 /**
  * Mirror of `public.plan_interleave`.
  *
- * SQL is authoritative — this exists so the client can predict the next page's
- * interrupt slots for prefetch, and so the behaviour can be tested without a
- * database. `interleave.parity.test.ts` asserts the two agree exactly against
- * fixtures captured from the live database.
+ * SQL is authoritative. This exists so the placement rules can be exercised
+ * without a database — thousands of sessions per run, which is how the
+ * cross-page minimum gap was caught — and `interleave.parity.test.ts` asserts
+ * the two agree exactly against fixtures captured from the live one.
+ *
+ * It is deliberately **not** browser code. `seededUnit` needs a synchronous
+ * MD5 and takes it from `node:crypto`, which Vite cannot bundle; Web Crypto
+ * offers no synchronous digest, so serving this to the client would mean
+ * carrying a pure-JS MD5 for a prefetch nothing asks for yet. Until something
+ * does, this package is a test harness and belongs in devDependencies.
  */
 
 export interface InterleaveConfig {

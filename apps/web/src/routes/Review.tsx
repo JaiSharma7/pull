@@ -36,7 +36,16 @@ export function Review() {
   const card = due[0]!;
 
   async function grade(g: RecallGrade) {
-    await api.gradeRecall(card.pullId, g);
+    // Advance regardless. A grade that fails to reach the server is a lost
+    // measurement, but leaving the card on screen with its answer already
+    // revealed is worse: the reader cannot grade it honestly a second time, and
+    // offline is one of the five things promised free, so this page has to keep
+    // working without a connection rather than wedging on the first card.
+    try {
+      await api.gradeRecall(card.pullId, g);
+    } catch {
+      /* the review continues; the schedule for this card simply does not move */
+    }
     setRevealed(false);
     setDue((d) => (d ?? []).slice(1));
   }

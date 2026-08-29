@@ -143,12 +143,33 @@ export async function unsavePull(pullId: string, userId: string) {
   if (error) throw error;
 }
 
+/**
+ * Every saved pull, paged.
+ *
+ * PostgREST caps a response at `max_rows` (100), so a single unpaged select
+ * silently returns a slice of a large library and the rest render as unsaved —
+ * with the Save button doing nothing, since the insert collides and is
+ * swallowed as a duplicate. Law 3 promises unlimited stashing; that has to hold
+ * in the read path too, not just in the table.
+ */
 export async function fetchSavedPullIds(userId: string): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('saved_items')
-    .select('pull_id')
-    .eq('user_id', userId)
-    .not('pull_id', 'is', null);
-  if (error) throw error;
-  return new Set((data ?? []).map((r) => r.pull_id).filter((id): id is string => id !== null));
+  const PAGE = 100;
+  const ids = new Set<string>();
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('saved_items')
+      .select('pull_id')
+      .eq('user_id', userId)
+      .not('pull_id', 'is', null)
+      // Ordered so the pages partition the set. Without it PostgREST may return
+      // rows in any order and a range walk can repeat or skip.
+      .order('pull_id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+
+    const rows = data ?? [];
+    for (const r of rows) if (r.pull_id !== null) ids.add(r.pull_id);
+    if (rows.length < PAGE) return ids;
+  }
 }

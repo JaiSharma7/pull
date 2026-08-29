@@ -39,6 +39,8 @@ const supabase = createClient(
 interface QueueMessage {
   msg_id: number;
   message: { jobId: string; step: Step };
+  /** pgmq's delivery count, incremented on every read of this message. */
+  read_ct: number;
 }
 
 /**
@@ -140,7 +142,13 @@ Deno.serve(async () => {
 
     const attempt = (last?.attempt ?? 0) + 1;
 
-    if (attempt > MAX_ATTEMPTS) {
+    // Two bounds, because the first one can be lost. `attempt` comes from
+    // `job_steps`, which assumes every failed attempt manages to record itself;
+    // when that insert is the thing that failed, no row appears and the next
+    // tick derives this same number again, forever. `read_ct` is pgmq's own
+    // delivery counter — incremented before this function runs and regardless
+    // of what it writes — so it holds when the ledger cannot.
+    if (attempt > MAX_ATTEMPTS || msg.read_ct > MAX_ATTEMPTS) {
       // Checked like every other write. Bare awaits here would let a failed
       // update be followed by an archive that removes the only queue message,
       // leaving the job stuck in `running` with nothing to retry it.
@@ -201,7 +209,11 @@ Deno.serve(async () => {
       must(await archive(msg.msg_id), 'archive message');
       processed.push({ jobId, step, attempt, ok: true });
     } catch (e) {
-      await supabase.from('job_steps').insert({
+      // The one write here that must not use `must()`: throwing out of a catch
+      // would skip the bookkeeping below and lose the original error. Its result
+      // is still checked, because an unrecorded attempt is what lets a job cycle
+      // without ever reaching MAX_ATTEMPTS.
+      const { error: recordError } = await supabase.from('job_steps').insert({
         job_id: jobId,
         step,
         attempt,
@@ -210,9 +222,21 @@ Deno.serve(async () => {
         duration_ms: Date.now() - started,
         finished_at: new Date().toISOString(),
       });
+      // A duplicate key means `record_job_step` already wrote a *succeeded* row
+      // for this attempt and only the transition after it failed. There is
+      // nothing to mark failed in that case — the resume path picks it up on
+      // redelivery — so it is the expected collision, not a lost write.
+      const recorded = !recordError || recordError.code === '23505';
       // Leave the message unarchived: its visibility timeout expires and the
-      // next tick retries, up to MAX_ATTEMPTS.
-      processed.push({ jobId, step, attempt, ok: false });
+      // next tick retries, bounded by MAX_ATTEMPTS on either counter.
+      processed.push({
+        jobId,
+        step,
+        attempt,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+        ...(recorded ? {} : { attemptUnrecorded: recordError.message }),
+      });
     }
   }
 

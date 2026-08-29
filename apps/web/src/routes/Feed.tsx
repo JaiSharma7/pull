@@ -37,7 +37,13 @@ function weave(rows: FeedRow[], slots: InterleaveSlot[]): Item[] {
   const out: Item[] = [];
   rows.forEach((row, i) => {
     const slot = bySlot.get(i);
-    if (slot) {
+    // Only ask about a card this page has actually rendered. Once a session has
+    // pages behind it the planner can place a slot at index 0, where there is
+    // no earlier card *here* — and `Math.max(0, i - 3)` would resolve to the
+    // card at the slot itself, asking the reader to recall something still on
+    // screen. The earlier pages' rows are not in hand, so the honest move is to
+    // let that slot pass rather than invent a target for it.
+    if (slot && i > 0) {
       const earlier = rows[Math.max(0, i - 3)];
       if (earlier) out.push({ type: 'interrupt', slot, row: earlier, index: i });
     }
@@ -199,11 +205,17 @@ export function Feed({ userId }: { userId: string | null }) {
   const onSave = useCallback(
     async (row: FeedRow) => {
       if (!userId) return;
-      const next = new Set(saved);
-      const wasSaved = next.has(row.id);
-      if (wasSaved) next.delete(row.id);
-      else next.add(row.id);
-      setSaved(next); // optimistic — saving is free and unlimited, so never blocks
+      const wasSaved = saved.has(row.id);
+      // Updated from the previous state, not from the set this render captured.
+      // Two saves tapped before React commits would otherwise both start from
+      // the same snapshot, and the second would drop the first — leaving a card
+      // saved server-side but rendered unsaved, where the next tap deletes it.
+      setSaved((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.delete(row.id);
+        else next.add(row.id);
+        return next;
+      }); // optimistic — saving is free and unlimited, so never blocks
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
       } catch {
@@ -220,6 +232,11 @@ export function Feed({ userId }: { userId: string | null }) {
       if (seenRef.current.has(row.id)) return;
       seenRef.current.add(row.id);
       setReadCount((n) => n + 1);
+      // The planner's warm-up and its minimum gap are measured in cards read
+      // across the whole session, not within a page, so this has to advance or
+      // `p_cards_before` stays 0 and every page is planned as if it were the
+      // first one.
+      setSession((s) => persist({ ...s, cardsSeen: s.cardsSeen + 1 }));
       api.recordRead(row.id, 0, index).catch(() => {
         // Offline reading should still produce history, impressions and
         // knowledge states once the connection returns — but only for a signed-in
@@ -298,10 +315,14 @@ export function Feed({ userId }: { userId: string | null }) {
       }
       // Never rejects, so a dropped write cannot break the reading session.
       await Promise.allSettled(writes);
-      // Only a recall grade counts as recall. A conviction or counterpull answer
-      // is a stance, not a memory test, and counting it would overstate the
-      // number the Enough screen reports.
-      if (answer?.grade) setRecalled((n) => n + 1);
+      // Only the two variants that actually test retrieval count. A conviction
+      // or counterpull answer is a stance, and a delta probe is calibration —
+      // answering "already knew it" is a claim about the past, not a memory
+      // retrieved now. Keyed on the interrupt's kind rather than on a grade
+      // being present, because a probe carries one too.
+      if (item.slot.kind === 'recall' || item.slot.kind === 'say_it_back') {
+        if (answer?.grade) setRecalled((n) => n + 1);
+      }
       setSession((s) => persist({ ...s, interruptsShown: s.interruptsShown + 1 }));
     },
     [handledSlots, userId],
@@ -329,6 +350,11 @@ export function Feed({ userId }: { userId: string | null }) {
           setSession(resetSession());
           setDone(false);
           seenRef.current.clear();
+          // The session is being reset, so its tallies reset with it. Carrying
+          // them over would report both halves summed against a `minutesSaved`
+          // that describes only the second — two spans on one screen.
+          setReadCount(0);
+          setRecalled(0);
         }}
       />
     );

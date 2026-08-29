@@ -79,6 +79,34 @@ Then selectively: native share sheet, background audio, haptics, camera page-sca
 push notifications, universal links so `whatapull.com/pull/abc123` opens in-app, and a
 native ad SDK.
 
+## Known gaps carried out of round 1
+
+Named here because they are inert rather than broken, and a reader of this repo should
+not have to rediscover them.
+
+- **`refresh_knowledge_vector` has no caller.** `user_knowledge_vectors` is therefore
+  never populated, so the `uvec` term in `get_feed` — 18% of the ranking score, and the
+  largest personalisation signal in it — evaluates to the same constant for every card
+  and every reader. The feed is currently ranked by topic weights, quality, novelty and
+  jitter alone. Wiring it up belongs with the generation pipeline that produces the
+  embeddings it averages, not before: recomputing a reader's centroid on every read
+  would be a write amplification we have no evidence is needed. Round 2 either calls it
+  from a `pg_cron` tick or drops the term and redistributes its weight.
+- **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
+  and takes it from `node:crypto`. That is fine for its actual job — testing the
+  placement rules over thousands of sessions without a database — but the prefetch use
+  it was originally described as serving would need a pure-JS MD5 first. It is a
+  devDependency now, which is what it has always in fact been.
+- **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
+  says "in the migration that creates it", and the schema does not do that: tables land
+  in `20260829124548_learning.sql` and its siblings, policies in
+  `20260829124730_rls.sql`. CI check 4 asserts the end state, so no environment that
+  finishes migrating is exposed — but an environment that stops between the two is, and
+  a table added to one of those files inherits the gap by default. Since migrations are
+  append-only the split cannot be retrofitted; the choice is to keep the law as written
+  and treat this as a standing deviation, or to reword it to describe what is actually
+  enforceable. That is a decision for the repo owner, not a cleanup.
+
 ## Deliberately not planned
 
 - A paid tier. The five free capabilities are the positioning; adding a subscription

@@ -56,9 +56,6 @@ importers:
       '@wap/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@wap/ranking':
-        specifier: workspace:*
-        version: link:../../packages/ranking
       '@wap/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

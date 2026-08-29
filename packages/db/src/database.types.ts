@@ -379,6 +379,7 @@ export type Database = {
           pull_id: string
           recipe_id: string | null
           shown_at: string
+          shown_on: string | null
           user_id: string
         }
         Insert: {
@@ -388,6 +389,7 @@ export type Database = {
           pull_id: string
           recipe_id?: string | null
           shown_at?: string
+          shown_on?: string | null
           user_id: string
         }
         Update: {
@@ -397,6 +399,7 @@ export type Database = {
           pull_id?: string
           recipe_id?: string | null
           shown_at?: string
+          shown_on?: string | null
           user_id?: string
         }
         Relationships: [
@@ -594,6 +597,7 @@ export type Database = {
           dwell_ms: number | null
           id: number
           kind: string
+          occurred_on: string | null
           pull_id: string | null
           summary_id: string | null
           user_id: string
@@ -604,6 +608,7 @@ export type Database = {
           dwell_ms?: number | null
           id?: never
           kind: string
+          occurred_on?: string | null
           pull_id?: string | null
           summary_id?: string | null
           user_id: string
@@ -614,6 +619,7 @@ export type Database = {
           dwell_ms?: number | null
           id?: never
           kind?: string
+          occurred_on?: string | null
           pull_id?: string | null
           summary_id?: string | null
           user_id?: string
@@ -1718,6 +1724,7 @@ export type Database = {
         Returns: {
           message: Json
           msg_id: number
+          read_ct: number
         }[]
       }
       disable_generation_dispatcher: { Args: never; Returns: string }

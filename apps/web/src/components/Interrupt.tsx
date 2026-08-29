@@ -189,6 +189,12 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   }
 
   // delta_probe — the cheapest possible calibration of the knowledge model.
+  //
+  // Only the two answers that claim prior knowledge carry a grade. "New to me"
+  // deliberately carries none: it is not a failed retrieval, and sending it as
+  // `forgot` would run the FSRS lapse path against a card the reader has never
+  // seen — shrinking its stability, permanently raising its difficulty and
+  // counting a lapse for honestly saying the idea is new.
   return shell(
     'Quick check',
     <>
@@ -203,7 +209,7 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
         <button type="button" className="btn" onClick={() => onAnswer({ grade: 'good' })}>
           Roughly
         </button>
-        <button type="button" className="btn" onClick={() => onAnswer({ grade: 'forgot' })}>
+        <button type="button" className="btn" onClick={() => onAnswer({})}>
           New to me
         </button>
       </div>
