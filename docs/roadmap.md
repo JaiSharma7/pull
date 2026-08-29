@@ -6,12 +6,28 @@ it.
 
 ## Round 1 — the spine ✅
 
-Monorepo, four CI checks, the agentic setup, the full schema with RLS, the read path
-(ranking · Delta · interleave), a public-domain seed, The Archive design system, and a
-working vertical slice: auth → onboarding → feed → save → review → Enough.
+Monorepo with four CI checks, the agentic setup, 28 migrations across 38 tables with RLS
+everywhere, the read path (ranking · Delta · interleave), a public-domain seed, The
+Archive design system, the generation step-machine skeleton, and a working app: auth →
+feed → interleaved questions → save → review → Enough.
 
-Plus the free-forever five: audio, offline, unlimited history, unlimited stashes, and
-curated Daily Pulls.
+The free-forever five all land here, each affordable because of where it runs rather than
+because of a subsidy: audio (Web Speech, on-device), offline (service worker + IndexedDB),
+unlimited history and stashes (rows in Postgres), and Daily Pulls (one shared editorial
+query).
+
+**Known gaps carried into round 2**, so they are not rediscovered as surprises:
+
+- Onboarding is not built. New readers get default preferences from the signup trigger and
+  an unweighted feed, which works but is not personalised until they have history.
+- The Delta's `covered` check scans the reader's known set per candidate. Correct and fast
+  at seed scale; it needs a precomputed neighbour table before a library grows large.
+- `packages/ranking` mirrors the interleave planner but not the feed scorer. Only the
+  planner has a parity test; the scorer lives solely in SQL for now.
+- Source pages, Explore, Library and Studio are stubs or absent — `get_source_delta` is
+  implemented and tested but has no screen yet.
+- Embeddings are synthetic (concept axes). Real ones arrive with the providers in round 2,
+  and no read-path code needs to change when they do.
 
 ## Round 2 — generation
 
