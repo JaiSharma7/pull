@@ -97,6 +97,15 @@ not have to rediscover them.
   placement rules over thousands of sessions without a database — but the prefetch use
   it was originally described as serving would need a pure-JS MD5 first. It is a
   devDependency now, which is what it has always in fact been.
+- **A permanently-invalid queued write retries forever.** `drainAndReschedule` keeps a
+  timer alive while `hasPending` is true, and a write that can never succeed — a save
+  for a pull deleted while the reader was offline — keeps it true. The loop settles at
+  its 5-minute ceiling and stays there for the life of the tab: one IndexedDB read and
+  one request per cycle, so cheap, but unbounded. The obvious bound is to give up after
+  N attempts, which trades this for the worse failure of silently discarding something
+  the reader did. Round 2 should classify permanent failures (a 404 or a 403 is not a
+  500) and drop only those. Found while reviewing my own retry path, not by either
+  reviewer.
 - **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
   says "in the migration that creates it", and the schema does not do that: tables land
   in `20260829124548_learning.sql` and its siblings, policies in
