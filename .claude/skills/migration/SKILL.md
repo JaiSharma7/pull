@@ -51,3 +51,7 @@ build failure, not a note.
   false-safe — but `using (true)` on a user table is not, and never should ship.
 - Adding a column to a table that a `SECURITY DEFINER` function selects with `*` changes
   that function's output shape silently. Name your columns.
+- **Never reference a platform-provided object unconditionally.** The hosted project has
+  objects a local stack does not — `rls_auto_enable` is one. A migration that assumes one
+  exists cannot be replayed from zero, which breaks CI check 4 and every fresh checkout.
+  Guard it: `if exists (select 1 from pg_proc ...) then execute '...' end if;`
