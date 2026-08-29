@@ -5,6 +5,8 @@ import * as api from '../lib/api.js';
 import {
   cachePulls,
   drainPending,
+  hasPending,
+  onPendingQueued,
   onReconnect,
   queueMutation,
   readCachedPulls,
@@ -17,6 +19,10 @@ import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
 type Item =
   | { type: 'pull'; row: FeedRow; index: number }
   | { type: 'interrupt'; slot: InterleaveSlot; row: FeedRow; index: number };
+
+/** Retry schedule for writes queued while the browser is still online. */
+const RETRY_BASE_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
 
 /**
  * Weave the interrupt slots into the row list.
@@ -105,18 +111,21 @@ export function Feed({ userId }: { userId: string | null }) {
   useEffect(() => {
     if (!userId) return;
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let backoff = RETRY_BASE_MS;
+    let stopped = false;
+
     const drain = () => {
       setOffline(false);
-      void drainPending(
+      return drainPending(
         userId,
-        async ({ kind, pullId, text }) => {
-          if (kind === 'save') await api.savePull(pullId, userId);
-          else if (kind === 'unsave') await api.unsavePull(pullId, userId);
-          else if (kind === 'explain') {
-            // No text means nothing to write. Dropping it is right: a retry
-            // would fail identically forever and block this pull's other writes.
-            if (text) await api.saveExplanation(userId, pullId, text);
-          } else await api.recordRead(pullId, 0, 0);
+        async (write) => {
+          if (write.kind === 'save') await api.savePull(write.pullId, userId);
+          else if (write.kind === 'unsave') await api.unsavePull(write.pullId, userId);
+          else if (write.kind === 'explain')
+            await api.saveExplanation(userId, write.pullId, write.text, write.mutationId);
+          else if (write.kind === 'conviction') await api.setConviction(write.pullId, write.stance);
+          else await api.recordRead(write.pullId, 0, 0);
         },
         // Read from the live auth session, not from component state. Signing
         // out unmounts this component rather than re-rendering it, so a ref
@@ -126,12 +135,47 @@ export function Feed({ userId }: { userId: string | null }) {
       );
     };
 
+    // A write can fail while the browser is still online — a 500, a timeout, a
+    // server that is up but unwell. No `online` event follows, because
+    // connectivity never changed, so the entry needs a timer of its own or it
+    // waits for a reload. Backs off while it keeps failing and resets once the
+    // queue clears, so an unreachable server is retried patiently rather than
+    // hammered.
+    const retryLater = () => {
+      if (stopped || timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        void (async () => {
+          await drain();
+          if (stopped) return;
+          if (await hasPending(userId)) {
+            backoff = Math.min(backoff * 2, RETRY_MAX_MS);
+            retryLater();
+          } else {
+            backoff = RETRY_BASE_MS;
+          }
+        })();
+      }, backoff);
+    };
+
     // Writes can be queued by a transient server failure that never flips
     // navigator.onLine, and a reload while already online fires no `online`
     // event at all. Either way they would sit unapplied forever, so drain once
     // on mount as well as on reconnect.
-    if (typeof navigator === 'undefined' || navigator.onLine) drain();
-    return onReconnect(drain);
+    if (typeof navigator === 'undefined' || navigator.onLine) void drain();
+
+    const offReconnect = onReconnect(() => {
+      backoff = RETRY_BASE_MS;
+      void drain();
+    });
+    const offQueued = onPendingQueued(retryLater);
+
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+      offReconnect();
+      offQueued();
+    };
   }, [userId]);
 
   const items = useMemo(() => (feed ? weave(feed.rows, feed.interleaveSlots) : []), [feed]);
@@ -149,7 +193,7 @@ export function Feed({ userId }: { userId: string | null }) {
       } catch {
         // The write failed, but the reader's intent should survive a tunnel:
         // keep the optimistic state and replay it on reconnect.
-        await queueMutation(userId, wasSaved ? 'unsave' : 'save', row.id);
+        await queueMutation(userId, { kind: wasSaved ? 'unsave' : 'save', pullId: row.id });
       }
     },
     [saved, userId],
@@ -164,7 +208,7 @@ export function Feed({ userId }: { userId: string | null }) {
         // Offline reading should still produce history, impressions and
         // knowledge states once the connection returns — but only for a signed-in
         // reader, since a queued write has to belong to someone.
-        if (userId) void queueMutation(userId, 'read', row.id);
+        if (userId) void queueMutation(userId, { kind: 'read', pullId: row.id });
       });
     },
     [userId],
@@ -194,17 +238,33 @@ export function Feed({ userId }: { userId: string | null }) {
           ...(answer?.grade ? { grade: answer.grade } : {}),
         }),
       ];
-      if (answer?.stance) writes.push(api.setConviction(item.row.id, answer.stance));
-      // Say It Back's whole value is the reader's own wording — without this it
-      // was typed, compared against the card, and then thrown away. It is the
-      // one write here worth queueing: several sentences the reader composed,
-      // against an impression they can regenerate just by scrolling.
+      // Both of the reader's own answers are queued on failure. Each exists
+      // nowhere else — a stance is a considered judgement and an explanation is
+      // several sentences they composed — where an impression regenerates the
+      // moment they scroll past the card again. Replay is safe for both:
+      // `set_conviction` no-ops on an unchanged stance, and the explanation
+      // carries a mutation id that makes a retry collide with the write it is
+      // replaying rather than duplicate it.
+      if (answer?.stance) {
+        const stance = answer.stance;
+        writes.push(
+          api.setConviction(item.row.id, stance).catch(() => {
+            // Only queueable for a signed-in reader: a pending write has to
+            // belong to someone, or the drain cannot tell whose it is.
+            if (userId)
+              return queueMutation(userId, { kind: 'conviction', pullId: item.row.id, stance });
+          }),
+        );
+      }
       if (answer?.explanation && userId) {
         const text = answer.explanation;
+        const mutationId = crypto.randomUUID();
         writes.push(
           api
-            .saveExplanation(userId, item.row.id, text)
-            .catch(() => queueMutation(userId, 'explain', item.row.id, text)),
+            .saveExplanation(userId, item.row.id, text, mutationId)
+            .catch(() =>
+              queueMutation(userId, { kind: 'explain', pullId: item.row.id, text, mutationId }),
+            ),
         );
       }
       // Never rejects, so a dropped write cannot break the reading session.

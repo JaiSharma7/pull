@@ -92,12 +92,23 @@ export async function setConviction(
  * personal annotation on the card. Grading it is round 2 — `gap_score` and
  * `missed_points` stay null until a provider fills them — but the text has to be
  * kept now or there is nothing to grade later.
+ *
+ * `mutationId` is minted once per submission and reused by any queued retry, so
+ * a replay after a lost response collides on `explanations_client_mutation_key`
+ * rather than writing the reader's paragraph twice.
  */
-export async function saveExplanation(userId: string, pullId: string, text: string) {
+export async function saveExplanation(
+  userId: string,
+  pullId: string,
+  text: string,
+  mutationId: string,
+) {
   const { error } = await supabase
     .from('explanations')
-    .insert({ user_id: userId, pull_id: pullId, text });
-  if (error) throw error;
+    .insert({ user_id: userId, pull_id: pullId, text, client_mutation_id: mutationId });
+  // The collision means this exact submission already landed, which is the
+  // outcome the caller wanted — not a failure to retry.
+  if (error && error.code !== '23505') throw error;
 }
 
 /** Saving is unlimited and free, by policy. There is no quota to check. */

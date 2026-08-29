@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import type { Stance } from '@wap/schemas';
 import type { FeedRow } from './types.js';
 
 /**
@@ -14,18 +15,24 @@ import type { FeedRow } from './types.js';
  */
 
 /**
- * `explain` carries a payload; the other three are identified entirely by their
- * pull. It is queued like the rest because an explanation is the most expensive
- * thing a reader ever produces here — several sentences of their own writing —
- * and losing it to a dropped connection is far worse than losing an impression.
+ * A queued write, as a union so each kind carries exactly its own payload.
+ *
+ * Saves and reads are identified entirely by their pull. The two learning
+ * writes are not: an explanation is several sentences the reader composed and a
+ * conviction is a stance, and both exist nowhere else once the request that
+ * carried them fails. They are queued for the same reason the others are, but
+ * they are the ones it would actually hurt to lose.
+ *
+ * Every kind here must be safe to replay, since a queued write is retried
+ * whenever its response was lost rather than its effect: saves collide on their
+ * unique index, `record_read` is idempotent per pull and day,
+ * `explanations.client_mutation_id` makes the retry collide with the write it
+ * is replaying, and `set_conviction` no-ops on an unchanged stance.
  */
-export type PendingKind = 'save' | 'unsave' | 'read' | 'explain';
-
-export interface PendingWrite {
-  kind: PendingKind;
-  pullId: string;
-  text?: string;
-}
+export type PendingWrite =
+  | { kind: 'save' | 'unsave' | 'read'; pullId: string }
+  | { kind: 'explain'; pullId: string; text: string; mutationId: string }
+  | { kind: 'conviction'; pullId: string; stance: Stance };
 
 interface WapDB extends DBSchema {
   pulls: { key: string; value: FeedRow & { cachedAt: number } };
@@ -86,23 +93,41 @@ export async function readCachedPulls(limit = 20): Promise<FeedRow[]> {
   }
 }
 
-export async function queueMutation(
-  userId: string,
-  kind: PendingKind,
-  pullId: string,
-  text?: string,
-): Promise<void> {
+/**
+ * Anyone waiting to hear that something was queued.
+ *
+ * A write can fail while `navigator.onLine` is still true — a 500, a timeout, a
+ * server that is up but unwell. No `online` event follows, because connectivity
+ * never changed, so without this the entry would sit until a reload or an
+ * unrelated network transition. The listener is how a retry gets scheduled.
+ */
+const queuedListeners = new Set<() => void>();
+
+export function onPendingQueued(handler: () => void): () => void {
+  queuedListeners.add(handler);
+  return () => {
+    queuedListeners.delete(handler);
+  };
+}
+
+export async function queueMutation(userId: string, write: PendingWrite): Promise<void> {
   try {
     const database = await db();
-    await database.add('pending', {
-      userId,
-      kind,
-      pullId,
-      at: Date.now(),
-      ...(text === undefined ? {} : { text }),
-    });
+    await database.add('pending', { ...write, userId, at: Date.now() });
   } catch {
     /* nothing to do — the mutation is simply lost, which is the honest outcome */
+    return;
+  }
+  for (const listener of queuedListeners) listener();
+}
+
+/** Whether this account still has queued writes — the signal to keep retrying. */
+export async function hasPending(userId: string): Promise<boolean> {
+  try {
+    const database = await db();
+    return (await database.getAll('pending')).some((item) => item.userId === userId);
+  } catch {
+    return false;
   }
 }
 
@@ -185,7 +210,8 @@ async function runDrain(
       try {
         // Project rather than forward the row: `id`, `userId` and `at` are
         // bookkeeping for this queue, not part of the write being replayed.
-        await apply({ kind: item.kind, pullId: item.pullId, text: item.text });
+        const { id: _id, userId: _userId, at: _at, ...write } = item;
+        await apply(write);
       } catch {
         // Keep it queued and skip the rest of this pull's writes, preserving
         // their relative order for the next attempt.

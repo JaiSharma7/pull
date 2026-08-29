@@ -321,6 +321,7 @@ export type Database = {
       explanations: {
         Row: {
           audio_path: string | null
+          client_mutation_id: string | null
           created_at: string
           gap_score: number | null
           graded_at: string | null
@@ -332,6 +333,7 @@ export type Database = {
         }
         Insert: {
           audio_path?: string | null
+          client_mutation_id?: string | null
           created_at?: string
           gap_score?: number | null
           graded_at?: string | null
@@ -343,6 +345,7 @@ export type Database = {
         }
         Update: {
           audio_path?: string | null
+          client_mutation_id?: string | null
           created_at?: string
           gap_score?: number | null
           graded_at?: string | null

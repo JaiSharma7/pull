@@ -1,6 +1,14 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
-import { cachePulls, drainPending, queueMutation, readCachedPulls } from './offline.js';
+import {
+  cachePulls,
+  drainPending,
+  hasPending,
+  onPendingQueued,
+  queueMutation,
+  readCachedPulls,
+  type PendingWrite,
+} from './offline.js';
 import type { FeedRow } from './types.js';
 
 const USER_A = 'user-a';
@@ -41,11 +49,11 @@ describe('pending mutation queue', () => {
   it('drains in the order the writes were made', async () => {
     // Ordering is not cosmetic here: replaying a save after a later unsave
     // would resurrect something the reader deliberately removed.
-    await queueMutation(USER_A, 'save', 'x');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'x' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_A, 'unsave', 'x');
+    await queueMutation(USER_A, { kind: 'unsave', pullId: 'x' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_A, 'save', 'y');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'y' });
 
     const applied: string[] = [];
     const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
@@ -59,11 +67,11 @@ describe('pending mutation queue', () => {
   it('blocks only the failing pull, so one bad write cannot wedge the queue', async () => {
     // 'stuck' is permanently invalid; 'other' is fine. Ordering matters within
     // a pull, not across pulls, so 'other' must still get through.
-    await queueMutation(USER_A, 'save', 'stuck');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'stuck' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_A, 'unsave', 'stuck');
+    await queueMutation(USER_A, { kind: 'unsave', pullId: 'stuck' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_A, 'save', 'other');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'other' });
 
     const applied: string[] = [];
     const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
@@ -85,32 +93,81 @@ describe('pending mutation queue', () => {
   });
 });
 
-describe('queued explanations', () => {
-  it('carries the reader’s text through the queue', async () => {
+describe('queued learning writes', () => {
+  it('carries an explanation’s text and mutation id through the queue', async () => {
     // An explanation is several sentences the reader composed. Unlike an
     // impression — which regenerates the moment they scroll past the card again
     // — it exists nowhere else, so the payload has to survive the round trip.
+    // The mutation id travels with it so the replay collides with the write it
+    // is replaying rather than writing the paragraph twice.
     const text = 'Stoicism separates what I control from what I merely react to.';
-    await queueMutation(USER_A, 'explain', 'p1', text);
+    const mutationId = '6f1f4a2c-0b3d-4c5e-8a7b-9d0e1f2a3b4c';
+    await queueMutation(USER_A, { kind: 'explain', pullId: 'p1', text, mutationId });
 
-    const applied: { kind: string; pullId: string; text?: string }[] = [];
+    const applied: PendingWrite[] = [];
     const drained = await drainPending(USER_A, async (m) => {
       applied.push(m);
     });
 
     expect(drained).toBe(1);
-    expect(applied).toEqual([{ kind: 'explain', pullId: 'p1', text }]);
+    expect(applied).toEqual([{ kind: 'explain', pullId: 'p1', text, mutationId }]);
   });
 
-  it('leaves text absent for writes that carry no payload', async () => {
-    await queueMutation(USER_A, 'read', 'p2');
+  it('carries a stance through the queue', async () => {
+    await queueMutation(USER_A, { kind: 'conviction', pullId: 'p2', stance: 'disagree' });
 
-    const applied: { text?: string }[] = [];
+    const applied: PendingWrite[] = [];
     await drainPending(USER_A, async (m) => {
       applied.push(m);
     });
 
-    expect(applied[0]?.text).toBeUndefined();
+    expect(applied).toEqual([{ kind: 'conviction', pullId: 'p2', stance: 'disagree' }]);
+  });
+
+  it('carries no payload for the writes that have none', async () => {
+    // The drain callback sees the write, not the row: `id`, `userId` and `at`
+    // are this queue's bookkeeping and have no business in a replayed write.
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p3' });
+
+    const applied: PendingWrite[] = [];
+    await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(applied).toEqual([{ kind: 'read', pullId: 'p3' }]);
+  });
+});
+
+describe('retry scheduling', () => {
+  it('announces a queued write so a retry can be scheduled without an online event', async () => {
+    // A 500 or a timeout queues a write while navigator.onLine stays true, so
+    // no `online` event ever fires. Without this notification the entry would
+    // wait for a reload.
+    let announced = 0;
+    const off = onPendingQueued(() => {
+      announced += 1;
+    });
+
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p4' });
+    expect(announced).toBe(1);
+    expect(await hasPending(USER_A)).toBe(true);
+
+    off();
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p5' });
+    expect(announced).toBe(1); // unsubscribed
+
+    await drainPending(USER_A, async () => undefined);
+    expect(await hasPending(USER_A)).toBe(false);
+  });
+
+  it('reports pending state per account', async () => {
+    await queueMutation(USER_B, { kind: 'read', pullId: 'b-pending' });
+
+    expect(await hasPending(USER_B)).toBe(true);
+    expect(await hasPending(USER_A)).toBe(false);
+
+    await drainPending(USER_B, async () => undefined);
+    expect(await hasPending(USER_B)).toBe(false);
   });
 });
 
@@ -119,9 +176,9 @@ describe('account scoping', () => {
     // Pending writes survive sign-out. On a shared browser, replaying A's saves
     // and reads into B's session would contaminate B's history, knowledge model
     // and library with someone else's reading.
-    await queueMutation(USER_A, 'save', 'a-only');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'a-only' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_B, 'save', 'b-only');
+    await queueMutation(USER_B, { kind: 'save', pullId: 'b-only' });
 
     const asB: string[] = [];
     await drainPending(USER_B, async ({ pullId }) => {
@@ -140,8 +197,8 @@ describe('account scoping', () => {
 
 describe('drain single-flight', () => {
   it('shares an in-flight drain within an account but not across accounts', async () => {
-    await queueMutation(USER_A, 'save', 'a-1');
-    await queueMutation(USER_B, 'save', 'b-1');
+    await queueMutation(USER_A, { kind: 'save', pullId: 'a-1' });
+    await queueMutation(USER_B, { kind: 'save', pullId: 'b-1' });
 
     const seen: string[] = [];
     let release!: () => void;
@@ -173,9 +230,9 @@ describe('drain single-flight', () => {
 
 describe('identity revalidation', () => {
   it('stops mid-drain when the account changes, leaving the rest queued', async () => {
-    await queueMutation(USER_A, 'read', 'first');
+    await queueMutation(USER_A, { kind: 'read', pullId: 'first' });
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation(USER_A, 'read', 'second');
+    await queueMutation(USER_A, { kind: 'read', pullId: 'second' });
 
     let signedIn = USER_A;
     const applied: string[] = [];
