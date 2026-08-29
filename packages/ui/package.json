@@ -20,12 +20,13 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "@wap/config": "workspace:*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11",
-    "@wap/config": "workspace:*"
+    "vitest": "^4.1.11"
   }
 }

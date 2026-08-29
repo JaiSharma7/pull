@@ -1,0 +1,245 @@
+/* The Archive — components. Hairline rules, no shadows, one accent. */
+
+/* --- Pull card ---------------------------------------------------------- */
+
+.pull-card {
+  position: relative;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-6) var(--space-5) var(--space-4);
+  max-width: 40rem;
+  container-type: inline-size;
+}
+
+.pull-card__chip {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.pull-card__chip-sep {
+  color: var(--text-faint);
+}
+
+.pull-card__rule {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 0 0 var(--space-5);
+}
+
+.pull-card__headline {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-4);
+  text-wrap: balance;
+}
+
+@container (min-width: 30rem) {
+  .pull-card__headline {
+    font-size: var(--step-4);
+  }
+}
+
+.pull-card__body {
+  color: var(--text-soft);
+  margin: 0 0 var(--space-5);
+  max-width: var(--measure);
+}
+
+.pull-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.pull-card__trail {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition:
+    color var(--transition),
+    border-color var(--transition);
+}
+
+.btn:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.btn[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn--plain {
+  border-color: transparent;
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bone);
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--bone);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- Flip --------------------------------------------------------------- */
+
+/*
+ * A 3D flip, degrading to a cross-fade when the reader has asked for less
+ * motion. Both faces stay in the DOM so the back is reachable by keyboard and
+ * announced correctly; `inert` keeps the hidden face out of the tab order.
+ */
+.flip {
+  perspective: 1800px;
+}
+
+.flip__inner {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 420ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.flip[data-flipped='true'] .flip__inner {
+  transform: rotateY(180deg);
+}
+
+.flip__face {
+  backface-visibility: hidden;
+}
+
+.flip__face--back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+  overflow-y: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flip__inner {
+    transform: none !important;
+    transition: none;
+  }
+
+  .flip__face {
+    backface-visibility: visible;
+    transition: opacity 120ms linear;
+  }
+
+  .flip__face--back {
+    transform: none;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .flip[data-flipped='true'] .flip__face--front {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .flip[data-flipped='true'] .flip__face--back {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* --- Small parts -------------------------------------------------------- */
+
+.stack > * + * {
+  margin-block-start: var(--stack-gap, var(--space-4));
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.measure {
+  max-width: var(--measure);
+}
+
+.field {
+  display: block;
+  margin-bottom: var(--space-4);
+}
+
+.field__label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.field__input,
+.field__textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.field__textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+/* Progress as a hairline, not a candy pill. */
+.meter {
+  height: 2px;
+  background: var(--rule);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  background: var(--accent);
+}
