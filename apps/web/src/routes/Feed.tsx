@@ -48,6 +48,8 @@ export function Feed({ userId }: { userId: string | null }) {
   const [offline, setOffline] = useState(false);
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
+  /** Interrupt slots already answered or skipped, so they are not shown twice. */
+  const [handledSlots, setHandledSlots] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +168,14 @@ export function Feed({ userId }: { userId: string | null }) {
 
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
+      // A question is answered once. Without this guard the card stays mounted
+      // and clickable, so repeated clicks would write duplicate interrupt
+      // events, re-record convictions and recall grades, and inflate the
+      // session's interrupt budget from a single question.
+      const slotKey = `${item.index}-${item.row.id}`;
+      if (handledSlots.has(slotKey)) return;
+      setHandledSlots((prev) => new Set(prev).add(slotKey));
+
       const responded = answer !== null;
       try {
         await api.recordInterrupt({
@@ -182,7 +192,7 @@ export function Feed({ userId }: { userId: string | null }) {
       if (responded) setRecalled((n) => n + 1);
       setSession((s) => persist({ ...s, interruptsShown: s.interruptsShown + 1 }));
     },
-    [],
+    [handledSlots],
   );
 
   if (error) {
@@ -230,13 +240,17 @@ export function Feed({ userId }: { userId: string | null }) {
 
       {items.map((item) =>
         item.type === 'interrupt' ? (
-          <Interrupt
-            key={`i-${item.index}-${item.row.id}`}
-            kind={item.slot.kind}
-            pull={item.row}
-            onAnswer={(a) => void onInterrupt(item, a)}
-            onDismiss={() => void onInterrupt(item, null)}
-          />
+          // An answered question is done with. Leaving it mounted would let a
+          // second click write another interrupt event and another grade.
+          handledSlots.has(`${item.index}-${item.row.id}`) ? null : (
+            <Interrupt
+              key={`i-${item.index}-${item.row.id}`}
+              kind={item.slot.kind}
+              pull={item.row}
+              onAnswer={(a) => void onInterrupt(item, a)}
+              onDismiss={() => void onInterrupt(item, null)}
+            />
+          )
         ) : (
           <PullCardInView
             key={item.row.id}
