@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   cachePulls,
   drainPending,
-  dropSupersededConvictions,
   hasPending,
   onPendingQueued,
   queueMutation,
@@ -140,30 +139,20 @@ describe('queued learning writes', () => {
     ]);
   });
 
-  it('drops a stale queued stance once a newer one lands', async () => {
-    // A conviction that genuinely failed was never recorded, so nothing
-    // server-side can tell it is stale. Replaying it after the reader decided
-    // otherwise would overwrite the newer decision with the older one.
+  it('replays a stance with the submission time the reader made it at', async () => {
+    // Whether a queued stance still counts is not decided here — the queue
+    // cannot see a request that has not failed yet, which is why three rounds
+    // of trying to decide it client-side kept leaving a window open. The server
+    // declines a submission older than the stance on record, so all this has to
+    // do is carry the original submission time rather than the replay's.
+    const submittedAt = 1_000;
     await queueMutation(USER_A, {
       kind: 'conviction',
       pullId: 'p9',
       stance: 'agree',
-      mutationId: 'stale',
-      submittedAt: 1_000,
+      mutationId: 'queued-before-a-newer-one',
+      submittedAt,
     });
-    // An unrelated write for the same pull must survive — only a superseded
-    // stance is dropped.
-    await queueMutation(USER_A, { kind: 'read', pullId: 'p9' });
-    // And another pull's stance is none of this one's business.
-    await queueMutation(USER_A, {
-      kind: 'conviction',
-      pullId: 'p10',
-      stance: 'unsure',
-      mutationId: 'other-pull',
-      submittedAt: 1_000,
-    });
-
-    await dropSupersededConvictions(USER_A, 'p9', 2_000);
 
     const applied: PendingWrite[] = [];
     await drainPending(USER_A, async (m) => {
@@ -171,40 +160,14 @@ describe('queued learning writes', () => {
     });
 
     expect(applied).toEqual([
-      { kind: 'read', pullId: 'p9' },
       {
         kind: 'conviction',
-        pullId: 'p10',
-        stance: 'unsure',
-        mutationId: 'other-pull',
-        submittedAt: 1_000,
+        pullId: 'p9',
+        stance: 'agree',
+        mutationId: 'queued-before-a-newer-one',
+        submittedAt,
       },
     ]);
-  });
-
-  it('keeps a queued stance the reader submitted after the one that landed', async () => {
-    // A slow request can succeed *after* a later stance has already failed and
-    // queued. Treating everything queued as stale would then discard the
-    // reader's newer intent and make the older stance permanent — so the cutoff
-    // is when each was submitted, not that it happens to be sitting in the queue.
-    const newer: PendingWrite = {
-      kind: 'conviction',
-      pullId: 'p11',
-      stance: 'disagree',
-      mutationId: 'newer',
-      submittedAt: 5_000,
-    };
-    await queueMutation(USER_A, newer);
-
-    // The older submission (3_000) finally lands and tries to clear the queue.
-    await dropSupersededConvictions(USER_A, 'p11', 3_000);
-
-    const applied: PendingWrite[] = [];
-    await drainPending(USER_A, async (m) => {
-      applied.push(m);
-    });
-
-    expect(applied).toEqual([newer]);
   });
 
   it('carries no payload for the writes that have none', async () => {

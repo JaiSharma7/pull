@@ -40,9 +40,9 @@ export type PendingWrite =
       mutationId: string;
       /**
        * When the reader submitted this stance — not when it was queued, which
-       * is only when its request gave up. A later stance supersedes an earlier
-       * one by this, and the two can be minted in either order relative to the
-       * requests that carry them.
+       * is only when its request gave up. The server orders competing stances
+       * by this and declines any older than the one on record, so a retry
+       * delayed past a newer decision is a no-op rather than a reversal.
        */
       submittedAt: number;
     };
@@ -135,41 +135,6 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 }
 
 /**
- * Forget queued stances for one pull that a landed submission supersedes.
- *
- * The server can recognise a replayed submission and decline to reapply it, but
- * only for submissions it actually saw. One that genuinely failed was never
- * recorded, so nothing server-side can tell it is stale — and replaying it after
- * the reader has since decided otherwise would overwrite the newer decision with
- * the older one. Dropping it here is the only place that knows.
- *
- * Which is why the cutoff is `submittedAt` and not simply "everything queued".
- * A slow request can succeed *after* a later one has already failed and queued:
- * the older submission would then discard the reader's newer intent and make
- * itself permanent. Only what was submitted no later than this is superseded by
- * it. Both timestamps come from the same machine's clock, including across tabs,
- * so they are comparable.
- */
-export async function dropSupersededConvictions(
-  userId: string,
-  pullId: string,
-  submittedAt: number,
-): Promise<void> {
-  try {
-    const database = await db();
-    const stale = (await database.getAll('pending')).filter(
-      (item) =>
-        item.userId === userId &&
-        item.pullId === pullId &&
-        item.kind === 'conviction' &&
-        item.submittedAt <= submittedAt,
-    );
-    for (const item of stale) if (item.id !== undefined) await database.delete('pending', item.id);
-  } catch {
-    /* best effort — the server still declines to reapply anything it recorded */
-  }
-}
-
 /** Whether this account still has queued writes — the signal to keep retrying. */
 export async function hasPending(userId: string): Promise<boolean> {
   try {

@@ -72,16 +72,21 @@ export async function recordInterrupt(args: {
 }
 
 /**
- * `mutationId` is minted once per submission and reused by any queued retry, so
- * the ledger can tell a replay from a new stance. Without it a retry is
- * recognised only by matching the current row, which fails in exactly the case
- * that matters: the reader has since decided otherwise, and replaying the older
- * stance would silently reverse the newer one.
+ * Two pieces of provenance travel with a stance, and they answer different
+ * questions.
+ *
+ * `mutationId` says *which submission this is*, so a replay of one already
+ * recorded is returned rather than reapplied. `submittedAt` says *when the
+ * reader decided*, so a submission older than the stance on record loses no
+ * matter how long its request took to arrive — which is the only way to order
+ * two requests that overlap, since neither the browser nor the queue can
+ * observe both of them finishing.
  */
 export async function setConviction(
   pullId: string,
   stance: 'agree' | 'disagree' | 'unsure',
   mutationId: string,
+  submittedAt: number,
   confidence = 0.6,
 ) {
   const { error } = await supabase.rpc('set_conviction', {
@@ -89,6 +94,7 @@ export async function setConviction(
     p_stance: stance,
     p_confidence: confidence,
     p_mutation_id: mutationId,
+    p_submitted_at: new Date(submittedAt).toISOString(),
   });
   if (error) throw error;
 }

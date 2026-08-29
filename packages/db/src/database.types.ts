@@ -140,6 +140,7 @@ export type Database = {
           pull_id: string
           rationale: string | null
           stance: Database["public"]["Enums"]["stance"]
+          submitted_at: string | null
           superseded_by: string | null
           user_id: string
         }
@@ -151,6 +152,7 @@ export type Database = {
           pull_id: string
           rationale?: string | null
           stance: Database["public"]["Enums"]["stance"]
+          submitted_at?: string | null
           superseded_by?: string | null
           user_id: string
         }
@@ -162,6 +164,7 @@ export type Database = {
           pull_id?: string
           rationale?: string | null
           stance?: Database["public"]["Enums"]["stance"]
+          submitted_at?: string | null
           superseded_by?: string | null
           user_id?: string
         }
@@ -1831,6 +1834,7 @@ export type Database = {
           p_pull_id: string
           p_rationale?: string
           p_stance: Database["public"]["Enums"]["stance"]
+          p_submitted_at?: string
         }
         Returns: {
           client_mutation_id: string | null
@@ -1840,6 +1844,7 @@ export type Database = {
           pull_id: string
           rationale: string | null
           stance: Database["public"]["Enums"]["stance"]
+          submitted_at: string | null
           superseded_by: string | null
           user_id: string
         }

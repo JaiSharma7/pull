@@ -5,7 +5,6 @@ import * as api from '../lib/api.js';
 import {
   cachePulls,
   drainPending,
-  dropSupersededConvictions,
   hasPending,
   onPendingQueued,
   onReconnect,
@@ -126,7 +125,12 @@ export function Feed({ userId }: { userId: string | null }) {
           else if (write.kind === 'explain')
             await api.saveExplanation(userId, write.pullId, write.text, write.mutationId);
           else if (write.kind === 'conviction')
-            await api.setConviction(write.pullId, write.stance, write.mutationId);
+            await api.setConviction(
+              write.pullId,
+              write.stance,
+              write.mutationId,
+              write.submittedAt,
+            );
           else await api.recordRead(write.pullId, 0, 0);
         },
         // Read from the live auth session, not from component state. Signing
@@ -261,29 +265,23 @@ export function Feed({ userId }: { userId: string | null }) {
         const mutationId = crypto.randomUUID();
         const submittedAt = Date.now();
         writes.push(
-          api.setConviction(item.row.id, stance, mutationId).then(
-            // Any stance submitted no later than this one is superseded by it,
-            // so a queued retry of one would overwrite this with something
-            // older. The server declines to reapply a submission it recorded,
-            // but one that genuinely failed was never recorded — only the
-            // client knows it is stale. Keyed on submission time rather than
-            // "everything queued", because this request may have been the slow
-            // one and a *newer* stance may already be waiting.
-            () =>
-              userId ? dropSupersededConvictions(userId, item.row.id, submittedAt) : undefined,
-            () => {
-              // Only queueable for a signed-in reader: a pending write has to
-              // belong to someone, or the drain cannot tell whose it is.
-              if (userId)
-                return queueMutation(userId, {
-                  kind: 'conviction',
-                  pullId: item.row.id,
-                  stance,
-                  mutationId,
-                  submittedAt,
-                });
-            },
-          ),
+          // Nothing to clean up on success. Ordering is the server's: it
+          // declines a stance older than the one on record, so a retry that
+          // arrives after a newer decision is a no-op wherever it comes from.
+          // Deciding that here meant scanning a queue that cannot yet contain
+          // a request still in flight.
+          api.setConviction(item.row.id, stance, mutationId, submittedAt).catch(() => {
+            // Only queueable for a signed-in reader: a pending write has to
+            // belong to someone, or the drain cannot tell whose it is.
+            if (userId)
+              return queueMutation(userId, {
+                kind: 'conviction',
+                pullId: item.row.id,
+                stance,
+                mutationId,
+                submittedAt,
+              });
+          }),
         );
       }
       if (answer?.explanation && userId) {
