@@ -1,0 +1,60 @@
+# Local development configuration. The hosted project is `pull`
+# (ref zjvfwhjwaytyogdxeddo). Link with: supabase link --project-ref <ref>
+project_id = "what-a-pull"
+
+[api]
+enabled = true
+port = 54321
+# Only `public` is exposed. The hosted project matches this, so types generated
+# locally and from the hosted project are identical — which CI check 4 asserts.
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 100
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+additional_redirect_urls = ["http://127.0.0.1:5173"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+policy = "oneshot"
+inspector_port = 8083
+
+# The Open Graph endpoint is read by link unfurlers — Slack, Twitter, iMessage —
+# which send no Authorization header. Edge functions verify a JWT by default, so
+# without this every crawler gets a 401 and the tags the function exists to
+# render are never seen. It returns nothing that is not already public: the
+# request goes through PostgREST as `anon`, so a draft or private summary is
+# invisible to it exactly as it is to any other unauthenticated reader.
+[functions.og]
+verify_jwt = false

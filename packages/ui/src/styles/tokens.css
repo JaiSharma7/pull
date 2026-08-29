@@ -1,0 +1,109 @@
+/*
+ * The Archive — design tokens.
+ *
+ * The brief is explicitly anti-Deepstash: they are pastel gradients, candy
+ * rounding and playful illustration; this is ink on paper. Every colour in the
+ * product comes from here. A hardcoded hex anywhere else is a bug — see
+ * docs/design.md and .claude/skills/design-check.
+ */
+
+:root {
+  /* Colour ------------------------------------------------------------- */
+  --bone: #f4f1ea;
+  --bone-raised: #faf8f3;
+  --ink: #14120e;
+  --ink-soft: #2c2823;
+  --warm: #6b6459;
+  --warm-faint: #9a9287;
+  --oxblood: #8c2f26;
+  --oxblood-soft: #a8433a;
+  --rule: rgb(20 18 14 / 12%);
+  --rule-strong: rgb(20 18 14 / 24%);
+
+  --surface: var(--bone);
+  --surface-raised: var(--bone-raised);
+  --text: var(--ink);
+  --text-soft: var(--ink-soft);
+  --text-muted: var(--warm);
+  --text-faint: var(--warm-faint);
+  --accent: var(--oxblood);
+  --accent-hover: var(--oxblood-soft);
+
+  /* Type --------------------------------------------------------------- */
+  --font-display: 'Fraunces', 'Iowan Old Style', georgia, 'Times New Roman', serif;
+  --font-body: 'Inter', -apple-system, blinkmacsystemfont, 'Segoe UI', helvetica, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, sfmono-regular, menlo, monospace;
+
+  --step--1: 0.8125rem;
+  --step-0: 1rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5625rem;
+  --step-3: 1.9531rem;
+  --step-4: 2.4414rem;
+  --step-5: 3.0518rem;
+
+  /* Space — a 4px base, used consistently rather than eyeballed. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Radius — deliberately small. Candy rounding is the look we are avoiding. */
+  --radius: 3px;
+  --radius-sm: 2px;
+
+  --measure: 34rem; /* ~66 characters: the comfortable reading column */
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  --transition: 160ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/*
+ * Dark mode is ink-ground, not an inverted candy palette: the same two colours
+ * swap roles and the accent is unchanged. Defined for both the system
+ * preference and an explicit choice, so a toggle wins in either direction.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --surface: #14120e;
+    --surface-raised: #1c1a16;
+    --text: #f4f1ea;
+    --text-soft: #e3ded3;
+    --text-muted: #a49b8e;
+    --text-faint: #776f64;
+    --accent: #c96a5f;
+    --accent-hover: #dc8074;
+    --rule: rgb(244 241 234 / 14%);
+    --rule-strong: rgb(244 241 234 / 26%);
+  }
+}
+
+:root[data-theme='dark'] {
+  --surface: #14120e;
+  --surface-raised: #1c1a16;
+  --text: #f4f1ea;
+  --text-soft: #e3ded3;
+  --text-muted: #a49b8e;
+  --text-faint: #776f64;
+  --accent: #c96a5f;
+  --accent-hover: #dc8074;
+  --rule: rgb(244 241 234 / 14%);
+  --rule-strong: rgb(244 241 234 / 26%);
+}
+
+/* Accessibility is a launch requirement here, not a later pass. */
+:root[data-contrast='high'] {
+  --text-muted: var(--text);
+  --rule: var(--text);
+  --rule-strong: var(--text);
+}
+
+:root[data-text='large'] {
+  --step-0: 1.1875rem;
+  --step--1: 1rem;
+  --step-1: 1.4375rem;
+  --step-2: 1.75rem;
+}

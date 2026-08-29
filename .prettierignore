@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+pnpm-lock.yaml
+packages/db/src/database.types.ts
+supabase/.temp/
+supabase/migrations/

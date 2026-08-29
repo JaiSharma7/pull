@@ -1,0 +1,6 @@
+/*
+ * Fraunces, Inter and JetBrains Mono — all OFL, which an open-source project
+ * requires. Loaded with display=swap so text is readable before the webfont
+ * arrives; tokens.css names a real fallback stack for each.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');

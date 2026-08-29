@@ -1,0 +1,14 @@
+{
+  "name": "@wap/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./vitest": "./vitest.base.ts"
+  },
+  "scripts": {
+    "lint": "echo \"no sources\"",
+    "typecheck": "echo \"no sources\"",
+    "test": "echo \"no sources\""
+  }
+}

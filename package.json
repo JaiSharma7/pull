@@ -1,0 +1,40 @@
+{
+  "name": "what-a-pull",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An open-source knowledge feed that turns the feed into a personal knowledge system.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "db:start": "supabase start",
+    "db:reset": "supabase db reset",
+    "db:push": "supabase db push",
+    "db:types": "node scripts/gen-types.mjs",
+    "db:lint": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f supabase/tests/lint.sql"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "supabase": "2.116.0",
+    "turbo": "^2.10.12",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.68.0",
+    "vitest": "^4.1.11"
+  }
+}
