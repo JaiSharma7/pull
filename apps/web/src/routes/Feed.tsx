@@ -11,6 +11,7 @@ import {
 } from '../lib/offline.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { speak } from '../lib/speech.js';
+import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
 
 type Item =
@@ -48,13 +49,6 @@ export function Feed({ userId }: { userId: string | null }) {
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
   const seenRef = useRef<Set<string>>(new Set());
-  // Kept in a ref so an in-flight drain can re-check the live identity without
-  // being torn down and restarted every time this component re-renders.
-  const currentUserRef = useRef(userId);
-  useEffect(() => {
-    currentUserRef.current = userId;
-  }, [userId]);
-
   useEffect(() => {
     let cancelled = false;
     api
@@ -118,9 +112,11 @@ export function Feed({ userId }: { userId: string | null }) {
           else if (kind === 'unsave') await api.unsavePull(pullId, userId);
           else await api.recordRead(pullId, 0, 0);
         },
-        // A drain can outlive a sign-out; without this the previous account's
-        // queued reads would be written against the new session.
-        () => currentUserRef.current === userId,
+        // Read from the live auth session, not from component state. Signing
+        // out unmounts this component rather than re-rendering it, so a ref
+        // would stop updating at exactly the moment it matters and the drain
+        // would keep believing this account was still present.
+        () => getCurrentUserId() === userId,
       );
     };
 
