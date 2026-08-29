@@ -21,7 +21,7 @@
     "db:start": "supabase start",
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
-    "db:types": "supabase gen types typescript --local > packages/db/src/database.types.ts",
+    "db:types": "node scripts/gen-types.mjs",
     "db:lint": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f supabase/tests/lint.sql"
   },
   "devDependencies": {

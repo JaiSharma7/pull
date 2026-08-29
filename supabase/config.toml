@@ -5,7 +5,9 @@ project_id = "what-a-pull"
 [api]
 enabled = true
 port = 54321
-schemas = ["public", "graphql_public"]
+# Only `public` is exposed. The hosted project matches this, so types generated
+# locally and from the hosted project are identical — which CI check 4 asserts.
+schemas = ["public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 100
 
