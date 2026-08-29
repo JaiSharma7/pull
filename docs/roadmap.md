@@ -103,8 +103,8 @@ not have to rediscover them.
   its 5-minute ceiling and stays there for the life of the tab: one IndexedDB read and
   one request per cycle, so cheap, but unbounded. The obvious bound is to give up after
   N attempts, which trades this for the worse failure of silently discarding something
-  the reader did. Round 2 should classify permanent failures (a 404 or a 403 is not a
-  500) and drop only those. Found while reviewing my own retry path, not by either
+  the reader did. Round 2 should classify permanent failures — a 404 or a 403 is not a
+  500 — and drop only those. Found while reviewing my own retry path, not by either
   reviewer.
 - **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
   says "in the migration that creates it", and the schema does not do that: tables land
