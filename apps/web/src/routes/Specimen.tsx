@@ -58,6 +58,13 @@ export function Specimen() {
       />
 
       <Interrupt
+        kind="say_it_back"
+        pull={sample}
+        onAnswer={() => undefined}
+        onDismiss={() => undefined}
+      />
+
+      <Interrupt
         kind="conviction"
         pull={sample}
         onAnswer={() => undefined}

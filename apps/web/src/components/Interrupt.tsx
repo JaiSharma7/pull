@@ -98,20 +98,41 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             placeholder="What does this actually claim, and why would it matter?"
           />
         </label>
-        {revealed && <p className="pull-card__body">{pull.body}</p>}
-        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={explanation.trim().length < 10}
-            onClick={() => {
-              setRevealed(true);
-              onAnswer({ grade: 'good', explanation: explanation.trim() });
-            }}
-          >
-            Compare with the card
-          </button>
-        </div>
+        {/*
+          Revealing and submitting are two steps on purpose. The whole point of
+          this variant is seeing your own words next to the card's, so the card
+          has to stay on screen after the comparison — submitting here would
+          retire the question before the reader had read the thing they asked for.
+        */}
+        {revealed ? (
+          <>
+            <p className="meta">The card said</p>
+            <p className="pull-card__body">{pull.body}</p>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              {RECALL_GRADES.map((g: RecallGrade) => (
+                <button
+                  key={g}
+                  type="button"
+                  className="btn"
+                  onClick={() => onAnswer({ grade: g, explanation: explanation.trim() })}
+                >
+                  {GRADE_LABELS[g]}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={explanation.trim().length < 10}
+              onClick={() => setRevealed(true)}
+            >
+              Compare with the card
+            </button>
+          </div>
+        )}
       </>,
     );
   }
