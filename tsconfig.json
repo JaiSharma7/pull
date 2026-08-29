@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/schemas" },
+    { "path": "./packages/db" },
+    { "path": "./packages/ranking" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/web" }
+  ]
+}

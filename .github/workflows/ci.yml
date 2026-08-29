@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.33.0'
+
+jobs:
+  # Check 1 of 4 — style drift, dead code, and JSX accessibility rules.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v5
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+
+  # Check 2 of 4 — schema/code drift is the likeliest breakage in this repo,
+  # so typecheck runs against the committed generated Supabase types.
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v5
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  # Check 3 of 4 — the signature mechanics must not change behaviour silently.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v5
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  # Check 4 of 4 — replay every migration from zero on a real Supabase stack,
+  # then assert the invariants that a missing policy would violate. An RLS gap
+  # is a data breach, and it is trivial to introduce by adding a table.
+  db:
+    name: db
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v5
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start Supabase (db + auth only)
+        run: pnpm exec supabase start -x studio,realtime,storage-api,imgproxy,inbucket,logflare,vector,edge-runtime,supavisor
+
+      - name: Replay all migrations from zero
+        run: pnpm exec supabase db reset --no-seed
+
+      - name: Assert RLS, policies, and FK indexes
+        run: pnpm run db:lint
+
+      - name: Seed corpus applies cleanly
+        run: pnpm exec supabase db reset
+
+      - name: Generated types are in sync with the schema
+        run: |
+          pnpm exec supabase gen types typescript --local > /tmp/database.types.ts
+          diff -u packages/db/src/database.types.ts /tmp/database.types.ts \
+            || { echo "::error::Generated DB types are stale. Run 'pnpm db:types' and commit."; exit 1; }
