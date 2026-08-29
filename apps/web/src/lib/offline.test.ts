@@ -85,6 +85,35 @@ describe('pending mutation queue', () => {
   });
 });
 
+describe('queued explanations', () => {
+  it('carries the reader’s text through the queue', async () => {
+    // An explanation is several sentences the reader composed. Unlike an
+    // impression — which regenerates the moment they scroll past the card again
+    // — it exists nowhere else, so the payload has to survive the round trip.
+    const text = 'Stoicism separates what I control from what I merely react to.';
+    await queueMutation(USER_A, 'explain', 'p1', text);
+
+    const applied: { kind: string; pullId: string; text?: string }[] = [];
+    const drained = await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(drained).toBe(1);
+    expect(applied).toEqual([{ kind: 'explain', pullId: 'p1', text }]);
+  });
+
+  it('leaves text absent for writes that carry no payload', async () => {
+    await queueMutation(USER_A, 'read', 'p2');
+
+    const applied: { text?: string }[] = [];
+    await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(applied[0]?.text).toBeUndefined();
+  });
+});
+
 describe('account scoping', () => {
   it('never drains writes queued by another account', async () => {
     // Pending writes survive sign-out. On a shared browser, replaying A's saves

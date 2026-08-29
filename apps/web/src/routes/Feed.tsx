@@ -109,10 +109,14 @@ export function Feed({ userId }: { userId: string | null }) {
       setOffline(false);
       void drainPending(
         userId,
-        async ({ kind, pullId }) => {
+        async ({ kind, pullId, text }) => {
           if (kind === 'save') await api.savePull(pullId, userId);
           else if (kind === 'unsave') await api.unsavePull(pullId, userId);
-          else await api.recordRead(pullId, 0, 0);
+          else if (kind === 'explain') {
+            // No text means nothing to write. Dropping it is right: a retry
+            // would fail identically forever and block this pull's other writes.
+            if (text) await api.saveExplanation(userId, pullId, text);
+          } else await api.recordRead(pullId, 0, 0);
         },
         // Read from the live auth session, not from component state. Signing
         // out unmounts this component rather than re-rendering it, so a ref
@@ -177,23 +181,34 @@ export function Feed({ userId }: { userId: string | null }) {
       setHandledSlots((prev) => new Set(prev).add(slotKey));
 
       const responded = answer !== null;
-      try {
-        await api.recordInterrupt({
+
+      // Settled independently, not chained. `record_interrupt` is telemetry;
+      // the stance and the explanation are the reader's own data. Awaiting them
+      // behind it meant one failed telemetry write silently discarded both.
+      const writes: Promise<unknown>[] = [
+        api.recordInterrupt({
           pullId: item.row.id,
           kind: item.slot.kind,
           slot: item.slot.slotIndex,
           response: responded ? 'answered' : 'dismissed',
           ...(answer?.grade ? { grade: answer.grade } : {}),
-        });
-        if (answer?.stance) await api.setConviction(item.row.id, answer.stance);
-        // Say It Back's whole value is the reader's own wording — without this
-        // it was typed, compared against the card, and then thrown away.
-        if (answer?.explanation && userId) {
-          await api.saveExplanation(userId, item.row.id, answer.explanation);
-        }
-      } catch {
-        /* a dropped interrupt record must never break the reading session */
+        }),
+      ];
+      if (answer?.stance) writes.push(api.setConviction(item.row.id, answer.stance));
+      // Say It Back's whole value is the reader's own wording — without this it
+      // was typed, compared against the card, and then thrown away. It is the
+      // one write here worth queueing: several sentences the reader composed,
+      // against an impression they can regenerate just by scrolling.
+      if (answer?.explanation && userId) {
+        const text = answer.explanation;
+        writes.push(
+          api
+            .saveExplanation(userId, item.row.id, text)
+            .catch(() => queueMutation(userId, 'explain', item.row.id, text)),
+        );
       }
+      // Never rejects, so a dropped write cannot break the reading session.
+      await Promise.allSettled(writes);
       // Only a recall grade counts as recall. A conviction or counterpull answer
       // is a stance, not a memory test, and counting it would overstate the
       // number the Enough screen reports.

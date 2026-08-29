@@ -13,6 +13,20 @@ import type { FeedRow } from './types.js';
  * enhancement rather than a rescue operation.
  */
 
+/**
+ * `explain` carries a payload; the other three are identified entirely by their
+ * pull. It is queued like the rest because an explanation is the most expensive
+ * thing a reader ever produces here — several sentences of their own writing —
+ * and losing it to a dropped connection is far worse than losing an impression.
+ */
+export type PendingKind = 'save' | 'unsave' | 'read' | 'explain';
+
+export interface PendingWrite {
+  kind: PendingKind;
+  pullId: string;
+  text?: string;
+}
+
 interface WapDB extends DBSchema {
   pulls: { key: string; value: FeedRow & { cachedAt: number } };
   /**
@@ -25,11 +39,9 @@ interface WapDB extends DBSchema {
    */
   pending: {
     key: number;
-    value: {
+    value: PendingWrite & {
       id?: number;
       userId: string;
-      kind: 'save' | 'unsave' | 'read';
-      pullId: string;
       at: number;
     };
   };
@@ -76,12 +88,19 @@ export async function readCachedPulls(limit = 20): Promise<FeedRow[]> {
 
 export async function queueMutation(
   userId: string,
-  kind: 'save' | 'unsave' | 'read',
+  kind: PendingKind,
   pullId: string,
+  text?: string,
 ): Promise<void> {
   try {
     const database = await db();
-    await database.add('pending', { userId, kind, pullId, at: Date.now() });
+    await database.add('pending', {
+      userId,
+      kind,
+      pullId,
+      at: Date.now(),
+      ...(text === undefined ? {} : { text }),
+    });
   } catch {
     /* nothing to do — the mutation is simply lost, which is the honest outcome */
   }
@@ -105,7 +124,7 @@ const inFlight = new Map<string, Promise<number>>();
 
 export function drainPending(
   userId: string,
-  apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
+  apply: (m: PendingWrite) => Promise<void>,
   /**
    * Whether `userId` is still the signed-in account. Checked before every
    * write, because a drain can outlive a sign-out: the Supabase client is
@@ -146,7 +165,7 @@ async function withCrossTabLock<T>(userId: string, run: () => Promise<T>): Promi
 
 async function runDrain(
   userId: string,
-  apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
+  apply: (m: PendingWrite) => Promise<void>,
   isStillCurrent: () => boolean,
 ): Promise<number> {
   let drained = 0;
@@ -164,7 +183,9 @@ async function runDrain(
       if (!isStillCurrent()) break;
       if (blocked.has(item.pullId)) continue;
       try {
-        await apply(item);
+        // Project rather than forward the row: `id`, `userId` and `at` are
+        // bookkeeping for this queue, not part of the write being replayed.
+        await apply({ kind: item.kind, pullId: item.pullId, text: item.text });
       } catch {
         // Keep it queued and skip the rest of this pull's writes, preserving
         // their relative order for the next attempt.
