@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cachePulls,
   drainPending,
+  dropPending,
   hasPending,
   onPendingQueued,
   queueMutation,
@@ -113,15 +114,55 @@ describe('queued learning writes', () => {
     expect(applied).toEqual([{ kind: 'explain', pullId: 'p1', text, mutationId }]);
   });
 
-  it('carries a stance through the queue', async () => {
-    await queueMutation(USER_A, { kind: 'conviction', pullId: 'p2', stance: 'disagree' });
+  it('carries a stance and its mutation id through the queue', async () => {
+    const mutationId = 'b2c3d4e5-1a2b-4c3d-9e8f-7a6b5c4d3e2f';
+    await queueMutation(USER_A, {
+      kind: 'conviction',
+      pullId: 'p2',
+      stance: 'disagree',
+      mutationId,
+    });
 
     const applied: PendingWrite[] = [];
     await drainPending(USER_A, async (m) => {
       applied.push(m);
     });
 
-    expect(applied).toEqual([{ kind: 'conviction', pullId: 'p2', stance: 'disagree' }]);
+    expect(applied).toEqual([{ kind: 'conviction', pullId: 'p2', stance: 'disagree', mutationId }]);
+  });
+
+  it('drops a stale queued stance once a newer one lands', async () => {
+    // A conviction that genuinely failed was never recorded, so nothing
+    // server-side can tell it is stale. Replaying it after the reader decided
+    // otherwise would overwrite the newer decision with the older one.
+    await queueMutation(USER_A, {
+      kind: 'conviction',
+      pullId: 'p9',
+      stance: 'agree',
+      mutationId: 'stale',
+    });
+    // An unrelated write for the same pull must survive — only the superseded
+    // kind is dropped.
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p9' });
+    // And another pull's stance is none of this one's business.
+    await queueMutation(USER_A, {
+      kind: 'conviction',
+      pullId: 'p10',
+      stance: 'unsure',
+      mutationId: 'other-pull',
+    });
+
+    await dropPending(USER_A, 'p9', 'conviction');
+
+    const applied: PendingWrite[] = [];
+    await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(applied).toEqual([
+      { kind: 'read', pullId: 'p9' },
+      { kind: 'conviction', pullId: 'p10', stance: 'unsure', mutationId: 'other-pull' },
+    ]);
   });
 
   it('carries no payload for the writes that have none', async () => {

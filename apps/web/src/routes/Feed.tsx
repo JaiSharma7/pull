@@ -5,6 +5,7 @@ import * as api from '../lib/api.js';
 import {
   cachePulls,
   drainPending,
+  dropPending,
   hasPending,
   onPendingQueued,
   onReconnect,
@@ -124,7 +125,8 @@ export function Feed({ userId }: { userId: string | null }) {
           else if (write.kind === 'unsave') await api.unsavePull(write.pullId, userId);
           else if (write.kind === 'explain')
             await api.saveExplanation(userId, write.pullId, write.text, write.mutationId);
-          else if (write.kind === 'conviction') await api.setConviction(write.pullId, write.stance);
+          else if (write.kind === 'conviction')
+            await api.setConviction(write.pullId, write.stance, write.mutationId);
           else await api.recordRead(write.pullId, 0, 0);
         },
         // Read from the live auth session, not from component state. Signing
@@ -137,38 +139,47 @@ export function Feed({ userId }: { userId: string | null }) {
 
     // A write can fail while the browser is still online — a 500, a timeout, a
     // server that is up but unwell. No `online` event follows, because
-    // connectivity never changed, so the entry needs a timer of its own or it
-    // waits for a reload. Backs off while it keeps failing and resets once the
-    // queue clears, so an unreachable server is retried patiently rather than
-    // hammered.
-    const retryLater = () => {
+    // connectivity never changed, so the queue needs a timer of its own or it
+    // waits for a reload.
+    const scheduleRetry = () => {
       if (stopped || timer !== undefined) return;
       timer = setTimeout(() => {
         timer = undefined;
-        void (async () => {
-          await drain();
-          if (stopped) return;
-          if (await hasPending(userId)) {
-            backoff = Math.min(backoff * 2, RETRY_MAX_MS);
-            retryLater();
-          } else {
-            backoff = RETRY_BASE_MS;
-          }
-        })();
+        void drainAndReschedule();
       }, backoff);
+    };
+
+    // Every path into the queue ends here, because what decides whether to
+    // retry is whether anything is still pending — not which event got us here.
+    // Hanging the schedule off the queued-write notification alone left the
+    // case that needs it most uncovered: a page that loads with an entry
+    // already queued emits no notification, so a failing mount drain would sit
+    // there until an unrelated reconnect. Backs off while the server stays
+    // unwell and resets once the queue clears.
+    const drainAndReschedule = async () => {
+      await drain();
+      if (stopped) return;
+      if (await hasPending(userId)) {
+        backoff = Math.min(backoff * 2, RETRY_MAX_MS);
+        scheduleRetry();
+      } else {
+        backoff = RETRY_BASE_MS;
+      }
     };
 
     // Writes can be queued by a transient server failure that never flips
     // navigator.onLine, and a reload while already online fires no `online`
     // event at all. Either way they would sit unapplied forever, so drain once
     // on mount as well as on reconnect.
-    if (typeof navigator === 'undefined' || navigator.onLine) void drain();
+    if (typeof navigator === 'undefined' || navigator.onLine) void drainAndReschedule();
 
     const offReconnect = onReconnect(() => {
       backoff = RETRY_BASE_MS;
-      void drain();
+      void drainAndReschedule();
     });
-    const offQueued = onPendingQueued(retryLater);
+    // A write that just failed is not worth retrying this instant — let the
+    // backoff run first.
+    const offQueued = onPendingQueued(scheduleRetry);
 
     return () => {
       stopped = true;
@@ -247,13 +258,27 @@ export function Feed({ userId }: { userId: string | null }) {
       // replaying rather than duplicate it.
       if (answer?.stance) {
         const stance = answer.stance;
+        const mutationId = crypto.randomUUID();
         writes.push(
-          api.setConviction(item.row.id, stance).catch(() => {
-            // Only queueable for a signed-in reader: a pending write has to
-            // belong to someone, or the drain cannot tell whose it is.
-            if (userId)
-              return queueMutation(userId, { kind: 'conviction', pullId: item.row.id, stance });
-          }),
+          api.setConviction(item.row.id, stance, mutationId).then(
+            // This stance is now the reader's position, so any earlier one still
+            // waiting to be retried is stale. The server can decline to reapply
+            // a submission it recorded, but one that genuinely failed was never
+            // recorded — replaying it would overwrite this newer decision with
+            // an older one, and only the client knows to drop it.
+            () => (userId ? dropPending(userId, item.row.id, 'conviction') : undefined),
+            () => {
+              // Only queueable for a signed-in reader: a pending write has to
+              // belong to someone, or the drain cannot tell whose it is.
+              if (userId)
+                return queueMutation(userId, {
+                  kind: 'conviction',
+                  pullId: item.row.id,
+                  stance,
+                  mutationId,
+                });
+            },
+          ),
         );
       }
       if (answer?.explanation && userId) {

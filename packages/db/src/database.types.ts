@@ -133,6 +133,7 @@ export type Database = {
       }
       convictions: {
         Row: {
+          client_mutation_id: string | null
           confidence: number
           created_at: string
           id: string
@@ -143,6 +144,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          client_mutation_id?: string | null
           confidence?: number
           created_at?: string
           id?: string
@@ -153,6 +155,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          client_mutation_id?: string | null
           confidence?: number
           created_at?: string
           id?: string
@@ -1824,11 +1827,13 @@ export type Database = {
       set_conviction: {
         Args: {
           p_confidence?: number
+          p_mutation_id?: string
           p_pull_id: string
           p_rationale?: string
           p_stance: Database["public"]["Enums"]["stance"]
         }
         Returns: {
+          client_mutation_id: string | null
           confidence: number
           created_at: string
           id: string

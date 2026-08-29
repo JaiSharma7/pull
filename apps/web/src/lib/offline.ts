@@ -24,15 +24,16 @@ import type { FeedRow } from './types.js';
  * they are the ones it would actually hurt to lose.
  *
  * Every kind here must be safe to replay, since a queued write is retried
- * whenever its response was lost rather than its effect: saves collide on their
- * unique index, `record_read` is idempotent per pull and day,
- * `explanations.client_mutation_id` makes the retry collide with the write it
- * is replaying, and `set_conviction` no-ops on an unchanged stance.
+ * whenever its *response* was lost rather than its effect: saves collide on
+ * their unique index, `record_read` is idempotent per pull and day, and the two
+ * learning writes carry a `mutationId` minted once per submission, which is
+ * what lets the server recognise a replay as a submission it already applied
+ * — even when a later stance has superseded it in the meantime.
  */
 export type PendingWrite =
   | { kind: 'save' | 'unsave' | 'read'; pullId: string }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
-  | { kind: 'conviction'; pullId: string; stance: Stance };
+  | { kind: 'conviction'; pullId: string; stance: Stance; mutationId: string };
 
 interface WapDB extends DBSchema {
   pulls: { key: string; value: FeedRow & { cachedAt: number } };
@@ -119,6 +120,31 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
     return;
   }
   for (const listener of queuedListeners) listener();
+}
+
+/**
+ * Forget queued writes of one kind for one pull, because a newer one landed.
+ *
+ * The server can recognise a replayed submission and decline to reapply it, but
+ * only for submissions it actually saw. One that genuinely failed was never
+ * recorded, so nothing server-side can tell it is stale — and replaying it after
+ * the reader has since decided otherwise would overwrite the newer decision with
+ * the older one. Dropping it here is the only place that knows.
+ */
+export async function dropPending(
+  userId: string,
+  pullId: string,
+  kind: PendingWrite['kind'],
+): Promise<void> {
+  try {
+    const database = await db();
+    const stale = (await database.getAll('pending')).filter(
+      (item) => item.userId === userId && item.pullId === pullId && item.kind === kind,
+    );
+    for (const item of stale) if (item.id !== undefined) await database.delete('pending', item.id);
+  } catch {
+    /* best effort — the server still declines to reapply anything it recorded */
+  }
 }
 
 /** Whether this account still has queued writes — the signal to keep retrying. */

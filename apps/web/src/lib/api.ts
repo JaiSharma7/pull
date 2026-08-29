@@ -71,15 +71,24 @@ export async function recordInterrupt(args: {
   if (error) throw error;
 }
 
+/**
+ * `mutationId` is minted once per submission and reused by any queued retry, so
+ * the ledger can tell a replay from a new stance. Without it a retry is
+ * recognised only by matching the current row, which fails in exactly the case
+ * that matters: the reader has since decided otherwise, and replaying the older
+ * stance would silently reverse the newer one.
+ */
 export async function setConviction(
   pullId: string,
   stance: 'agree' | 'disagree' | 'unsure',
+  mutationId: string,
   confidence = 0.6,
 ) {
   const { error } = await supabase.rpc('set_conviction', {
     p_pull_id: pullId,
     p_stance: stance,
     p_confidence: confidence,
+    p_mutation_id: mutationId,
   });
   if (error) throw error;
 }
