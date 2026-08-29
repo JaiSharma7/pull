@@ -5,7 +5,7 @@ import * as api from '../lib/api.js';
 import {
   cachePulls,
   drainPending,
-  dropPending,
+  dropSupersededConvictions,
   hasPending,
   onPendingQueued,
   onReconnect,
@@ -259,14 +259,18 @@ export function Feed({ userId }: { userId: string | null }) {
       if (answer?.stance) {
         const stance = answer.stance;
         const mutationId = crypto.randomUUID();
+        const submittedAt = Date.now();
         writes.push(
           api.setConviction(item.row.id, stance, mutationId).then(
-            // This stance is now the reader's position, so any earlier one still
-            // waiting to be retried is stale. The server can decline to reapply
-            // a submission it recorded, but one that genuinely failed was never
-            // recorded — replaying it would overwrite this newer decision with
-            // an older one, and only the client knows to drop it.
-            () => (userId ? dropPending(userId, item.row.id, 'conviction') : undefined),
+            // Any stance submitted no later than this one is superseded by it,
+            // so a queued retry of one would overwrite this with something
+            // older. The server declines to reapply a submission it recorded,
+            // but one that genuinely failed was never recorded — only the
+            // client knows it is stale. Keyed on submission time rather than
+            // "everything queued", because this request may have been the slow
+            // one and a *newer* stance may already be waiting.
+            () =>
+              userId ? dropSupersededConvictions(userId, item.row.id, submittedAt) : undefined,
             () => {
               // Only queueable for a signed-in reader: a pending write has to
               // belong to someone, or the drain cannot tell whose it is.
@@ -276,6 +280,7 @@ export function Feed({ userId }: { userId: string | null }) {
                   pullId: item.row.id,
                   stance,
                   mutationId,
+                  submittedAt,
                 });
             },
           ),
