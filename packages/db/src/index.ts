@@ -9,3 +9,6 @@ export function createBrowserClient(url: string, anonKey: string): Db {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 }
+
+// Type-only parity guard between generated enums and their TS mirrors.
+export type { EnumParityChecks } from './enum-parity.js';

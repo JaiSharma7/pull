@@ -107,6 +107,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.112.4
         version: 2.112.4
+      '@wap/schemas':
+        specifier: workspace:*
+        version: link:../schemas
     devDependencies:
       '@wap/config':
         specifier: workspace:*

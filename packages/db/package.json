@@ -15,7 +15,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.4"
+    "@supabase/supabase-js": "^2.112.4",
+    "@wap/schemas": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

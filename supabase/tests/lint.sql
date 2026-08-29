@@ -97,4 +97,32 @@ BEGIN
   END IF;
 END $$;
 
+-- 5. No two permissive policies may cover SELECT for the same role on the same
+--    table: Postgres OR-s them together on every row of every read. Usually
+--    caused by adding a `for all` write policy beside an existing read policy.
+DO $$
+DECLARE
+  offenders text;
+BEGIN
+  SELECT string_agg(DISTINCT rel, ', ')
+    INTO offenders
+  FROM (
+    SELECT p.polrelid::regclass::text AS rel, unnest(p.polroles) AS role_oid
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND p.polpermissive
+      AND p.polcmd IN ('r', '*')       -- SELECT, or ALL (which includes SELECT)
+    GROUP BY 1, 2
+    HAVING count(*) > 1
+  ) dupes;
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Overlapping permissive SELECT policies on: %. Split `for all` into INSERT/UPDATE/DELETE.',
+      offenders;
+  END IF;
+END $$;
+
 SELECT 'schema invariants: ok' AS result;
