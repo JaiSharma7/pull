@@ -1,0 +1,173 @@
+{
+  "note": "Captured from public.plan_interleave on the live database. SQL is authoritative; regenerate only when the planner changes deliberately.",
+  "context": { "duePressure": 0, "dismissalDamping": 1, "preferenceRate": 1 },
+  "cases": [
+    {
+      "seed": 1,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [{ "slotIndex": 10, "kind": "counterpull" }]
+    },
+    {
+      "seed": 2,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 6, "kind": "recall" },
+        { "slotIndex": 17, "kind": "delta_probe" },
+        { "slotIndex": 28, "kind": "counterpull" }
+      ]
+    },
+    {
+      "seed": 3,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [{ "slotIndex": 4, "kind": "recall" }]
+    },
+    {
+      "seed": 7,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 4, "kind": "recall" },
+        { "slotIndex": 17, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 11,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 11, "kind": "delta_probe" },
+        { "slotIndex": 27, "kind": "say_it_back" }
+      ]
+    },
+    {
+      "seed": 13,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 13, "kind": "recall" },
+        { "slotIndex": 25, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 12345,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 4, "kind": "conviction" },
+        { "slotIndex": 20, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 99999,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 8, "kind": "say_it_back" },
+        { "slotIndex": 14, "kind": "delta_probe" }
+      ]
+    },
+    { "seed": 42, "page": 1, "pageSize": 20, "cardsBefore": 30, "usedBudget": 1, "expected": [] },
+    {
+      "seed": 42,
+      "page": 2,
+      "pageSize": 20,
+      "cardsBefore": 50,
+      "usedBudget": 2,
+      "expected": [{ "slotIndex": 6, "kind": "conviction" }]
+    },
+    { "seed": 42, "page": 3, "pageSize": 20, "cardsBefore": 70, "usedBudget": 3, "expected": [] },
+    { "seed": 777, "page": 0, "pageSize": 8, "cardsBefore": 0, "usedBudget": 0, "expected": [] },
+    {
+      "seed": 777,
+      "page": 0,
+      "pageSize": 50,
+      "cardsBefore": 0,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 16, "kind": "say_it_back" },
+        { "slotIndex": 30, "kind": "recall" },
+        { "slotIndex": 37, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 555,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 1,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 1, "kind": "say_it_back" },
+        { "slotIndex": 6, "kind": "conviction" },
+        { "slotIndex": 11, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 555,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 2,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 1, "kind": "say_it_back" },
+        { "slotIndex": 6, "kind": "conviction" },
+        { "slotIndex": 11, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 555,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 5,
+      "usedBudget": 0,
+      "expected": [
+        { "slotIndex": 1, "kind": "say_it_back" },
+        { "slotIndex": 6, "kind": "conviction" },
+        { "slotIndex": 11, "kind": "recall" }
+      ]
+    },
+    {
+      "seed": 888,
+      "page": 0,
+      "pageSize": 30,
+      "cardsBefore": 0,
+      "usedBudget": 2,
+      "expected": [{ "slotIndex": 28, "kind": "recall" }]
+    },
+    { "seed": 888, "page": 0, "pageSize": 30, "cardsBefore": 0, "usedBudget": 3, "expected": [] },
+    {
+      "seed": 31337,
+      "page": 4,
+      "pageSize": 25,
+      "cardsBefore": 100,
+      "usedBudget": 0,
+      "expected": [{ "slotIndex": 9, "kind": "say_it_back" }]
+    },
+    {
+      "seed": 2024,
+      "page": 0,
+      "pageSize": 12,
+      "cardsBefore": 0,
+      "usedBudget": 1,
+      "expected": [{ "slotIndex": 11, "kind": "say_it_back" }]
+    }
+  ]
+}

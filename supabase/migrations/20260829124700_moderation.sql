@@ -1,17 +1,11 @@
--- Moderation and the §512 rights workflow.
---
--- These tables exist BEFORE the UGC features that need them. Building the
--- takedown path after opening submissions is how hosts end up out of
--- compliance. See docs/content-policy.md.
-
 create table public.reports (
   id          uuid primary key default extensions.gen_random_uuid(),
   reporter_id uuid references auth.users (id) on delete set null,
-  target_type text not null,          -- pull | summary | stash | profile | note
+  target_type text not null,
   target_id   uuid not null,
-  reason      text not null,          -- infringement | inaccuracy | abuse | spam
+  reason      text not null,
   detail      text,
-  status      text not null default 'open',   -- open | actioned | dismissed
+  status      text not null default 'open',
   created_at  timestamptz not null default now()
 );
 
@@ -23,7 +17,7 @@ create table public.moderation_decisions (
   id           uuid primary key default extensions.gen_random_uuid(),
   report_id    uuid references public.reports (id) on delete cascade,
   moderator_id uuid references auth.users (id) on delete set null,
-  action       text not null,        -- removed | restored | edited | no_action
+  action       text not null,
   rationale    text,
   created_at   timestamptz not null default now()
 );
@@ -39,7 +33,6 @@ create table public.rights_requests (
   summary_id     uuid references public.summaries (id) on delete set null,
   notice_body    text not null,
   status         text not null default 'received',
-  -- received | disabled | counter_noticed | restored | resolved
   received_at    timestamptz not null default now(),
   resolved_at    timestamptz,
   resolution     text

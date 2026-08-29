@@ -1,10 +1,8 @@
--- A `for all` policy also covers SELECT. On a table that already has its own
--- read policy, that means two permissive policies get OR-ed together for every
--- row of every read — a cost paid on the hot path, since summaries, stashes and
--- notes are read constantly.
---
--- The performance advisor flagged 25 of these. Split each write policy into
--- INSERT/UPDATE/DELETE so every action is covered exactly once.
+-- A `for all` policy also covers SELECT. On tables that already have a distinct
+-- read policy that means two permissive policies are OR-ed together on every
+-- row of every read — a cost paid on the hot path (summaries and stashes are
+-- read constantly). Split the write policies into INSERT/UPDATE/DELETE so each
+-- action is covered exactly once.
 
 -- follows
 drop policy follows_write_own on public.follows;

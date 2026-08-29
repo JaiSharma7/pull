@@ -18,8 +18,9 @@
     "@wap/schemas": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11",
-    "@wap/config": "workspace:*"
+    "vitest": "^4.1.11"
   }
 }

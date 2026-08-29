@@ -1701,17 +1701,117 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      dismissal_damping: { Args: { p_user_id: string }; Returns: number }
+      due_pressure: { Args: { p_user_id: string }; Returns: number }
+      get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
+      get_feed: {
+        Args: {
+          p_cards_before?: number
+          p_limit?: number
+          p_page?: number
+          p_seed?: number
+          p_used_budget?: number
+        }
+        Returns: Json
+      }
+      get_source_delta: { Args: { p_work_id: string }; Returns: Json }
+      grade_recall: {
+        Args: {
+          p_grade: Database["public"]["Enums"]["recall_grade"]
+          p_pull_id: string
+        }
+        Returns: {
+          acquired_via: Database["public"]["Enums"]["acquisition"]
+          difficulty: number
+          lapses: number
+          last_seen_at: string
+          next_due_at: string
+          pull_id: string
+          reps: number
+          stability: number
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "knowledge_states"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      plan_interleave: {
+        Args: {
+          p_cards_before?: number
+          p_page: number
+          p_page_size: number
+          p_seed: number
+          p_used_budget?: number
+          p_user_id: string
+        }
+        Returns: {
+          kind: Database["public"]["Enums"]["interrupt_kind"]
+          slot_index: number
+        }[]
+      }
+      record_interrupt: {
+        Args: {
+          p_grade?: Database["public"]["Enums"]["recall_grade"]
+          p_kind: Database["public"]["Enums"]["interrupt_kind"]
+          p_latency?: number
+          p_pull_id: string
+          p_response: Database["public"]["Enums"]["interrupt_response"]
+          p_session?: string
+          p_slot: number
+        }
+        Returns: undefined
+      }
+      record_read: {
+        Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
+        Returns: undefined
+      }
+      refresh_knowledge_vector: {
+        Args: { p_user_id?: string }
+        Returns: undefined
+      }
       retrievability: {
-        Args: { at_time?: string; last_seen: string; stability: number }
+        Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
       }
       seeded_unit: {
         Args: { page: number; salt?: string; seed: number; slot: number }
         Returns: number
       }
+      set_conviction: {
+        Args: {
+          p_confidence?: number
+          p_pull_id: string
+          p_rationale?: string
+          p_stance: Database["public"]["Enums"]["stance"]
+        }
+        Returns: {
+          confidence: number
+          created_at: string
+          id: string
+          pull_id: string
+          rationale: string | null
+          stance: Database["public"]["Enums"]["stance"]
+          superseded_by: string | null
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "convictions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean
+      }
+      synthetic_embedding: { Args: { p_axes: Json }; Returns: string }
+      topic_affinity: {
+        Args: { p_weights: Json; p_work_id: string }
+        Returns: number
       }
     }
     Enums: {

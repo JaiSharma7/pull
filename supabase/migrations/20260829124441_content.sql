@@ -1,9 +1,3 @@
--- Canonical sources.
---
--- A Work is the thing itself; Editions are its concrete forms. Blade Runner's
--- three cuts and a book's four ISBNs are distinct rows, so a citation can point
--- at a real page in a real printing rather than at a title string.
-
 create table public.works (
   id            uuid primary key default extensions.gen_random_uuid(),
   kind          public.work_kind not null,
@@ -13,17 +7,11 @@ create table public.works (
   year          int,
   description   text,
   rights_status public.rights_status not null default 'review_required',
-
-  -- {"isbn13": "...", "doi": "...", "tmdb": 123, "gutenberg": 2680}
   external_ids  jsonb not null default '{}'::jsonb,
-
-  -- Editorial signals used by ranking. Deliberately not user-visible scores.
   quality_score real not null default 0.5,
   trust_score   real not null default 0.5,
-
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
-
   constraint works_year_sane     check (year is null or year between -3000 and 2200),
   constraint works_quality_range check (quality_score between 0 and 1),
   constraint works_trust_range   check (trust_score   between 0 and 1)
@@ -40,12 +28,12 @@ create trigger works_updated_at
 create table public.editions (
   id               uuid primary key default extensions.gen_random_uuid(),
   work_id          uuid not null references public.works (id) on delete cascade,
-  label            text not null,          -- 'Hardcover, 2018' / "Director's Cut"
+  label            text not null,
   isbn13           text,
   publisher        text,
   year             int,
   language         text not null default 'en',
-  duration_seconds int,                    -- film, podcast, lecture
+  duration_seconds int,
   page_count       int,
   url              text,
   is_primary       boolean not null default false,
@@ -53,8 +41,6 @@ create table public.editions (
 );
 
 create index editions_work_idx on public.editions (work_id);
-
--- At most one primary edition per work: the one a bare citation resolves to.
 create unique index editions_one_primary_per_work
   on public.editions (work_id) where is_primary;
 
@@ -72,7 +58,7 @@ create index contributors_name_trgm
 create table public.work_contributors (
   work_id        uuid not null references public.works (id) on delete cascade,
   contributor_id uuid not null references public.contributors (id) on delete cascade,
-  role           text not null default 'author',  -- author|director|host|researcher
+  role           text not null default 'author',
   ordinal        int  not null default 0,
   primary key (work_id, contributor_id, role)
 );
@@ -80,8 +66,6 @@ create table public.work_contributors (
 create index work_contributors_contributor_idx
   on public.work_contributors (contributor_id);
 
--- Topics are hierarchical: 'cognitive-psychology' sits under 'psychology', and
--- an affinity for the parent should partially credit the child.
 create table public.topics (
   id         uuid primary key default extensions.gen_random_uuid(),
   slug       citext unique not null,

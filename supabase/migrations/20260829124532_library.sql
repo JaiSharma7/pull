@@ -1,6 +1,3 @@
--- The Library. Everything here is free and unlimited by policy — no row counts,
--- no quotas, no gates. See CLAUDE.md §3.
-
 create table public.stashes (
   id          uuid primary key default extensions.gen_random_uuid(),
   user_id     uuid not null references auth.users (id) on delete cascade,
@@ -9,20 +6,13 @@ create table public.stashes (
   description text,
   visibility  public.visibility not null default 'private',
   cover_path  text,
-
-  -- Smart Stashes: the stash is a saved query rather than a folder.
-  -- e.g. {"topics":["ai","design"],"savedWithinDays":30,"notYetReviewed":true}
   is_smart    boolean not null default false,
   query       jsonb,
-
   position    int not null default 0,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
-
-  constraint stashes_smart_has_query
-    check (not is_smart or query is not null),
-  constraint stashes_no_self_parent
-    check (parent_id is null or parent_id <> id)
+  constraint stashes_smart_has_query check (not is_smart or query is not null),
+  constraint stashes_no_self_parent check (parent_id is null or parent_id <> id)
 );
 
 create index stashes_user_idx   on public.stashes (user_id, position);
@@ -32,7 +22,6 @@ create trigger stashes_updated_at
   before update on public.stashes
   for each row execute function public.set_updated_at();
 
--- A save points at a Pull or a whole Summary, never both and never neither.
 create table public.saved_items (
   id         uuid primary key default extensions.gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
@@ -43,7 +32,6 @@ create table public.saved_items (
   archived   boolean not null default false,
   read_later boolean not null default false,
   created_at timestamptz not null default now(),
-
   constraint saved_items_one_target check (
     (pull_id is not null)::int + (summary_id is not null)::int = 1
   )
@@ -54,7 +42,6 @@ create index saved_items_stash_idx   on public.saved_items (stash_id);
 create index saved_items_pull_idx    on public.saved_items (pull_id);
 create index saved_items_summary_idx on public.saved_items (summary_id);
 
--- One save per user per target: saving twice is idempotent, not a duplicate row.
 create unique index saved_items_unique_pull
   on public.saved_items (user_id, pull_id) where pull_id is not null;
 create unique index saved_items_unique_summary
@@ -83,7 +70,7 @@ create table public.highlights (
   id         uuid primary key default extensions.gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   pull_id    uuid not null references public.pulls (id) on delete cascade,
-  field      text not null default 'body',   -- which card field the range indexes
+  field      text not null default 'body',
   start_offset int not null,
   end_offset   int not null,
   text       text not null,
@@ -94,12 +81,10 @@ create table public.highlights (
 create index highlights_user_idx on public.highlights (user_id, created_at desc);
 create index highlights_pull_idx on public.highlights (pull_id);
 
--- Unlimited history, organised by day. Deepstash charges for this; it is a
--- table with an index.
 create table public.history_events (
   id         bigint generated always as identity primary key,
   user_id    uuid not null references auth.users (id) on delete cascade,
-  kind       text not null,     -- viewed|read|saved|listened|reviewed|explained
+  kind       text not null,
   pull_id    uuid references public.pulls (id) on delete cascade,
   summary_id uuid references public.summaries (id) on delete cascade,
   work_id    uuid references public.works (id) on delete cascade,
@@ -112,7 +97,6 @@ create index history_pull_idx      on public.history_events (pull_id);
 create index history_summary_idx   on public.history_events (summary_id);
 create index history_work_idx      on public.history_events (work_id);
 
--- "Resume from the exact card", synced across devices.
 create table public.progress (
   user_id      uuid not null references auth.users (id) on delete cascade,
   summary_id   uuid not null references public.summaries (id) on delete cascade,

@@ -4,7 +4,9 @@
     "outDir": "dist",
     "rootDir": "src",
     "composite": true,
-    "jsx": "react-jsx"
+    "types": ["node"],
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*.ts", "src/**/*.json"],
+  "references": [{ "path": "../schemas" }]
 }

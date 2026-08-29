@@ -1,16 +1,3 @@
--- ---------------------------------------------------------------------------
--- Row level security on every table.
---
--- Two postures:
---   * User-owned data  — the owner, and only the owner.
---   * Canonical content — world-readable once published, writable by nobody
---     through the API (the worker uses the service role, which bypasses RLS).
---
--- A table with RLS enabled and no policy is readable by NO ONE, which is a
--- different bug with the same cause. supabase/tests/lint.sql checks for both.
--- ---------------------------------------------------------------------------
-
--- Helper: is this summary visible to the caller?
 create or replace function public.summary_is_readable(s public.summaries)
 returns boolean
 language sql
@@ -23,13 +10,8 @@ as $$
       or (s.author_id is not null and s.author_id = (select auth.uid()));
 $$;
 
--- =========================================================================
--- Identity
--- =========================================================================
 alter table public.profiles enable row level security;
-
-create policy profiles_read_all on public.profiles
-  for select using (true);
+create policy profiles_read_all on public.profiles for select using (true);
 create policy profiles_write_own on public.profiles
   for update using ((select auth.uid()) = id) with check ((select auth.uid()) = id);
 create policy profiles_insert_own on public.profiles
@@ -41,15 +23,11 @@ create policy preference_profiles_own on public.preference_profiles
   with check ((select auth.uid()) = user_id);
 
 alter table public.follows enable row level security;
-create policy follows_read_all on public.follows
-  for select using (true);
+create policy follows_read_all on public.follows for select using (true);
 create policy follows_write_own on public.follows
   for all using ((select auth.uid()) = follower_id)
   with check ((select auth.uid()) = follower_id);
 
--- =========================================================================
--- Canonical content — readable by everyone, written only by the service role
--- =========================================================================
 alter table public.works enable row level security;
 create policy works_read_all on public.works for select using (true);
 
@@ -110,9 +88,6 @@ create policy quiz_questions_read on public.quiz_questions
 alter table public.artworks enable row level security;
 create policy artworks_read_all on public.artworks for select using (true);
 
--- =========================================================================
--- Library — strictly the owner's
--- =========================================================================
 alter table public.stashes enable row level security;
 create policy stashes_read on public.stashes
   for select using (visibility = 'public' or (select auth.uid()) = user_id);
@@ -147,9 +122,6 @@ create policy progress_own on public.progress
   for all using ((select auth.uid()) = user_id)
   with check ((select auth.uid()) = user_id);
 
--- =========================================================================
--- Learning — the most private data in the product. Never world-readable.
--- =========================================================================
 alter table public.knowledge_states enable row level security;
 create policy knowledge_states_own on public.knowledge_states
   for all using ((select auth.uid()) = user_id)
@@ -170,9 +142,6 @@ create policy explanations_own on public.explanations
   for all using ((select auth.uid()) = user_id)
   with check ((select auth.uid()) = user_id);
 
--- =========================================================================
--- Interleave
--- =========================================================================
 alter table public.session_seeds enable row level security;
 create policy session_seeds_own on public.session_seeds
   for all using ((select auth.uid()) = user_id)
@@ -184,12 +153,8 @@ create policy interrupt_events_own on public.interrupt_events
   with check ((select auth.uid()) = user_id);
 
 alter table public.interleave_config enable row level security;
-create policy interleave_config_read on public.interleave_config
-  for select using (true);
+create policy interleave_config_read on public.interleave_config for select using (true);
 
--- =========================================================================
--- Feeds
--- =========================================================================
 alter table public.feed_recipes enable row level security;
 create policy feed_recipes_read on public.feed_recipes
   for select using (is_public or (select auth.uid()) = user_id);
@@ -205,9 +170,6 @@ create policy feed_impressions_own on public.feed_impressions
 alter table public.daily_pulls enable row level security;
 create policy daily_pulls_read_all on public.daily_pulls for select using (true);
 
--- =========================================================================
--- Generation — a user sees their own jobs; steps and costs are internal
--- =========================================================================
 alter table public.generation_jobs enable row level security;
 create policy generation_jobs_own on public.generation_jobs
   for select using ((select auth.uid()) = requester_id);
@@ -223,20 +185,13 @@ create policy job_steps_own on public.job_steps
     )
   );
 
--- Cost data is operational, not user-facing. Service role only: RLS is enabled
--- with a policy that denies everyone, which is deliberate rather than an
--- oversight — the lint checks a policy exists, not that it grants anything.
 alter table public.cost_ledger enable row level security;
-create policy cost_ledger_no_api_access on public.cost_ledger
-  for select using (false);
+create policy cost_ledger_no_api_access on public.cost_ledger for select using (false);
 
 alter table public.rate_limits enable row level security;
 create policy rate_limits_own on public.rate_limits
   for select using ((select auth.uid()) = user_id);
 
--- =========================================================================
--- Moderation — a reporter sees their own report; decisions are staff-only
--- =========================================================================
 alter table public.reports enable row level security;
 create policy reports_own on public.reports
   for select using ((select auth.uid()) = reporter_id);
@@ -247,8 +202,6 @@ alter table public.moderation_decisions enable row level security;
 create policy moderation_decisions_no_api_access on public.moderation_decisions
   for select using (false);
 
--- Anyone may file a notice, including someone with no account. Nobody may read
--- the queue through the API: notices carry the claimant's contact details.
 alter table public.rights_requests enable row level security;
 create policy rights_requests_insert_any on public.rights_requests
   for insert with check (true);
