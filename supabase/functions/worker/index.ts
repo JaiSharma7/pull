@@ -15,8 +15,9 @@ import {
  * that is what the 150s wall-clock limit forbids.
  */
 
-const QUEUE = 'generation';
 const BATCH = 5;
+/** Steps that invoke a provider, and so must produce a ledger row. */
+const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
 /** Long enough for one step, short enough that a dead worker frees the job. */
 const VISIBILITY_SECONDS = 120;
 
@@ -61,64 +62,37 @@ async function runStep(jobId: string, step: Step) {
   }
 }
 
-const archive = (msgId: number) =>
-  supabase.schema('pgmq_public').rpc('archive', { queue_name: QUEUE, message_id: msgId });
+const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
 
 /**
  * Move the job on and enqueue its successor.
  *
- * The update is a compare-and-set on `current_step`. If an earlier attempt
- * already advanced this job, no row matches and we skip the send — otherwise a
- * worker dying between `send` and `archive` would enqueue the successor twice
- * on redelivery, letting two workers run the same billable step concurrently.
+ * Both writes happen inside one Postgres transaction (`pgmq.send` is itself a
+ * SQL function), so the pair is atomic. Previously they were separate round
+ * trips: a crash between them left the job advanced with nothing queued, which
+ * — with no sweeper — is a permanent stall rather than a recoverable one.
+ *
+ * The compare-and-set lives inside that same transaction, so a redelivered
+ * message cannot enqueue the successor twice.
  */
 async function advance(jobId: string, step: Step) {
-  const following = nextStep(step);
-
-  if (!following) {
-    must(
-      await supabase
-        .from('generation_jobs')
-        .update({ status: 'succeeded', finished_at: new Date().toISOString() })
-        .eq('id', jobId)
-        .eq('current_step', step)
-        .select('id'),
-      'complete job',
-    );
-    return;
-  }
-
-  const moved = must(
-    await supabase
-      .from('generation_jobs')
-      .update({ current_step: following, status: 'running' })
-      .eq('id', jobId)
-      .eq('current_step', step)
-      .select('id'),
-    'advance job',
-  ) as { id: string }[] | null;
-
-  // Already advanced: the successor is on the queue.
-  if (!moved || moved.length === 0) return;
-
   must(
-    await supabase.schema('pgmq_public').rpc('send', {
-      queue_name: QUEUE,
-      message: { jobId, step: following },
-      sleep_seconds: 0,
+    await supabase.rpc('advance_generation_job', {
+      p_job_id: jobId,
+      p_from_step: step,
+      p_to_step: nextStep(step),
     }),
-    'enqueue next step',
+    'advance job',
   );
 }
 
 Deno.serve(async () => {
   const messages = must(
-    await supabase.schema('pgmq_public').rpc('read', {
-      queue_name: QUEUE,
-      sleep_seconds: VISIBILITY_SECONDS,
-      n: BATCH,
+    await supabase.rpc('claim_generation_messages', {
+      p_count: BATCH,
+      p_visibility_seconds: VISIBILITY_SECONDS,
     }),
-    'read queue',
+    'claim queue messages',
   ) as QueueMessage[] | null;
 
   const processed: unknown[] = [];
@@ -193,6 +167,9 @@ Deno.serve(async () => {
           p_cost_cents: usage.costCents,
           p_duration_ms: Date.now() - started,
           p_provider: 'stub',
+          // A zero-cost call is still a call: a free or local provider must stay
+          // distinguishable from missing accounting.
+          p_billable: PROVIDER_STEPS.has(step),
         }),
         'record step and cost',
       );

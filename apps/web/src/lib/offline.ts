@@ -15,10 +15,23 @@ import type { FeedRow } from './types.js';
 
 interface WapDB extends DBSchema {
   pulls: { key: string; value: FeedRow & { cachedAt: number } };
-  /** Writes made offline, drained in order once the connection returns. */
+  /**
+   * Writes made offline, drained in order once the connection returns.
+   *
+   * `userId` is not decoration. Pending writes survive sign-out, so on a shared
+   * browser one account's queued saves and reads would otherwise replay into
+   * whoever signs in next — contaminating their history, knowledge model and
+   * library with someone else's reading.
+   */
   pending: {
     key: number;
-    value: { id?: number; kind: 'save' | 'unsave' | 'read'; pullId: string; at: number };
+    value: {
+      id?: number;
+      userId: string;
+      kind: 'save' | 'unsave' | 'read';
+      pullId: string;
+      at: number;
+    };
   };
 }
 
@@ -62,12 +75,13 @@ export async function readCachedPulls(limit = 20): Promise<FeedRow[]> {
 }
 
 export async function queueMutation(
+  userId: string,
   kind: 'save' | 'unsave' | 'read',
   pullId: string,
 ): Promise<void> {
   try {
     const database = await db();
-    await database.add('pending', { kind, pullId, at: Date.now() });
+    await database.add('pending', { userId, kind, pullId, at: Date.now() });
   } catch {
     /* nothing to do — the mutation is simply lost, which is the honest outcome */
   }
@@ -86,26 +100,31 @@ export async function queueMutation(
 let inFlight: Promise<number> | null = null;
 
 export function drainPending(
+  userId: string,
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
 ): Promise<number> {
   // Single-flight. The mount-time drain and a reconnect drain can otherwise
   // overlap — React Strict Mode's double effect mount reproduces it every time
   // in development — and both would snapshot the same pending items before
   // either deleted them, replaying every write twice.
-  inFlight ??= runDrain(apply).finally(() => {
+  inFlight ??= runDrain(userId, apply).finally(() => {
     inFlight = null;
   });
   return inFlight;
 }
 
 async function runDrain(
+  userId: string,
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
 ): Promise<number> {
   let drained = 0;
   const blocked = new Set<string>();
   try {
     const database = await db();
-    const items = (await database.getAll('pending')).sort((a, b) => a.at - b.at);
+    const items = (await database.getAll('pending'))
+      // Only this account's writes. Another user's stay queued for them.
+      .filter((item) => item.userId === userId)
+      .sort((a, b) => a.at - b.at);
     for (const item of items) {
       if (blocked.has(item.pullId)) continue;
       try {

@@ -1696,6 +1696,21 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      advance_generation_job: {
+        Args: { p_from_step: string; p_job_id: string; p_to_step?: string }
+        Returns: boolean
+      }
+      archive_generation_message: {
+        Args: { p_msg_id: number }
+        Returns: boolean
+      }
+      claim_generation_messages: {
+        Args: { p_count?: number; p_visibility_seconds?: number }
+        Returns: {
+          message: Json
+          msg_id: number
+        }[]
+      }
       disable_generation_dispatcher: { Args: never; Returns: string }
       dismissal_damping: { Args: { p_user_id: string }; Returns: number }
       due_pressure: { Args: { p_user_id: string }; Returns: number }
@@ -1706,6 +1721,14 @@ export type Database = {
           p_service_key: string
         }
         Returns: string
+      }
+      enqueue_generation_job: {
+        Args: {
+          p_daily_fast_limit?: number
+          p_slow_delay_seconds?: number
+          p_target: Json
+        }
+        Returns: Json
       }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
@@ -1773,6 +1796,7 @@ export type Database = {
       record_job_step: {
         Args: {
           p_attempt: number
+          p_billable?: boolean
           p_cost_cents: number
           p_duration_ms: number
           p_input_tokens: number

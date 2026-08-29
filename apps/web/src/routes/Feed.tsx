@@ -105,7 +105,7 @@ export function Feed({ userId }: { userId: string | null }) {
 
     const drain = () => {
       setOffline(false);
-      void drainPending(async ({ kind, pullId }) => {
+      void drainPending(userId, async ({ kind, pullId }) => {
         if (kind === 'save') await api.savePull(pullId, userId);
         else if (kind === 'unsave') await api.unsavePull(pullId, userId);
         else await api.recordRead(pullId, 0, 0);
@@ -135,22 +135,26 @@ export function Feed({ userId }: { userId: string | null }) {
       } catch {
         // The write failed, but the reader's intent should survive a tunnel:
         // keep the optimistic state and replay it on reconnect.
-        await queueMutation(wasSaved ? 'unsave' : 'save', row.id);
+        await queueMutation(userId, wasSaved ? 'unsave' : 'save', row.id);
       }
     },
     [saved, userId],
   );
 
-  const onRead = useCallback((row: FeedRow, index: number) => {
-    if (seenRef.current.has(row.id)) return;
-    seenRef.current.add(row.id);
-    setReadCount((n) => n + 1);
-    api.recordRead(row.id, 0, index).catch(() => {
-      // Offline reading should still produce history, impressions and knowledge
-      // states once the connection returns.
-      void queueMutation('read', row.id);
-    });
-  }, []);
+  const onRead = useCallback(
+    (row: FeedRow, index: number) => {
+      if (seenRef.current.has(row.id)) return;
+      seenRef.current.add(row.id);
+      setReadCount((n) => n + 1);
+      api.recordRead(row.id, 0, index).catch(() => {
+        // Offline reading should still produce history, impressions and
+        // knowledge states once the connection returns — but only for a signed-in
+        // reader, since a queued write has to belong to someone.
+        if (userId) void queueMutation(userId, 'read', row.id);
+      });
+    },
+    [userId],
+  );
 
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {

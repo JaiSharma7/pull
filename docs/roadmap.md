@@ -28,6 +28,14 @@ query).
   implemented and tested but has no screen yet.
 - Embeddings are synthetic (concept axes). Real ones arrive with the providers in round 2,
   and no read-path code needs to change when they do.
+- The generation step-machine is wired and verified but **not deployed**, and runs stub
+  providers. Round 2 deploys the Edge Functions, enables the `pg_cron` dispatcher and swaps in
+  real providers.
+- `public.enqueue_generation_job` is deliberately `SECURITY DEFINER` and callable by signed-in
+  readers — the only way to make the job insert and its queue send one transaction, since the
+  `authenticated` role has no privilege on `pgmq`. It derives the requester from `auth.uid()`
+  and enforces the quota internally. The security advisor notes this by design; it is the one
+  advisory the project accepts, and the reasoning is in the migration that grants it.
 
 ## Round 2 — generation
 

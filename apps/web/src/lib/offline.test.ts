@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { cachePulls, drainPending, queueMutation, readCachedPulls } from './offline.js';
 import type { FeedRow } from './types.js';
 
+const USER_A = 'user-a';
+const USER_B = 'user-b';
+
 const row = (id: string): FeedRow => ({
   id,
   summaryId: 's',
@@ -38,14 +41,14 @@ describe('pending mutation queue', () => {
   it('drains in the order the writes were made', async () => {
     // Ordering is not cosmetic here: replaying a save after a later unsave
     // would resurrect something the reader deliberately removed.
-    await queueMutation('save', 'x');
+    await queueMutation(USER_A, 'save', 'x');
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation('unsave', 'x');
+    await queueMutation(USER_A, 'unsave', 'x');
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation('save', 'y');
+    await queueMutation(USER_A, 'save', 'y');
 
     const applied: string[] = [];
-    const drained = await drainPending(async ({ kind, pullId }) => {
+    const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
       applied.push(`${kind}:${pullId}`);
     });
 
@@ -56,14 +59,14 @@ describe('pending mutation queue', () => {
   it('blocks only the failing pull, so one bad write cannot wedge the queue', async () => {
     // 'stuck' is permanently invalid; 'other' is fine. Ordering matters within
     // a pull, not across pulls, so 'other' must still get through.
-    await queueMutation('save', 'stuck');
+    await queueMutation(USER_A, 'save', 'stuck');
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation('unsave', 'stuck');
+    await queueMutation(USER_A, 'unsave', 'stuck');
     await new Promise((r) => setTimeout(r, 2));
-    await queueMutation('save', 'other');
+    await queueMutation(USER_A, 'save', 'other');
 
     const applied: string[] = [];
-    const drained = await drainPending(async ({ kind, pullId }) => {
+    const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
       applied.push(`${kind}:${pullId}`);
       if (pullId === 'stuck') throw new Error('gone');
     });
@@ -75,9 +78,33 @@ describe('pending mutation queue', () => {
 
     // Both of the stuck pull's writes are still queued, still in order.
     const retried: string[] = [];
-    await drainPending(async ({ kind, pullId }) => {
+    await drainPending(USER_A, async ({ kind, pullId }) => {
       retried.push(`${kind}:${pullId}`);
     });
     expect(retried).toEqual(['save:stuck', 'unsave:stuck']);
+  });
+});
+
+describe('account scoping', () => {
+  it('never drains writes queued by another account', async () => {
+    // Pending writes survive sign-out. On a shared browser, replaying A's saves
+    // and reads into B's session would contaminate B's history, knowledge model
+    // and library with someone else's reading.
+    await queueMutation(USER_A, 'save', 'a-only');
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_B, 'save', 'b-only');
+
+    const asB: string[] = [];
+    await drainPending(USER_B, async ({ pullId }) => {
+      asB.push(pullId);
+    });
+    expect(asB).toEqual(['b-only']);
+
+    // A's write is untouched and still theirs to drain.
+    const asA: string[] = [];
+    await drainPending(USER_A, async ({ pullId }) => {
+      asA.push(pullId);
+    });
+    expect(asA).toEqual(['a-only']);
   });
 });
