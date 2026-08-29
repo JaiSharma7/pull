@@ -62,6 +62,9 @@
   align-items: center;
   gap: var(--space-3);
   border-top: 1px solid var(--rule);
+  /* The rule needs air above it, or it collides with whatever content the card
+     ends on — buttons in particular sit only a few pixels clear otherwise. */
+  margin-top: var(--space-5);
   padding-top: var(--space-3);
   flex-wrap: wrap;
 }

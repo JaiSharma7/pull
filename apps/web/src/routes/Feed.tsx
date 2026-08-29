@@ -1,0 +1,222 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Enough, PullCard } from '@wap/ui';
+import { Interrupt, type InterruptAnswer } from '../components/Interrupt.js';
+import * as api from '../lib/api.js';
+import { loadSession, persist, resetSession } from '../lib/session.js';
+import { speak } from '../lib/speech.js';
+import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
+
+type Item =
+  | { type: 'pull'; row: FeedRow; index: number }
+  | { type: 'interrupt'; slot: InterleaveSlot; row: FeedRow; index: number };
+
+/**
+ * Weave the interrupt slots into the row list.
+ *
+ * A slot replaces the card at that index with a question about an *earlier*
+ * card — asking about something the reader has just this second read would be
+ * recognition, not recall.
+ */
+function weave(rows: FeedRow[], slots: InterleaveSlot[]): Item[] {
+  const bySlot = new Map(slots.map((s) => [s.slotIndex, s]));
+  const out: Item[] = [];
+  rows.forEach((row, i) => {
+    const slot = bySlot.get(i);
+    if (slot) {
+      const earlier = rows[Math.max(0, i - 3)];
+      if (earlier) out.push({ type: 'interrupt', slot, row: earlier, index: i });
+    }
+    out.push({ type: 'pull', row, index: i });
+  });
+  return out;
+}
+
+export function Feed({ userId }: { userId: string | null }) {
+  const [session, setSession] = useState(loadSession);
+  const [feed, setFeed] = useState<FeedResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<Set<string>>(new Set());
+  const [done, setDone] = useState(false);
+  const [readCount, setReadCount] = useState(0);
+  const [recalled, setRecalled] = useState(0);
+  const seenRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .fetchFeed({
+        seed: session.seed,
+        page: 0,
+        cardsBefore: session.cardsSeen,
+        usedBudget: session.interruptsShown,
+      })
+      .then((f) => !cancelled && setFeed(f))
+      .catch((e: unknown) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, [session.seed, session.cardsSeen, session.interruptsShown]);
+
+  useEffect(() => {
+    if (!userId) return;
+    api
+      .fetchSavedPullIds(userId)
+      .then(setSaved)
+      .catch(() => undefined);
+  }, [userId]);
+
+  const items = useMemo(() => (feed ? weave(feed.rows, feed.interleaveSlots) : []), [feed]);
+
+  const onSave = useCallback(
+    async (row: FeedRow) => {
+      if (!userId) return;
+      const next = new Set(saved);
+      const wasSaved = next.has(row.id);
+      if (wasSaved) next.delete(row.id);
+      else next.add(row.id);
+      setSaved(next); // optimistic — saving is free and unlimited, so never blocks
+      try {
+        await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
+      } catch {
+        setSaved(saved); // roll back on failure
+      }
+    },
+    [saved, userId],
+  );
+
+  const onRead = useCallback((row: FeedRow, index: number) => {
+    if (seenRef.current.has(row.id)) return;
+    seenRef.current.add(row.id);
+    setReadCount((n) => n + 1);
+    api.recordRead(row.id, 0, index).catch(() => undefined);
+  }, []);
+
+  const onInterrupt = useCallback(
+    async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
+      const responded = answer !== null;
+      try {
+        await api.recordInterrupt({
+          pullId: item.row.id,
+          kind: item.slot.kind,
+          slot: item.slot.slotIndex,
+          response: responded ? 'answered' : 'dismissed',
+          ...(answer?.grade ? { grade: answer.grade } : {}),
+        });
+        if (answer?.stance) await api.setConviction(item.row.id, answer.stance);
+      } catch {
+        /* a dropped interrupt record must never break the reading session */
+      }
+      if (responded) setRecalled((n) => n + 1);
+      setSession((s) => persist({ ...s, interruptsShown: s.interruptsShown + 1 }));
+    },
+    [],
+  );
+
+  if (error) {
+    return (
+      <p role="alert" className="measure">
+        Could not load the feed: {error}
+      </p>
+    );
+  }
+
+  if (!feed) {
+    return <p className="meta">Loading…</p>;
+  }
+
+  if (done || feed.rows.length === 0) {
+    return (
+      <Enough
+        ideasRead={readCount}
+        recalled={recalled}
+        minutesSaved={feed.minutesSaved}
+        onContinue={() => {
+          setSession(resetSession());
+          setDone(false);
+          seenRef.current.clear();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="stack" style={{ '--stack-gap': 'var(--space-6)' } as React.CSSProperties}>
+      {feed.skippedKnownCount > 0 && (
+        <p className="meta" data-testid="delta-banner">
+          Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
+          already know —{' '}
+          <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
+        </p>
+      )}
+
+      {items.map((item) =>
+        item.type === 'interrupt' ? (
+          <Interrupt
+            key={`i-${item.index}-${item.row.id}`}
+            kind={item.slot.kind}
+            pull={item.row}
+            onAnswer={(a) => void onInterrupt(item, a)}
+            onDismiss={() => void onInterrupt(item, null)}
+          />
+        ) : (
+          <PullCardInView
+            key={item.row.id}
+            row={item.row}
+            saved={saved.has(item.row.id)}
+            onSave={() => void onSave(item.row)}
+            onRead={() => onRead(item.row, item.index)}
+          />
+        ),
+      )}
+
+      <button type="button" className="btn" onClick={() => setDone(true)}>
+        That's enough for today
+      </button>
+    </div>
+  );
+}
+
+function PullCardInView({
+  row,
+  saved,
+  onSave,
+  onRead,
+}: {
+  row: FeedRow;
+  saved: boolean;
+  onSave: () => void;
+  onRead: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // A card counts as read once it has actually been on screen, not merely
+  // rendered below the fold.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) if (e.isIntersecting) onRead();
+      },
+      { threshold: 0.6 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [onRead]);
+
+  return (
+    <div ref={ref}>
+      <PullCard
+        source={{ title: row.work.title, kind: row.work.kind, year: row.work.year }}
+        headline={row.headline}
+        body={row.body}
+        whyItMatters={row.whyItMatters}
+        example={row.example}
+        sourceTrail={row.summaryTitle}
+        saved={saved}
+        onSave={onSave}
+        onListen={() => speak(`${row.headline}. ${row.body}`)}
+      />
+    </div>
+  );
+}
