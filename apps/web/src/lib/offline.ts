@@ -106,6 +106,14 @@ const inFlight = new Map<string, Promise<number>>();
 export function drainPending(
   userId: string,
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
+  /**
+   * Whether `userId` is still the signed-in account. Checked before every
+   * write, because a drain can outlive a sign-out: the Supabase client is
+   * shared, and a queued `read` carries no user argument — `record_read`
+   * derives `auth.uid()` — so one account's pending read would otherwise land
+   * in the next account's history and knowledge model.
+   */
+  isStillCurrent: () => boolean = () => true,
 ): Promise<number> {
   // Single-flight. The mount-time drain and a reconnect drain can otherwise
   // overlap — React Strict Mode's double effect mount reproduces it every time
@@ -114,16 +122,32 @@ export function drainPending(
   const existing = inFlight.get(userId);
   if (existing) return existing;
 
-  const started = runDrain(userId, apply).finally(() => {
-    inFlight.delete(userId);
-  });
+  const started = withCrossTabLock(userId, () => runDrain(userId, apply, isStillCurrent)).finally(
+    () => {
+      inFlight.delete(userId);
+    },
+  );
   inFlight.set(userId, started);
   return started;
+}
+
+/**
+ * The in-flight map is per JavaScript context, but IndexedDB is shared across
+ * every tab on the origin. Two tabs could each snapshot the same pending
+ * entries before either deleted them, replaying every write twice. Web Locks
+ * are origin-wide, which is the right scope; where unavailable we fall back to
+ * the per-context guard alone.
+ */
+async function withCrossTabLock<T>(userId: string, run: () => Promise<T>): Promise<T> {
+  const locks = globalThis.navigator?.locks;
+  if (!locks) return run();
+  return locks.request(`wap.drain.${userId}`, run);
 }
 
 async function runDrain(
   userId: string,
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
+  isStillCurrent: () => boolean,
 ): Promise<number> {
   let drained = 0;
   const blocked = new Set<string>();
@@ -134,6 +158,10 @@ async function runDrain(
       .filter((item) => item.userId === userId)
       .sort((a, b) => a.at - b.at);
     for (const item of items) {
+      // Re-check between every item, not just at the start: signing out
+      // mid-drain must stop the remaining writes rather than attribute them to
+      // whoever signs in next. The entries stay queued for their real owner.
+      if (!isStillCurrent()) break;
       if (blocked.has(item.pullId)) continue;
       try {
         await apply(item);

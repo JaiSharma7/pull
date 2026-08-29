@@ -141,3 +141,34 @@ describe('drain single-flight', () => {
     expect(seen).not.toContain('dup:a-1');
   });
 });
+
+describe('identity revalidation', () => {
+  it('stops mid-drain when the account changes, leaving the rest queued', async () => {
+    await queueMutation(USER_A, 'read', 'first');
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, 'read', 'second');
+
+    let signedIn = USER_A;
+    const applied: string[] = [];
+
+    await drainPending(
+      USER_A,
+      async ({ pullId }) => {
+        applied.push(pullId);
+        signedIn = USER_B; // sign-out lands while the first write is in flight
+      },
+      () => signedIn === USER_A,
+    );
+
+    // Only the write that started while A was signed in is applied.
+    expect(applied).toEqual(['first']);
+
+    // The remainder is still A's, untouched, and replays when A returns.
+    signedIn = USER_A;
+    const later: string[] = [];
+    await drainPending(USER_A, async ({ pullId }) => {
+      later.push(pullId);
+    });
+    expect(later).toEqual(['second']);
+  });
+});

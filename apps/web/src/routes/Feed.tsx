@@ -48,6 +48,12 @@ export function Feed({ userId }: { userId: string | null }) {
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
   const seenRef = useRef<Set<string>>(new Set());
+  // Kept in a ref so an in-flight drain can re-check the live identity without
+  // being torn down and restarted every time this component re-renders.
+  const currentUserRef = useRef(userId);
+  useEffect(() => {
+    currentUserRef.current = userId;
+  }, [userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,11 +111,17 @@ export function Feed({ userId }: { userId: string | null }) {
 
     const drain = () => {
       setOffline(false);
-      void drainPending(userId, async ({ kind, pullId }) => {
-        if (kind === 'save') await api.savePull(pullId, userId);
-        else if (kind === 'unsave') await api.unsavePull(pullId, userId);
-        else await api.recordRead(pullId, 0, 0);
-      });
+      void drainPending(
+        userId,
+        async ({ kind, pullId }) => {
+          if (kind === 'save') await api.savePull(pullId, userId);
+          else if (kind === 'unsave') await api.unsavePull(pullId, userId);
+          else await api.recordRead(pullId, 0, 0);
+        },
+        // A drain can outlive a sign-out; without this the previous account's
+        // queued reads would be written against the new session.
+        () => currentUserRef.current === userId,
+      );
     };
 
     // Writes can be queued by a transient server failure that never flips

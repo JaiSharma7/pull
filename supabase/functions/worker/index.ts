@@ -18,8 +18,15 @@ import {
 const BATCH = 5;
 /** Steps that invoke a provider, and so must produce a ledger row. */
 const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
-/** Long enough for one step, short enough that a dead worker frees the job. */
-const VISIBILITY_SECONDS = 120;
+/**
+ * Must exceed the platform's maximum request lifetime (150s wall clock), or the
+ * next dispatcher tick can claim a message while the original invocation is
+ * still legally running — and both would invoke the same billable provider,
+ * with the unique step constraint only rejecting one *after* both paid for it.
+ * Long enough to outlive any step, short enough that a dead worker frees the
+ * job promptly.
+ */
+const VISIBILITY_SECONDS = 180;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
