@@ -97,7 +97,11 @@ export async function queueMutation(
  * item (a save for a pull deleted while offline, say) would wedge the queue for
  * every pull, forever.
  */
-let inFlight: Promise<number> | null = null;
+// Keyed by user, not global. A single shared promise meant that if the account
+// changed mid-drain, the new account's mount-time call would await the previous
+// account's work — which filters to the *old* user's entries — and then never
+// retry, leaving the new account's writes pending until the next reconnect.
+const inFlight = new Map<string, Promise<number>>();
 
 export function drainPending(
   userId: string,
@@ -107,10 +111,14 @@ export function drainPending(
   // overlap — React Strict Mode's double effect mount reproduces it every time
   // in development — and both would snapshot the same pending items before
   // either deleted them, replaying every write twice.
-  inFlight ??= runDrain(userId, apply).finally(() => {
-    inFlight = null;
+  const existing = inFlight.get(userId);
+  if (existing) return existing;
+
+  const started = runDrain(userId, apply).finally(() => {
+    inFlight.delete(userId);
   });
-  return inFlight;
+  inFlight.set(userId, started);
+  return started;
 }
 
 async function runDrain(

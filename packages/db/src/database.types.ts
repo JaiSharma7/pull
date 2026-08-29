@@ -1722,14 +1722,7 @@ export type Database = {
         }
         Returns: string
       }
-      enqueue_generation_job: {
-        Args: {
-          p_daily_fast_limit?: number
-          p_slow_delay_seconds?: number
-          p_target: Json
-        }
-        Returns: Json
-      }
+      enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {

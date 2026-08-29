@@ -108,3 +108,36 @@ describe('account scoping', () => {
     expect(asA).toEqual(['a-only']);
   });
 });
+
+describe('drain single-flight', () => {
+  it('shares an in-flight drain within an account but not across accounts', async () => {
+    await queueMutation(USER_A, 'save', 'a-1');
+    await queueMutation(USER_B, 'save', 'b-1');
+
+    const seen: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+
+    // Two concurrent drains for A must share one pass; B's must run its own,
+    // otherwise B would await A's work — which filters to A's entries — and
+    // then never retry its own.
+    const a1 = drainPending(USER_A, async ({ pullId }) => {
+      seen.push(pullId);
+      await gate;
+    });
+    const a2 = drainPending(USER_A, async ({ pullId }) => {
+      seen.push(`dup:${pullId}`);
+    });
+    const b1 = drainPending(USER_B, async ({ pullId }) => {
+      seen.push(pullId);
+    });
+
+    release();
+    await Promise.all([a1, a2, b1]);
+
+    expect(seen).toContain('a-1');
+    expect(seen).toContain('b-1');
+    // A's second call reused the first rather than replaying the write.
+    expect(seen).not.toContain('dup:a-1');
+  });
+});

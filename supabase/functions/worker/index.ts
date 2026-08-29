@@ -134,16 +134,29 @@ Deno.serve(async () => {
     const attempt = (last?.attempt ?? 0) + 1;
 
     if (attempt > MAX_ATTEMPTS) {
-      await supabase
-        .from('generation_jobs')
-        .update({
-          status: 'failed',
-          error: `step ${step} exhausted retries`,
-          finished_at: new Date().toISOString(),
-        })
-        .eq('id', jobId);
-      await archive(msg.msg_id);
-      processed.push({ jobId, step, ok: false, exhausted: true });
+      // Checked like every other write. Bare awaits here would let a failed
+      // update be followed by an archive that removes the only queue message,
+      // leaving the job stuck in `running` with nothing to retry it.
+      try {
+        must(
+          await supabase
+            .from('generation_jobs')
+            .update({
+              status: 'failed',
+              error: `step ${step} exhausted retries`,
+              finished_at: new Date().toISOString(),
+            })
+            .eq('id', jobId)
+            .select('id'),
+          'mark job failed',
+        );
+        must(await archive(msg.msg_id), 'archive exhausted message');
+        processed.push({ jobId, step, ok: false, exhausted: true });
+      } catch (e) {
+        // Leave the message unarchived so the next tick can try again rather
+        // than dropping a job that was never marked failed.
+        processed.push({ jobId, step, ok: false, exhausted: false, error: String(e) });
+      }
       continue;
     }
 
