@@ -83,7 +83,22 @@ export async function queueMutation(
  * item (a save for a pull deleted while offline, say) would wedge the queue for
  * every pull, forever.
  */
-export async function drainPending(
+let inFlight: Promise<number> | null = null;
+
+export function drainPending(
+  apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
+): Promise<number> {
+  // Single-flight. The mount-time drain and a reconnect drain can otherwise
+  // overlap — React Strict Mode's double effect mount reproduces it every time
+  // in development — and both would snapshot the same pending items before
+  // either deleted them, replaying every write twice.
+  inFlight ??= runDrain(apply).finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function runDrain(
   apply: (m: { kind: 'save' | 'unsave' | 'read'; pullId: string }) => Promise<void>,
 ): Promise<number> {
   let drained = 0;

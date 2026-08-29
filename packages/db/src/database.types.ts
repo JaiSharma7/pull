@@ -1770,6 +1770,21 @@ export type Database = {
         }
         Returns: undefined
       }
+      record_job_step: {
+        Args: {
+          p_attempt: number
+          p_cost_cents: number
+          p_duration_ms: number
+          p_input_tokens: number
+          p_job_id: string
+          p_model: string
+          p_output_tokens: number
+          p_prompt_version: string
+          p_provider: string
+          p_step: string
+        }
+        Returns: string
+      }
       record_read: {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined

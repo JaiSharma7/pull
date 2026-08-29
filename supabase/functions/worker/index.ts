@@ -34,9 +34,9 @@ interface QueueMessage {
 }
 
 /**
- * supabase-js returns `{ error }` rather than throwing. Every write in this
- * worker must be checked, because an unchecked failure followed by archiving
- * the message strands the job silently — or worse, marks it complete.
+ * supabase-js returns `{ error }` rather than throwing. Every write here must be
+ * checked: an unchecked failure followed by archiving the message strands the
+ * job silently, or worse marks it complete.
  */
 function must<T>(result: { data: T; error: unknown }, what: string): T {
   if (result.error) {
@@ -61,38 +61,54 @@ async function runStep(jobId: string, step: Step) {
   }
 }
 
-/** Move the job on, and enqueue its successor. Throws if either write fails. */
+const archive = (msgId: number) =>
+  supabase.schema('pgmq_public').rpc('archive', { queue_name: QUEUE, message_id: msgId });
+
+/**
+ * Move the job on and enqueue its successor.
+ *
+ * The update is a compare-and-set on `current_step`. If an earlier attempt
+ * already advanced this job, no row matches and we skip the send — otherwise a
+ * worker dying between `send` and `archive` would enqueue the successor twice
+ * on redelivery, letting two workers run the same billable step concurrently.
+ */
 async function advance(jobId: string, step: Step) {
   const following = nextStep(step);
-  if (following) {
-    must(
-      await supabase
-        .from('generation_jobs')
-        .update({ current_step: following, status: 'running' })
-        .eq('id', jobId)
-        .select('id')
-        .single(),
-      'advance job',
-    );
-    must(
-      await supabase.schema('pgmq_public').rpc('send', {
-        queue_name: QUEUE,
-        message: { jobId, step: following },
-        sleep_seconds: 0,
-      }),
-      'enqueue next step',
-    );
-  } else {
+
+  if (!following) {
     must(
       await supabase
         .from('generation_jobs')
         .update({ status: 'succeeded', finished_at: new Date().toISOString() })
         .eq('id', jobId)
-        .select('id')
-        .single(),
+        .eq('current_step', step)
+        .select('id'),
       'complete job',
     );
+    return;
   }
+
+  const moved = must(
+    await supabase
+      .from('generation_jobs')
+      .update({ current_step: following, status: 'running' })
+      .eq('id', jobId)
+      .eq('current_step', step)
+      .select('id'),
+    'advance job',
+  ) as { id: string }[] | null;
+
+  // Already advanced: the successor is on the queue.
+  if (!moved || moved.length === 0) return;
+
+  must(
+    await supabase.schema('pgmq_public').rpc('send', {
+      queue_name: QUEUE,
+      message: { jobId, step: following },
+      sleep_seconds: 0,
+    }),
+    'enqueue next step',
+  );
 }
 
 Deno.serve(async () => {
@@ -128,17 +144,12 @@ Deno.serve(async () => {
     // its message, and the visibility timeout then redelivers it. Rerunning
     // would repeat a billable provider call — and the unique key on
     // (job_id, step, attempt) cannot prevent that, because each replay picks a
-    // NEW attempt number. So resume: finish the transition, do not redo the work.
+    // NEW attempt number. So resume: finish the transition, do not redo the
+    // work. `advance` is idempotent, so repeating it is safe.
     if (last?.status === 'succeeded') {
       try {
         await advance(jobId, step);
-        must(
-          await supabase.schema('pgmq_public').rpc('archive', {
-            queue_name: QUEUE,
-            message_id: msg.msg_id,
-          }),
-          'archive resumed message',
-        );
+        must(await archive(msg.msg_id), 'archive resumed message');
         processed.push({ jobId, step, resumed: true });
       } catch (e) {
         processed.push({ jobId, step, resumed: false, error: String(e) });
@@ -157,9 +168,7 @@ Deno.serve(async () => {
           finished_at: new Date().toISOString(),
         })
         .eq('id', jobId);
-      await supabase
-        .schema('pgmq_public')
-        .rpc('archive', { queue_name: QUEUE, message_id: msg.msg_id });
+      await archive(msg.msg_id);
       processed.push({ jobId, step, ok: false, exhausted: true });
       continue;
     }
@@ -168,57 +177,31 @@ Deno.serve(async () => {
       const result: any = await runStep(jobId, step);
       const usage = result?.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
-      const stepRow = must(
-        await supabase
-          .from('job_steps')
-          .insert({
-            job_id: jobId,
-            step,
-            attempt,
-            status: 'succeeded',
-            model: 'stub',
-            input_tokens: usage.inputTokens,
-            output_tokens: usage.outputTokens,
-            cost_cents: usage.costCents,
-            duration_ms: Date.now() - started,
-            finished_at: new Date().toISOString(),
-          })
-          .select('id')
-          .single(),
-        'record step',
+      // One transaction for the step and its cost. As two separate writes, a
+      // ledger failure after a succeeded step left the spend permanently
+      // unrecorded and unretryable: the step row already existed, so the retry
+      // path could not replace it and resume treated it as fully done.
+      must(
+        await supabase.rpc('record_job_step', {
+          p_job_id: jobId,
+          p_step: step,
+          p_attempt: attempt,
+          p_model: 'stub',
+          p_prompt_version: null,
+          p_input_tokens: usage.inputTokens,
+          p_output_tokens: usage.outputTokens,
+          p_cost_cents: usage.costCents,
+          p_duration_ms: Date.now() - started,
+          p_provider: 'stub',
+        }),
+        'record step and cost',
       );
-
-      // Every generation writes to the ledger. Without it a bad summary is an
-      // unfixable mystery; with it, it is a diff. See CLAUDE.md law 2.
-      if (usage.costCents > 0) {
-        must(
-          await supabase
-            .from('cost_ledger')
-            .insert({
-              job_id: jobId,
-              step_id: stepRow?.id ?? null,
-              provider: 'stub',
-              operation: step,
-              unit: 'tokens',
-              quantity: usage.inputTokens + usage.outputTokens,
-              cost_cents: usage.costCents,
-            })
-            .select('id')
-            .single(),
-          'record cost',
-        );
-      }
 
       await advance(jobId, step);
 
       // Only archive once every write above has been confirmed. Archiving
-      // before that would drop the message with the job's state unpersisted.
-      must(
-        await supabase
-          .schema('pgmq_public')
-          .rpc('archive', { queue_name: QUEUE, message_id: msg.msg_id }),
-        'archive message',
-      );
+      // earlier would drop the message with the job's state unpersisted.
+      must(await archive(msg.msg_id), 'archive message');
       processed.push({ jobId, step, attempt, ok: true });
     } catch (e) {
       await supabase.from('job_steps').insert({
