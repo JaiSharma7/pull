@@ -84,6 +84,22 @@ export async function setConviction(
   if (error) throw error;
 }
 
+/**
+ * Keep what the reader wrote in their own words.
+ *
+ * This is the whole point of Say It Back: an explanation someone can actually
+ * produce is the strongest evidence the knowledge model has, and it becomes a
+ * personal annotation on the card. Grading it is round 2 — `gap_score` and
+ * `missed_points` stay null until a provider fills them — but the text has to be
+ * kept now or there is nothing to grade later.
+ */
+export async function saveExplanation(userId: string, pullId: string, text: string) {
+  const { error } = await supabase
+    .from('explanations')
+    .insert({ user_id: userId, pull_id: pullId, text });
+  if (error) throw error;
+}
+
 /** Saving is unlimited and free, by policy. There is no quota to check. */
 export async function savePull(pullId: string, userId: string) {
   const { error } = await supabase.from('saved_items').insert({ user_id: userId, pull_id: pullId });

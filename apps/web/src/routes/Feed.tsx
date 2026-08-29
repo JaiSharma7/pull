@@ -186,13 +186,21 @@ export function Feed({ userId }: { userId: string | null }) {
           ...(answer?.grade ? { grade: answer.grade } : {}),
         });
         if (answer?.stance) await api.setConviction(item.row.id, answer.stance);
+        // Say It Back's whole value is the reader's own wording — without this
+        // it was typed, compared against the card, and then thrown away.
+        if (answer?.explanation && userId) {
+          await api.saveExplanation(userId, item.row.id, answer.explanation);
+        }
       } catch {
         /* a dropped interrupt record must never break the reading session */
       }
-      if (responded) setRecalled((n) => n + 1);
+      // Only a recall grade counts as recall. A conviction or counterpull answer
+      // is a stance, not a memory test, and counting it would overstate the
+      // number the Enough screen reports.
+      if (answer?.grade) setRecalled((n) => n + 1);
       setSession((s) => persist({ ...s, interruptsShown: s.interruptsShown + 1 }));
     },
-    [handledSlots],
+    [handledSlots, userId],
   );
 
   if (error) {
