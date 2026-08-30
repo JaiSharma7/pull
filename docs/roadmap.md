@@ -104,12 +104,31 @@ That is a read-path SQL change and a threshold re-tune, and it must land **befor
 backfill. `0.1474` sitting 0.007 from the cut also says the constant deserves a real
 distribution rather than one tuned by hand.
 
+### The pipeline writes content ✅
+
+`runStep` runs the real twelve steps. Worth recording what that took, because the
+first version of it looked finished and could not have completed a single job:
+
+Four separate values were rejected by the database and by nothing above it —
+`works.content_hash` (a column no migration created), `rights_status: 'user_private'`,
+`work_kind: 'article'`, and `summaries.model` (another absent column) — while
+`summaries.author_id` went unset, which `summary_is_readable` needs for a private
+summary to be readable by the person who asked for it. TypeScript accepts any string,
+the test fakes accept any string, PostgREST forwards it, and Postgres refuses at the
+end, after the expensive call is paid for. The hosted project's zero generation jobs
+had looked like nobody having tried one.
+
+The lesson is narrow and worth keeping: a test that mocks the database cannot catch an
+invalid enum member unless it asserts the member. Enum mirrors now live in
+`pipeline.ts` with narrowing functions at the boundary, and the tests assert the values
+that reach Postgres rather than the call counts alone. Unrecognised rights claims
+narrow to `review_required`, so the direction a mistake falls in is toward refusing to
+publish.
+
 ### Still to do
 
-`runStep` still calls stubs and writes no content — the providers exist, nothing calls
-them yet. Then the canonical summary pipeline, claim anchors, generated cards, hero
-artwork, cost ledger reporting, rate limiting, and private user generation in the Pull
-Studio.
+Claim anchors, generated cards, hero artwork, cost ledger reporting, rate limiting, and
+private user generation in the Pull Studio.
 
 Then public-domain ingest workers — Gutenberg, arXiv, Wikisource, open-access journals —
 to grow the corpus without rights exposure.
@@ -174,6 +193,18 @@ not have to rediscover them.
   the reader did. Round 2 should classify permanent failures — a 404 or a 403 is not a
   500 — and drop only those. Found while reviewing my own retry path, not by either
   reviewer.
+- **`acquire` is still open to DNS rebinding.** The host blocklist rejects private
+  and link-local literals in both IPv4 and IPv6, and re-checks every redirect hop, so
+  a public URL that 302s to `169.254.169.254` is refused. What it cannot see is
+  `evil.example.com` with an A record of `10.0.0.1`: the check is on the literal, and
+  resolution happens inside `fetch`. Closing it needs the address resolved before
+  connecting and the socket pinned to it, which Deno's `fetch` does not expose —
+  realistically a small resolve-then-connect helper, or an egress proxy. It matters
+  because the worker holds a service-role key and writes what it fetched into
+  `job_steps.output`, which the requester can read, and because
+  `enqueue_generation_job` is reachable by any signed-in reader. Found by Codex
+  reviewing the IPv4-only version of the blocklist; the IPv6 half is fixed, this half
+  is not.
 - **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
   says "in the migration that creates it", and the schema does not do that: tables land
   in `20260829124548_learning.sql` and its siblings, policies in
