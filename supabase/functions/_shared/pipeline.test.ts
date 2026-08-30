@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
-  assertFetchableUrl,
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  RIGHTS_STATUSES,
+  runPipelineStep,
+  WORK_KINDS,
+} from './pipeline.ts';
+import {
+  assertFetchableUrl,
   contentHash,
   extractText,
   MAX_SOURCE_CHARS,
-  RIGHTS_STATUSES,
-  runPipelineStep,
   segment,
-  WORK_KINDS,
-} from './pipeline.ts';
+} from './source.ts';
 import { stubSummaryProvider } from './providers.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
