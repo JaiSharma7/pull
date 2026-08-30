@@ -183,13 +183,32 @@ begin
   -- -- 0.0987 for "same idea, reworded" -- to repair the one thing they are
   -- not, and it reuses the same threshold rather than inventing a second.
   -- k2 includes k1 at distance 0, so this subsumes the direct set.
+  --
+  -- The `not exists` is load-bearing, and leaving it out was a real bug caught
+  -- in review. Widening by distance alone re-imports the exact blindness this
+  -- migration exists to fix: a claim and its contradiction are ALSO inside the
+  -- threshold, so an opposed k2 would be swept in as though it were a
+  -- restatement. For the reader who knows BOTH sides of a debate -- the
+  -- Conviction Ledger reader, the person this feature is for -- that excluded
+  -- both sides, left nothing to compare against, and served an idea they
+  -- already hold as maximally novel. Structure has to gate the propagation, or
+  -- the propagation inherits precisely what the vectors cannot see.
+  --
+  -- DISTINCT because opposition is stored in both directions, so every
+  -- symmetric pair would otherwise enter this set twice.
   opposed_pairs as materialized (
-    select od.candidate, k2.pull_id as known
+    select distinct od.candidate, k2.pull_id as known
     from opposed_direct od
     join known_ideas k1 on k1.pull_id = od.known
     join known_ideas k2
       on (k1.embedding OPERATOR(extensions.<=>) k2.embedding)
          < public.delta_covered_distance()
+     and not exists (
+       select 1 from public.pull_relations pr2
+       where pr2.kind = 'opposes'
+         and ((pr2.from_pull_id = k1.pull_id and pr2.to_pull_id = k2.pull_id)
+           or (pr2.from_pull_id = k2.pull_id and pr2.to_pull_id = k1.pull_id))
+     )
   ),
   -- Cheap signals only: no knowledge lookup and no vector maths, so this is the
   -- one stage that may touch the whole catalogue.
@@ -232,7 +251,11 @@ begin
            )) as seen_directly
     from pool pl
   ),
-  -- What this page would have shown and did not, because the reader has it.
+  -- What the ranker considered and dropped because the reader has it. Note this
+  -- counts over the pool, which is up to 30x the page -- so a well-read reader
+  -- can be told a number far larger than the cards in front of them. Inherited
+  -- from the migration that made this per-page rather than lifetime; called out
+  -- here because this file rewrites the comment that used to overstate it.
   directly_known as (
     select count(*) as n, coalesce(sum(estimated_read_seconds), 0) as secs
     from judged where seen_directly
@@ -329,7 +352,7 @@ end;
 $$;
 
 comment on function public.get_feed(int, bigint, int, int, int, int) is
-  'Personalised feed page: rows, Delta skip count, and interleaved question slots. Knowledge and vector work run only over a bounded candidate pool, so the reported saving describes this page. Ideas the candidate contradicts are excluded from the distance comparison, so a contradiction is never filed as already-known. No LLM.';
+  'Personalised feed page: rows, Delta skip count, and interleaved question slots. Knowledge and vector work run only over a bounded candidate pool, and the reported saving describes that pool rather than the cards returned. Ideas the candidate contradicts are excluded from the distance comparison, so a contradiction is never filed as already-known. No LLM.';
 
 -- ---------------------------------------------------------------------------
 
@@ -356,6 +379,19 @@ begin
                               'new', coalesce(total, 0), 'minutesSaved', 0);
   end if;
 
+  -- Capped, like get_feed's. Two reasons, and the second is new here.
+  --
+  -- The functions disagreed about how much a reader "knows": get_feed has always
+  -- bounded this at 500 by retrievability and this one bounded nothing, so a
+  -- source page and a feed page could give different answers about the same
+  -- reader. That was survivable while the comparison was linear.
+  --
+  -- It stops being survivable with the paraphrase join below, which is
+  -- |opposed_direct| x |known_ideas| cosine comparisons with no index to serve
+  -- it. Uncapped that is quadratic in the reader's whole history -- measured at
+  -- 327-423ms for 8,000 known ideas and 300 edges, on a function reachable from
+  -- every source page with no rate limit. The cap makes the worst case a
+  -- constant.
   with known_ideas as (
     select ks.pull_id, p2.embedding
     from public.knowledge_states ks
@@ -364,6 +400,8 @@ begin
       and p2.embedding is not null
       and public.retrievability(ks.stability, ks.last_seen_at)
           > public.known_retrievability_floor()
+    order by public.retrievability(ks.stability, ks.last_seen_at) desc
+    limit 500
   ),
   -- Same two stages as get_feed, and for the same reasons: restricted to what
   -- the reader knows, then widened to restatements of it.
@@ -378,13 +416,32 @@ begin
     join known_ideas ki on ki.pull_id = pr.from_pull_id
     where pr.kind = 'opposes'
   ),
+  --
+  -- The `not exists` is load-bearing, and leaving it out was a real bug caught
+  -- in review. Widening by distance alone re-imports the exact blindness this
+  -- migration exists to fix: a claim and its contradiction are ALSO inside the
+  -- threshold, so an opposed k2 would be swept in as though it were a
+  -- restatement. For the reader who knows BOTH sides of a debate -- the
+  -- Conviction Ledger reader, the person this feature is for -- that excluded
+  -- both sides, left nothing to compare against, and served an idea they
+  -- already hold as maximally novel. Structure has to gate the propagation, or
+  -- the propagation inherits precisely what the vectors cannot see.
+  --
+  -- DISTINCT because opposition is stored in both directions, so every
+  -- symmetric pair would otherwise enter this set twice.
   opposed_pairs as materialized (
-    select od.candidate, k2.pull_id as known
+    select distinct od.candidate, k2.pull_id as known
     from opposed_direct od
     join known_ideas k1 on k1.pull_id = od.known
     join known_ideas k2
       on (k1.embedding OPERATOR(extensions.<=>) k2.embedding)
          < public.delta_covered_distance()
+     and not exists (
+       select 1 from public.pull_relations pr2
+       where pr2.kind = 'opposes'
+         and ((pr2.from_pull_id = k1.pull_id and pr2.to_pull_id = k2.pull_id)
+           or (pr2.from_pull_id = k2.pull_id and pr2.to_pull_id = k1.pull_id))
+     )
   ),
   candidates as (
     select p.id, p.embedding, p.estimated_read_seconds,

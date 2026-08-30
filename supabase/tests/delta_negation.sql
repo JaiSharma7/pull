@@ -17,20 +17,42 @@
 -- therefore CONSTRUCTS the condition -- which is the same reason the fix has to
 -- land before the real-embedding backfill rather than after it.
 --
--- Everything runs as a real reader under RLS. Asserting as superuser would
--- prove nothing: RLS is the part most likely to be wrong and it is invisible to
--- an owner-role query. The whole file rolls back.
+-- Everything runs as a real reader under RLS, and section 7 is what makes that
+-- claim mean something. The earlier sections would pass as a superuser too --
+-- they assert paths whose predicates are written explicitly in the function
+-- bodies (`ks.user_id = uid`, `status = 'published'`), so RLS is redundant for
+-- them. Section 7 asserts a path that exists ONLY in a policy:
+-- `pull_relations_read_readable`, which is what stops one reader's private
+-- material from steering another reader's feed. `assert_is_reader` keeps the
+-- rest honest by refusing to let an assertion run with owner rights.
+--
+-- The whole file rolls back.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
 
 begin;
 
+-- Refuses to let an assertion run with owner rights. Without it, a stray
+-- `set role postgres` that outlives its section turns every check below into a
+-- superuser query that proves nothing -- and does so silently, which is the
+-- failure mode worth engineering against.
+create or replace function pg_temp.assert_is_reader() returns void
+language plpgsql as $fn$
+begin
+  if current_user <> 'authenticated' then
+    raise exception
+      'assertions must run as the reader, not as %. RLS is invisible to an '
+      'owner-role query, so this file would be proving nothing.', current_user;
+  end if;
+end $fn$;
+
 do $$
 declare
   reader_knows   uuid := extensions.gen_random_uuid();  -- knows the Mill pull
   reader_blank   uuid := extensions.gen_random_uuid();  -- knows nothing
   reader_lineage uuid := extensions.gen_random_uuid();  -- knows the Epictetus pull
+  reader_both    uuid := extensions.gen_random_uuid();  -- knows Mill AND its opposite
   mill_id     uuid;   -- 'Silencing an opinion...'      (On Liberty)
   thoreau_id  uuid;   -- 'Living deliberately...'       (Walden) -- opposes Mill
   epi_id      uuid;   -- 'You are disturbed by...'      (Enchiridion)
@@ -41,23 +63,40 @@ declare
   delta       jsonb;
   score_knows numeric;
   score_blank numeric;
-  skipped     int;
+  skipped       int;
+  skipped_blank int;
   present     boolean;
   signup_id   uuid;
+  author_id          uuid := extensions.gen_random_uuid();
+  private_summary_id uuid;
+  private_pull_id    uuid;
 begin
-  -- ---------------------------------------------------------------- fixture
-  select p.id into mill_id    from public.pulls p where p.headline like 'Silencing an opinion%';
-  select p.id into thoreau_id from public.pulls p where p.headline like 'Living deliberately%';
-  select p.id into epi_id     from public.pulls p where p.headline like 'You are disturbed by your judgement%';
-  select p.id into marcus_id  from public.pulls p where p.headline like 'It is your opinion of the thing%';
-  -- Any other On Liberty pull; section 3 turns it into a restatement of Mill
-  -- carrying no `opposes` edge of its own.
-  select p.id into mill_echo_id from public.pulls p where p.headline like 'An unchallenged truth%';
-
-  if mill_id is null or thoreau_id is null or epi_id is null or marcus_id is null
-     or mill_echo_id is null then
-    raise exception 'seed corpus is missing a pull this test depends on';
+  -- This file DELETEs pulls and relations and INSERTs users. It is safe only
+  -- because of the rollback at the end -- and `db:test` honours $DATABASE_URL,
+  -- so "which database" is not a constant. Refuse anything that is not the
+  -- freshly seeded local corpus rather than trusting the transaction alone.
+  if (select count(*) from public.pulls) <> 21 then
+    raise exception
+      'refusing to run: expected the 21-pull seed corpus, found %. This test '
+      'writes before it rolls back and must not be pointed at real data.',
+      (select count(*) from public.pulls);
   end if;
+
+  -- ---------------------------------------------------------------- fixture
+  -- STRICT: without it plpgsql silently takes an arbitrary row when a pattern
+  -- matches twice, and these patterns are only unique by convention.
+  select p.id into strict mill_id    from public.pulls p where p.headline like 'Silencing an opinion%';
+  select p.id into strict thoreau_id from public.pulls p where p.headline like 'Living deliberately%';
+  select p.id into strict epi_id     from public.pulls p where p.headline like 'You are disturbed by your judgement%';
+  select p.id into strict marcus_id  from public.pulls p where p.headline like 'It is your opinion of the thing%';
+  -- Another On Liberty pull; section 3 turns it into a restatement of Mill
+  -- carrying no `opposes` edge of its own. Constrained by slug so the comment
+  -- and the query cannot drift apart.
+  select p.id into strict mill_echo_id
+  from public.pulls p
+  join public.summaries s on s.id = p.summary_id
+  join public.works w on w.id = s.work_id
+  where w.slug = 'on-liberty' and p.headline like 'An unchallenged truth%';
 
   -- The seeded `opposes` edge is real editorial disagreement (Mill wants you to
   -- engage every opinion; Thoreau wants attention spent selectively). Give the
@@ -66,17 +105,21 @@ begin
   update public.pulls set embedding = (select embedding from public.pulls where id = mill_id)
   where id = thoreau_id;
 
-  -- Walden's other two pulls are removed so `per_work <= 2` in get_feed cannot
-  -- silently drop the card under test for a reason unrelated to the Delta.
+  -- Walden's and Meditations' other pulls are removed so `per_work <= 2` in
+  -- get_feed cannot silently drop a card under test for a reason unrelated to
+  -- the Delta. Without this, section 6 passes even if the `opposes`-only
+  -- restriction regresses: Marcus would be absent because he lost the per-work
+  -- cut, not because he was correctly covered.
   delete from public.pulls p
   using public.summaries s, public.works w
-  where p.summary_id = s.id and s.work_id = w.id and w.slug = 'walden'
-    and p.id <> thoreau_id;
+  where p.summary_id = s.id and s.work_id = w.id
+    and ((w.slug = 'walden' and p.id <> thoreau_id)
+      or (w.slug = 'meditations' and p.id <> marcus_id));
 
   -- Mimic three signups. Going through auth.users rather than inserting
   -- profiles directly is deliberate: handle_new_user is what creates the
   -- preference row get_feed scores against.
-  foreach signup_id in array array[reader_knows, reader_blank, reader_lineage] loop
+  foreach signup_id in array array[reader_knows, reader_blank, reader_lineage, reader_both] loop
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                             email_confirmed_at, created_at, updated_at,
                             raw_app_meta_data, raw_user_meta_data)
@@ -97,6 +140,7 @@ begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
   feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
 
   select exists (
@@ -114,14 +158,7 @@ begin
   select (r ->> 'score')::numeric into score_knows
   from jsonb_array_elements(feed -> 'rows') r where (r ->> 'id')::uuid = thoreau_id;
 
-  -- ...and is not counted as a saving. The reader knows Mill directly, which is
-  -- one genuine skip; the contradiction must not make it two.
   skipped := (feed ->> 'skippedKnownCount')::int;
-  if skipped <> 1 then
-    raise exception
-      'expected exactly 1 skipped card (the directly-known Mill pull), got %. '
-      'A contradiction counted as a saving is a false claim in the banner.', skipped;
-  end if;
 
   -- --------------------- 2. it is judged on its merits, not handed a rank
   -- The reader knows ONE idea, and the candidate opposes it. Excluding that
@@ -131,6 +168,7 @@ begin
   -- design, which leaves the contradiction scored as a near-duplicate.
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_blank, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
   feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
   select (r ->> 'score')::numeric into score_blank
   from jsonb_array_elements(feed -> 'rows') r where (r ->> 'id')::uuid = thoreau_id;
@@ -143,6 +181,33 @@ begin
       'a contradiction was scored as redundant: % for the reader who knows the '
       'opposed idea vs % for a reader who knows nothing. Excluding the opposed '
       'pair should make these identical.', score_knows, score_blank;
+  end if;
+
+  -- The comparison above is only meaningful while every other user-dependent
+  -- term is equal. Both readers take default preferences from handle_new_user,
+  -- and neither has a knowledge centroid -- today `user_knowledge_vectors` is
+  -- written only by an explicit RPC. If that ever becomes a trigger on
+  -- knowledge_states, the 0.18 uvec term would diverge and the failure above
+  -- would blame the negation fix for someone else's change. Say so here.
+  if exists (
+    select 1 from public.user_knowledge_vectors
+    where user_id in (reader_knows, reader_blank)
+  ) then
+    raise exception
+      'premise broken: a reader gained a knowledge vector, so the two scores '
+      'are no longer comparable and this assertion no longer tests the Delta.';
+  end if;
+
+  -- ...and the contradiction is not counted as a saving. Asserted as a
+  -- difference against the reader who knows nothing rather than an absolute,
+  -- so growing the seed corpus cannot fail this with a message blaming the
+  -- Delta. Exactly one more skip than the blank reader: Mill itself.
+  skipped_blank := (feed ->> 'skippedKnownCount')::int;
+  if skipped <> skipped_blank + 1 then
+    raise exception
+      'expected the reader who knows Mill to skip exactly one more card than a '
+      'reader who knows nothing (Mill itself), got % vs %. A contradiction '
+      'counted as a saving is a false claim in the banner.', skipped, skipped_blank;
   end if;
 
   -- ------------- 3. it survives a reader who knows the claim several ways
@@ -182,6 +247,7 @@ begin
   -- The same rule has to hold on a source page, which counts rather than ranks.
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
   delta := public.get_source_delta(
     (select w.id from public.works w where w.slug = 'walden'));
 
@@ -203,6 +269,7 @@ begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
   feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
 
   select exists (
@@ -217,12 +284,14 @@ begin
       'exclusion is keeping it in the feed.';
   end if;
 
-  -- Three: Mill and its restatement are both known directly, and the Thoreau
-  -- pull is now covered again because the opposition that was protecting it is
-  -- gone. That third one is the whole point of the control.
+  -- Three more than a reader who knows nothing: Mill and its restatement are
+  -- known directly, and the Thoreau pull is covered again now that the
+  -- opposition protecting it is gone. That third one is the point of the control.
   skipped := (feed ->> 'skippedKnownCount')::int;
-  if skipped <> 3 then
-    raise exception 'control failed: expected 3 skipped cards without the edge, got %', skipped;
+  if skipped <> skipped_blank + 3 then
+    raise exception
+      'control failed: expected 3 more skipped cards than the blank reader '
+      'once the edge is deleted, got % vs %', skipped, skipped_blank;
   end if;
 
   -- ------------------------ 6. the exclusion is `opposes`-only, not any edge
@@ -231,6 +300,7 @@ begin
   -- regress: a restatement is covered, a contradiction is not.
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_lineage, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
   feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
 
   select exists (
@@ -244,8 +314,118 @@ begin
       'to `opposes` edges only, not to ancestor/descendant lineage.';
   end if;
 
+  -- --------------- 7. knowing BOTH sides does not make the debate vanish
+  -- The propagation in section 3 widens the exclusion set by distance, and
+  -- distance is the one measurement this file exists because we cannot trust.
+  -- A contradiction of K1 sits inside K1's threshold exactly as a paraphrase
+  -- does, so an ungated propagation also drops the known idea that OPPOSES K1
+  -- -- and that idea may be the very thing the candidate restates.
+  --
+  -- Reader knows Mill and Thoreau, which oppose each other. The candidate
+  -- opposes Thoreau, so Thoreau is dropped from its comparison; ungated, Mill
+  -- goes with it for being "close to Thoreau", and the candidate is served as
+  -- maximally novel to a reader who already holds it. The exclusion may only
+  -- remove what a candidate contradicts, never what it agrees with.
+  perform set_config('role', 'postgres', true);
+  -- Section 5's control deleted the seeded Mill/Thoreau opposition to prove the
+  -- exclusion depends on it. Put it back: this section is about what happens
+  -- when the reader holds both sides, so both sides have to be opposed again.
+  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
+  values (mill_id, thoreau_id, 'opposes', 0.75),
+         (thoreau_id, mill_id, 'opposes', 0.75),
+         -- ...and the candidate takes a side, against Thoreau.
+         (mill_echo_id, thoreau_id, 'opposes', 0.75),
+         (thoreau_id, mill_echo_id, 'opposes', 0.75)
+  on conflict do nothing;
+
+  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
+  values (reader_both, mill_id, 100, now()), (reader_both, thoreau_id, 100, now());
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_both, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+
+  select exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r ->> 'id')::uuid = mill_echo_id
+  ) into present;
+
+  if present then
+    raise exception
+      'a reader who knows BOTH sides of a debate was served a restatement of '
+      'one side as new. Dropping the opposed idea is right; dropping what it '
+      'disagrees with is not. The propagation must be gated by the `opposes` '
+      'relation, or it re-imports the negation blindness this fix removes.';
+  end if;
+
+  -- ------------------- 8. another author's private material cannot reach in
+  -- The one assertion here that RLS alone enforces, and the reason the rest of
+  -- the file is allowed to claim it runs under RLS.
+  --
+  -- `opposed_pairs` reads `pull_relations`, whose policy requires BOTH endpoint
+  -- summaries to be readable. Nothing in the function bodies re-checks that. So
+  -- if `pull_relations_read_readable` were ever dropped, a private edge written
+  -- by someone else would start steering this reader's feed -- one author could
+  -- decide what another reader is shown, and pull an idea out of their Delta by
+  -- writing a row nobody can see. Every other section in this file would still
+  -- pass. This one would not.
+  perform set_config('role', 'postgres', true);
+
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data)
+  values (author_id, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated',
+          'delta-author-' || left(author_id::text, 8) || '@example.test', '',
+          now(), now(), now(),
+          '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
+
+  insert into public.summaries (work_id, title, status, visibility, author_id,
+                                published_at)
+  select w.id, 'Private counterpoint', 'published', 'private', author_id, now()
+  from public.works w where w.slug = 'on-liberty'
+  returning id into strict private_summary_id;
+
+  insert into public.pulls (summary_id, ordinal, headline, body, embedding,
+                            estimated_read_seconds)
+  select private_summary_id, 1, 'A private objection to Mill.',
+         'Visible only to its author.',
+         (select embedding from public.pulls where id = mill_id), 30
+  returning id into strict private_pull_id;
+
+  -- An edge the reader must never be able to act on.
+  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
+  values (private_pull_id, mill_id, 'opposes', 0.75);
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+
+  if exists (select 1 from public.pull_relations
+             where from_pull_id = private_pull_id) then
+    raise exception
+      'a reader can see another author''s private `opposes` edge. '
+      'pull_relations_read_readable is not doing its job.';
+  end if;
+
+  if exists (select 1 from public.pulls where id = private_pull_id) then
+    raise exception 'a reader can read another author''s private pull.';
+  end if;
+
+  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+  if exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r ->> 'id')::uuid = private_pull_id
+  ) then
+    raise exception 'another author''s private pull was served in the feed.';
+  end if;
+
   raise notice 'DELTA IS NEGATION-AWARE: contradiction shown, scored on merit, '
-               'restatement still covered, source delta agrees';
+               'restatement still covered, source delta agrees, '
+               'both-sides reader keeps their coverage, private material stays out';
 end $$;
 
 rollback;

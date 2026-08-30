@@ -81,9 +81,9 @@ Three things that measurement changed:
 
 ### The Delta is negation-aware ✅
 
-The Delta treats cosine distance `< 0.14` as "the reader already knows this", hardcoded
-in six migrations and tuned against synthetic concept-axis vectors. Measured against real
-Gemini embeddings:
+The Delta _treated_ cosine distance `< 0.14` as "the reader already knows this",
+hardcoded across six migrations and tuned against synthetic concept-axis vectors. Measured
+against real Gemini embeddings:
 
 | distance        | verdict       | relationship                  |
 | --------------- | ------------- | ----------------------------- |
@@ -123,10 +123,18 @@ Two things that building it changed:
 - **`kind = 'opposes'` cannot be an index condition under RLS.** `enum_eq` is not
   leakproof, so the planner may not push it below the security-barrier quals of
   `pull_relations_read_readable`; it lands in `Filter`, _after_ the policy, and every
-  unrelated edge pays that policy in full — eight `summary_is_readable()` calls per row
-  visited, measured at 35× the cost of the same query with RLS bypassed. Two **partial**
-  indexes fix it, because a partial index predicate is a plan-time constraint rather than
-  a runtime qual and so escapes the leakproof rule entirely.
+  unrelated edge pays that policy in full. Two **partial** indexes fix it, because a
+  partial index predicate is a plan-time constraint rather than a runtime qual and so
+  escapes the leakproof rule entirely. Confirmed on a seeded stack: at seed size the
+  planner ignores them, and at ~2,000 relations it switches to an index-only scan and
+  `kind` disappears from `Filter`.
+- **Propagating opposition through paraphrase has to be gated by the relation, not by
+  distance.** The first version widened the exclusion set to everything within the
+  threshold of an opposed idea — which is the same blindness one level up, since a
+  contradiction is inside that threshold too. For a reader holding _both_ sides of a
+  debate it excluded both, leaving nothing to compare against, and served an idea they
+  already held as maximally novel. Caught in review, not by the tests that existed at the
+  time; `delta_negation.sql` now has the case, and it fails without the gate.
 
 The constants now live in `delta_covered_distance()` and `known_retrievability_floor()`,
 so a re-tune is a one-line migration rather than an edit across superseded files. `0.1474`
@@ -247,12 +255,24 @@ not have to rediscover them.
   embeddings it averages, not before: recomputing a reader's centroid on every read
   would be a write amplification we have no evidence is needed. Round 2 either calls it
   from a `pg_cron` tick or drops the term and redistributes its weight.
-- **`get_source_delta` bounds nothing.** `get_feed` caps the reader's known set at 500 by
-  retrievability before doing any vector work; `get_source_delta` does not, so a reader
-  with 5,000 known ideas pays 5,000 × candidates distance computations on every source
-  page. Pre-existing, found while making the Delta negation-aware, and not fixed there
-  because capping changes which ideas the count is taken against — a correctness question
-  about what the page claims, not a performance tweak.
+- **`get_source_delta` and `get_feed` disagreed about how much a reader knows.**
+  `get_feed` has always capped the known set at 500 by retrievability; `get_source_delta`
+  capped nothing, so the two could give different answers about the same reader. Survivable
+  while the comparison was linear, and not once the paraphrase join made it quadratic in
+  the reader's whole history — measured at 327–423ms for 8,000 known ideas on a function
+  every source page calls. Capped at 500 to match, in the same migration that introduced
+  the join: the negation work amplified this rather than merely inheriting it, so it was
+  not honest to file it as pre-existing.
+- **The Delta banner counts the pool, not the page.** `directly_known` counts over the
+  candidate pool (up to 600 rows) and `covered_delta` over the shortlist (up to 300),
+  while the page shows 20. So a well-read reader can be told _"skipped 240 ideas you
+  already know"_ above twenty cards. It is a true statement about what the ranker
+  considered and a false one about the page, and the same seconds drive the Enough
+  screen's "against reading the sources in full" — where `estimated_read_seconds` is
+  per-card, not per-source, so that line over-claims independently. Both are copy or
+  counting-scope decisions rather than bugs in the maths, and both predate the negation
+  work; recorded because the function comment that used to assert "describes this page"
+  was corrected rather than carried forward.
 - **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
   and takes it from `node:crypto`. That is fine for its actual job — testing the
   placement rules over thousands of sessions without a database — but the prefetch use
