@@ -50,12 +50,38 @@ export interface GeminiConfig {
   fetchImpl?: typeof fetch;
   /** Below the platform's 150s wall clock, so a hung call fails the step rather than the worker. */
   timeoutMs?: number;
+  /**
+   * Ceiling on everything one provider call may spend, across retries and the
+   * whole model chain.
+   *
+   * `timeoutMs` bounds a single HTTP attempt and is not sufficient on its own:
+   * two attempts per model over a two-model chain is 4 × 60s = 240s, against a
+   * platform that kills the invocation at 150s. Bounding the attempt while
+   * leaving the total unbounded means the worst case is decided by how many
+   * models happen to be configured — so adding a fallback model, which reads
+   * like making the pipeline more robust, silently makes the step less able to
+   * finish at all.
+   *
+   * The invocation dies with nothing recorded when that happens: no step row, no
+   * ledger row, and a delivery charged against `read_ct`. Three of those and the
+   * job is failed for a step that was only ever slow.
+   */
+  budgetMs?: number;
 }
 
 /** The dimensionality `pulls.embedding` is declared with, and its HNSW index built for. */
 export const EMBEDDING_DIMENSIONS = 1536;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * The total a step may spend inside a provider, chain and retries included.
+ *
+ * Sized so a step that uses all of it still leaves room for the worker to record
+ * the outcome and advance the job before the platform's 150s cap. A step that
+ * finishes is worth more than one that was allowed to keep trying.
+ */
+const DEFAULT_BUDGET_MS = 100_000;
 
 /**
  * Scale a vector to unit length.
@@ -158,6 +184,40 @@ class GeminiError extends Error {
   }
 }
 
+/**
+ * Thrown when a step's total provider budget is gone.
+ *
+ * Declared after `GeminiError` because `extends` is evaluated where the class is
+ * defined, not hoisted — putting this above would be a ReferenceError at module
+ * load, which in an Edge Function means every invocation 500s.
+ */
+class GeminiBudgetExhausted extends GeminiError {
+  constructor(spentMs: number, budgetMs: number) {
+    super(`Gemini budget exhausted after ${spentMs}ms of ${budgetMs}ms`);
+    this.name = 'GeminiBudgetExhausted';
+  }
+}
+
+/**
+ * A wall-clock budget shared by every attempt and every model in one step.
+ *
+ * Created once per provider call so the chain cannot outlive the invocation
+ * running it. Each attempt gets whatever is left, never more than `timeoutMs`.
+ */
+function budgetFrom(config: GeminiConfig) {
+  const budgetMs = config.budgetMs ?? DEFAULT_BUDGET_MS;
+  const startedAt = Date.now();
+  return {
+    /** Remaining budget, or a throw when there is none left to spend. */
+    nextTimeout(perAttemptMs: number): number {
+      const spent = Date.now() - startedAt;
+      const left = budgetMs - spent;
+      if (left <= 0) throw new GeminiBudgetExhausted(spent, budgetMs);
+      return Math.min(perAttemptMs, left);
+    },
+  };
+}
+
 /** 429 and 5xx are worth one more try; a 400 means the request itself is wrong. */
 const isRetryable = (status: number) => status === 429 || status >= 500;
 
@@ -165,9 +225,10 @@ async function callGemini(
   path: string,
   body: unknown,
   config: GeminiConfig,
+  budget: ReturnType<typeof budgetFrom>,
 ): Promise<Record<string, unknown>> {
   const doFetch = config.fetchImpl ?? fetch;
-  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const perAttemptMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let lastError: GeminiError | undefined;
   // Two attempts, not a loop with backoff: the worker already retries the whole step up
@@ -175,7 +236,10 @@ async function callGemini(
   // the step-machine exists to protect.
   for (let attempt = 1; attempt <= 2; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Throws rather than starting an attempt there is no time to finish. A
+    // request the invocation cannot outlive still costs money if it reaches the
+    // provider, and produces nothing anyone can read.
+    const timer = setTimeout(() => controller.abort(), budget.nextTimeout(perAttemptMs));
     try {
       const response = await doFetch(`${API_ROOT}/${path}`, {
         method: 'POST',
@@ -249,9 +313,16 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
       let model = '';
       let lastError: unknown;
 
+      // One budget for the whole chain, not one per model. Two attempts across
+      // two models is 4 × 60s = 240s against a platform that kills the
+      // invocation at 150s, so bounding the attempt while leaving the total
+      // open made the worst case a function of how many fallbacks were
+      // configured — adding one to be safer made the step less likely to finish.
+      const budget = budgetFrom(config);
+
       for (const candidate of config.summaryModels) {
         try {
-          payload = await callGemini(`models/${candidate}:generateContent`, body, config);
+          payload = await callGemini(`models/${candidate}:generateContent`, body, config, budget);
           model = candidate;
           break;
         } catch (e) {
@@ -342,6 +413,9 @@ export function createGeminiEmbeddingProvider(config: GeminiConfig): EmbeddingPr
           })),
         },
         config,
+        // Embedding has no model chain, but it has the same two retries and the
+        // same platform ceiling, so it gets the same bound.
+        budgetFrom(config),
       );
 
       const embeddings = payload.embeddings as { values?: number[] }[] | undefined;

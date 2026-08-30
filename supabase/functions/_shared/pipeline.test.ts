@@ -3,6 +3,7 @@ import {
   assertFetchableUrl,
   asRightsStatus,
   asWorkKind,
+  BilledStepError,
   contentHash,
   extractText,
   MAX_SOURCE_CHARS,
@@ -479,6 +480,63 @@ describe('reuse skips the paid work', () => {
 
     await runPipelineStep('acquire', { ...spied, priorOutputs: {} } as never);
     expect(sawRequester).toBe('reader-1');
+  });
+
+  /**
+   * A provider that answers has already charged for the tokens, whether or not
+   * the answer was usable. Throwing a bare Error there loses the only record of
+   * the spend — and since the step retries, each retry pays again.
+   */
+  describe('a provider billed before the failure still reaches the ledger', () => {
+    function harnessReturning(summary: {
+      title: string;
+      elevatorPitch: string;
+      whyItMatters: string;
+      pulls: { headline: string; body: string; whyItMatters: string }[];
+    }) {
+      const { deps } = harness(null);
+      return {
+        ...deps,
+        summary: {
+          name: 'fake',
+          generateSummary: async () => ({
+            summary,
+            usage: { inputTokens: 900, outputTokens: 120, costCents: 7 },
+            model: 'fake-model-b',
+          }),
+        },
+      };
+    }
+
+    it.each([
+      ['no pulls', { title: 't', elevatorPitch: 'e', whyItMatters: 'w', pulls: [] }],
+      [
+        'no title',
+        {
+          title: '',
+          elevatorPitch: 'e',
+          whyItMatters: 'w',
+          pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }],
+        },
+      ],
+    ])('carries the usage when the provider returns %s', async (_label, summary) => {
+      const deps = harnessReturning(summary);
+      const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+      const thrown = await runPipelineStep('synthesize', {
+        ...deps,
+        priorOutputs: { acquire: acquired.output },
+      } as never).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(BilledStepError);
+      const billed = thrown as InstanceType<typeof BilledStepError>;
+      // Without this the worker writes a failed step and nothing to cost_ledger,
+      // and spend reports understate exactly the runs paying for nothing.
+      expect(billed.usage.costCents).toBe(7);
+      expect(billed.usage.inputTokens).toBe(900);
+      expect(billed.model).toBe('fake-model-b');
+      expect(billed.provider).toBe('fake');
+    });
   });
 
   it('records the model that answered, not the head of the provider chain', async () => {

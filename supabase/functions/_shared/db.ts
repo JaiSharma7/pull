@@ -16,6 +16,16 @@ import type { PipelineDb } from './pipeline.ts';
 // deno-lint-ignore no-explicit-any
 type Db = SupabaseClient<any, any, any>;
 
+/**
+ * The `summaries.version` the pipeline writes, matching the column default.
+ *
+ * Named because it is half of the uniqueness key `(work_id, version, author_id)`
+ * and the insert relies on the default rather than sending it. Adopting a row
+ * after a collision has to match on the same value, and "1" appearing bare in a
+ * query is the kind of thing that survives a schema change it should not.
+ */
+const SUMMARY_VERSION = 1;
+
 function must<T>(result: { data: T; error: unknown }, what: string): T {
   if (result.error) {
     const e = result.error as { message?: string };
@@ -89,29 +99,41 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           .replace(/^-|-$/g, '')
           .slice(0, 80) || 'untitled';
 
-      const inserted = must(
-        await supabase
-          .from('works')
-          .insert({
-            title,
-            kind,
-            content_hash: contentHash,
-            // Suffixed with part of the hash because `slug` is unique and two
-            // different sources can easily share a title.
-            slug: `${slug}-${contentHash.slice(0, 8)}`,
-            // The status `resolve_identity` validated, not a literal. This used to
-            // send `user_private`, which is not a member of `rights_status` — so
-            // Postgres rejected the insert and no new source could ever reach
-            // summary creation. The enum is the rights posture in `content-policy.md`
-            // made unbypassable, and inventing a value defeats exactly that.
-            rights_status: rightsStatus,
-          })
-          .select('id')
-          .single(),
-        'insert work',
-      ) as { id: string };
+      const { data, error } = await supabase
+        .from('works')
+        .insert({
+          title,
+          kind,
+          content_hash: contentHash,
+          // Suffixed with part of the hash because `slug` is unique and two
+          // different sources can easily share a title.
+          slug: `${slug}-${contentHash.slice(0, 8)}`,
+          // The status `resolve_identity` validated, not a literal. This used to
+          // send `user_private`, which is not a member of `rights_status` — so
+          // Postgres rejected the insert and no new source could ever reach
+          // summary creation. The enum is the rights posture in `content-policy.md`
+          // made unbypassable, and inventing a value defeats exactly that.
+          rights_status: rightsStatus,
+        })
+        .select('id')
+        .single();
 
-      return { workId: inserted.id, existing: false };
+      // The select above this insert is not a lock, so two jobs fingerprinting
+      // the same source can both miss it. The unique index on `content_hash` is
+      // what actually decides; losing that race is the index working, not an
+      // error, and the loser adopts the winner's row.
+      if (error) {
+        if ((error as { code?: string }).code !== '23505') {
+          throw new Error(`insert work: ${error.message}`);
+        }
+        const raced = must(
+          await supabase.from('works').select('id').eq('content_hash', contentHash).single(),
+          'adopt concurrently created work',
+        ) as { id: string };
+        return { workId: raced.id, existing: true };
+      }
+
+      return { workId: (data as { id: string }).id, existing: false };
     },
 
     async createSummary({
@@ -123,34 +145,67 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       visibility,
       authorId,
     }) {
-      const row = must(
-        await supabase
+      /*
+       * `template` must be safe to run twice, and it was not.
+       *
+       * `summaries` is unique on `(work_id, version, author_id)`. If this insert
+       * commits and the `attachSummaryToJob` after it fails — a lost response is
+       * enough — the worker records the step as failed and retries the whole
+       * step. The retry re-inserts the same key, collides, and collides again on
+       * every remaining attempt, so the job fails permanently while an
+       * unreachable draft is left behind. The same collision happens when two
+       * jobs for one requester and one source both miss the reuse check and both
+       * synthesise.
+       *
+       * Adopting on collision fixes both, because in both cases the existing row
+       * is exactly the row this step was trying to create. `version` is not sent
+       * and defaults to 1, so it is part of the key and is matched explicitly
+       * here rather than left implied.
+       */
+      const insert = await supabase
+        .from('summaries')
+        .insert({
+          work_id: workId,
+          title,
+          elevator_pitch: elevatorPitch,
+          why_it_matters: whyItMatters,
+          sections,
+          // Draft until `publish`. A summary that is visible before the critic
+          // and the rights gate have run is the one outcome this pipeline
+          // exists to prevent.
+          status: 'draft',
+          visibility,
+          // Who this was generated for, and the only thing that makes a
+          // non-public summary readable at all: `summary_is_readable` grants
+          // access when `status = 'published' and visibility = 'public'`, or
+          // when `author_id = auth.uid()`. Jobs default to `private`, so a
+          // summary written without this is one the person who asked for it
+          // cannot open — the pipeline succeeding and the reader seeing
+          // nothing.
+          author_id: authorId,
+        })
+        .select('id')
+        .single();
+
+      if (insert.error) {
+        if ((insert.error as { code?: string }).code !== '23505') {
+          throw new Error(`insert summary: ${insert.error.message}`);
+        }
+        let adopt = supabase
           .from('summaries')
-          .insert({
-            work_id: workId,
-            title,
-            elevator_pitch: elevatorPitch,
-            why_it_matters: whyItMatters,
-            sections,
-            // Draft until `publish`. A summary that is visible before the critic
-            // and the rights gate have run is the one outcome this pipeline
-            // exists to prevent.
-            status: 'draft',
-            visibility,
-            // Who this was generated for, and the only thing that makes a
-            // non-public summary readable at all: `summary_is_readable` grants
-            // access when `status = 'published' and visibility = 'public'`, or
-            // when `author_id = auth.uid()`. Jobs default to `private`, so a
-            // summary written without this is one the person who asked for it
-            // cannot open — the pipeline succeeding and the reader seeing
-            // nothing.
-            author_id: authorId,
-          })
           .select('id')
-          .single(),
-        'insert summary',
-      ) as { id: string };
-      return row.id;
+          .eq('work_id', workId)
+          .eq('version', SUMMARY_VERSION);
+        // `.eq` on a null author_id would render as `author_id=eq.null` and match
+        // nothing; the unique constraint treats nulls as distinct anyway, so a
+        // collision here can only be a row that shares this author.
+        adopt = authorId === null ? adopt.is('author_id', null) : adopt.eq('author_id', authorId);
+
+        const existing = must(await adopt.single(), 'adopt existing summary') as { id: string };
+        return existing.id;
+      }
+
+      return (insert.data as { id: string }).id;
     },
 
     async insertPulls(summaryId, pulls) {

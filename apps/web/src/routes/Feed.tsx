@@ -83,17 +83,22 @@ export function Feed({
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
   /**
-   * Saves made *in this session*, which is not the size of `saved`.
+   * The ids saved *in this session* — a set, not a count.
    *
-   * `saved` is the reader's whole persistent library — `fetchSavedPullIds`
-   * loads every id so cards render with the right state. Reporting its size
-   * under "This session" credited a returning reader with all of it before they
-   * had done anything, which is the one kind of number this product must not
-   * inflate: the rail exists to say what this sitting was worth, and a counter
-   * that starts at 200 says nothing at all. Its siblings `read` and `recalled`
-   * both start at zero; this now matches them.
+   * `saved` is the reader's whole persistent library: `fetchSavedPullIds` loads
+   * every id so cards render with the right state. Reporting its size under
+   * "This session" credited a returning reader with all of it before they had
+   * done anything, which is the one kind of number this product must not
+   * inflate — the rail exists to say what this sitting was worth, and a counter
+   * that opens at 200 says nothing at all.
+   *
+   * A scalar incremented on save and decremented on un-save was the first fix
+   * and was still wrong: save one new Pull, then un-save something kept last
+   * week, and the count goes 1 → 0 while the new save is still there. Only the
+   * identity of what was saved can answer "this session", so that is what is
+   * tracked. Its siblings `read` and `recalled` both start empty; this matches.
    */
-  const [savedThisSession, setSavedThisSession] = useState(0);
+  const [savedThisSession, setSavedThisSession] = useState<Set<string>>(new Set());
   /** Interrupt slots already answered or skipped, so they are not shown twice. */
   const [handledSlots, setHandledSlots] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
@@ -104,7 +109,7 @@ export function Feed({
   useEffect(() => {
     onStats?.({
       read: readCount,
-      saved: savedThisSession,
+      saved: savedThisSession.size,
       recalled,
       skippedKnown: feed?.skippedKnownCount ?? 0,
       minutesSaved: feed?.minutesSaved ?? 0,
@@ -263,11 +268,15 @@ export function Feed({
         else next.add(row.id);
         return next;
       }); // optimistic — saving is free and unlimited, so never blocks
-      // Net for the session, so un-saving something kept a moment ago takes the
-      // number back down rather than leaving the rail claiming a save that no
-      // longer exists. Floored at zero: un-saving a card kept on a previous day
-      // is not this session going negative.
-      setSavedThisSession((n) => (wasSaved ? Math.max(0, n - 1) : n + 1));
+      // Keyed by id so un-saving only discounts a save this session actually
+      // made. Un-saving something kept last week is not this session undoing
+      // anything, and must not cancel out a Pull kept a minute ago.
+      setSavedThisSession((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.delete(row.id);
+        else next.add(row.id);
+        return next;
+      });
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
       } catch {

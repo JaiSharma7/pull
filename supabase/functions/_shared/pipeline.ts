@@ -24,6 +24,35 @@ import type { EmbeddingProvider, SummaryProvider, Usage } from './providers.ts';
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
 /**
+ * A step that failed *after* a provider had already been billed.
+ *
+ * The provider meters the call when it answers, not when we like the answer. So
+ * a summary that comes back with a blank title or no Pulls has cost exactly what
+ * a good one costs, and throwing a bare Error there loses the only record of it:
+ * the worker's failure path writes a `job_steps` row and nothing to
+ * `cost_ledger`. Since the step then retries, each retry silently adds another
+ * unrecorded charge, and spend reports understate precisely the runs that are
+ * paying for nothing.
+ *
+ * Law 2 says every model call writes to the ledger — not every successful one.
+ * Carrying the usage on the error is what lets the worker keep that promise on
+ * the path where it is easiest to forget.
+ */
+export class BilledStepError extends Error {
+  readonly usage: Usage;
+  readonly model: string | undefined;
+  readonly provider: string | undefined;
+
+  constructor(message: string, billed: { usage: Usage; model?: string; provider?: string }) {
+    super(message);
+    this.name = 'BilledStepError';
+    this.usage = billed.usage;
+    this.model = billed.model;
+    this.provider = billed.provider;
+  }
+}
+
+/**
  * What a step hands back: what it made, what it cost, and who made it.
  *
  * `usage` is optional because most steps spend nothing — only `synthesize`,
@@ -142,8 +171,7 @@ export interface PipelineDb {
    * Keyed on the hash because that is what is known *before* generating: asking
    * "has this exact source already been summarised" only saves money if it can
    * be asked before the expensive call, not after it.
-   */
-  /**
+   *
    * `requesterId` is not optional and is not for filtering convenience: reuse
    * must be limited to what this requester could read, or the job adopts a
    * summary it cannot show them. Public summaries are reusable by anyone —
@@ -608,7 +636,13 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       });
 
       if (!summary.title || summary.pulls.length === 0) {
-        throw new Error('synthesize: provider returned a summary with no pulls');
+        // Billed before it was rejected: the provider charged for these tokens
+        // whether or not the result was usable, so the error carries the usage
+        // to the worker rather than dropping it.
+        throw new BilledStepError(
+          `synthesize: provider returned ${!summary.title ? 'a summary with no title' : 'a summary with no pulls'}`,
+          { usage, model, provider: deps.summary.name },
+        );
       }
 
       return {

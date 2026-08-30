@@ -1799,6 +1799,22 @@ export type Database = {
           slot_index: number
         }[]
       }
+      record_failed_job_step: {
+        Args: {
+          p_attempt: number
+          p_billable?: boolean
+          p_cost_cents?: number
+          p_duration_ms: number
+          p_error: string
+          p_input_tokens?: number
+          p_job_id: string
+          p_model?: string
+          p_output_tokens?: number
+          p_provider?: string
+          p_step: string
+        }
+        Returns: string
+      }
       record_interrupt: {
         Args: {
           p_grade?: Database["public"]["Enums"]["recall_grade"]

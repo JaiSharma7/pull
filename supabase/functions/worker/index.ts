@@ -3,7 +3,12 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
 import { resolveProviders } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
-import { runPipelineStep, type JobRow, type StepResult } from '../_shared/pipeline.ts';
+import {
+  BilledStepError,
+  runPipelineStep,
+  type JobRow,
+  type StepResult,
+} from '../_shared/pipeline.ts';
 
 /**
  * One tick of the generation step-machine.
@@ -14,31 +19,27 @@ import { runPipelineStep, type JobRow, type StepResult } from '../_shared/pipeli
  */
 
 /**
- * The most messages one invocation will handle — and, importantly, an upper
- * bound rather than a number claimed up front.
+ * Exactly one message per invocation.
  *
- * Claiming five at once was safe while every step was a stub returning
- * instantly. It stopped being safe the moment the steps made real provider
- * calls: pgmq increments `read_ct` on delivery, not on execution, so five
- * messages claimed and two executed still charged all five a delivery. Three
- * such invocations and `read_ct > MAX_ATTEMPTS` fails a job at a step that never
- * once ran — a job killed for the worker's scheduling, with nothing in
- * `job_steps` to show why.
+ * This went from five, to one-at-a-time-with-a-time-guard, to this. The guard
+ * was still wrong: it reserved 40s for the next step while a single
+ * `generateSummary` may spend up to its full provider budget (100s), so the
+ * arithmetic permitted claiming a synthesis message that could not finish.
  *
- * So messages are claimed one at a time, immediately before being run.
+ * There is no reserve that makes a second message safe. The provider budget is
+ * 100s and the platform ceiling is 150s, so one slow step already consumes the
+ * invocation — any second claim is a bet that the first was fast. pgmq charges
+ * `read_ct` on delivery rather than execution, so losing that bet costs a
+ * delivery on a step that never ran, and three of those fail the job at a step
+ * with nothing in `job_steps` to explain it.
+ *
+ * Throughput does not depend on batching here. `pg_net` dispatches
+ * asynchronously and `pg_cron` fires every 10s whenever the queue is non-empty,
+ * so invocations overlap and pgmq's visibility timeout keeps them off each
+ * other's messages. Concurrency comes from many workers each doing one thing,
+ * which is also the only version of it that can be reasoned about.
  */
-const MAX_MESSAGES_PER_INVOCATION = 5;
-
-/**
- * Wall-clock bounds, well inside the platform's 150s ceiling.
- *
- * A single `synthesize` can spend two 60-second provider attempts, so the
- * question before claiming another message is not "is there time left" but "is
- * there time for the slowest thing that could be behind it". `RESERVE` is that
- * slowest thing; the loop stops rather than claim a message it might not reach.
- */
-const INVOCATION_DEADLINE_MS = 110_000;
-const RESERVE_FOR_ONE_STEP_MS = 40_000;
+const MESSAGES_PER_INVOCATION = 1;
 /** Steps that invoke a provider, and so must produce a ledger row. */
 const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
 /**
@@ -209,32 +210,19 @@ Deno.serve(async (req) => {
   }
 
   const processed: unknown[] = [];
-  const invocationStarted = Date.now();
 
-  for (let claimed = 0; claimed < MAX_MESSAGES_PER_INVOCATION; claimed++) {
-    // Only ask for a message once there is room to run the slowest step it
-    // could turn out to be. The first is always attempted, so an invocation
-    // never returns having done nothing while work was waiting.
-    if (
-      claimed > 0 &&
-      Date.now() - invocationStarted > INVOCATION_DEADLINE_MS - RESERVE_FOR_ONE_STEP_MS
-    ) {
-      break;
-    }
+  // Claimed immediately before it is run, and never more than one: `read_ct` is
+  // charged on delivery, so a message claimed and not reached is a retry spent
+  // on nothing.
+  const batch = must(
+    await supabase.rpc('claim_generation_messages', {
+      p_count: MESSAGES_PER_INVOCATION,
+      p_visibility_seconds: VISIBILITY_SECONDS,
+    }),
+    'claim queue messages',
+  ) as QueueMessage[] | null;
 
-    // One at a time. `read_ct` is charged on delivery, so a message claimed and
-    // not run is a retry spent on nothing.
-    const batch = must(
-      await supabase.rpc('claim_generation_messages', {
-        p_count: 1,
-        p_visibility_seconds: VISIBILITY_SECONDS,
-      }),
-      'claim queue messages',
-    ) as QueueMessage[] | null;
-
-    const msg = batch?.[0];
-    if (!msg) break;
-
+  for (const msg of batch ?? []) {
     const { jobId, step } = msg.message;
     const started = Date.now();
 
@@ -342,19 +330,44 @@ Deno.serve(async (req) => {
       must(await archive(msg.msg_id), 'archive message');
       processed.push({ jobId, step, attempt, ok: true });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // A failure that happened *after* the provider was billed. The tokens are
+      // spent either way, so the ledger has to hear about it: law 2 counts every
+      // model call, not every successful one, and the step is about to be
+      // retried — each retry paying again.
+      const billed = e instanceof BilledStepError ? e : null;
+
       // The one write here that must not use `must()`: throwing out of a catch
       // would skip the bookkeeping below and lose the original error. Its result
       // is still checked, because an unrecorded attempt is what lets a job cycle
       // without ever reaching MAX_ATTEMPTS.
-      const { error: recordError } = await supabase.from('job_steps').insert({
-        job_id: jobId,
-        step,
-        attempt,
-        status: 'failed',
-        error: e instanceof Error ? e.message : String(e),
-        duration_ms: Date.now() - started,
-        finished_at: new Date().toISOString(),
-      });
+      //
+      // Routed through an RPC when there is spend to record, so the failed step
+      // and its ledger row land in one transaction — the same guarantee
+      // `record_job_step` gives the success path, for the same reason.
+      const { error: recordError } = billed
+        ? await supabase.rpc('record_failed_job_step', {
+            p_job_id: jobId,
+            p_step: step,
+            p_attempt: attempt,
+            p_error: message,
+            p_duration_ms: Date.now() - started,
+            p_model: billed.model ?? null,
+            p_provider: billed.provider ?? null,
+            p_input_tokens: billed.usage.inputTokens,
+            p_output_tokens: billed.usage.outputTokens,
+            p_cost_cents: billed.usage.costCents,
+            p_billable: PROVIDER_STEPS.has(step),
+          })
+        : await supabase.from('job_steps').insert({
+            job_id: jobId,
+            step,
+            attempt,
+            status: 'failed',
+            error: message,
+            duration_ms: Date.now() - started,
+            finished_at: new Date().toISOString(),
+          });
       // A duplicate key means `record_job_step` already wrote a *succeeded* row
       // for this attempt and only the transition after it failed. There is
       // nothing to mark failed in that case — the resume path picks it up on
@@ -367,7 +380,8 @@ Deno.serve(async (req) => {
         step,
         attempt,
         ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: message,
+        ...(billed ? { billedCostCents: billed.usage.costCents } : {}),
         ...(recorded ? {} : { attemptUnrecorded: recordError.message }),
       });
     }
