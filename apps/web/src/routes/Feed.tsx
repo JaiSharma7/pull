@@ -52,7 +52,28 @@ function weave(rows: FeedRow[], slots: InterleaveSlot[]): Item[] {
   return out;
 }
 
-export function Feed({ userId }: { userId: string | null }) {
+/**
+ * What the session rail shows.
+ *
+ * Reported upward rather than fetched again up there: these are the same
+ * numbers the Enough screen ends on, and reading them twice from two places is
+ * how two views of one session start disagreeing with each other.
+ */
+export interface FeedStats {
+  read: number;
+  saved: number;
+  recalled: number;
+  skippedKnown: number;
+  minutesSaved: number;
+}
+
+export function Feed({
+  userId,
+  onStats,
+}: {
+  userId: string | null;
+  onStats?: (stats: FeedStats) => void;
+}) {
   const [session, setSession] = useState(loadSession);
   const [feed, setFeed] = useState<FeedResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +85,20 @@ export function Feed({ userId }: { userId: string | null }) {
   /** Interrupt slots already answered or skipped, so they are not shown twice. */
   const [handledSlots, setHandledSlots] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
+
+  // Push the session numbers up whenever they move. Effect rather than a call
+  // inside each handler, so no future counter can be added and silently not
+  // reach the rail.
+  useEffect(() => {
+    onStats?.({
+      read: readCount,
+      saved: saved.size,
+      recalled,
+      skippedKnown: feed?.skippedKnownCount ?? 0,
+      minutesSaved: feed?.minutesSaved ?? 0,
+    });
+  }, [onStats, readCount, saved, recalled, feed]);
+
   useEffect(() => {
     let cancelled = false;
     api

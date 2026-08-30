@@ -246,3 +246,153 @@
   height: 100%;
   background: var(--accent);
 }
+
+/* App shell ---------------------------------------------------------------
+ *
+ * Three panes on a laptop: where you are, what you are reading, and what the
+ * session has done. The reading column stays pinned to --measure however wide
+ * the window gets, because a 1400px line of prose is not "using the screen" —
+ * it is a line nobody can track back to the start of. The extra width buys
+ * structure and peripheral context instead of longer lines.
+ *
+ * That is also what makes this not a vertical video feed. The rails stay
+ * visible, so a session always has edges and a visible end rather than an
+ * infinite runway with the next card already sliding into view.
+ */
+.shell {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell__masthead {
+  display: flex;
+  gap: var(--space-5);
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--rule);
+}
+
+.shell__wordmark {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  letter-spacing: -0.02em;
+}
+
+.shell__body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.shell__rail,
+.shell__aside {
+  display: none;
+}
+
+.shell__main {
+  padding: var(--space-6) var(--space-5);
+  min-width: 0;
+}
+
+/* The reading column, independent of the shell around it. */
+.shell__column {
+  max-width: var(--measure);
+  margin-inline: auto;
+}
+
+/*
+ * 60rem is where a third pane stops stealing from the reading column: below it
+ * the rails would push the measure under a comfortable line length, which is
+ * the one thing this layout exists to protect.
+ */
+@media (min-width: 60rem) {
+  .shell__body {
+    grid-template-columns: 12rem minmax(0, 1fr) 15rem;
+  }
+
+  .shell__rail,
+  .shell__aside {
+    display: block;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    padding: var(--space-6) var(--space-4);
+  }
+
+  /* Separated by hairlines, never by elevation. */
+  .shell__rail {
+    border-right: 1px solid var(--rule);
+  }
+
+  .shell__aside {
+    border-left: 1px solid var(--rule);
+  }
+}
+
+@media (min-width: 88rem) {
+  .shell__body {
+    grid-template-columns: 15rem minmax(0, 1fr) 19rem;
+  }
+}
+
+.shell__nav {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.shell__nav-item {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) 0;
+}
+
+/* Current section is marked by weight and a rule, not by colour alone. */
+.shell__nav-item[aria-current='page'] {
+  color: var(--accent);
+  font-weight: 500;
+  border-bottom: 1px solid var(--accent);
+}
+
+.shell__group {
+  margin-bottom: var(--space-6);
+}
+
+.shell__stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.shell__stat-value {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+}
+
+/* The one number the product is actually optimising for. */
+.shell__stat-value--accent {
+  color: var(--accent);
+}
+
+/*
+ * Sections appear once. Below 60rem they sit in the masthead; above it the left
+ * rail owns them. Rendering both and hiding one visually would leave two
+ * controls with the same name in the accessibility tree, so each breakpoint
+ * removes the copy it is not using from the document entirely.
+ */
+.shell__masthead-nav {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (min-width: 60rem) {
+  .shell__masthead-nav {
+    display: none;
+  }
+}
