@@ -34,13 +34,29 @@
   --font-body: 'Inter', -apple-system, blinkmacsystemfont, 'Segoe UI', helvetica, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, sfmono-regular, menlo, monospace;
 
-  --step--1: 0.8125rem;
-  --step-0: 1rem;
-  --step-1: 1.25rem;
-  --step-2: 1.5625rem;
-  --step-3: 1.9531rem;
-  --step-4: 2.4414rem;
-  --step-5: 3.0518rem;
+  /*
+   * A fluid scale, not a stepped one.
+   *
+   * These were fixed rem values, so a 1504px laptop and a 375px phone rendered the
+   * same 39px headline — too tight on one, too loose on the other — changing only at
+   * two hard breakpoints in between. A window dragged from 1000px to 1400px changed
+   * nothing at all, and then everything at once.
+   *
+   * Each step is `clamp(min, rem + vw, max)`. The `rem` term is what keeps this
+   * accessible: a pure `vw` scale ignores the reader's font-size preference entirely,
+   * so a value that stays partly rem still grows when someone sets a larger default.
+   * The ratio holds near 1.25 at the top and compresses toward 1.2 on small screens,
+   * because a scale that reads as dramatic at 1400px is simply unreadable at 375px.
+   *
+   * The maxima are the previous fixed values, so nothing above ~90rem moves.
+   */
+  --step--1: clamp(0.78rem, 0.76rem + 0.08vw, 0.8125rem);
+  --step-0: clamp(1rem, 0.98rem + 0.1vw, 1.0625rem);
+  --step-1: clamp(1.15rem, 1.08rem + 0.3vw, 1.25rem);
+  --step-2: clamp(1.35rem, 1.22rem + 0.55vw, 1.5625rem);
+  --step-3: clamp(1.6rem, 1.38rem + 0.95vw, 1.9531rem);
+  --step-4: clamp(1.85rem, 1.55rem + 1.5vw, 2.4414rem);
+  --step-5: clamp(2.1rem, 1.68rem + 2.1vw, 3.0518rem);
 
   /* Space — a 4px base, used consistently rather than eyeballed. */
   --space-1: 0.25rem;

@@ -308,8 +308,23 @@
  * the one thing this layout exists to protect.
  */
 @media (min-width: 60rem) {
+  /*
+   * The rails absorb the extra width; the reading column never does.
+   *
+   * These were two fixed steps — 12/15rem, jumping to 15/19rem at 88rem — so every
+   * window between 60 and 88rem got furniture sized for the narrowest of them. A
+   * Surface Laptop at 200% scaling is 70.5rem wide and was styled as though it were
+   * 60. `clamp` lets the rails take up the slack continuously instead of at one jump.
+   *
+   * The middle track stays `minmax(0, 1fr)` and the column inside it stays pinned to
+   * --measure at every width. That is the point of the whole layout: extra pixels buy
+   * structure and peripheral context, never a longer line.
+   */
   .shell__body {
-    grid-template-columns: 12rem minmax(0, 1fr) 15rem;
+    grid-template-columns:
+      clamp(12rem, 9rem + 5vw, 16rem)
+      minmax(0, 1fr)
+      clamp(15rem, 11rem + 6.5vw, 20rem);
   }
 
   .shell__rail,
@@ -331,9 +346,36 @@
   }
 }
 
-@media (min-width: 88rem) {
-  .shell__body {
-    grid-template-columns: 15rem minmax(0, 1fr) 19rem;
+/*
+ * Height is a budget too, and nothing here was spending it.
+ *
+ * Every rule in this file keyed on width alone, which assumes a 16:9 laptop. A
+ * Surface Laptop is 3:2 and a MacBook 16:10, so two machines of the same width can
+ * differ by hundreds of vertical pixels — and the short one is where a card, its
+ * rails and the session tally stop fitting together.
+ *
+ * Under 48rem of height the vertical rhythm tightens and the display sizes come down
+ * a step. This is the opposite of what a video feed does: Reels reclaims a short
+ * viewport by going full-bleed and hiding its chrome, because its goal is to remove
+ * any sense of an edge. Ours is to keep the edges visible, so what gives is the
+ * spacing, never the context.
+ */
+@media (max-height: 48rem) and (min-width: 60rem) {
+  .shell__rail,
+  .shell__aside {
+    padding-block: var(--space-4);
+  }
+
+  .shell__group + .shell__group {
+    margin-top: var(--space-4);
+  }
+
+  .titlepage {
+    padding-block: var(--space-5);
+  }
+
+  .titlepage__title {
+    font-size: var(--step-3);
   }
 }
 
@@ -395,4 +437,160 @@
   .shell__masthead-nav {
     display: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * The title page — sign in, and step two of it.
+ *
+ * See docs/design-first-run.md. One axis, centred on both, capped at --measure.
+ * The screen it replaces was a 544px column pinned to left: 0 with 900px of dead
+ * space beside it, which is what .measure does on its own: it caps width and does
+ * not centre. On the first thing a stranger sees, that reads as broken rather
+ * than spare.
+ * ------------------------------------------------------------------------ */
+.titlepage {
+  display: grid;
+  /* svh, not vh: mobile browser chrome makes vh taller than the visible area, so
+     the primary button ends up underneath the address bar on exactly the devices
+     where it matters most. */
+  min-height: 100svh;
+  place-content: center;
+  padding: var(--space-8) var(--space-5);
+}
+
+.titlepage__inner {
+  width: 100%;
+  max-width: var(--measure);
+  text-align: center;
+}
+
+.titlepage__mark {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The sentence is the brand, so the sentence is what is large. A big logo is what
+   a product does when it has nothing to say. */
+.titlepage__title {
+  font-size: var(--step-4);
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.titlepage__lede {
+  color: var(--text-soft);
+  text-wrap: pretty;
+}
+
+.titlepage__promise {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.titlepage__sent,
+.titlepage__error {
+  font-size: var(--step--1);
+}
+
+.titlepage__error {
+  color: var(--accent);
+}
+
+.titlepage__alts {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+/* Forms centre-align their labels here, which reads wrong for an input the eye has
+   to track along. Left-align the field, keep the page centred. */
+.titlepage__inner .field {
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------------------
+ * Segmented sign-in code.
+ *
+ * Structure ported from 21st.dev's one-time-password pattern; none of its styling.
+ * Boxes rather than a field because progress through a six-digit code should be
+ * visible without counting characters.
+ * ------------------------------------------------------------------------ */
+.code {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-2);
+  max-width: 20rem;
+}
+
+.code__box {
+  min-width: 0;
+  padding: var(--space-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--step-2);
+  text-align: center;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+}
+
+.code__box:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------------------------------------------------------------------------
+ * Enough — the numbers are the claim, so they are set like a result.
+ * ------------------------------------------------------------------------ */
+.tally {
+  display: flex;
+  gap: var(--space-7);
+  justify-content: center;
+}
+
+.tally__value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--step-5);
+  line-height: 1;
+  /* Proportional digits make a row of numbers ragged, and these sit in a row. */
+  font-variant-numeric: tabular-nums;
+}
+
+.tally__label {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The only ornament law 1 allows. A hairline, full width of its container, with the
+   default <hr> border, margin and inset removed so it is a rule rather than a groove. */
+.rule {
+  width: 100%;
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* The primary action matches the field above it.
+ *
+ * A 189px button under a 544px input reads as unrelated to it — the eye tracks the
+ * full width of the field, then has to find a smaller target somewhere along that
+ * line. Matching widths makes the pair read as one gesture: type here, then commit.
+ * Only on the title page; buttons inside the reading column are inline actions and
+ * should stay sized to their label. */
+.titlepage__inner .btn--primary {
+  width: 100%;
+}
+
+/* The secondary pair stays inline and small — they are escape hatches, not the
+   action, and giving them the same weight would make the screen ask two questions. */
+.titlepage__alts .btn--plain {
+  padding-inline: 0;
+  font-size: inherit;
 }
