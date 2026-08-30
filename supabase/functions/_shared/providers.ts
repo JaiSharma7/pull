@@ -28,7 +28,15 @@ export interface Usage {
 
 export interface SummaryProvider {
   readonly name: string;
-  generateSummary(input: SummaryInput): Promise<{ summary: CanonicalSummary; usage: Usage }>;
+  /**
+   * `model` is returned rather than read off the provider because a provider may fall
+   * back between models mid-run — the newest Flash returns 503 under load often enough
+   * that a pipeline pinned to it stalls. `job_steps.model` has to name the model that
+   * actually produced this summary, or provenance is fiction.
+   */
+  generateSummary(
+    input: SummaryInput,
+  ): Promise<{ summary: CanonicalSummary; usage: Usage; model: string }>;
 }
 
 export interface EmbeddingProvider {
@@ -53,6 +61,7 @@ export const stubSummaryProvider: SummaryProvider = {
         pulls: [],
       },
       usage: { inputTokens: 0, outputTokens: 0, costCents: 0 },
+      model: 'stub',
     };
   },
 };
