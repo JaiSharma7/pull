@@ -3,6 +3,7 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  NO_USAGE,
   RIGHTS_STATUSES,
   runPipelineStep,
   WORK_KINDS,
@@ -337,6 +338,159 @@ describe('reuse skips the paid work', () => {
     } as never);
 
     expect(calls.summary).toBe(1);
+  });
+
+  /*
+   * The short-circuit.
+   *
+   *   reuse found:   acquire ──jumpTo──────────────────────────────→ publish
+   *   source new:    acquire → chunk → … → template → … → publish
+   *
+   * Nine invocations of difference on the path law 2 predicts will dominate. Asserted
+   * on the returned `jumpTo` rather than by counting invocations, because the worker
+   * is what acts on it and the step's job is only to say so.
+   */
+  it('sends a reused job straight to publish', async () => {
+    const { deps } = harness({ workId: 'w9', summaryId: 's9' });
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    expect(acquired.jumpTo).toBe('publish');
+  });
+
+  it('leaves a new source to walk every step', async () => {
+    const { deps } = harness(null);
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    // Absent, not 'chunk'. `nextStep` stays the default so the pipeline is a straight
+    // line unless a step has a reason to say otherwise.
+    expect(acquired.jumpTo).toBeUndefined();
+  });
+
+  it('publishes a jumped job that never ran template', async () => {
+    const { deps } = harness({ workId: 'w9', summaryId: 's9' });
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    // Exactly what the worker holds after a jump: acquire's output and nothing else.
+    // Before `publish` learned to check reuse first, this threw "no summary to
+    // publish" — the short-circuit would have failed every job it was meant to save.
+    const published = await runPipelineStep('publish', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    expect(published.output).toMatchObject({ published: false, reason: 'reused' });
+  });
+
+  /**
+   * The race `acquire` cannot see.
+   *
+   *   job A   acquire ─────── … ─────── synthesize ─── template(commit)
+   *   job B        acquire(miss) ─── … ─────── synthesize ← re-check catches it here
+   *
+   * `acquire` and `synthesize` are separate invocations minutes apart, so the reuse
+   * answer can go stale between them and two jobs can both pay for the same source.
+   * The re-check narrows that window; it does not close it. See the comment in
+   * `synthesize` for why reserving the fingerprint is deferred rather than half-built.
+   */
+  /** Misses on the first lookup and hits on the second — the race, deterministically. */
+  function racingHarness() {
+    const calls = { summary: 0, lookups: 0 };
+    const attached: { jobId: string; summaryId: string; workId: string }[] = [];
+
+    const deps = {
+      summary: {
+        name: 'fake',
+        generateSummary: async () => {
+          calls.summary++;
+          return {
+            summary: {
+              title: 't',
+              elevatorPitch: 'e',
+              whyItMatters: 'w',
+              pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }],
+            },
+            usage: { inputTokens: 1, outputTokens: 1, costCents: 1 },
+            model: 'fake-model-b',
+          };
+        },
+      },
+      embedding: { name: 'fake', embed: async () => ({ vectors: [], usage: NO_USAGE }) },
+      job: {
+        id: 'job-2',
+        kind: 'canonical_summary',
+        target: { text: 'y'.repeat(400) },
+        work_id: null,
+        summary_id: null,
+        visibility: 'private',
+        requester_id: 'reader-1',
+      },
+      db: {
+        findPublishedSummaryByHash: async () => {
+          calls.lookups++;
+          return calls.lookups === 1 ? null : { workId: 'w7', summaryId: 's7' };
+        },
+        upsertWork: async () => ({ workId: 'w1', existing: false }),
+        createSummary: async () => 's1',
+        insertPulls: async () => [],
+        setPullEmbeddings: async () => undefined,
+        publishSummary: async () => undefined,
+        attachSummaryToJob: async (jobId: string, summaryId: string, workId: string) => {
+          attached.push({ jobId, summaryId, workId });
+        },
+      },
+    };
+    return { deps, calls, attached };
+  }
+
+  it('calls no provider when another job published the source first', async () => {
+    const { deps, calls } = racingHarness();
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    // The point of the whole change: the second job does not pay. Without the
+    // re-check this is 1, and the money is already gone by the time `template`
+    // adopts the winner's row.
+    expect(calls.summary).toBe(0);
+    expect(calls.lookups).toBe(2);
+  });
+
+  it('adopts the winner’s summary and jumps to publish', async () => {
+    const { deps, attached } = racingHarness();
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const synthesized = await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    expect(synthesized.jumpTo).toBe('publish');
+    // Attached, not merely detected: a job that skips generation and does not point at
+    // the summary it adopted succeeds while showing the reader nothing.
+    expect(attached).toEqual([{ jobId: 'job-2', summaryId: 's7', workId: 'w7' }]);
+  });
+
+  it('records the adoption in the shape publish already understands', async () => {
+    const { deps } = racingHarness();
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const synthesized = await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    // Both origins write `reuse`, so `publish` never has to know which race it won.
+    const published = await runPipelineStep('publish', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output, synthesize: synthesized.output },
+    } as never);
+
+    expect(published.output).toMatchObject({ published: false, reason: 'reused' });
   });
 
   /**

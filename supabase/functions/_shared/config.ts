@@ -33,6 +33,17 @@ export interface Env {
   get(key: string): string | undefined;
 }
 
+/**
+ * Deliberately strict about what counts as on.
+ *
+ * A flag that turns a safety check off when someone writes `REQUIRE_REAL_PROVIDERS=false`
+ * and on when they write `no` is worse than no flag, so only the affirmative spellings
+ * enable it and everything else — including the empty string a shell exports for an unset
+ * variable — leaves it off.
+ */
+const isTruthy = (raw: string | undefined): boolean =>
+  raw !== undefined && ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+
 const numberFrom = (env: Env, key: string, fallback: number): number => {
   const raw = env.get(key);
   if (raw === undefined || raw === '') return fallback;
@@ -81,6 +92,19 @@ export function geminiConfigFrom(env: Env, apiKey: string): GeminiConfig {
  *
  * `getSecret` is a callback rather than a Supabase client so this module has no database
  * dependency and can be exercised directly.
+ *
+ *   REQUIRE_REAL_PROVIDERS unset       REQUIRE_REAL_PROVIDERS set
+ *   ──────────────────────────────     ──────────────────────────────
+ *   key found  → Gemini                key found  → Gemini
+ *   no key     → stubs, silently       no key     → throws here
+ *
+ * The right-hand column exists because the left-hand one is indistinguishable from
+ * working. A deployment whose key has been rotated, revoked or quota-exhausted keeps
+ * answering — with stub summaries, at zero cost, writing nothing to `cost_ledger` — and
+ * the only symptom is that readers quietly get placeholder prose. Nothing throws, so
+ * nothing alerts, and the failure is discovered by reading the app rather than by any
+ * monitor. The hosted worker sets the flag; a fresh clone does not, which is what keeps
+ * the no-key promise in law 3 intact.
  */
 export async function resolveProviders(
   env: Env,
@@ -93,6 +117,19 @@ export async function resolveProviders(
   let apiKey: string | null = null;
   if (needsGemini) {
     apiKey = env.get('GOOGLE_AI_API_KEY') ?? (await getSecret('google_ai_api_key'));
+  }
+
+  // Fail before a job is claimed rather than after one is silently mis-served. A worker
+  // that cannot reach the provider it was told to require has nothing useful to do, and
+  // this is the loudest moment available — before any message is claimed, any `read_ct`
+  // is spent, or any reader is handed a stub.
+  if (needsGemini && !apiKey && isTruthy(env.get('REQUIRE_REAL_PROVIDERS'))) {
+    throw new Error(
+      'REQUIRE_REAL_PROVIDERS is set but no Gemini key resolved. Set GOOGLE_AI_API_KEY in ' +
+        'the Edge Function environment, or store `google_ai_api_key` in Vault. Refusing to ' +
+        'fall back to stub providers, which would serve readers placeholder summaries with ' +
+        'no error anywhere.',
+    );
   }
 
   // No key is a supported state, not a crash: the stubs exercise every step, which is

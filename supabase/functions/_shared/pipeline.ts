@@ -67,6 +67,15 @@ export interface StepResult {
   output?: unknown;
   model?: string;
   provider?: string;
+  /**
+   * Skip ahead instead of advancing to the next step.
+   *
+   * The step machine is otherwise a straight line, and this is the one branch in it:
+   * a job that adopts an existing summary has nothing left to generate. Expressed as
+   * data returned by the step rather than as a decision the worker makes, so the
+   * knowledge of *why* a jump is legal stays with the step that established it.
+   */
+  jumpTo?: Step;
 }
 
 export interface JobRow {
@@ -234,10 +243,22 @@ function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
-/** What `acquire` records when the source has already been summarised. */
+/**
+ * What a step records when the source turns out to be already summarised.
+ *
+ * Two steps can establish this and both write it under the same `reuse` key, so every
+ * downstream check is one question rather than one per origin:
+ *
+ *   acquire.reuse     — the source was already summarised when this job started
+ *   synthesize.reuse  — another job published it while this one was queued
+ *
+ * The second is rarer and is caught immediately before the provider call. Keeping the
+ * shape identical is what lets `publish` stay ignorant of which race it won.
+ */
 function reuseOf(priorOutputs: Record<string, unknown>): { summaryId: string } | null {
   const acquired = priorOutputs.acquire as { reuse?: { summaryId: string } } | undefined;
-  return acquired?.reuse ?? null;
+  const synthesized = priorOutputs.synthesize as { reuse?: { summaryId: string } } | undefined;
+  return acquired?.reuse ?? synthesized?.reuse ?? null;
 }
 
 /**
@@ -334,6 +355,33 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       const reuse = await db.findPublishedSummaryByHash(hash, job.requester_id);
       if (reuse) await db.attachSummaryToJob(job.id, reuse.summaryId, reuse.workId);
 
+      /*
+       * A reused job is finished, and walking it to `publish` one step at a time
+       * costs nine Edge Function invocations to reach nine no-ops.
+       *
+       *   without jumpTo   acquire → chunk → evidence → synthesize → template →
+       *                    critic → cards → artwork → embed → moderate → publish
+       *                              └──────── nine invocations, all skipped ────────┘
+       *
+       *   with jumpTo      acquire ─────────────────────────────────────────→ publish
+       *
+       * This is the path law 2 predicts will dominate: one canonical summary serving
+       * thousands of readers means reuse is the common case and generation the rare
+       * one, so the cheapest outcome was burning the most invocations per unit of
+       * value. It is the same argument the dispatcher gate made — the invocation is
+       * what costs, not the tick.
+       *
+       * It jumps to `publish` rather than straight to done so a reused job still ends
+       * with `current_step = 'publish'` like every other job, and still records a step
+       * row saying it concluded by reuse. `publish` is a no-op on a reused summary —
+       * the summary it adopted was already published, which is how it was found.
+       *
+       * Skipping `moderate` is safe here and only here: moderate is the rights gate
+       * before *publication*, and this job publishes nothing. `findPublishedSummaryByHash`
+       * already restricts what can be adopted to summaries that are public or the
+       * requester's own, so no rights decision is being taken on trust.
+       */
+
       // Truncated rather than refused: a long work still produces a useful
       // canonical summary, and the alternative is a job that can never succeed.
       // Where the cut falls is recorded so a later pass can tell it happened.
@@ -352,7 +400,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         truncated,
         ...(reuse ? { reuse } : {}),
       };
-      return { output: out };
+      return reuse ? { output: out, jumpTo: 'publish' } : { output: out };
     }
 
     /** Structural segmentation. A model pass can refine these later. */
@@ -386,11 +434,42 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
     case 'synthesize': {
       // The whole point of the reuse branch: when `acquire` already found a
       // published summary for this exact source, no provider is called at all.
-      // Every step from here to `publish` is a no-op and the job costs nothing.
+      // A job that took that branch normally jumps straight to `publish`; this
+      // still guards the path where a crash between `acquire` and its advance sent
+      // the job the long way round.
       if (reuseOf(priorOutputs)) return { output: { skipped: 'reused an existing summary' } };
 
       const acquired = priorOutputs.acquire as AcquireOutput | undefined;
       if (!acquired?.text) throw new Error('synthesize: acquire produced no text');
+
+      /*
+       * Asked a second time, immediately before paying.
+       *
+       *   job A   acquire ──────── … ──────── synthesize ─── template(commit)
+       *   job B        acquire(miss) ──── … ──────── synthesize ← re-check catches it here
+       *
+       * `acquire` asks whether this source is already summarised, but the answer can
+       * go stale: `acquire` and `synthesize` are separate invocations, minutes apart
+       * on a queue, so two jobs fingerprinting the same text can both miss and both
+       * pay. The adopt-on-23505 in `createSummary` stops that ending in a crash — but
+       * a duplicated provider bill is a law 2 failure whether or not anything throws.
+       *
+       * This does not serialize; it narrows. The window shrinks from the whole
+       * acquire→synthesize span to the moment between this lookup and the call below.
+       * Closing it properly means reserving the fingerprint — a `generation_hash_claims`
+       * row taken at `acquire` and released at publish or failure — which is a migration,
+       * a lease timeout, and a new way for a crashed job to block every later one on the
+       * same source. That is worth doing when reuse volume justifies it and is recorded
+       * as such, rather than half-built here where it would read as solved.
+       */
+      const raced = await db.findPublishedSummaryByHash(acquired.hash, job.requester_id);
+      if (raced) {
+        await db.attachSummaryToJob(job.id, raced.summaryId, raced.workId);
+        return {
+          output: { reuse: raced, skipped: 'another job published this source first' },
+          jumpTo: 'publish',
+        };
+      }
 
       const { summary, usage, model } = await deps.summary.generateSummary({
         workTitle: acquired.title,
@@ -600,6 +679,12 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
     }
 
     case 'publish': {
+      // Checked before `template`'s output, because a reused job jumps here directly
+      // from `acquire` and never runs `template` at all — reading that output first
+      // would find nothing and throw "no summary to publish" on a job that succeeded.
+      // The summary this job adopted is already published; that is how it was found.
+      if (reuseOf(priorOutputs)) return { output: { published: false, reason: 'reused' } };
+
       const templated = (priorOutputs.template ?? {}) as {
         summaryId?: string;
         reused?: boolean;

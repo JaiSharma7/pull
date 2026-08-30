@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
-import { resolveProviders } from '../_shared/config.ts';
+import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
   BilledStepError,
@@ -81,6 +81,45 @@ function must<T>(result: { data: T; error: unknown }, what: string): T {
 }
 
 /**
+ * How long a resolved provider set is reused before the key is read again.
+ *
+ * Resolving per step was deliberate — a key added to Vault should take effect on the
+ * next tick, not the next deploy — but it meant a twelve-step job paid twelve
+ * `security definer` decrypts of the same unchanged secret. Caching at module scope
+ * would have bought that back by giving up the property it was protecting: a rotated
+ * key would then wait for the isolate to recycle, which is a duration nobody controls
+ * or can observe.
+ *
+ * A short TTL keeps both. Eleven of every twelve decrypts disappear, and the worst case
+ * for a key change is a bounded, stated minute rather than an unbounded unknown.
+ */
+const PROVIDER_CACHE_MS = 60_000;
+
+let providerCache: { at: number; providers: ProviderSet } | null = null;
+
+async function providersNow(): Promise<ProviderSet> {
+  const now = Date.now();
+  if (providerCache && now - providerCache.at < PROVIDER_CACHE_MS) return providerCache.providers;
+
+  const providers = await resolveProviders(
+    { get: (key: string) => Deno.env.get(key) },
+    async (name: string) => {
+      const { data, error } = await supabase.rpc('generation_secret', { p_name: name });
+      // A missing secret is a supported state — the stubs take over. Only a
+      // failure to *ask* is worth surfacing.
+      if (error) throw new Error(`read secret ${name}: ${error.message}`);
+      return (data as string | null) ?? null;
+    },
+  );
+
+  // Cached only on success. A throw — which is what REQUIRE_REAL_PROVIDERS produces when
+  // the key is missing — must not be able to poison the next minute of invocations, and
+  // must not be remembered as though it were an answer.
+  providerCache = { at: now, providers };
+  return providers;
+}
+
+/**
  * Run one step of the real pipeline.
  *
  * The job row and the outputs of its already-succeeded steps are read fresh
@@ -88,8 +127,7 @@ function must<T>(result: { data: T; error: unknown }, what: string): T {
  * per request is what the 150s wall-clock limit forces, and it means a step's
  * only inputs are what earlier steps wrote down.
  *
- * Providers are resolved per step rather than at module load so a key added to
- * Vault takes effect on the next tick instead of the next deploy.
+ * Providers are the one exception, cached for `PROVIDER_CACHE_MS`. See above.
  */
 async function runStep(jobId: string, step: Step): Promise<StepResult> {
   const job = must(
@@ -106,16 +144,7 @@ async function runStep(jobId: string, step: Step): Promise<StepResult> {
     'read prior step outputs',
   ) ?? {}) as Record<string, unknown>;
 
-  const providers = await resolveProviders(
-    { get: (key: string) => Deno.env.get(key) },
-    async (name: string) => {
-      const { data, error } = await supabase.rpc('generation_secret', { p_name: name });
-      // A missing secret is a supported state — the stubs take over. Only a
-      // failure to *ask* is worth surfacing.
-      if (error) throw new Error(`read secret ${name}: ${error.message}`);
-      return (data as string | null) ?? null;
-    },
-  );
+  const providers = await providersNow();
 
   return await runPipelineStep(step, {
     summary: providers.summary,
@@ -189,12 +218,16 @@ async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why
  * The compare-and-set lives inside that same transaction, so a redelivered
  * message cannot enqueue the successor twice.
  */
-async function advance(jobId: string, step: Step) {
+async function advance(jobId: string, step: Step, jumpTo?: Step) {
   must(
     await supabase.rpc('advance_generation_job', {
       p_job_id: jobId,
       p_from_step: step,
-      p_to_step: nextStep(step),
+      // A step may name where the job goes next — currently only `acquire`, which
+      // sends a job that adopted an existing summary straight to `publish` rather
+      // than through nine steps that would each do nothing. `nextStep` remains the
+      // default, so the pipeline is still a straight line unless a step says otherwise.
+      p_to_step: jumpTo ?? nextStep(step),
     }),
     'advance job',
   );
@@ -247,6 +280,13 @@ Deno.serve(async (req) => {
     // work. `advance` is idempotent, so repeating it is safe.
     if (last?.status === 'succeeded') {
       try {
+        // No `jumpTo` here: the result that would have carried it belongs to an
+        // invocation that has already ended. Both outcomes are correct. If that
+        // invocation advanced before dying, this compare-and-set matches nothing and
+        // changes nothing; if it died first, the job takes the long way round and
+        // every intermediate step no-ops on the reuse that `acquire` recorded. The
+        // cost of the rare case is invocations, not correctness, which is the right
+        // direction for a path that only runs after a crash.
         await advance(jobId, step);
         must(await archive(msg.msg_id), 'archive resumed message');
         processed.push({ jobId, step, resumed: true });
@@ -323,7 +363,7 @@ Deno.serve(async (req) => {
         'record step and cost',
       );
 
-      await advance(jobId, step);
+      await advance(jobId, step, result.jumpTo);
 
       // Only archive once every write above has been confirmed. Archiving
       // earlier would drop the message with the job's state unpersisted.
