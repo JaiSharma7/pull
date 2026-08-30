@@ -79,7 +79,7 @@ Three things that measurement changed:
   the model that actually answered is returned per call and recorded — a provider name
   pinned to the head of the chain would misattribute every fallback.
 
-### Blocker for the embedding backfill: the 0.14 threshold is not negation-aware
+### The Delta is negation-aware ✅
 
 The Delta treats cosine distance `< 0.14` as "the reader already knows this", hardcoded
 in six migrations and tuned against synthetic concept-axis vectors. Measured against real
@@ -95,14 +95,51 @@ Gemini embeddings:
 The ordering mostly survives, but _"spacing improves retention"_ and _"spacing offers no
 benefit"_ are 0.0618 apart. Embeddings barely encode negation, so the Delta would file a
 **contradiction** as already-known and hide it — precisely the material Counterpull and
-the Conviction Ledger exist to surface. Swapping the seed corpus to real embeddings
-without addressing this makes the Delta quietly suppress disagreement.
+the Conviction Ledger exist to surface.
 
-The fix is already in the schema: `pull_relations` carries an `opposes` kind, so the
-`covered` check should exempt any candidate that opposes something the reader knows.
-That is a read-path SQL change and a threshold re-tune, and it must land **before** the
-backfill. `0.1474` sitting 0.007 from the cut also says the constant deserves a real
-distribution rather than one tuned by hand.
+**Re-tuning was the wrong framing, and it is worth recording why.** No value of the
+threshold separates 0.0618 from 0.0987: an opposed claim sits _closer_ than a paraphrase,
+so the ordering the constant relies on is not merely mis-calibrated, it is inverted. The
+0.0618 is not a weak statement about redundancy — it is not a statement about redundancy
+at all. It is an artifact of vectors that do not encode negation, and no constant recovers
+information the vectors never carried.
+
+So the fix is structural, and it does not exempt anything: opposed pairs are removed from
+the comparison itself, and `covered` and `novelty_distance` then both come out right with
+no special case downstream. A contradiction is judged against everything the reader knows
+_except_ the ideas it contradicts — novel if nothing else is near it, redundant if it
+genuinely duplicates something else. It earns its rank rather than being handed one.
+
+Two things that building it changed:
+
+- **An exemption is not enough, and the difference is measurable.** The first design
+  exempted the candidate from `covered` and floored its novelty at the threshold. It was
+  wrong: the contradiction survived the filter and then ranked **last** — 0.0268 against
+  0.1380 and 0.1600 — because the floor is worth `0.12 × (0.14 − 0.0618) = 0.0094` of a
+  score whose weights sum to 1.0, against the 0.12 a merely-novel card earns. It was not
+  hidden by the filter; it was hidden by the scorer instead. `delta_negation.sql` asserts
+  against that specific failure by requiring a contradiction to score identically for a
+  reader who knows the opposed idea and one who knows nothing.
+- **`kind = 'opposes'` cannot be an index condition under RLS.** `enum_eq` is not
+  leakproof, so the planner may not push it below the security-barrier quals of
+  `pull_relations_read_readable`; it lands in `Filter`, _after_ the policy, and every
+  unrelated edge pays that policy in full — eight `summary_is_readable()` calls per row
+  visited, measured at 35× the cost of the same query with RLS bypassed. Two **partial**
+  indexes fix it, because a partial index predicate is a plan-time constraint rather than
+  a runtime qual and so escapes the leakproof rule entirely.
+
+The constants now live in `delta_covered_distance()` and `known_retrievability_floor()`,
+so a re-tune is a one-line migration rather than an edit across superseded files. `0.1474`
+sitting 0.007 from the cut still says the threshold deserves a real distribution rather
+than one tuned by hand — but that measurement wants real embeddings, which is what this
+unblocks, so it belongs after the backfill rather than before it.
+
+**What this does and does not unblock.** Nothing writes `pull_relations`: the twelve
+pipeline steps never emit edges, so every row in the database comes from the seed
+migration. The exclusion is therefore live for the **seed** corpus — whose `opposes` edges
+are hand-written — and inert for generated content until a step produces them. Backfilling
+the seed corpus is now safe. Generated content needs the relation-extraction step below
+first, or the Delta will suppress disagreement in exactly the material we generate.
 
 ### The pipeline writes content ✅
 
@@ -155,8 +192,11 @@ two billable `synthesize` rows against one content hash is exactly the query.
 
 ### Still to do
 
-Claim anchors, generated cards, hero artwork, cost ledger reporting, rate limiting, and
-private user generation in the Pull Studio.
+Claim anchors — which is also where **relation extraction** belongs, since the Delta's
+negation-awareness is inert on generated content until something writes `opposes` edges,
+and the embedding backfill of generated summaries is gated on it. Then generated cards,
+hero artwork, cost ledger reporting, rate limiting, and private user generation in the
+Pull Studio.
 
 Then public-domain ingest workers — Gutenberg, arXiv, Wikisource, open-access journals —
 to grow the corpus without rights exposure.
@@ -207,6 +247,12 @@ not have to rediscover them.
   embeddings it averages, not before: recomputing a reader's centroid on every read
   would be a write amplification we have no evidence is needed. Round 2 either calls it
   from a `pg_cron` tick or drops the term and redistributes its weight.
+- **`get_source_delta` bounds nothing.** `get_feed` caps the reader's known set at 500 by
+  retrievability before doing any vector work; `get_source_delta` does not, so a reader
+  with 5,000 known ideas pays 5,000 × candidates distance computations on every source
+  page. Pre-existing, found while making the Delta negation-aware, and not fixed there
+  because capping changes which ideas the count is taken against — a correctness question
+  about what the page claims, not a performance tweak.
 - **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
   and takes it from `node:crypto`. That is fine for its actual job — testing the
   placement rules over thousands of sessions without a database — but the prefetch use
