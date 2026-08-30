@@ -59,12 +59,57 @@ checkout (`TS6310` — `--noEmit` in `tsc -b` applies to referenced composite pr
 CI hid it because its typecheck job runs first and warms the graph. Fixed, and CI's
 `pnpm build` is now a real check rather than a cached no-op.
 
+### Providers ✅
+
+`_shared/gemini.ts` and `_shared/config.ts` implement the environment-selected provider
+set `architecture.md` has described since round 1. No key means stubs, so a fresh clone
+still runs the whole pipeline. Verified against the live API, not mocked.
+
+Three things that measurement changed:
+
+- **Embeddings must be normalised client-side.** At a truncated 1536 dimensions Gemini
+  returns vectors of length ~0.69, not 1. Every comparison in the read path is a cosine
+  distance against an HNSW index; un-normalised vectors do not error, they rank wrongly.
+- **Thinking tokens are output tokens.** A trivial prompt billed 5 visible output tokens
+  and 157 reasoning tokens. Counting only `candidatesTokenCount` would have understated
+  that call by ~97%, so `computeUsage` adds `thoughtsTokenCount`.
+- **The newest model is not the right default.** `gemini-3.7-flash` and
+  `gemini-flash-latest` both returned 503 under load while `gemini-3.6-flash` answered;
+  `gemini-2.5-flash` 404s despite being listed. So the default is an ordered chain, and
+  the model that actually answered is returned per call and recorded — a provider name
+  pinned to the head of the chain would misattribute every fallback.
+
+### Blocker for the embedding backfill: the 0.14 threshold is not negation-aware
+
+The Delta treats cosine distance `< 0.14` as "the reader already knows this", hardcoded
+in six migrations and tuned against synthetic concept-axis vectors. Measured against real
+Gemini embeddings:
+
+| distance        | verdict       | relationship                  |
+| --------------- | ------------- | ----------------------------- |
+| 0.0635 · 0.0987 | covered ✓     | same idea, reworded           |
+| **0.0618**      | **covered ✗** | **same topic, opposed claim** |
+| 0.1474 · 0.1823 | new ✓         | related but distinct          |
+| 0.2775 · 0.3423 | new ✓         | unrelated                     |
+
+The ordering mostly survives, but _"spacing improves retention"_ and _"spacing offers no
+benefit"_ are 0.0618 apart. Embeddings barely encode negation, so the Delta would file a
+**contradiction** as already-known and hide it — precisely the material Counterpull and
+the Conviction Ledger exist to surface. Swapping the seed corpus to real embeddings
+without addressing this makes the Delta quietly suppress disagreement.
+
+The fix is already in the schema: `pull_relations` carries an `opposes` kind, so the
+`covered` check should exempt any candidate that opposes something the reader knows.
+That is a read-path SQL change and a threshold re-tune, and it must land **before** the
+backfill. `0.1474` sitting 0.007 from the cut also says the constant deserves a real
+distribution rather than one tuned by hand.
+
 ### Still to do
 
-Wire the step-machine to real providers — the Gemini key is in Vault and reachable
-through `generation_secret`, but `runStep` still calls stubs and writes no content.
-Canonical summary pipeline, claim anchors, generated cards, hero artwork, cost ledger
-reporting, rate limiting, and private user generation in the Pull Studio.
+`runStep` still calls stubs and writes no content — the providers exist, nothing calls
+them yet. Then the canonical summary pipeline, claim anchors, generated cards, hero
+artwork, cost ledger reporting, rate limiting, and private user generation in the Pull
+Studio.
 
 Then public-domain ingest workers — Gutenberg, arXiv, Wikisource, open-access journals —
 to grow the corpus without rights exposure.
