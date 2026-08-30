@@ -37,13 +37,28 @@ file_size_limit = "50MiB"
 [auth]
 enabled = true
 site_url = "http://127.0.0.1:5173"
-additional_redirect_urls = ["http://127.0.0.1:5173"]
+# 5174 is here because a second dev server is a normal state on this project, not
+# an accident: a stale one on 5173 is easy to leave running and hard to notice.
+additional_redirect_urls = ["http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 jwt_expiry = 3600
 enable_signup = true
 
 [auth.email]
 enable_signup = true
 enable_confirmations = false
+
+# The default template renders `{{ .ConfirmationURL }}` and nothing else, so the
+# email carries a link but no code — and `verifyOtp` has nothing to verify. The
+# sign-in screen accepts either, and the code is the more reliable half: a link
+# opened on a phone frequently lands in a different browser than the one that
+# started the sign-in, and the session then arrives where nobody is looking.
+#
+# This configures the local stack only. The hosted project needs the same
+# `{{ .Token }}` added under Authentication → Email Templates, or its codes keep
+# arriving blank.
+[auth.email.template.magic_link]
+subject = "Your sign-in code"
+content_path = "./supabase/templates/magic_link.html"
 
 [edge_runtime]
 enabled = true
@@ -57,4 +72,18 @@ inspector_port = 8083
 # request goes through PostgREST as `anon`, so a draft or private summary is
 # invisible to it exactly as it is to any other unauthenticated reader.
 [functions.og]
+verify_jwt = false
+
+# The worker authenticates its own caller, against a token in Vault, because the
+# platform cannot: the dispatcher is `pg_net` sending `x-worker-token` and no
+# `Authorization` header at all. With JWT verification on, every tick is rejected
+# before the function body runs and the queue simply stops draining — a 401 visible
+# only in a log nobody is watching.
+#
+# Declared here rather than left to `--no-verify-jwt` on a command line, because a
+# flag is a thing someone has to remember. Any deploy that forgets it — from CI, from
+# memory, from `supabase functions serve` — silently re-enables verification and stops
+# generation. This widens nothing: `authorised()` fails closed, so a worker with no
+# credential configured still refuses every request.
+[functions.worker]
 verify_jwt = false

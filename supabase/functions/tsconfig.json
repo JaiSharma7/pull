@@ -1,0 +1,32 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Not composite and emitting nothing: these files are deployed as source to
+    // the Deno runtime, never built here. The only job of this project is to
+    // typecheck them, which nothing did before — eslint ignores this directory
+    // and no tsconfig included it, so the whole generation pipeline was
+    // unchecked.
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    // Deno resolves relative imports with their real `.ts` extension. Node's
+    // resolver would reject that; this is what lets one set of files satisfy
+    // both the runtime that executes them and the compiler that checks them.
+    "allowImportingTsExtensions": true,
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "types": [],
+    // Deno fetches supabase-js from JSR at deploy time; there is nothing at that
+    // specifier for tsc to resolve. Pointing it at the npm build of the same
+    // library gives the real types rather than an `any` shim, so a wrong RPC
+    // argument is caught here instead of at 3am in a worker log.
+    // No `baseUrl`: it is deprecated in TS 6, and without one these resolve
+    // relative to this file, which is what we want anyway.
+    "paths": {
+      "jsr:@supabase/supabase-js@2": ["./node_modules/@supabase/supabase-js"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

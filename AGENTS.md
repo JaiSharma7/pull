@@ -39,6 +39,49 @@ merges only when both are satisfied.
 If Codex is not installed on the repository, its review never arrives. Say so and stop;
 do not wait indefinitely, and do not merge around the gate on the assumption it passed.
 
+## Secrets
+
+Law 7 in `CLAUDE.md` says what may reach the browser. This is how to hold to it.
+
+**Before every push**, check that the diff introduces no credential outside the one place
+it belongs:
+
+```bash
+git diff --cached | grep -nE 'sb_secret_|service_role|AIza|AQ\.[A-Za-z0-9]|BEGIN [A-Z ]*PRIVATE KEY'
+```
+
+A hit is a stop, not a judgement call.
+
+**Where each credential lives.** The Supabase publishable key is committed in
+`apps/web/.env.production` on purpose — it is designed for the browser and RLS is the real
+protection. Every other credential is server-side: the service_role key is injected into
+Edge Functions by the platform as `SUPABASE_SERVICE_ROLE_KEY` and is never written down;
+provider keys and the generation dispatch token live in Edge Function secrets or Vault, read
+by the worker through a `security definer` RPC that is revoked from `anon` and
+`authenticated`.
+
+**Never move a key toward the client to make something work.** If a browser feature seems to
+need a provider key, the feature belongs behind an Edge Function — which is also what law 2
+requires, since anything calling a model from the client is a read-path model call by
+definition.
+
+**A leaked key is rotated.** Removing it in a follow-up commit does nothing: it stays in
+history and in every clone. Rotate at the provider, then clean up.
+
+**Local-stack keys are dev-only, and the split is deliberate.** `supabase start` prints two.
+The publishable one is committed in `apps/web/.env.development` so a fresh clone runs
+`pnpm dev` with no setup; it points at `127.0.0.1:54321` and is useless against anything
+else. The secret one (`sb_secret_…`) is never committed — it is service_role for the local
+database, and the local stack's JWT secret is a published default, so anyone who can reach
+that stack can mint an admin token for it. Loopback only, always.
+
+Neither ever goes into `.env.production`, a Vercel or Supabase environment variable, or any
+deployed config. If a local key would make production work, something is pointed at the
+wrong database.
+
+Overriding locally is `.env.local`, which is gitignored — use it if your stack prints
+different values than the committed defaults.
+
 ## Modes
 
 | Situation                                                             | Mode                                          |

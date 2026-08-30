@@ -1,0 +1,17 @@
+{
+  "name": "@wap/functions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "echo \"linted by Deno, not eslint\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@wap/config": "workspace:*",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11",
+    "@supabase/supabase-js": "^2.112.4"
+  }
+}

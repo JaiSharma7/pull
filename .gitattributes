@@ -1,0 +1,24 @@
+# Line endings are LF everywhere, decided by the repository rather than by
+# whoever cloned it.
+#
+# Git for Windows ships `core.autocrlf=true` in its *system* config — invisible
+# to `git config --global --get` — so a Windows clone checks every file out as
+# CRLF. Prettier writes LF, so `pnpm format:check` then fails on essentially
+# every file in the repo. That failure reads like a formatting problem and is
+# not one, which makes it expensive to diagnose exactly once per contributor.
+#
+# It is not only cosmetic: a shell script checked out with CRLF fails to execute
+# on Linux, because the kernel reads the carriage return as part of the
+# interpreter path. `scripts/session-start.sh` runs as a hook.
+* text=auto eol=lf
+
+# Generated, and diffed byte-for-byte by CI check 4.
+packages/db/src/database.types.ts text eol=lf
+
+# Never transform these.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

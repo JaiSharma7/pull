@@ -52,7 +52,28 @@ function weave(rows: FeedRow[], slots: InterleaveSlot[]): Item[] {
   return out;
 }
 
-export function Feed({ userId }: { userId: string | null }) {
+/**
+ * What the session rail shows.
+ *
+ * Reported upward rather than fetched again up there: these are the same
+ * numbers the Enough screen ends on, and reading them twice from two places is
+ * how two views of one session start disagreeing with each other.
+ */
+export interface FeedStats {
+  read: number;
+  saved: number;
+  recalled: number;
+  skippedKnown: number;
+  minutesSaved: number;
+}
+
+export function Feed({
+  userId,
+  onStats,
+}: {
+  userId: string | null;
+  onStats?: (stats: FeedStats) => void;
+}) {
   const [session, setSession] = useState(loadSession);
   const [feed, setFeed] = useState<FeedResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,9 +82,40 @@ export function Feed({ userId }: { userId: string | null }) {
   const [offline, setOffline] = useState(false);
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
+  /**
+   * The ids saved *in this session* — a set, not a count.
+   *
+   * `saved` is the reader's whole persistent library: `fetchSavedPullIds` loads
+   * every id so cards render with the right state. Reporting its size under
+   * "This session" credited a returning reader with all of it before they had
+   * done anything, which is the one kind of number this product must not
+   * inflate — the rail exists to say what this sitting was worth, and a counter
+   * that opens at 200 says nothing at all.
+   *
+   * A scalar incremented on save and decremented on un-save was the first fix
+   * and was still wrong: save one new Pull, then un-save something kept last
+   * week, and the count goes 1 → 0 while the new save is still there. Only the
+   * identity of what was saved can answer "this session", so that is what is
+   * tracked. Its siblings `read` and `recalled` both start empty; this matches.
+   */
+  const [savedThisSession, setSavedThisSession] = useState<Set<string>>(new Set());
   /** Interrupt slots already answered or skipped, so they are not shown twice. */
   const [handledSlots, setHandledSlots] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
+
+  // Push the session numbers up whenever they move. Effect rather than a call
+  // inside each handler, so no future counter can be added and silently not
+  // reach the rail.
+  useEffect(() => {
+    onStats?.({
+      read: readCount,
+      saved: savedThisSession.size,
+      recalled,
+      skippedKnown: feed?.skippedKnownCount ?? 0,
+      minutesSaved: feed?.minutesSaved ?? 0,
+    });
+  }, [onStats, readCount, savedThisSession, recalled, feed]);
+
   useEffect(() => {
     let cancelled = false;
     api
@@ -216,6 +268,15 @@ export function Feed({ userId }: { userId: string | null }) {
         else next.add(row.id);
         return next;
       }); // optimistic — saving is free and unlimited, so never blocks
+      // Keyed by id so un-saving only discounts a save this session actually
+      // made. Un-saving something kept last week is not this session undoing
+      // anything, and must not cancel out a Pull kept a minute ago.
+      setSavedThisSession((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.delete(row.id);
+        else next.add(row.id);
+        return next;
+      });
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
       } catch {

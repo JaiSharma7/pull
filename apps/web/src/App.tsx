@@ -1,17 +1,25 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
-import { Feed } from './routes/Feed.js';
+import { Feed, type FeedStats } from './routes/Feed.js';
+import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
 import { supabase } from './lib/supabase.js';
 
-type Tab = 'feed' | 'review';
+type Tab = 'feed' | 'review' | 'library';
+
+const SECTIONS: { id: Tab; label: string }[] = [
+  { id: 'feed', label: 'For You' },
+  { id: 'review', label: 'Review' },
+  { id: 'library', label: 'Library' },
+];
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('feed');
+  const [stats, setStats] = useState<FeedStats | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -36,42 +44,31 @@ export function App() {
   if (!session) return <Auth />;
 
   return (
-    <>
+    <div className="shell">
       <a className="skip-link" href="#main">
         Skip to content
       </a>
 
-      <header
-        style={{
-          borderBottom: '1px solid var(--rule)',
-          padding: 'var(--space-4) var(--space-5)',
-          display: 'flex',
-          gap: 'var(--space-4)',
-          alignItems: 'baseline',
-          flexWrap: 'wrap',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 'var(--step-1)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          What a Pull
-        </span>
+      <header className="shell__masthead">
+        <span className="shell__wordmark">What a Pull</span>
 
-        <nav aria-label="Sections" style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          {(['feed', 'review'] as const).map((t) => (
+        {/*
+          The sections live in the masthead below 60rem and in the left rail
+          above it. Rendering both and hiding one would put two controls with
+          the same name in the accessibility tree, so the rail is the only
+          copy on wide screens and this one steps aside for it.
+        */}
+        <nav aria-label="Sections" className="shell__masthead-nav">
+          {SECTIONS.map((s) => (
             <button
-              key={t}
+              key={s.id}
               type="button"
               className="btn btn--plain"
-              aria-current={tab === t ? 'page' : undefined}
-              style={tab === t ? { color: 'var(--accent)' } : undefined}
-              onClick={() => setTab(t)}
+              aria-current={tab === s.id ? 'page' : undefined}
+              style={tab === s.id ? { color: 'var(--accent)' } : undefined}
+              onClick={() => setTab(s.id)}
             >
-              {t === 'feed' ? 'For You' : 'Review'}
+              {s.label}
             </button>
           ))}
         </nav>
@@ -86,9 +83,69 @@ export function App() {
         </button>
       </header>
 
-      <main id="main" style={{ padding: 'var(--space-6) var(--space-5)', maxWidth: '48rem' }}>
-        {tab === 'feed' ? <Feed userId={session.user.id} /> : <Review />}
-      </main>
-    </>
+      <div className="shell__body">
+        <aside className="shell__rail" aria-label="Sections">
+          <p className="meta shell__group">Reading</p>
+          <nav className="shell__nav">
+            {SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="btn btn--plain shell__nav-item"
+                aria-current={tab === s.id ? 'page' : undefined}
+                onClick={() => setTab(s.id)}
+              >
+                {s.label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <main id="main" className="shell__main">
+          <div className="shell__column">
+            {tab === 'feed' && <Feed userId={session.user.id} onStats={setStats} />}
+            {tab === 'review' && <Review />}
+            {tab === 'library' && <Library userId={session.user.id} />}
+          </div>
+        </main>
+
+        <aside className="shell__aside" aria-label="This session">
+          <div className="shell__group">
+            <p className="meta">This session</p>
+            <div className="shell__stat">
+              <span>Ideas met</span>
+              <span className="shell__stat-value">{stats?.read ?? 0}</span>
+            </div>
+            <div className="shell__stat">
+              <span>Saved</span>
+              <span className="shell__stat-value">{stats?.saved ?? 0}</span>
+            </div>
+            <div className="shell__stat">
+              <span>Recalled</span>
+              <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
+            </div>
+          </div>
+
+          {/*
+            Time saved rather than time spent, in the one accent colour — it is
+            the number the product is optimising for, and putting it here keeps
+            it in view during a session instead of only at the end of one.
+          */}
+          <div className="shell__group">
+            <p className="meta">The Delta</p>
+            <div className="shell__stat">
+              <span>Already knew</span>
+              <span className="shell__stat-value">{stats?.skippedKnown ?? 0}</span>
+            </div>
+            <div className="shell__stat">
+              <span>Time saved</span>
+              <span className="shell__stat-value shell__stat-value--accent">
+                {stats ? `${stats.minutesSaved} min` : '—'}
+              </span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
   );
 }

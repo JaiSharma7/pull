@@ -1,11 +1,14 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
+import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
+import { createPipelineDb } from '../_shared/db.ts';
 import {
-  disabledImageProvider,
-  stubEmbeddingProvider,
-  stubSummaryProvider,
-} from '../_shared/providers.ts';
+  BilledStepError,
+  runPipelineStep,
+  type JobRow,
+  type StepResult,
+} from '../_shared/pipeline.ts';
 
 /**
  * One tick of the generation step-machine.
@@ -15,7 +18,28 @@ import {
  * that is what the 150s wall-clock limit forbids.
  */
 
-const BATCH = 5;
+/**
+ * Exactly one message per invocation.
+ *
+ * This went from five, to one-at-a-time-with-a-time-guard, to this. The guard
+ * was still wrong: it reserved 40s for the next step while a single
+ * `generateSummary` may spend up to its full provider budget (100s), so the
+ * arithmetic permitted claiming a synthesis message that could not finish.
+ *
+ * There is no reserve that makes a second message safe. The provider budget is
+ * 100s and the platform ceiling is 150s, so one slow step already consumes the
+ * invocation — any second claim is a bet that the first was fast. pgmq charges
+ * `read_ct` on delivery rather than execution, so losing that bet costs a
+ * delivery on a step that never ran, and three of those fail the job at a step
+ * with nothing in `job_steps` to explain it.
+ *
+ * Throughput does not depend on batching here. `pg_net` dispatches
+ * asynchronously and `pg_cron` fires every 10s whenever the queue is non-empty,
+ * so invocations overlap and pgmq's visibility timeout keeps them off each
+ * other's messages. Concurrency comes from many workers each doing one thing,
+ * which is also the only version of it that can be reasoned about.
+ */
+const MESSAGES_PER_INVOCATION = 1;
 /** Steps that invoke a provider, and so must produce a ledger row. */
 const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
 /**
@@ -56,22 +80,132 @@ function must<T>(result: { data: T; error: unknown }, what: string): T {
   return result.data;
 }
 
-async function runStep(jobId: string, step: Step) {
-  // Round 1 wires the machine with stub providers so the whole pipeline is
-  // exercisable with no API key. Round 2 swaps these for real ones.
-  switch (step) {
-    case 'synthesize':
-      return stubSummaryProvider.generateSummary({ workTitle: jobId, kind: 'book', context: '' });
-    case 'embed':
-      return stubEmbeddingProvider.embed(['']);
-    case 'artwork':
-      return disabledImageProvider.generateArtwork('');
-    default:
-      return { usage: { inputTokens: 0, outputTokens: 0, costCents: 0 } };
-  }
+/**
+ * How long a resolved provider set is reused before the key is read again.
+ *
+ * Resolving per step was deliberate — a key added to Vault should take effect on the
+ * next tick, not the next deploy — but it meant a twelve-step job paid twelve
+ * `security definer` decrypts of the same unchanged secret. Caching at module scope
+ * would have bought that back by giving up the property it was protecting: a rotated
+ * key would then wait for the isolate to recycle, which is a duration nobody controls
+ * or can observe.
+ *
+ * A short TTL keeps both. Eleven of every twelve decrypts disappear, and the worst case
+ * for a key change is a bounded, stated minute rather than an unbounded unknown.
+ */
+const PROVIDER_CACHE_MS = 60_000;
+
+let providerCache: { at: number; providers: ProviderSet } | null = null;
+
+async function providersNow(): Promise<ProviderSet> {
+  const now = Date.now();
+  if (providerCache && now - providerCache.at < PROVIDER_CACHE_MS) return providerCache.providers;
+
+  const providers = await resolveProviders(
+    { get: (key: string) => Deno.env.get(key) },
+    async (name: string) => {
+      const { data, error } = await supabase.rpc('generation_secret', { p_name: name });
+      // A missing secret is a supported state — the stubs take over. Only a
+      // failure to *ask* is worth surfacing.
+      if (error) throw new Error(`read secret ${name}: ${error.message}`);
+      return (data as string | null) ?? null;
+    },
+  );
+
+  // Cached only on success. A throw — which is what REQUIRE_REAL_PROVIDERS produces when
+  // the key is missing — must not be able to poison the next minute of invocations, and
+  // must not be remembered as though it were an answer.
+  providerCache = { at: now, providers };
+  return providers;
+}
+
+/**
+ * Run one step of the real pipeline.
+ *
+ * The job row and the outputs of its already-succeeded steps are read fresh
+ * each time, because the worker holds nothing between invocations — one step
+ * per request is what the 150s wall-clock limit forces, and it means a step's
+ * only inputs are what earlier steps wrote down.
+ *
+ * Providers are the exception and are passed IN, already resolved. They have to be,
+ * because resolving them can fail and that failure must happen before a message is
+ * claimed — see the ordering argument in `Deno.serve` below.
+ */
+async function runStep(jobId: string, step: Step, providers: ProviderSet): Promise<StepResult> {
+  const job = must(
+    await supabase
+      .from('generation_jobs')
+      .select('id, kind, target, work_id, summary_id, visibility, requester_id')
+      .eq('id', jobId)
+      .single(),
+    'read job',
+  ) as JobRow;
+
+  const priorOutputs = (must(
+    await supabase.rpc('job_step_outputs', { p_job_id: jobId }),
+    'read prior step outputs',
+  ) ?? {}) as Record<string, unknown>;
+
+  return await runPipelineStep(step, {
+    summary: providers.summary,
+    embedding: providers.embedding,
+    priorOutputs,
+    job,
+    db: createPipelineDb(supabase),
+  });
 }
 
 const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
+
+/** Length-independent comparison, so a wrong token leaks nothing through timing. */
+function secureEquals(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Who is allowed to tick the machine.
+ *
+ * There are two supported dispatchers and this accepts either, because the repository
+ * documents both and picking one would silently break the other:
+ *
+ *   • `enable_generation_dispatcher_with_token` sends `x-worker-token` from Vault. Used
+ *     when the function is deployed with JWT verification off, which is what lets the
+ *     dispatcher be scheduled without anyone reading the service_role key out of the
+ *     dashboard.
+ *   • `enable_generation_dispatcher` sends the service_role key as a bearer token. The
+ *     platform has already verified it when `verify_jwt` is on, but this function cannot
+ *     tell whether that happened, so it compares against the key it was given itself.
+ *
+ * Fails closed. A worker with no credential configured refuses every request rather than
+ * running open: this endpoint spends money, and "misconfigured" must not mean "public".
+ */
+async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why: string }> {
+  const bearer = req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+  if (secureEquals(bearer, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))) return { ok: true };
+
+  const presented = req.headers.get('x-worker-token');
+
+  // Env first so a local stack can run without touching Vault, which `db:reset` wipes.
+  let expected = Deno.env.get('WORKER_DISPATCH_TOKEN') ?? null;
+  if (!expected) {
+    const { data, error } = await supabase.rpc('generation_secret', {
+      p_name: 'worker_dispatch_token',
+    });
+    if (error) return { ok: false, why: `dispatch token unreadable: ${error.message}` };
+    expected = data as string | null;
+  }
+
+  if (!expected) {
+    return {
+      ok: false,
+      why: 'no dispatch token configured — run enable_generation_dispatcher_with_token',
+    };
+  }
+  return secureEquals(presented, expected) ? { ok: true } : { ok: false, why: 'bad token' };
+}
 
 /**
  * Move the job on and enqueue its successor.
@@ -84,29 +218,75 @@ const archive = (msgId: number) => supabase.rpc('archive_generation_message', { 
  * The compare-and-set lives inside that same transaction, so a redelivered
  * message cannot enqueue the successor twice.
  */
-async function advance(jobId: string, step: Step) {
+async function advance(jobId: string, step: Step, jumpTo?: Step) {
   must(
     await supabase.rpc('advance_generation_job', {
       p_job_id: jobId,
       p_from_step: step,
-      p_to_step: nextStep(step),
+      // A step may name where the job goes next — currently only `acquire`, which
+      // sends a job that adopted an existing summary straight to `publish` rather
+      // than through nine steps that would each do nothing. `nextStep` remains the
+      // default, so the pipeline is still a straight line unless a step says otherwise.
+      p_to_step: jumpTo ?? nextStep(step),
     }),
     'advance job',
   );
 }
 
-Deno.serve(async () => {
-  const messages = must(
+Deno.serve(async (req) => {
+  const auth = await authorised(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.why }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  const processed: unknown[] = [];
+
+  /*
+   * Resolved BEFORE anything is claimed, and this ordering is the whole point.
+   *
+   * `REQUIRE_REAL_PROVIDERS` exists so a rotated or unreadable key is loud rather
+   * than silently served as stubs. Resolving it inside `runStep` — after the claim —
+   * turned that into something worse than the silence it replaced:
+   *
+   *   claim → read_ct 1 → throw → record failed attempt → leave message
+   *   claim → read_ct 2 → throw → …                        (pg_cron, every 10s)
+   *   claim → read_ct 3 → throw → …
+   *   claim → read_ct 4 → attempt > MAX_ATTEMPTS → job marked FAILED, archived
+   *
+   * Every queued job terminally failed within about a minute of a key rotation,
+   * unrecoverable, with "exhausted retries" as the only explanation. A worker that
+   * cannot reach its provider has nothing useful to do, and the correct behaviour is
+   * for the queue to STALL — jobs stay queued, retries stay unspent, and the work
+   * resumes when the key comes back.
+   *
+   * 503 rather than 500: this is "try again shortly", not "this request was wrong".
+   * The 60s cache means the healthy path pays for this at most once a minute.
+   */
+  let providers: ProviderSet;
+  try {
+    providers = await providersNow();
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ error: e instanceof Error ? e.message : String(e), claimed: 0 }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
+  // Claimed immediately before it is run, and never more than one: `read_ct` is
+  // charged on delivery, so a message claimed and not reached is a retry spent
+  // on nothing.
+  const batch = must(
     await supabase.rpc('claim_generation_messages', {
-      p_count: BATCH,
+      p_count: MESSAGES_PER_INVOCATION,
       p_visibility_seconds: VISIBILITY_SECONDS,
     }),
     'claim queue messages',
   ) as QueueMessage[] | null;
 
-  const processed: unknown[] = [];
-
-  for (const msg of messages ?? []) {
+  for (const msg of batch ?? []) {
     const { jobId, step } = msg.message;
     const started = Date.now();
 
@@ -131,6 +311,13 @@ Deno.serve(async () => {
     // work. `advance` is idempotent, so repeating it is safe.
     if (last?.status === 'succeeded') {
       try {
+        // No `jumpTo` here: the result that would have carried it belongs to an
+        // invocation that has already ended. Both outcomes are correct. If that
+        // invocation advanced before dying, this compare-and-set matches nothing and
+        // changes nothing; if it died first, the job takes the long way round and
+        // every intermediate step no-ops on the reuse that `acquire` recorded. The
+        // cost of the rare case is invocations, not correctness, which is the right
+        // direction for a path that only runs after a crash.
         await advance(jobId, step);
         must(await archive(msg.msg_id), 'archive resumed message');
         processed.push({ jobId, step, resumed: true });
@@ -176,52 +363,82 @@ Deno.serve(async () => {
     }
 
     try {
-      const result: any = await runStep(jobId, step);
-      const usage = result?.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
+      const result = await runStep(jobId, step, providers);
+      const usage = result.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
-      // One transaction for the step and its cost. As two separate writes, a
-      // ledger failure after a succeeded step left the spend permanently
-      // unrecorded and unretryable: the step row already existed, so the retry
-      // path could not replace it and resume treated it as fully done.
+      // One transaction for the step, its output and its cost. As separate
+      // writes, a ledger failure after a succeeded step left the spend
+      // permanently unrecorded and unretryable: the step row already existed, so
+      // the retry path could not replace it and resume treated it as fully done.
       must(
         await supabase.rpc('record_job_step', {
           p_job_id: jobId,
           p_step: step,
           p_attempt: attempt,
-          p_model: 'stub',
+          p_model: result.model ?? null,
           p_prompt_version: null,
           p_input_tokens: usage.inputTokens,
           p_output_tokens: usage.outputTokens,
           p_cost_cents: usage.costCents,
           p_duration_ms: Date.now() - started,
-          p_provider: 'stub',
-          // A zero-cost call is still a call: a free or local provider must stay
-          // distinguishable from missing accounting.
-          p_billable: PROVIDER_STEPS.has(step),
+          p_provider: result.provider ?? 'none',
+          // Billable when a provider was actually called, not merely when the
+          // step is one that *can* call one. A reuse skips `synthesize`'s call
+          // entirely, and charging a ledger row for it would misreport the
+          // reuse ratio — the number the whole cost argument is measured by.
+          p_billable: result.provider !== undefined && PROVIDER_STEPS.has(step),
+          // What this step produced, for the next one to read. The worker keeps
+          // nothing in memory between invocations.
+          p_output: (result.output ?? null) as never,
         }),
         'record step and cost',
       );
 
-      await advance(jobId, step);
+      await advance(jobId, step, result.jumpTo);
 
       // Only archive once every write above has been confirmed. Archiving
       // earlier would drop the message with the job's state unpersisted.
       must(await archive(msg.msg_id), 'archive message');
       processed.push({ jobId, step, attempt, ok: true });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // A failure that happened *after* the provider was billed. The tokens are
+      // spent either way, so the ledger has to hear about it: law 2 counts every
+      // model call, not every successful one, and the step is about to be
+      // retried — each retry paying again.
+      const billed = e instanceof BilledStepError ? e : null;
+
       // The one write here that must not use `must()`: throwing out of a catch
       // would skip the bookkeeping below and lose the original error. Its result
       // is still checked, because an unrecorded attempt is what lets a job cycle
       // without ever reaching MAX_ATTEMPTS.
-      const { error: recordError } = await supabase.from('job_steps').insert({
-        job_id: jobId,
-        step,
-        attempt,
-        status: 'failed',
-        error: e instanceof Error ? e.message : String(e),
-        duration_ms: Date.now() - started,
-        finished_at: new Date().toISOString(),
-      });
+      //
+      // Routed through an RPC when there is spend to record, so the failed step
+      // and its ledger row land in one transaction — the same guarantee
+      // `record_job_step` gives the success path, for the same reason.
+      const { error: recordError } = billed
+        ? await supabase.rpc('record_failed_job_step', {
+            p_job_id: jobId,
+            p_step: step,
+            p_attempt: attempt,
+            p_error: message,
+            p_duration_ms: Date.now() - started,
+            p_model: billed.model ?? null,
+            p_provider: billed.provider ?? null,
+            p_input_tokens: billed.usage.inputTokens,
+            p_output_tokens: billed.usage.outputTokens,
+            p_cost_cents: billed.usage.costCents,
+            p_billable: PROVIDER_STEPS.has(step),
+          })
+        : await supabase.from('job_steps').insert({
+            job_id: jobId,
+            step,
+            attempt,
+            status: 'failed',
+            error: message,
+            duration_ms: Date.now() - started,
+            finished_at: new Date().toISOString(),
+          });
       // A duplicate key means `record_job_step` already wrote a *succeeded* row
       // for this attempt and only the transition after it failed. There is
       // nothing to mark failed in that case — the resume path picks it up on
@@ -234,7 +451,8 @@ Deno.serve(async () => {
         step,
         attempt,
         ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: message,
+        ...(billed ? { billedCostCents: billed.usage.costCents } : {}),
         ...(recorded ? {} : { attemptUnrecorded: recordError.message }),
       });
     }

@@ -4,8 +4,14 @@ const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 if (!url || !key) {
+  // Both are committed — .env.development for `vite dev`, .env.production for the
+  // build — so reaching this means an env file was deleted or Vite ran in a mode that
+  // loads neither. Naming both files is the difference between a one-line fix and a
+  // blank page with a stack trace pointing at a module that looks fine.
   throw new Error(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY. Copy apps/web/.env.example to apps/web/.env.',
+    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY. ' +
+      'These ship in apps/web/.env.development (local stack) and apps/web/.env.production ' +
+      '(hosted). Override either in apps/web/.env.local.',
   );
 }
 

@@ -9,7 +9,11 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
  * whole app, and redirects a real browser straight through to the app.
  */
 
-const APP_ORIGIN = Deno.env.get('APP_ORIGIN') ?? 'https://whatapull.com';
+// Overridable by an APP_ORIGIN secret; the default is the deployed origin so this
+// works without one. It is a URL, not a credential, so it belongs in the source
+// rather than in the secret store.
+const APP_ORIGIN =
+  Deno.env.get('APP_ORIGIN') ?? 'https://pull-jai-sharmas-projects-d3062905.vercel.app';
 
 const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
   auth: { persistSession: false },

@@ -53,7 +53,7 @@ The seed corpus is public-domain only, so the app is usable with **no API keys**
 
 ## Contributing
 
-Read `CLAUDE.md` for the six laws that govern changes, `AGENTS.md` for the review
+Read `CLAUDE.md` for the seven laws that govern changes, `AGENTS.md` for the review
 process, and `CONTRIBUTING.md` to get started. Docs live in [`docs/`](./docs).
 
 ## Licence

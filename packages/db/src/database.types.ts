@@ -1660,6 +1660,7 @@ export type Database = {
       }
       works: {
         Row: {
+          content_hash: string | null
           created_at: string
           description: string | null
           external_ids: Json
@@ -1675,6 +1676,7 @@ export type Database = {
           year: number | null
         }
         Insert: {
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           external_ids?: Json
@@ -1690,6 +1692,7 @@ export type Database = {
           year?: number | null
         }
         Update: {
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           external_ids?: Json
@@ -1738,7 +1741,12 @@ export type Database = {
         }
         Returns: string
       }
+      enable_generation_dispatcher_with_token: {
+        Args: { p_project_url: string; p_seconds?: number }
+        Returns: string
+      }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
+      generation_secret: { Args: { p_name: string }; Returns: string }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {
@@ -1775,6 +1783,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
       plan_interleave: {
         Args: {
           p_cards_before?: number
@@ -1789,6 +1798,22 @@ export type Database = {
           kind: Database["public"]["Enums"]["interrupt_kind"]
           slot_index: number
         }[]
+      }
+      record_failed_job_step: {
+        Args: {
+          p_attempt: number
+          p_billable?: boolean
+          p_cost_cents?: number
+          p_duration_ms: number
+          p_error: string
+          p_input_tokens?: number
+          p_job_id: string
+          p_model?: string
+          p_output_tokens?: number
+          p_provider?: string
+          p_step: string
+        }
+        Returns: string
       }
       record_interrupt: {
         Args: {
@@ -1811,6 +1836,7 @@ export type Database = {
           p_input_tokens: number
           p_job_id: string
           p_model: string
+          p_output?: Json
           p_output_tokens: number
           p_prompt_version: string
           p_provider: string
@@ -1861,6 +1887,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      set_worker_secret: {
+        Args: { p_name: string; p_value: string }
+        Returns: string
       }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }

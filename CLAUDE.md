@@ -5,7 +5,7 @@ remember it — across books, films, documentaries, podcasts, papers, essays and
 
 > **What other learning apps call premium, we call learning.**
 
-## The six laws
+## The seven laws
 
 These are not preferences. A change that breaks one is wrong even if it is elegant,
 and reviewers should reject it on that basis alone.
@@ -41,6 +41,38 @@ and reviewers should reject it on that basis alone.
 6. **Migration law — append-only.**
    Never edit a migration that has been pushed. Add a new one that supersedes it.
    Editing history silently diverges every environment that already applied it.
+
+7. **Secrets law — the browser gets the publishable key and nothing else.**
+   Anything in a `VITE_*` variable is compiled into the bundle every visitor downloads.
+   Treat it as printed on the homepage. Exactly one credential belongs there: the
+   Supabase **publishable** key (`sb_publishable_…`), which is designed for the browser
+   and which RLS — not secrecy — is what actually protects.
+
+   Everything else is server-only and must never appear in `apps/web/`, in a `VITE_*`
+   variable, in client-reachable code, or in any committed file:
+
+   | Credential                            | Lives only in                                                                       |
+   | ------------------------------------- | ----------------------------------------------------------------------------------- |
+   | `sb_secret_…` / `service_role`        | Edge Function env (`SUPABASE_SERVICE_ROLE_KEY`), injected by the platform           |
+   | `GOOGLE_AI_API_KEY`, any provider key | Edge Function secrets, or Vault read by the worker through a `security definer` RPC |
+   | Storage S3 access/secret pair         | Server-side callers only                                                            |
+   | The generation dispatch token         | Vault                                                                               |
+
+   A key that reaches a commit is **rotated**, not quietly removed from the diff — git
+   history keeps it, and so does every clone.
+
+   **Local-stack keys are never production credentials.** `supabase start` prints a
+   publishable and a secret key for `127.0.0.1:54321`. The publishable one is committed
+   in `apps/web/.env.development`, so `pnpm dev` works on a fresh clone with no setup;
+   the secret one is never committed anywhere. Neither may appear in `.env.production`,
+   in a hosting provider's environment, or in any deployed configuration. A credential
+   that works against both a laptop and production is one nobody can reason about, and
+   the blast radius of confusing them runs in the wrong direction.
+
+   The local stack signs its tokens with a **published default secret**, so anyone who
+   can reach it can mint an admin token for it. That is harmless on loopback and a total
+   compromise anywhere else: never bind the local stack to a public address, and never
+   reuse its JWT secret in a hosted project.
 
 ## Stack
 
@@ -79,4 +111,4 @@ pnpm db:lint        # the schema invariants CI check 4 runs
 ## Definition of done
 
 Format, lint, typecheck and tests pass; `pnpm db:lint` is clean; Supabase advisors report
-no security findings; the diff obeys the six laws. Then the review gate in `AGENTS.md`.
+no security findings; the diff obeys the seven laws. Then the review gate in `AGENTS.md`.

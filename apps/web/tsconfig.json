@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
+    // Not `dist`: that is Vite's output, and `tsc -b` emitting JS into the same
+    // directory means the two builds race over one folder — whichever runs last wins,
+    // and `emptyOutDir` silently deciding that is not a build.
+    "outDir": ".tsbuild",
     "rootDir": "src",
     "composite": true,
     "jsx": "react-jsx",
