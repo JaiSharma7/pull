@@ -50,3 +50,21 @@ export interface SourceDelta {
   new: number;
   minutesSaved: number;
 }
+
+/** A saved Pull as the Library lists it, with enough source to be identifiable. */
+export interface LibraryItem {
+  id: string;
+  headline: string;
+  body: string;
+  whyItMatters: string | null;
+  savedAt: string;
+  work: { id: string; title: string; kind: string | null };
+}
+
+/** One source the reader has saved from, with its Delta. */
+export interface LibrarySource {
+  workId: string;
+  title: string;
+  kind: string | null;
+  savedCount: number;
+}

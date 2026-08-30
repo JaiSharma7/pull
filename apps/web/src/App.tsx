@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
+import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
 import { supabase } from './lib/supabase.js';
 
-type Tab = 'feed' | 'review';
+type Tab = 'feed' | 'review' | 'library';
 
 const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'feed', label: 'For You' },
   { id: 'review', label: 'Review' },
+  { id: 'library', label: 'Library' },
 ];
 
 export function App() {
@@ -101,7 +103,9 @@ export function App() {
 
         <main id="main" className="shell__main">
           <div className="shell__column">
-            {tab === 'feed' ? <Feed userId={session.user.id} onStats={setStats} /> : <Review />}
+            {tab === 'feed' && <Feed userId={session.user.id} onStats={setStats} />}
+            {tab === 'review' && <Review />}
+            {tab === 'library' && <Library userId={session.user.id} />}
           </div>
         </main>
 
