@@ -9,6 +9,40 @@ pnpm db:reset     # migrations + public-domain seed
 pnpm dev
 ```
 
+### On Windows, work inside WSL
+
+Put the repo **and** the Node toolchain inside the WSL filesystem. A Windows
+`pnpm` driving a repo at `\\wsl.localhost\...` fails in two ways that look like
+project bugs and are not:
+
+- `pnpm install` dies with `EPERM` renaming its store symlink, because the store
+  lives on the Windows side and the project does not.
+- `pnpm <script>` spawns `cmd.exe`, which refuses UNC working directories and
+  silently runs from `C:\Windows` instead.
+
+Interop also puts `/mnt/c/.../npm` ahead of the native toolchain on `PATH`, so a
+Windows `pnpm` shim gets picked even inside WSL and then fails looking for a
+`node` that is not there. Install Node in WSL and make sure it wins:
+
+```bash
+export PATH="$HOME/.local/node/bin:$PATH"   # ahead of the /mnt/c entries
+```
+
+`.gitattributes` pins `eol=lf`, so line endings are already handled — clone with
+Git for Windows and `pnpm format:check` still passes.
+
+## Verifying the read path
+
+```bash
+docker exec -i supabase_db_what-a-pull \
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f - < scripts/smoke-read-path.sql
+```
+
+Creates a reader through the real signup trigger, calls `get_feed` and
+`get_due_reviews` **as that reader** under RLS, then rolls back. Running those as
+the owning role would prove nothing: RLS is both the likeliest thing to be wrong
+and invisible to a superuser query.
+
 ## Before you push
 
 ```bash
