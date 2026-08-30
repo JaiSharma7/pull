@@ -286,6 +286,15 @@ not have to rediscover them.
   counting-scope decisions rather than bugs in the maths, and both predate the negation
   work; recorded because the function comment that used to assert "describes this page"
   was corrected rather than carried forward.
+- **Two hosted advisories are open and neither is code.** Leaked password protection is
+  disabled in Auth, and `artworks` carries two identical indexes
+  (`artworks_summary_idx`, `artworks_summary_readable_idx`) — a WARN each, both predating
+  any of round 2's work. The first is a dashboard toggle; the second wants a migration
+  that drops one index. Named here because the definition of done says advisors report no
+  security findings, and an undocumented WARN is indistinguishable from one nobody
+  noticed. The `enqueue_generation_job` advisory remains the one the project accepts by
+  design. Everything else the performance advisor reports is `unused_index` on a database
+  with no traffic yet, which is what an unused index looks like before launch.
 - **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
   and takes it from `node:crypto`. That is fine for its actual job — testing the
   placement rules over thousands of sessions without a database — but the prefetch use
