@@ -1785,6 +1785,7 @@ export type Database = {
         }
       }
       job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
+      known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
       plan_interleave: {
         Args: {
