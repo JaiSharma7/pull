@@ -68,9 +68,19 @@ definition.
 **A leaked key is rotated.** Removing it in a follow-up commit does nothing: it stays in
 history and in every clone. Rotate at the provider, then clean up.
 
-**Local-stack keys are still keys.** `supabase start` prints well-known defaults, which
-makes them harmless in themselves and exactly the wrong thing to commit — a repository that
-carries them trains reviewers to scroll past the pattern that matters.
+**Local-stack keys are dev-only, and the split is deliberate.** `supabase start` prints two.
+The publishable one is committed in `apps/web/.env.development` so a fresh clone runs
+`pnpm dev` with no setup; it points at `127.0.0.1:54321` and is useless against anything
+else. The secret one (`sb_secret_…`) is never committed — it is service_role for the local
+database, and the local stack's JWT secret is a published default, so anyone who can reach
+that stack can mint an admin token for it. Loopback only, always.
+
+Neither ever goes into `.env.production`, a Vercel or Supabase environment variable, or any
+deployed config. If a local key would make production work, something is pointed at the
+wrong database.
+
+Overriding locally is `.env.local`, which is gitignored — use it if your stack prints
+different values than the committed defaults.
 
 ## Modes
 
