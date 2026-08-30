@@ -361,16 +361,17 @@ begin
   end if;
 
   -- ------------------- 8. another author's private material cannot reach in
-  -- The one assertion here that RLS alone enforces, and the reason the rest of
-  -- the file is allowed to claim it runs under RLS.
+  -- `opposed_pairs` reads `pull_relations`, and nothing in the function bodies
+  -- re-checks who may see an edge -- that is `pull_relations_read_readable`'s
+  -- job alone. This asserts the policy does it.
   --
-  -- `opposed_pairs` reads `pull_relations`, whose policy requires BOTH endpoint
-  -- summaries to be readable. Nothing in the function bodies re-checks that. So
-  -- if `pull_relations_read_readable` were ever dropped, a private edge written
-  -- by someone else would start steering this reader's feed -- one author could
-  -- decide what another reader is shown, and pull an idea out of their Delta by
-  -- writing a row nobody can see. Every other section in this file would still
-  -- pass. This one would not.
+  -- Being precise about what this does and does not prove, because the first
+  -- version of this comment overclaimed: today no authenticated user can write
+  -- an edge at all (there is no INSERT policy), and a private pull cannot enter
+  -- the candidate pool anyway, so this is defence in depth rather than a live
+  -- hole. It is worth keeping because both of those are properties of other
+  -- objects that could change independently, and because a direct read of the
+  -- edge is exactly what a future Counterpull UI will do.
   perform set_config('role', 'postgres', true);
 
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,

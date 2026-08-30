@@ -1,8 +1,12 @@
 export interface EnoughProps {
   ideasRead: number;
   recalled: number;
-  /** Minutes the Delta saved by not re-teaching what the reader already knows. */
-  minutesSaved: number;
+  /**
+   * Minutes the Delta saved by not re-teaching what the reader already knows.
+   * `null` means the Delta never ran -- offline, say -- which is not the same
+   * as it having saved nothing, and must not be reported as though it were.
+   */
+  minutesSaved: number | null;
   onContinue?: () => void;
 }
 
@@ -46,21 +50,27 @@ export function Enough({ ideasRead, recalled, minutesSaved, onContinue }: Enough
 
       <hr className="rule" />
 
-      {/* Zero is not "under a minute" -- it is nothing, and claiming a saving
-          the reader did not get is the same dishonesty as congratulating them
-          for reading nothing. It also became more likely once contradictions
-          stopped counting as skips. */}
-      <p style={{ color: 'var(--accent)', fontSize: 'var(--step-1)' }}>
-        {minutesSaved === 0
-          ? 'Nothing skipped this time'
-          : minutesSaved < 1
-            ? 'Under a minute saved'
-            : `${minutesSaved} ${minutesSaved === 1 ? 'minute' : 'minutes'} saved`}
-      </p>
-      {minutesSaved > 0 && (
-        <p className="meta" style={{ marginTop: 'calc(var(--space-2) * -1)' }}>
-          against reading the sources in full
-        </p>
+      {/* Three states, and the difference between the last two is the point.
+          Zero is not "under a minute": claiming a saving the reader did not get
+          is the same dishonesty as congratulating them for reading nothing, and
+          zero became more likely once contradictions stopped counting as skips.
+          Null is not zero either -- it means we never computed it, and saying
+          "nothing skipped" there would be asserting something we do not know. */}
+      {minutesSaved !== null && (
+        <>
+          <p style={{ color: 'var(--accent)', fontSize: 'var(--step-1)' }}>
+            {minutesSaved === 0
+              ? 'Nothing skipped this time'
+              : minutesSaved < 1
+                ? 'Under a minute saved'
+                : `${minutesSaved} ${minutesSaved === 1 ? 'minute' : 'minutes'} saved`}
+          </p>
+          {minutesSaved > 0 && (
+            <p className="meta" style={{ marginTop: 'calc(var(--space-2) * -1)' }}>
+              against reading the sources in full
+            </p>
+          )}
+        </>
       )}
 
       <p className="pull-card__body">Mind fed. Go and use some of it.</p>

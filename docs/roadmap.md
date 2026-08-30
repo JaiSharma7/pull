@@ -110,7 +110,7 @@ no special case downstream. A contradiction is judged against everything the rea
 _except_ the ideas it contradicts — novel if nothing else is near it, redundant if it
 genuinely duplicates something else. It earns its rank rather than being handed one.
 
-Two things that building it changed:
+Three things that building it changed:
 
 - **An exemption is not enough, and the difference is measurable.** The first design
   exempted the candidate from `covered` and floored its novelty at the threshold. It was
@@ -125,9 +125,10 @@ Two things that building it changed:
   `pull_relations_read_readable`; it lands in `Filter`, _after_ the policy, and every
   unrelated edge pays that policy in full. Two **partial** indexes fix it, because a
   partial index predicate is a plan-time constraint rather than a runtime qual and so
-  escapes the leakproof rule entirely. Confirmed on a seeded stack: at seed size the
-  planner ignores them, and at ~2,000 relations it switches to an index-only scan and
-  `kind` disappears from `Filter`.
+  escapes the leakproof rule entirely. Observed once on a seeded stack: at seed size the
+  planner ignores them, and at a few thousand relations it switches to an index-only scan
+  and `kind` disappears from `Filter`. Not yet a committed check — the plan shape would
+  fit `db:test` and belongs there before it is quoted as fact.
 - **Propagating opposition through paraphrase has to be gated by the relation, not by
   distance.** The first version widened the exclusion set to everything within the
   threshold of an opposed idea — which is the same blindness one level up, since a
@@ -135,6 +136,20 @@ Two things that building it changed:
   debate it excluded both, leaving nothing to compare against, and served an idea they
   already held as maximally novel. Caught in review, not by the tests that existed at the
   time; `delta_negation.sql` now has the case, and it fails without the gate.
+
+  The gate is exact-pair and the propagation is transitive, so one hop remains open: a
+  paraphrase of an opposing known idea that carries no edge of its own is still swept in.
+  Closing it needs edges dense enough to describe claims rather than pulls — relation
+  extraction's job. The residual is strictly smaller than the bug it replaces, since it
+  takes a second unannotated restatement to appear at all.
+
+- **The two Delta functions disagreed about how much a reader knows.** `get_feed` has
+  always capped the known set at 500 by retrievability; `get_source_delta` capped nothing,
+  so the same reader could get different answers. Survivable while the comparison was
+  linear, and not once the paraphrase join made it quadratic in a whole history — measured
+  at 327–423ms for 8,000 known ideas, on a function every source page calls. Capped to
+  match. The negation work amplified this rather than inheriting it, which is why it is
+  recorded here rather than filed as a pre-existing gap.
 
 The constants now live in `delta_covered_distance()` and `known_retrievability_floor()`,
 so a re-tune is a one-line migration rather than an edit across superseded files. `0.1474`
@@ -255,17 +270,10 @@ not have to rediscover them.
   embeddings it averages, not before: recomputing a reader's centroid on every read
   would be a write amplification we have no evidence is needed. Round 2 either calls it
   from a `pg_cron` tick or drops the term and redistributes its weight.
-- **`get_source_delta` and `get_feed` disagreed about how much a reader knows.**
-  `get_feed` has always capped the known set at 500 by retrievability; `get_source_delta`
-  capped nothing, so the two could give different answers about the same reader. Survivable
-  while the comparison was linear, and not once the paraphrase join made it quadratic in
-  the reader's whole history — measured at 327–423ms for 8,000 known ideas on a function
-  every source page calls. Capped at 500 to match, in the same migration that introduced
-  the join: the negation work amplified this rather than merely inheriting it, so it was
-  not honest to file it as pre-existing.
-- **The Delta banner counts the pool, not the page.** `directly_known` counts over the
-  candidate pool (up to 600 rows) and `covered_delta` over the shortlist (up to 300),
-  while the page shows 20. So a well-read reader can be told _"skipped 240 ideas you
+- **The Delta banner counts the pool, not the page.** At the `p_limit` the client actually
+  sends (20), `directly_known` counts over an 800-row candidate pool and `covered_delta`
+  over a 400-row shortlist, while the page shows 20 — so the number describes something
+  forty times larger than what the reader is looking at. So a well-read reader can be told _"skipped 240 ideas you
   already know"_ above twenty cards. It is a true statement about what the ranker
   considered and a false one about the page, and the same seconds drive the Enough
   screen's "against reading the sources in full" — where `estimated_read_seconds` is

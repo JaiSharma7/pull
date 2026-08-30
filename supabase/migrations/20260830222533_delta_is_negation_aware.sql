@@ -1,5 +1,10 @@
 -- The Delta filed a contradiction as something the reader already knows.
 --
+-- THE RULE, in one sentence, because everything below is why rather than what:
+-- an idea is left out of the "do you already know this?" comparison when the
+-- candidate opposes it, or when it paraphrases something the candidate opposes
+-- and does not itself oppose that thing.
+--
 -- `covered` asked one question -- is this within 0.14 of an idea you know? --
 -- and measured against real Gemini embeddings that question cannot tell
 -- agreement from disagreement:
@@ -82,8 +87,8 @@ comment on function public.known_retrievability_floor() is
 -- `kind = 'opposes'` cannot become an index condition under RLS: `enum_eq` is
 -- not leakproof, so the planner may not push it below the security-barrier
 -- quals of `pull_relations_read_readable`. It lands in Filter, AFTER the
--- policy, and every unrelated edge then pays that policy in full -- which
--- expands to eight `summary_is_readable()` calls per row visited.
+-- policy, and every unrelated edge then pays that policy in full -- and that
+-- policy re-derives the readability of both endpoint summaries.
 --
 -- A partial index predicate is a plan-time constraint rather than a runtime
 -- qual, so it escapes the leakproof rule entirely: only `opposes` rows ever
@@ -154,9 +159,9 @@ begin
   --
   -- Joined to known_ideas rather than scanned whole. That is correctness, not
   -- optimisation: dropping an idea from the comparison because the candidate
-  -- opposes it only makes sense if the reader actually knows it. (It is also
-  -- 64x faster -- measured -- since the unrestricted form re-probes every
-  -- `opposes` edge in the graph for every candidate.)
+  -- opposes it only makes sense if the reader actually knows it. It is also far
+  -- cheaper, since the unrestricted form re-probes every `opposes` edge in the
+  -- graph for every candidate.
   opposed_direct as materialized (
     select pr.from_pull_id as candidate, ki.pull_id as known
     from public.pull_relations pr
@@ -191,8 +196,15 @@ begin
   -- restatement. For the reader who knows BOTH sides of a debate -- the
   -- Conviction Ledger reader, the person this feature is for -- that excluded
   -- both sides, left nothing to compare against, and served an idea they
-  -- already hold as maximally novel. Structure has to gate the propagation, or
-  -- the propagation inherits precisely what the vectors cannot see.
+  -- already hold as maximally novel.
+  --
+  -- The gate is exact-pair, and the propagation it guards is transitive, so it
+  -- does not close the case one hop out: a paraphrase of an opposing known idea
+  -- that carries no edge of its own is still swept in. Closing that needs the
+  -- edges to be dense enough to describe claims rather than pulls, which is
+  -- relation extraction's job, not this migration's. Recorded rather than
+  -- half-built -- and the residual is strictly smaller than the bug it replaces,
+  -- since it needs a second unannotated restatement to appear at all.
   --
   -- DISTINCT because opposition is stored in both directions, so every
   -- symmetric pair would otherwise enter this set twice.
@@ -251,8 +263,9 @@ begin
            )) as seen_directly
     from pool pl
   ),
-  -- What the ranker considered and dropped because the reader has it. Note this
-  -- counts over the pool, which is up to 30x the page -- so a well-read reader
+  -- What the ranker considered and dropped because the reader has it. This
+  -- counts over the pool, not the page: at the p_limit the client actually
+  -- sends (20) the pool is 800 rows and the page is 20, so a well-read reader
   -- can be told a number far larger than the cards in front of them. Inherited
   -- from the migration that made this per-page rather than lifetime; called out
   -- here because this file rewrites the comment that used to overstate it.
@@ -390,8 +403,10 @@ begin
   -- |opposed_direct| x |known_ideas| cosine comparisons with no index to serve
   -- it. Uncapped that is quadratic in the reader's whole history -- measured at
   -- 327-423ms for 8,000 known ideas and 300 edges, on a function reachable from
-  -- every source page with no rate limit. The cap makes the worst case a
-  -- constant.
+  -- every source page with no rate limit. The cap makes this constant in the
+  -- reader's history -- it does not bound `opposed_direct`, which still grows
+  -- with how many `opposes` edges touch the known set, so degree is the
+  -- dimension left to watch once relation extraction starts writing them.
   with known_ideas as (
     select ks.pull_id, p2.embedding
     from public.knowledge_states ks
@@ -416,19 +431,8 @@ begin
     join known_ideas ki on ki.pull_id = pr.from_pull_id
     where pr.kind = 'opposes'
   ),
-  --
-  -- The `not exists` is load-bearing, and leaving it out was a real bug caught
-  -- in review. Widening by distance alone re-imports the exact blindness this
-  -- migration exists to fix: a claim and its contradiction are ALSO inside the
-  -- threshold, so an opposed k2 would be swept in as though it were a
-  -- restatement. For the reader who knows BOTH sides of a debate -- the
-  -- Conviction Ledger reader, the person this feature is for -- that excluded
-  -- both sides, left nothing to compare against, and served an idea they
-  -- already hold as maximally novel. Structure has to gate the propagation, or
-  -- the propagation inherits precisely what the vectors cannot see.
-  --
-  -- DISTINCT because opposition is stored in both directions, so every
-  -- symmetric pair would otherwise enter this set twice.
+  -- The same propagation and the same gate as get_feed; the reasoning is in the
+  -- header and is not repeated here.
   opposed_pairs as materialized (
     select distinct od.candidate, k2.pull_id as known
     from opposed_direct od

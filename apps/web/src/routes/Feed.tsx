@@ -63,8 +63,8 @@ export interface FeedStats {
   read: number;
   saved: number;
   recalled: number;
-  skippedKnown: number;
-  minutesSaved: number;
+  skippedKnown: number | null;
+  minutesSaved: number | null;
 }
 
 export function Feed({
@@ -111,8 +111,10 @@ export function Feed({
       read: readCount,
       saved: savedThisSession.size,
       recalled,
-      skippedKnown: feed?.skippedKnownCount ?? 0,
-      minutesSaved: feed?.minutesSaved ?? 0,
+      // ?? null, not ?? 0: the rail must show "--" for "we do not know"
+      // rather than a zero it cannot stand behind.
+      skippedKnown: feed?.skippedKnownCount ?? null,
+      minutesSaved: feed?.minutesSaved ?? null,
     });
   }, [onStats, readCount, savedThisSession, recalled, feed]);
 
@@ -136,10 +138,12 @@ export function Feed({
         // back to what is cached rather than showing an error.
         const cached = await readCachedPulls();
         if (cached.length > 0) {
+          // null, not 0: the Delta never ran, and "nothing skipped" is a
+          // claim about the session we have no basis for making.
           setFeed({
             rows: cached,
-            skippedKnownCount: 0,
-            minutesSaved: 0,
+            skippedKnownCount: null,
+            minutesSaved: null,
             interleaveSlots: [],
             page: 0,
           });
@@ -471,7 +475,7 @@ export function Feed({
         </p>
       )}
 
-      {feed.skippedKnownCount > 0 && (
+      {feed.skippedKnownCount !== null && feed.skippedKnownCount > 0 && (
         <p className="meta" data-testid="delta-banner">
           Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
           already know —{' '}
