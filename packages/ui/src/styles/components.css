@@ -534,3 +534,21 @@
   border: 0;
   border-top: 1px solid var(--rule);
 }
+
+/* The primary action matches the field above it.
+ *
+ * A 189px button under a 544px input reads as unrelated to it — the eye tracks the
+ * full width of the field, then has to find a smaller target somewhere along that
+ * line. Matching widths makes the pair read as one gesture: type here, then commit.
+ * Only on the title page; buttons inside the reading column are inline actions and
+ * should stay sized to their label. */
+.titlepage__inner .btn--primary {
+  width: 100%;
+}
+
+/* The secondary pair stays inline and small — they are escape hatches, not the
+   action, and giving them the same weight would make the screen ask two questions. */
+.titlepage__alts .btn--plain {
+  padding-inline: 0;
+  font-size: inherit;
+}
