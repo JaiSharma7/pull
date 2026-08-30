@@ -82,6 +82,30 @@ describe('extractText', () => {
     expect(extractText('<p>one    two</p><p>three</p>')).toBe('one two\n\nthree');
   });
 
+  /**
+   * Unterminated tags used to be quadratic, and the numbers were not close.
+   *
+   *     100 KB → 0.4s     400 KB → 6s     1 MB → 340s
+   *
+   * against a platform that kills the invocation at 150s — and synchronously, on a
+   * single-threaded isolate, so no timeout could fire and nothing was recorded. Any
+   * signed-in reader could point `target.url` at a server returning `"<script"` on
+   * repeat. The bound is asserted rather than the implementation, because what must
+   * stay true is "hostile input is not quadratic", not "an index scan is used".
+   */
+  it.each(['script', 'style'])('strips unterminated <%s> in linear time', (tag) => {
+    const hostile = `<${tag}`.repeat(200_000); // ~1.2MB, 200k unclosed openers
+    const started = Date.now();
+    extractText(hostile);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('drops the tail after an unterminated script rather than keeping it', () => {
+    // The safe direction: the remainder of a document whose script never closes is
+    // not content, and keeping it would mean summarising markup.
+    expect(extractText('<p>Before.</p><script>var x = 1;')).toBe('Before.');
+  });
+
   it('produces text that segment can actually divide', () => {
     const html = Array.from({ length: 6 }, (_, i) => `<p>${'word '.repeat(400)}${i}</p>`).join('');
     expect(segment(extractText(html), 4000).length).toBeGreaterThan(1);
@@ -123,9 +147,27 @@ describe('assertFetchableUrl', () => {
     'http://[::ffff:127.0.0.1]/', // loopback, IPv4-mapped
     'http://[::ffff:169.254.169.254]/', // cloud metadata, IPv4-mapped
     'http://[::]/', // unspecified
+    // Four spellings that reached the private network. The first two embed an IPv4
+    // address in forms the mapped-address patterns never matched; `64:ff9b::/96` is
+    // the one that actually routes, because an IPv6-only runtime behind NAT64/DNS64
+    // translates it straight to the embedded IPv4 with no v4 check ever seeing a v4
+    // address. Blocking spellings was the wrong shape — `::/96` is refused wholesale.
+    'http://[::127.0.0.1]/', // IPv4-compatible → ::7f00:1
+    'http://[::ffff:0:127.0.0.1]/', // IPv4-translated → ::ffff:0:7f00:1
+    'http://[64:ff9b::127.0.0.1]/', // NAT64 well-known prefix
+    'http://[fec0::1]/', // site-local, deprecated but still routed by some stacks
   ])('refuses the IPv6 address %s', (url) => {
     expect(() => assertFetchableUrl(url)).toThrow(/private or link-local/);
   });
+
+  // A blocklist that refuses everything with a colon in it would be a different bug
+  // wearing the same fix, so the allow side is asserted with the same weight.
+  it.each(['http://[2606:4700:4700::1111]/', 'http://[2001:4860:4860::8888]/'])(
+    'still allows the public IPv6 address %s',
+    (url) => {
+      expect(() => assertFetchableUrl(url)).not.toThrow();
+    },
+  );
 
   it.each(['file:///etc/passwd', 'data:text/html,hi', 'gopher://example.com/'])(
     'refuses the %s scheme',

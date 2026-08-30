@@ -39,11 +39,47 @@ export async function contentHash(text: string): Promise<string> {
  * its own module when URL ingestion is more than a convenience; this is honest
  * about being the simple version rather than pretending to be the other one.
  */
+/**
+ * Drop an element and its contents by scanning, not by backtracking.
+ *
+ * `/<script[\s\S]*?<\/script>/g` looks harmless and is quadratic on hostile input:
+ * every unterminated `<script` scans to end-of-string before failing, so k openers
+ * over n bytes costs O(k·n). Measured on the regex this replaces:
+ *
+ *     100 KB of "<script"  →      0.4 s
+ *     400 KB               →      6.0 s
+ *       1 MB               →    340 s      ← against a 150 s platform ceiling
+ *
+ * A signed-in reader only had to point `target.url` at a server returning
+ * `"<script".repeat(n)`. `FETCH_TIMEOUT_MS` does not help: it bounds the fetch, and
+ * this runs synchronously afterwards on a single-threaded isolate, so the timer
+ * cannot even fire. The invocation is killed with no `job_steps` row and no ledger
+ * row, while pgmq charges `read_ct` on delivery — three of those fail the job with
+ * nothing recorded to explain it, having burned three full invocations.
+ *
+ * An index scan has no backtracking to exploit: each byte is visited once. An
+ * unterminated opener drops the remainder of the document, which is the safe
+ * direction — the tail of a document whose script tag never closes is not content.
+ */
+function stripElement(html: string, tag: string): string {
+  const lower = html.toLowerCase();
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const start = lower.indexOf(open, i);
+    if (start === -1) return out + html.slice(i);
+    out += html.slice(i, start) + ' ';
+    const end = lower.indexOf(close, start);
+    if (end === -1) return out;
+    i = end + close.length;
+  }
+}
+
 export function extractText(html: string): string {
   return (
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    stripElement(stripElement(html, 'script'), 'style')
       // Block boundaries become paragraph breaks *before* tags are stripped.
       // Collapsing all whitespace first — which this used to do — destroyed the
       // only structure `segment` can split on, so every fetched article arrived
@@ -128,7 +164,30 @@ function isBlockedIpv6(host: string): boolean {
   const mappedDotted = bare.match(/^::(?:ffff:)?((?:\d{1,3}\.){3}\d{1,3})$/);
   if (mappedDotted?.[1]) return BLOCKED_HOST_V4.test(mappedDotted[1]);
 
+  /*
+   * Everything whose first 96 bits are zero, whatever the last 32 say.
+   *
+   * Enumerating spellings was the wrong shape: `::127.0.0.1` (IPv4-compatible) and
+   * `::ffff:0:127.0.0.1` (IPv4-translated) both normalise to forms the patterns above
+   * do not match, and both embed an IPv4 address. Rather than add two more patterns,
+   * refuse the whole `::/96` and `::ffff:0:0/96` prefixes: no public address lives
+   * there, so a blanket refusal costs nothing and cannot be spelled around.
+   */
+  if (/^::(?:ffff:0:)?[0-9a-f]{0,4}(?::[0-9a-f]{1,4})?$/.test(bare)) return true;
+
+  /*
+   * 64:ff9b::/96 and 64:ff9b:1::/48 — the NAT64 well-known prefixes.
+   *
+   * The one on this list that actually routes. An IPv6-only runtime behind NAT64 and
+   * DNS64 — increasingly what an edge function sits on — translates
+   * `64:ff9b::7f00:1` straight to 127.0.0.1, so the embedded IPv4 reaches the private
+   * network with none of the v4 checks above ever seeing a v4 address.
+   */
+  if (/^64:ff9b:/.test(bare) || bare.startsWith('64:ff9b::')) return true;
+
   const head = bare.split(':')[0] ?? '';
+  // fec0::/10 — site-local. Deprecated by RFC 3879, still routed by some stacks.
+  if (/^fe[cdef][0-9a-f]?$/.test(head)) return true;
   // fc00::/7 — unique local. Covers the fc.. and fd.. halves.
   if (/^f[cd][0-9a-f]{0,2}$/.test(head)) return true;
   // fe80::/10 — link local, which is where cloud metadata lives on IPv6.
