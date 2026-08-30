@@ -26,6 +26,31 @@ export interface Usage {
   costCents: number;
 }
 
+/**
+ * A provider call that was metered and then turned out to be unusable.
+ *
+ * Lives here rather than beside a vendor because the pipeline must be able to
+ * recognise it without importing one: `pipeline.ts` depends on these interfaces and
+ * on no concrete provider, which is what lets the steps be tested against fakes.
+ *
+ * The distinction that matters is metered-vs-not, not failed-vs-succeeded. A model
+ * that returns HTTP 200 with `finishReason: MAX_TOKENS` and empty parts has charged
+ * for every input and thinking token it consumed; throwing a bare Error there loses
+ * the only record of a real charge, and the step then retries and charges again.
+ * A connection refused, by contrast, costs nothing and is correctly a plain Error.
+ */
+export class BilledProviderError extends Error {
+  readonly usage: Usage;
+  readonly model: string | undefined;
+
+  constructor(message: string, billed: { usage: Usage; model?: string }) {
+    super(message);
+    this.name = 'BilledProviderError';
+    this.usage = billed.usage;
+    this.model = billed.model;
+  }
+}
+
 export interface SummaryProvider {
   readonly name: string;
   /**

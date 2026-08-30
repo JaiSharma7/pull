@@ -11,6 +11,7 @@
  * made by the worker, once per canonical summary, and lands in `cost_ledger`.
  */
 
+import { BilledProviderError } from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -345,23 +346,45 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
             );
       }
 
-      const raw = firstTextPart(payload);
+      /*
+       * Everything below this line has already been paid for.
+       *
+       * `payload` exists, so the model answered and metered the call. The three ways
+       * the answer can still be unusable — no text part, unparseable JSON, no pulls
+       * array — were previously plain `GeminiError`s, which the worker's failure path
+       * records in `job_steps` and NOT in `cost_ledger`. Each retry then bought
+       * another unrecorded charge.
+       *
+       * The likeliest of the three is not a malformed model: it is `MAX_TOKENS`. A
+       * thinking Flash model given up to MAX_SOURCE_CHARS of context can spend its
+       * entire output budget on `thoughtsTokenCount` and return HTTP 200 with a full
+       * `usageMetadata` and no parts at all — an expensive call, billed for tens of
+       * thousands of input tokens, that produces nothing.
+       *
+       * Law 2 counts every model call, not every successful one.
+       */
+      const usage = computeUsage(payload.usageMetadata as GeminiUsageMetadata | undefined, config);
+      const billed = (message: string) => new BilledProviderError(message, { usage, model });
+
+      let raw: string;
+      try {
+        raw = firstTextPart(payload);
+      } catch (e) {
+        throw billed(e instanceof Error ? e.message : String(e));
+      }
+
       let summary: CanonicalSummary;
       try {
         summary = JSON.parse(raw) as CanonicalSummary;
       } catch {
-        throw new GeminiError(`Gemini returned unparseable JSON: ${raw.slice(0, 200)}`);
+        throw billed(`Gemini returned unparseable JSON: ${raw.slice(0, 200)}`);
       }
 
       if (!Array.isArray(summary.pulls)) {
-        throw new GeminiError('Gemini summary has no pulls array');
+        throw billed('Gemini summary has no pulls array');
       }
 
-      return {
-        summary,
-        usage: computeUsage(payload.usageMetadata as GeminiUsageMetadata | undefined, config),
-        model,
-      };
+      return { summary, usage, model };
     },
   };
 }

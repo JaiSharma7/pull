@@ -19,7 +19,8 @@
  */
 
 import type { Step } from './steps.ts';
-import type { EmbeddingProvider, SummaryProvider, Usage } from './providers.ts';
+import { BilledProviderError } from './providers.ts';
+import type { CanonicalSummary, EmbeddingProvider, SummaryProvider, Usage } from './providers.ts';
 import { contentHash, extractText, fetchBounded, MAX_SOURCE_CHARS, segment } from './source.ts';
 
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
@@ -471,11 +472,40 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         };
       }
 
-      const { summary, usage, model } = await deps.summary.generateSummary({
-        workTitle: acquired.title,
-        kind: acquired.kind,
-        context: acquired.text,
-      });
+      /*
+       * Two ways to be billed and get nothing, and both have to reach the ledger.
+       *
+       *   provider answered, answer unusable   → BilledProviderError, caught here
+       *   provider answered, answer empty      → the check below
+       *   provider never answered              → a plain Error, and correctly free
+       *
+       * The first was the gap: a model can return HTTP 200 with a full
+       * `usageMetadata` and no usable text — most likely by spending its whole
+       * output budget on thinking tokens — which charged for tens of thousands of
+       * input tokens and threw a bare Error carrying none of it. Each retry then
+       * bought another unrecorded charge. Law 2 counts every model call, not every
+       * successful one, so the usage is carried across the provider boundary rather
+       * than discarded at it.
+       */
+      let summary: CanonicalSummary;
+      let usage: Usage;
+      let model: string;
+      try {
+        ({ summary, usage, model } = await deps.summary.generateSummary({
+          workTitle: acquired.title,
+          kind: acquired.kind,
+          context: acquired.text,
+        }));
+      } catch (e) {
+        if (e instanceof BilledProviderError) {
+          throw new BilledStepError(`synthesize: ${e.message}`, {
+            usage: e.usage,
+            model: e.model,
+            provider: deps.summary.name,
+          });
+        }
+        throw e;
+      }
 
       if (!summary.title || summary.pulls.length === 0) {
         // Billed before it was rejected: the provider charged for these tokens

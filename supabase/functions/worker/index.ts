@@ -127,9 +127,11 @@ async function providersNow(): Promise<ProviderSet> {
  * per request is what the 150s wall-clock limit forces, and it means a step's
  * only inputs are what earlier steps wrote down.
  *
- * Providers are the one exception, cached for `PROVIDER_CACHE_MS`. See above.
+ * Providers are the exception and are passed IN, already resolved. They have to be,
+ * because resolving them can fail and that failure must happen before a message is
+ * claimed — see the ordering argument in `Deno.serve` below.
  */
-async function runStep(jobId: string, step: Step): Promise<StepResult> {
+async function runStep(jobId: string, step: Step, providers: ProviderSet): Promise<StepResult> {
   const job = must(
     await supabase
       .from('generation_jobs')
@@ -143,8 +145,6 @@ async function runStep(jobId: string, step: Step): Promise<StepResult> {
     await supabase.rpc('job_step_outputs', { p_job_id: jobId }),
     'read prior step outputs',
   ) ?? {}) as Record<string, unknown>;
-
-  const providers = await providersNow();
 
   return await runPipelineStep(step, {
     summary: providers.summary,
@@ -244,6 +244,37 @@ Deno.serve(async (req) => {
 
   const processed: unknown[] = [];
 
+  /*
+   * Resolved BEFORE anything is claimed, and this ordering is the whole point.
+   *
+   * `REQUIRE_REAL_PROVIDERS` exists so a rotated or unreadable key is loud rather
+   * than silently served as stubs. Resolving it inside `runStep` — after the claim —
+   * turned that into something worse than the silence it replaced:
+   *
+   *   claim → read_ct 1 → throw → record failed attempt → leave message
+   *   claim → read_ct 2 → throw → …                        (pg_cron, every 10s)
+   *   claim → read_ct 3 → throw → …
+   *   claim → read_ct 4 → attempt > MAX_ATTEMPTS → job marked FAILED, archived
+   *
+   * Every queued job terminally failed within about a minute of a key rotation,
+   * unrecoverable, with "exhausted retries" as the only explanation. A worker that
+   * cannot reach its provider has nothing useful to do, and the correct behaviour is
+   * for the queue to STALL — jobs stay queued, retries stay unspent, and the work
+   * resumes when the key comes back.
+   *
+   * 503 rather than 500: this is "try again shortly", not "this request was wrong".
+   * The 60s cache means the healthy path pays for this at most once a minute.
+   */
+  let providers: ProviderSet;
+  try {
+    providers = await providersNow();
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ error: e instanceof Error ? e.message : String(e), claimed: 0 }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
   // Claimed immediately before it is run, and never more than one: `read_ct` is
   // charged on delivery, so a message claimed and not reached is a retry spent
   // on nothing.
@@ -332,7 +363,7 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const result = await runStep(jobId, step);
+      const result = await runStep(jobId, step, providers);
       const usage = result.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
       // One transaction for the step, its output and its cost. As separate

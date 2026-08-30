@@ -73,3 +73,17 @@ inspector_port = 8083
 # invisible to it exactly as it is to any other unauthenticated reader.
 [functions.og]
 verify_jwt = false
+
+# The worker authenticates its own caller, against a token in Vault, because the
+# platform cannot: the dispatcher is `pg_net` sending `x-worker-token` and no
+# `Authorization` header at all. With JWT verification on, every tick is rejected
+# before the function body runs and the queue simply stops draining — a 401 visible
+# only in a log nobody is watching.
+#
+# Declared here rather than left to `--no-verify-jwt` on a command line, because a
+# flag is a thing someone has to remember. Any deploy that forgets it — from CI, from
+# memory, from `supabase functions serve` — silently re-enables verification and stops
+# generation. This widens nothing: `authorised()` fails closed, so a worker with no
+# credential configured still refuses every request.
+[functions.worker]
+verify_jwt = false
