@@ -1,4 +1,5 @@
 import type { RecallGrade } from './grades.js';
+import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 import type { DueReview, FeedResponse, SourceDelta } from './types.js';
 
@@ -22,19 +23,19 @@ export async function fetchFeed(params: {
     p_cards_before: params.cardsBefore,
     p_used_budget: params.usedBudget,
   });
-  if (error) throw error;
+  if (error) throw rpcError(error);
   return data as unknown as FeedResponse;
 }
 
 export async function fetchDueReviews(limit = 20): Promise<DueReview[]> {
   const { data, error } = await supabase.rpc('get_due_reviews', { p_limit: limit });
-  if (error) throw error;
+  if (error) throw rpcError(error);
   return (data ?? []) as unknown as DueReview[];
 }
 
 export async function fetchSourceDelta(workId: string): Promise<SourceDelta> {
   const { data, error } = await supabase.rpc('get_source_delta', { p_work_id: workId });
-  if (error) throw error;
+  if (error) throw rpcError(error);
   return data as unknown as SourceDelta;
 }
 
@@ -44,12 +45,12 @@ export async function recordRead(pullId: string, dwellMs: number, position: numb
     p_dwell_ms: dwellMs,
     p_position: position,
   });
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
 export async function gradeRecall(pullId: string, grade: RecallGrade) {
   const { error } = await supabase.rpc('grade_recall', { p_pull_id: pullId, p_grade: grade });
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
 export async function recordInterrupt(args: {
@@ -68,7 +69,7 @@ export async function recordInterrupt(args: {
     p_grade: args.grade as never,
     p_latency: args.latencyMs,
   });
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
 /**
@@ -96,7 +97,7 @@ export async function setConviction(
     p_mutation_id: mutationId,
     p_submitted_at: new Date(submittedAt).toISOString(),
   });
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
 /**
@@ -123,7 +124,7 @@ export async function saveExplanation(
     .insert({ user_id: userId, pull_id: pullId, text, client_mutation_id: mutationId });
   // The collision means this exact submission already landed, which is the
   // outcome the caller wanted — not a failure to retry.
-  if (error && error.code !== '23505') throw error;
+  if (error && error.code !== '23505') throw rpcError(error);
 }
 
 /** Saving is unlimited and free, by policy. There is no quota to check. */
@@ -131,7 +132,7 @@ export async function savePull(pullId: string, userId: string) {
   const { error } = await supabase.from('saved_items').insert({ user_id: userId, pull_id: pullId });
   // A duplicate save is idempotent, not an error: the unique index is doing its
   // job and the reader's intent is already satisfied.
-  if (error && error.code !== '23505') throw error;
+  if (error && error.code !== '23505') throw rpcError(error);
 }
 
 export async function unsavePull(pullId: string, userId: string) {
@@ -140,7 +141,7 @@ export async function unsavePull(pullId: string, userId: string) {
     .delete()
     .eq('user_id', userId)
     .eq('pull_id', pullId);
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
 /**
@@ -166,7 +167,7 @@ export async function fetchSavedPullIds(userId: string): Promise<Set<string>> {
       // rows in any order and a range walk can repeat or skip.
       .order('pull_id', { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error) throw error;
+    if (error) throw rpcError(error);
 
     const rows = data ?? [];
     for (const r of rows) if (r.pull_id !== null) ids.add(r.pull_id);

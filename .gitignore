@@ -53,3 +53,4 @@ logs/
 
 # claude local overrides
 .claude/settings.local.json
+.gstack/
