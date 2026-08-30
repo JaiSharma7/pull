@@ -1,3 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+  # The Edge Functions are deployed as Deno source, never built here — but they
+  # are still TypeScript, and being outside the workspace is why nothing
+  # typechecked or tested them.
+  - 'supabase/functions'

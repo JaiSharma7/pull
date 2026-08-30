@@ -1,11 +1,9 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
-import {
-  disabledImageProvider,
-  stubEmbeddingProvider,
-  stubSummaryProvider,
-} from '../_shared/providers.ts';
+import { resolveProviders } from '../_shared/config.ts';
+import { createPipelineDb } from '../_shared/db.ts';
+import { runPipelineStep, type JobRow, type StepResult } from '../_shared/pipeline.ts';
 
 /**
  * One tick of the generation step-machine.
@@ -56,19 +54,50 @@ function must<T>(result: { data: T; error: unknown }, what: string): T {
   return result.data;
 }
 
-async function runStep(jobId: string, step: Step) {
-  // Round 1 wires the machine with stub providers so the whole pipeline is
-  // exercisable with no API key. Round 2 swaps these for real ones.
-  switch (step) {
-    case 'synthesize':
-      return stubSummaryProvider.generateSummary({ workTitle: jobId, kind: 'book', context: '' });
-    case 'embed':
-      return stubEmbeddingProvider.embed(['']);
-    case 'artwork':
-      return disabledImageProvider.generateArtwork('');
-    default:
-      return { usage: { inputTokens: 0, outputTokens: 0, costCents: 0 } };
-  }
+/**
+ * Run one step of the real pipeline.
+ *
+ * The job row and the outputs of its already-succeeded steps are read fresh
+ * each time, because the worker holds nothing between invocations — one step
+ * per request is what the 150s wall-clock limit forces, and it means a step's
+ * only inputs are what earlier steps wrote down.
+ *
+ * Providers are resolved per step rather than at module load so a key added to
+ * Vault takes effect on the next tick instead of the next deploy.
+ */
+async function runStep(jobId: string, step: Step): Promise<StepResult> {
+  const job = must(
+    await supabase
+      .from('generation_jobs')
+      .select('id, kind, target, work_id, summary_id, visibility')
+      .eq('id', jobId)
+      .single(),
+    'read job',
+  ) as JobRow;
+
+  const priorOutputs = (must(
+    await supabase.rpc('job_step_outputs', { p_job_id: jobId }),
+    'read prior step outputs',
+  ) ?? {}) as Record<string, unknown>;
+
+  const providers = await resolveProviders(
+    { get: (key: string) => Deno.env.get(key) },
+    async (name: string) => {
+      const { data, error } = await supabase.rpc('generation_secret', { p_name: name });
+      // A missing secret is a supported state — the stubs take over. Only a
+      // failure to *ask* is worth surfacing.
+      if (error) throw new Error(`read secret ${name}: ${error.message}`);
+      return (data as string | null) ?? null;
+    },
+  );
+
+  return await runPipelineStep(step, {
+    summary: providers.summary,
+    embedding: providers.embedding,
+    priorOutputs,
+    job,
+    db: createPipelineDb(supabase),
+  });
 }
 
 const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
@@ -234,28 +263,33 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const result: any = await runStep(jobId, step);
-      const usage = result?.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
+      const result = await runStep(jobId, step);
+      const usage = result.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
-      // One transaction for the step and its cost. As two separate writes, a
-      // ledger failure after a succeeded step left the spend permanently
-      // unrecorded and unretryable: the step row already existed, so the retry
-      // path could not replace it and resume treated it as fully done.
+      // One transaction for the step, its output and its cost. As separate
+      // writes, a ledger failure after a succeeded step left the spend
+      // permanently unrecorded and unretryable: the step row already existed, so
+      // the retry path could not replace it and resume treated it as fully done.
       must(
         await supabase.rpc('record_job_step', {
           p_job_id: jobId,
           p_step: step,
           p_attempt: attempt,
-          p_model: 'stub',
+          p_model: result.model ?? null,
           p_prompt_version: null,
           p_input_tokens: usage.inputTokens,
           p_output_tokens: usage.outputTokens,
           p_cost_cents: usage.costCents,
           p_duration_ms: Date.now() - started,
-          p_provider: 'stub',
-          // A zero-cost call is still a call: a free or local provider must stay
-          // distinguishable from missing accounting.
-          p_billable: PROVIDER_STEPS.has(step),
+          p_provider: result.provider ?? 'none',
+          // Billable when a provider was actually called, not merely when the
+          // step is one that *can* call one. A reuse skips `synthesize`'s call
+          // entirely, and charging a ledger row for it would misreport the
+          // reuse ratio — the number the whole cost argument is measured by.
+          p_billable: result.provider !== undefined && PROVIDER_STEPS.has(step),
+          // What this step produced, for the next one to read. The worker keeps
+          // nothing in memory between invocations.
+          p_output: (result.output ?? null) as never,
         }),
         'record step and cost',
       );
