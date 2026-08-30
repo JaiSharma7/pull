@@ -125,6 +125,34 @@ that reach Postgres rather than the call counts alone. Unrecognised rights claim
 narrow to `review_required`, so the direction a mistake falls in is toward refusing to
 publish.
 
+### Open risk: reuse is narrowed, not serialized
+
+Two jobs fingerprinting the same source can still both pay a provider.
+
+`acquire` asks whether a source is already summarised, and `synthesize` now asks again
+immediately before calling the provider — but they are separate invocations, minutes
+apart on a queue, so the answer can go stale in between:
+
+```
+job A   acquire ──────── … ──────── synthesize ─── template (commits)
+job B        acquire(miss) ──── … ──────── synthesize ← second lookup catches it here
+                                             ↑
+                        still open: both reach synthesize inside this gap
+```
+
+The adopt-on-`23505` in `createSummary` means this no longer ends in a crash or a
+permanently failed job, so what remains is purely a duplicated bill — which is a law 2
+failure whether or not anything throws, since the whole cost argument is that a source
+is generated once.
+
+Closing it properly means reserving the fingerprint: a `generation_hash_claims` row
+taken at `acquire` and released at publish or failure, with a lease timeout. That was
+deferred rather than half-built because the lease is the hard part — a crashed job
+holding a claim would block every later request for the same source, turning a
+duplicated bill into a stalled queue, which is the worse failure. Worth doing when reuse
+volume makes the duplicate spend measurable; `cost_ledger` is where that shows up, since
+two billable `synthesize` rows against one content hash is exactly the query.
+
 ### Still to do
 
 Claim anchors, generated cards, hero artwork, cost ledger reporting, rate limiting, and
