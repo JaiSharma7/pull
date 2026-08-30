@@ -1660,6 +1660,7 @@ export type Database = {
       }
       works: {
         Row: {
+          content_hash: string | null
           created_at: string
           description: string | null
           external_ids: Json
@@ -1675,6 +1676,7 @@ export type Database = {
           year: number | null
         }
         Insert: {
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           external_ids?: Json
@@ -1690,6 +1692,7 @@ export type Database = {
           year?: number | null
         }
         Update: {
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           external_ids?: Json

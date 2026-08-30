@@ -46,7 +46,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       return published ? { workId: work.id, summaryId: published.id } : null;
     },
 
-    async upsertWork({ title, kind, contentHash }) {
+    async upsertWork({ title, kind, contentHash, rightsStatus }) {
       const existing = must(
         await supabase.from('works').select('id').eq('content_hash', contentHash).limit(1),
         'look up work',
@@ -72,7 +72,12 @@ export function createPipelineDb(supabase: Db): PipelineDb {
             // Suffixed with part of the hash because `slug` is unique and two
             // different sources can easily share a title.
             slug: `${slug}-${contentHash.slice(0, 8)}`,
-            rights_status: 'user_private',
+            // The status `resolve_identity` validated, not a literal. This used to
+            // send `user_private`, which is not a member of `rights_status` — so
+            // Postgres rejected the insert and no new source could ever reach
+            // summary creation. The enum is the rights posture in `content-policy.md`
+            // made unbypassable, and inventing a value defeats exactly that.
+            rights_status: rightsStatus,
           })
           .select('id')
           .single(),
@@ -88,8 +93,8 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       elevatorPitch,
       whyItMatters,
       sections,
-      model,
       visibility,
+      authorId,
     }) {
       const row = must(
         await supabase
@@ -105,7 +110,14 @@ export function createPipelineDb(supabase: Db): PipelineDb {
             // exists to prevent.
             status: 'draft',
             visibility,
-            model,
+            // Who this was generated for, and the only thing that makes a
+            // non-public summary readable at all: `summary_is_readable` grants
+            // access when `status = 'published' and visibility = 'public'`, or
+            // when `author_id = auth.uid()`. Jobs default to `private`, so a
+            // summary written without this is one the person who asked for it
+            // cannot open — the pipeline succeeding and the reader seeing
+            // nothing.
+            author_id: authorId,
           })
           .select('id')
           .single(),

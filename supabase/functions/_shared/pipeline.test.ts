@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertFetchableUrl,
+  asRightsStatus,
+  asWorkKind,
   contentHash,
   extractText,
   MAX_SOURCE_CHARS,
+  RIGHTS_STATUSES,
   runPipelineStep,
   segment,
+  WORK_KINDS,
 } from './pipeline.ts';
+import { stubSummaryProvider } from './providers.ts';
+
+/** A synthesize output, so `template` can be exercised without re-running it. */
+const SYNTHESIZED = {
+  title: 't',
+  elevatorPitch: 'e',
+  whyItMatters: 'w',
+  pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }],
+};
 
 /**
  * The generation pipeline.
@@ -87,6 +100,29 @@ describe('assertFetchableUrl', () => {
     expect(() => assertFetchableUrl(url)).toThrow(/private or link-local/);
   });
 
+  /**
+   * The same addresses spelled in IPv6, which the IPv4 patterns cannot see.
+   *
+   * Blocking `::1` alone left every other private range reachable. The worker
+   * writes what it fetched into `job_steps.output`, which the requester can
+   * read — so this is an exfiltration path, not just an unwanted request.
+   */
+  it.each([
+    'http://[::1]/',
+    'http://[::1]:54321/rest/v1/',
+    'http://[0:0:0:0:0:0:0:1]/',
+    'http://[fd00::1]/', // unique-local
+    'http://[fdff:ffff::9]/', // unique-local, upper half of fc00::/7
+    'http://[fc00::1]/', // unique-local, lower half
+    'http://[fe80::1]/', // link-local
+    'http://[febf::1]/', // link-local, top of fe80::/10
+    'http://[::ffff:127.0.0.1]/', // loopback, IPv4-mapped
+    'http://[::ffff:169.254.169.254]/', // cloud metadata, IPv4-mapped
+    'http://[::]/', // unspecified
+  ])('refuses the IPv6 address %s', (url) => {
+    expect(() => assertFetchableUrl(url)).toThrow(/private or link-local/);
+  });
+
   it.each(['file:///etc/passwd', 'data:text/html,hi', 'gopher://example.com/'])(
     'refuses the %s scheme',
     (url) => {
@@ -96,6 +132,68 @@ describe('assertFetchableUrl', () => {
 
   it('allows an ordinary public URL', () => {
     expect(assertFetchableUrl('https://example.com/essay').hostname).toBe('example.com');
+  });
+
+  // Public IPv6 must still work; a blocklist that refuses everything with a
+  // colon in it would be a different bug wearing the same fix.
+  it('allows a public IPv6 address', () => {
+    expect(() => assertFetchableUrl('http://[2606:4700:4700::1111]/')).not.toThrow();
+  });
+});
+
+describe('enum narrowing at the boundary', () => {
+  // Each of these values was actually sent to Postgres and rejected, failing
+  // every job that reached the step. TypeScript cannot catch a string that is
+  // invalid only in the database, so the narrowing is the check.
+  it('maps an unknown kind to a real work_kind', () => {
+    expect(asWorkKind('article')).toBe('essay');
+    expect(asWorkKind(undefined)).toBe('essay');
+    expect(asWorkKind('book')).toBe('book');
+    for (const kind of WORK_KINDS) expect(asWorkKind(kind)).toBe(kind);
+  });
+
+  it('maps an unknown rights status to review_required, never to a publishable one', () => {
+    expect(asRightsStatus('user_private')).toBe('review_required');
+    expect(asRightsStatus(undefined)).toBe('review_required');
+    expect(asRightsStatus('public_domain')).toBe('public_domain');
+    for (const status of RIGHTS_STATUSES) expect(asRightsStatus(status)).toBe(status);
+  });
+
+  it('never defaults an unrecognised rights claim to something publishable', () => {
+    // The direction of the failure is the point: an unknown claim must not
+    // become publishable by accident. `resolve_identity` refuses anything that
+    // is not public_domain or licensed.
+    expect(['public_domain', 'licensed']).not.toContain(asRightsStatus('totally-made-up'));
+  });
+});
+
+describe('the stub provider', () => {
+  /**
+   * "Runs with no API key" is a promise to every contributor cloning this repo.
+   * The stub returned an empty `pulls` array and `synthesize` rejects exactly
+   * that, so the documented no-key path failed at the step it was meant to
+   * prove.
+   */
+  it('returns at least one Pull, so the no-key path can reach publish', async () => {
+    const { summary } = await stubSummaryProvider.generateSummary({
+      workTitle: 'On Liberty',
+      kind: 'essay',
+      context: 'The only freedom which deserves the name is that of pursuing our own good.',
+    });
+
+    expect(summary.pulls.length).toBeGreaterThan(0);
+    expect(summary.pulls[0]?.headline).toContain('On Liberty');
+    expect(summary.pulls[0]?.body.length).toBeGreaterThan(0);
+  });
+
+  it('survives the check synthesize actually applies', async () => {
+    const { summary } = await stubSummaryProvider.generateSummary({
+      workTitle: 'A Work',
+      kind: 'essay',
+      context: '',
+    });
+    // The literal condition from `synthesize`.
+    expect(!summary.title || summary.pulls.length === 0).toBe(false);
   });
 });
 
@@ -140,6 +238,12 @@ describe('segment', () => {
 describe('reuse skips the paid work', () => {
   function harness(reuse: { workId: string; summaryId: string } | null) {
     const calls = { summary: 0, embedding: 0, createSummary: 0, insertPulls: 0 };
+    // What the fakes were handed, so the tests can assert on the values that
+    // actually reach Postgres rather than only on how often it was called.
+    const received: {
+      upsertWork?: { kind: string; rightsStatus: string };
+      createSummary?: { authorId: string | null; visibility: string };
+    } = {};
 
     const deps = {
       summary: {
@@ -156,6 +260,9 @@ describe('reuse skips the paid work', () => {
               pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }],
             },
             usage: { inputTokens: 1, outputTokens: 1, costCents: 1 },
+            // Deliberately not equal to `name`: a provider that fell back to a
+            // different model must be recorded as the model that answered.
+            model: 'fake-model-b',
           };
         },
       },
@@ -176,12 +283,17 @@ describe('reuse skips the paid work', () => {
         work_id: null,
         summary_id: null,
         visibility: 'private',
+        requester_id: 'reader-1',
       },
       db: {
         findPublishedSummaryByHash: async () => reuse,
-        upsertWork: async () => ({ workId: 'w1', existing: false }),
-        createSummary: async () => {
+        upsertWork: async (input: { kind: string; rightsStatus: string }) => {
+          received.upsertWork = input;
+          return { workId: 'w1', existing: false };
+        },
+        createSummary: async (input: { authorId: string | null; visibility: string }) => {
           calls.createSummary++;
+          received.createSummary = input;
           return 's1';
         },
         insertPulls: async () => {
@@ -193,7 +305,7 @@ describe('reuse skips the paid work', () => {
         attachSummaryToJob: async () => undefined,
       },
     };
-    return { deps, calls };
+    return { deps, calls, received };
   }
 
   it('calls no provider when the source is already summarised', async () => {
@@ -222,6 +334,92 @@ describe('reuse skips the paid work', () => {
     } as never);
 
     expect(calls.summary).toBe(1);
+  });
+
+  /**
+   * These four assert the values that reach Postgres, not the shape of the code.
+   *
+   * Every one of them was wrong in a way that type-checked, passed every existing
+   * test, and failed only against a real database — which is why the hosted
+   * project has zero completed generation jobs. A test that mocks the database
+   * cannot catch an invalid enum member unless it asserts the member.
+   */
+  it('writes a real work_kind, never the caller-supplied string', async () => {
+    const { deps, received } = harness(null);
+    // `article` is the natural thing to send for a URL and is not a work_kind.
+    const job = { ...deps.job, target: { text: 'x'.repeat(400), kind: 'article' } };
+
+    const identity = await runPipelineStep('resolve_identity', {
+      ...deps,
+      job,
+      priorOutputs: {},
+    } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+    const prior = { acquire: acquired.output, synthesize: SYNTHESIZED };
+    await runPipelineStep('template', { ...deps, job, priorOutputs: prior } as never);
+
+    expect(received.upsertWork?.kind).toBe('essay');
+    expect(WORK_KINDS).toContain(received.upsertWork?.kind);
+  });
+
+  it('writes a real rights_status, and defaults an unknown one to review_required', async () => {
+    const { deps, received } = harness(null);
+    const job = {
+      ...deps.job,
+      target: { text: 'x'.repeat(400), rights_status: 'user_private' },
+    };
+
+    const identity = await runPipelineStep('resolve_identity', {
+      ...deps,
+      job,
+      priorOutputs: {},
+    } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+
+    // Not `user_private`, which is not a member and was rejected by Postgres.
+    expect(received.upsertWork?.rightsStatus).toBe('review_required');
+    expect(RIGHTS_STATUSES).toContain(received.upsertWork?.rightsStatus);
+  });
+
+  it('assigns a private summary to the reader who asked for it', async () => {
+    const { deps, received } = harness(null);
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('template', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+
+    // Without this, `summary_is_readable` hides the result from the only person
+    // entitled to see it: the job succeeds and the requester gets nothing.
+    expect(received.createSummary?.visibility).toBe('private');
+    expect(received.createSummary?.authorId).toBe('reader-1');
+  });
+
+  it('records the model that answered, not the head of the provider chain', async () => {
+    const { deps } = harness(null);
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const synthesized = await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    expect(synthesized.model).toBe('fake-model-b');
+    expect(synthesized.provider).toBe('fake');
   });
 
   it('hashes the full source, so two long works sharing a prefix stay distinct', async () => {

@@ -69,7 +69,7 @@ async function runStep(jobId: string, step: Step): Promise<StepResult> {
   const job = must(
     await supabase
       .from('generation_jobs')
-      .select('id, kind, target, work_id, summary_id, visibility')
+      .select('id, kind, target, work_id, summary_id, visibility, requester_id')
       .eq('id', jobId)
       .single(),
     'read job',

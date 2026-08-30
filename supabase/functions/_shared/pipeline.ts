@@ -46,6 +46,76 @@ export interface JobRow {
   work_id: string | null;
   summary_id: string | null;
   visibility: string;
+  /** Who asked. Becomes `summaries.author_id`, which is what makes a private
+   *  summary readable by the person who requested it. */
+  requester_id: string | null;
+}
+
+/**
+ * Mirrors of the two Postgres enums this pipeline writes into.
+ *
+ * Written out rather than inferred because the failure they prevent is silent at
+ * every layer above the database: TypeScript accepts any string, PostgREST
+ * forwards it, and Postgres rejects the insert at the very end — after the
+ * expensive call has already been paid for. `article` and `user_private` both
+ * looked plausible and were both invalid, and each one failed every job that
+ * reached it.
+ *
+ * If either enum changes, these change in the same commit. That is the same rule
+ * `packages/db` already lives under.
+ */
+export const WORK_KINDS = [
+  'book',
+  'film',
+  'documentary',
+  'podcast',
+  'paper',
+  'essay',
+  'lecture',
+  'video',
+  'interview',
+  'other',
+] as const;
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+export const RIGHTS_STATUSES = [
+  'public_domain',
+  'licensed',
+  'user_owned',
+  'public_reference',
+  'community',
+  'review_required',
+] as const;
+export type RightsStatus = (typeof RIGHTS_STATUSES)[number];
+
+/**
+ * A fetched web page is an essay unless the caller says otherwise.
+ *
+ * The previous default was `article`, which is not a `work_kind` — so the most
+ * ordinary request there is, "summarise this URL", failed at `template` after
+ * paying for synthesis. `essay` is the member that actually describes prose
+ * making an argument, and `product.md` already gives it a section shape
+ * (Thesis · Evidence · Implications · Counterarguments).
+ */
+export const DEFAULT_WORK_KIND: WorkKind = 'essay';
+
+/** Narrow a caller-supplied kind, rather than trusting it as far as Postgres. */
+export function asWorkKind(value: unknown): WorkKind {
+  return WORK_KINDS.includes(value as WorkKind) ? (value as WorkKind) : DEFAULT_WORK_KIND;
+}
+
+/**
+ * Narrow a caller-supplied rights status.
+ *
+ * Unknown falls to `review_required` — the value that is explicitly not
+ * publishable. An unrecognised rights claim is precisely the case that must not
+ * quietly become a publishable one, and `resolve_identity` already refuses to
+ * publish anything that is not `public_domain` or `licensed`.
+ */
+export function asRightsStatus(value: unknown): RightsStatus {
+  return RIGHTS_STATUSES.includes(value as RightsStatus)
+    ? (value as RightsStatus)
+    : 'review_required';
 }
 
 /**
@@ -78,8 +148,9 @@ export interface PipelineDb {
   ): Promise<{ workId: string; summaryId: string } | null>;
   upsertWork(input: {
     title: string;
-    kind: string;
+    kind: WorkKind;
     contentHash: string;
+    rightsStatus: RightsStatus;
   }): Promise<{ workId: string; existing: boolean }>;
   createSummary(input: {
     workId: string;
@@ -87,8 +158,13 @@ export interface PipelineDb {
     elevatorPitch: string;
     whyItMatters: string;
     sections: unknown;
-    model: string;
     visibility: string;
+    /**
+     * The reader this was generated for. Null only for canonical content with no
+     * requester. `summary_is_readable` keys non-public access off this column, so
+     * it is not decoration — see `createSummary` in `db.ts`.
+     */
+    authorId: string | null;
   }): Promise<string>;
   /**
    * Returns each Pull with the ordinal it was written at.
@@ -162,6 +238,17 @@ export function extractText(html: string): string {
 /**
  * Hosts the worker must never be talked into fetching.
  *
+ * What this does NOT cover, stated plainly so nobody reads it as complete: a
+ * hostname that resolves to a private address. `evil.example.com` with an A
+ * record of `10.0.0.1` passes every check here, because the check is on the
+ * literal and the resolution happens inside `fetch`. Closing that needs the
+ * address resolved before connecting and the socket pinned to it, which Deno's
+ * `fetch` does not expose. Every redirect hop is re-checked, so the cheap
+ * version of the attack — a public URL that 302s to a private one — is covered;
+ * DNS rebinding is not. It is a real residual risk on an endpoint any signed-in
+ * reader can reach, and it belongs on the roadmap rather than in a comment
+ * claiming otherwise.
+ *
  * `acquire` follows a URL supplied by whoever created the job, and it runs
  * server-side holding a service-role key. Without this it is a confused deputy:
  * a job targeting `169.254.169.254` reaches cloud instance metadata, and one
@@ -169,8 +256,55 @@ export function extractText(html: string): string {
  * trust boundary. Neither needs a credential to be handed over — the worker
  * already has one.
  */
-const BLOCKED_HOST =
-  /^(?:localhost$|127\.|0\.0\.0\.0$|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|\[::1\]$|metadata\.google\.internal$)/i;
+const BLOCKED_HOST_V4 =
+  /^(?:localhost$|127\.|0\.0\.0\.0$|0\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|metadata\.google\.internal$)/i;
+
+/**
+ * The IPv6 half, which the v4 patterns above cannot express.
+ *
+ * Blocking only `::1` left every other way of naming a private address open:
+ * `fd00::1` is unique-local, `fe80::1` is link-local, and `::ffff:127.0.0.1`
+ * is loopback wearing an IPv6 spelling. Any of them reaches the private network
+ * from a worker holding a service-role key, and `acquire` writes what it fetched
+ * into `job_steps.output` — which the requester can read. That is exfiltration,
+ * not merely an unwanted request.
+ */
+function isBlockedIpv6(host: string): boolean {
+  // The WHATWG URL parser returns IPv6 hosts bracketed; the checks below are
+  // written against the bare address.
+  const bare = host.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!bare.includes(':')) return false;
+
+  // Loopback and unspecified. The parser has already collapsed the long forms —
+  // `0:0:0:0:0:0:0:1` arrives here as `::1`.
+  if (bare === '::1' || bare === '::') return true;
+
+  /*
+   * IPv4-mapped addresses, which do not survive parsing in the form they were
+   * written. `http://[::ffff:127.0.0.1]/` normalises to `::ffff:7f00:1` — the
+   * final two groups are the four IPv4 bytes in hex. Matching the dotted form
+   * alone therefore never fires, which is precisely the bug the tests caught:
+   * the check looked right and covered nothing.
+   */
+  const mappedHex = bare.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const high = Number.parseInt(mappedHex[1]!, 16);
+    const low = Number.parseInt(mappedHex[2]!, 16);
+    const dotted = [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
+    return BLOCKED_HOST_V4.test(dotted);
+  }
+  // The dotted spelling too, for any caller reaching this without a URL parse.
+  const mappedDotted = bare.match(/^::(?:ffff:)?((?:\d{1,3}\.){3}\d{1,3})$/);
+  if (mappedDotted?.[1]) return BLOCKED_HOST_V4.test(mappedDotted[1]);
+
+  const head = bare.split(':')[0] ?? '';
+  // fc00::/7 — unique local. Covers the fc.. and fd.. halves.
+  if (/^f[cd][0-9a-f]{0,2}$/.test(head)) return true;
+  // fe80::/10 — link local, which is where cloud metadata lives on IPv6.
+  if (/^fe[89ab][0-9a-f]?$/.test(head)) return true;
+
+  return false;
+}
 
 export function assertFetchableUrl(raw: string): URL {
   let url: URL;
@@ -183,7 +317,7 @@ export function assertFetchableUrl(raw: string): URL {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`acquire: refusing to fetch a ${url.protocol} URL`);
   }
-  if (BLOCKED_HOST.test(url.hostname)) {
+  if (BLOCKED_HOST_V4.test(url.hostname) || isBlockedIpv6(url.hostname)) {
     throw new Error(`acquire: refusing to fetch a private or link-local host (${url.hostname})`);
   }
   return url;
@@ -223,7 +357,10 @@ interface AcquireOutput {
   text: string;
   hash: string;
   title: string;
-  kind: string;
+  kind: WorkKind;
+  /** Carried forward from `resolve_identity` so `template` writes the status that
+   *  was actually validated, rather than re-deriving it from the raw target. */
+  rights: RightsStatus;
 }
 
 function asString(value: unknown, fallback = ''): string {
@@ -325,7 +462,11 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
      */
     case 'resolve_identity': {
       const target = job.target;
-      const kind = asString(target.kind, 'article');
+      // Narrowed to a real `work_kind` here, at the boundary, rather than passed
+      // through as whatever the caller typed. `template` writes this into
+      // `works.kind`, and an invalid value fails there — after synthesis has been
+      // paid for.
+      const kind = asWorkKind(target.kind);
       const text = asString(target.text);
       const url = asString(target.url);
       const title = asString(target.title, url || 'Untitled source');
@@ -338,10 +479,14 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       // now and the answer never changes. Leaving it until after synthesis meant
       // paying a provider, writing a summary and embedding every Pull for a job
       // that was always going to be refused at the last step.
-      const rights = asString(target.rights_status);
+      //
+      // An unset or unrecognised claim narrows to `review_required`, which is
+      // never publishable — so the default direction of any mistake here is to
+      // refuse, not to publish.
+      const rights = asRightsStatus(target.rights_status);
       if (job.visibility === 'public' && rights !== 'public_domain' && rights !== 'licensed') {
         throw new Error(
-          `resolve_identity: cannot publish a summary of a source with rights_status "${rights || 'unset'}"`,
+          `resolve_identity: cannot publish a summary of a source with rights_status "${asString(target.rights_status) || 'unset'}"`,
         );
       }
 
@@ -403,7 +548,8 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         text: kept,
         hash,
         title: asString(identity.title, 'Untitled source'),
-        kind: asString(identity.kind, 'article'),
+        kind: asWorkKind(identity.kind),
+        rights: asRightsStatus(identity.rights),
         truncated,
         ...(reuse ? { reuse } : {}),
       };
@@ -447,7 +593,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       const acquired = priorOutputs.acquire as AcquireOutput | undefined;
       if (!acquired?.text) throw new Error('synthesize: acquire produced no text');
 
-      const { summary, usage } = await deps.summary.generateSummary({
+      const { summary, usage, model } = await deps.summary.generateSummary({
         workTitle: acquired.title,
         kind: acquired.kind,
         context: acquired.text,
@@ -460,7 +606,13 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       return {
         output: summary,
         usage,
-        model: deps.summary.name,
+        // The model that actually answered, not the head of the chain. Gemini
+        // falls back between models mid-run — the newest Flash 503s under load
+        // often enough that the provider is built to retry down a list — and
+        // recording `deps.summary.name` would file every fallback run under
+        // "gemini". Provenance that is wrong exactly when something unusual
+        // happened is worse than none, because it is trusted.
+        model,
         provider: deps.summary.name,
       };
     }
@@ -492,6 +644,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         title: summary.title || acquired.title,
         kind: acquired.kind,
         contentHash: acquired.hash,
+        rightsStatus: acquired.rights,
       });
 
       const summaryId = await db.createSummary({
@@ -500,8 +653,13 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         elevatorPitch: summary.elevatorPitch,
         whyItMatters: summary.whyItMatters,
         sections: { elevatorPitch: summary.elevatorPitch, whyItMatters: summary.whyItMatters },
-        model: deps.summary.name,
         visibility: job.visibility,
+        // Model provenance is deliberately not stored here. `summaries` has no
+        // `model` column, and inventing one would duplicate what `job_steps`
+        // already records per step — which is the granularity a bad summary has
+        // to be traced at anyway, since twelve steps and several models
+        // contribute to one row. See docs/generation.md.
+        authorId: job.requester_id,
       });
       await db.attachSummaryToJob(job.id, summaryId, workId);
       return { output: { workId, summaryId, reused: false } };
