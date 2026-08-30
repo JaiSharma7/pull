@@ -80,6 +80,17 @@ parallel safe
 set search_path = ''
 as $$ select 0.7::double precision $$;
 
+create function public.known_comparison_cap()
+returns int
+language sql
+immutable
+parallel safe
+set search_path = ''
+as $$ select 500 $$;
+
+comment on function public.known_comparison_cap() is
+  'How many of the reader''s known ideas the Delta compares a candidate against, most retrievable first. Bounds the read path; both the feed and the source delta must use the same number or they disagree about how much someone knows.';
+
 comment on function public.known_retrievability_floor() is
   'Retrievability above which the reader is treated as still knowing an idea. One definition of "knows", shared by the feed, the Delta and the source delta.';
 
@@ -123,7 +134,6 @@ declare
   excluded text[] := '{}';
   media    public.work_kind[];
   uvec     extensions.vector(1536);
-  known_cap constant int := 500;
   shortlist_size int;
   pool_size int;
   result   jsonb;
@@ -150,77 +160,52 @@ begin
     where uid is not null and ks.user_id = uid and p2.embedding is not null
       and public.retrievability(ks.stability, ks.last_seen_at)
           > public.known_retrievability_floor()
-    order by public.retrievability(ks.stability, ks.last_seen_at) desc
-    limit known_cap
+    -- pull_id breaks ties: retrievability is equal for everything read in the
+    -- same batch, and without a tiebreak which rows survive the cap is
+    -- plan-dependent, so a reader's Delta count could move with no data change.
+    order by public.retrievability(ks.stability, ks.last_seen_at) desc, ks.pull_id
+    limit public.known_comparison_cap()
   ),
-  -- Both directions: the primary key is (from_pull_id, to_pull_id, kind), so
-  -- opposition is stored directionally. The seed writes both rows, but nothing
-  -- enforces that, and a one-sided edge must still work.
+  -- Edges where the reader knows one endpoint. Both directions, because the
+  -- primary key is (from_pull_id, to_pull_id, kind) and opposition is stored
+  -- directionally -- the seed writes both rows, nothing enforces it, and a
+  -- one-sided edge must still work. UNION rather than UNION ALL: the two stored
+  -- directions of one opposition would otherwise drive this join twice.
   --
-  -- Joined to known_ideas rather than scanned whole. That is correctness, not
-  -- optimisation: dropping an idea from the comparison because the candidate
-  -- opposes it only makes sense if the reader actually knows it. It is also far
-  -- cheaper, since the unrestricted form re-probes every `opposes` edge in the
-  -- graph for every candidate.
-  opposed_direct as materialized (
+  -- Restricted to known_ideas, which is correctness rather than optimisation:
+  -- dropping an idea from the comparison because the candidate opposes it only
+  -- makes sense if the reader actually knows it.
+  --
+  -- EDGE-EXACT, DELIBERATELY. An earlier version widened this set to anything
+  -- within the threshold of an opposed idea, on the reasoning that a reader
+  -- knows a claim through several restatements while only one carries an edge.
+  -- That was unsound twice over. Distance cannot tell a restatement from a
+  -- contradiction -- the whole premise of this migration -- so the widening
+  -- swept in ideas that OPPOSE the opposed one, and a reader holding both sides
+  -- of a debate had both removed from their comparison and was served an idea
+  -- they already held as maximally novel. Gating the widening on an `opposes`
+  -- edge does not rescue it: the widening exists because edges are sparse, and
+  -- the gate reads a missing edge as "not opposed". Both cannot be true of the
+  -- same graph, and with today's corpus -- one seeded pair, nothing generating
+  -- more -- the gate would essentially never fire.
+  --
+  -- So the exclusion removes only what a candidate is annotated as opposing.
+  -- That is incomplete: a reader who knows a claim through an unannotated
+  -- restatement still has the contradiction hidden. But incomplete fails the
+  -- way the old behaviour already failed, whereas the widening failed by
+  -- serving known ideas as novel and could hide a contradiction outright.
+  -- Closing the gap needs edges dense enough to describe claims rather than
+  -- pulls, which is relation extraction's job.
+  opposed_pairs as materialized (
     select pr.from_pull_id as candidate, ki.pull_id as known
     from public.pull_relations pr
     join known_ideas ki on ki.pull_id = pr.to_pull_id
     where pr.kind = 'opposes'
-    union all
+    union
     select pr.to_pull_id as candidate, ki.pull_id as known
     from public.pull_relations pr
     join known_ideas ki on ki.pull_id = pr.from_pull_id
     where pr.kind = 'opposes'
-  ),
-  -- Opposition propagates through paraphrase, and it has to.
-  --
-  -- Edges are annotated between two specific pulls, but a reader does not know
-  -- pulls -- they know claims, often via several restatements. Someone who has
-  -- read twenty phrasings of "spacing improves retention" and one contradiction
-  -- of it carries exactly one `opposes` edge; the other nineteen are still
-  -- 0.06 away and would keep the contradiction covered on proximity alone. The
-  -- exclusion would then work only for readers who barely know the topic, and
-  -- fail precisely for the ones with a real stake in the disagreement.
-  --
-  -- So an idea is excluded when it is opposed OR when it is a restatement of
-  -- something opposed. This leans on the one thing the vectors ARE reliable at
-  -- -- 0.0987 for "same idea, reworded" -- to repair the one thing they are
-  -- not, and it reuses the same threshold rather than inventing a second.
-  -- k2 includes k1 at distance 0, so this subsumes the direct set.
-  --
-  -- The `not exists` is load-bearing, and leaving it out was a real bug caught
-  -- in review. Widening by distance alone re-imports the exact blindness this
-  -- migration exists to fix: a claim and its contradiction are ALSO inside the
-  -- threshold, so an opposed k2 would be swept in as though it were a
-  -- restatement. For the reader who knows BOTH sides of a debate -- the
-  -- Conviction Ledger reader, the person this feature is for -- that excluded
-  -- both sides, left nothing to compare against, and served an idea they
-  -- already hold as maximally novel.
-  --
-  -- The gate is exact-pair, and the propagation it guards is transitive, so it
-  -- does not close the case one hop out: a paraphrase of an opposing known idea
-  -- that carries no edge of its own is still swept in. Closing that needs the
-  -- edges to be dense enough to describe claims rather than pulls, which is
-  -- relation extraction's job, not this migration's. Recorded rather than
-  -- half-built -- and the residual is strictly smaller than the bug it replaces,
-  -- since it needs a second unannotated restatement to appear at all.
-  --
-  -- DISTINCT because opposition is stored in both directions, so every
-  -- symmetric pair would otherwise enter this set twice.
-  opposed_pairs as materialized (
-    select distinct od.candidate, k2.pull_id as known
-    from opposed_direct od
-    join known_ideas k1 on k1.pull_id = od.known
-    join known_ideas k2
-      on (k1.embedding OPERATOR(extensions.<=>) k2.embedding)
-         < public.delta_covered_distance()
-     and not exists (
-       select 1 from public.pull_relations pr2
-       where pr2.kind = 'opposes'
-         and ((pr2.from_pull_id = k1.pull_id and pr2.to_pull_id = k2.pull_id)
-           or (pr2.from_pull_id = k2.pull_id and pr2.to_pull_id = k1.pull_id))
-     )
   ),
   -- Cheap signals only: no knowledge lookup and no vector maths, so this is the
   -- one stage that may touch the whole catalogue.
@@ -392,21 +377,11 @@ begin
                               'new', coalesce(total, 0), 'minutesSaved', 0);
   end if;
 
-  -- Capped, like get_feed's. Two reasons, and the second is new here.
-  --
-  -- The functions disagreed about how much a reader "knows": get_feed has always
-  -- bounded this at 500 by retrievability and this one bounded nothing, so a
-  -- source page and a feed page could give different answers about the same
-  -- reader. That was survivable while the comparison was linear.
-  --
-  -- It stops being survivable with the paraphrase join below, which is
-  -- |opposed_direct| x |known_ideas| cosine comparisons with no index to serve
-  -- it. Uncapped that is quadratic in the reader's whole history -- measured at
-  -- 327-423ms for 8,000 known ideas and 300 edges, on a function reachable from
-  -- every source page with no rate limit. The cap makes this constant in the
-  -- reader's history -- it does not bound `opposed_direct`, which still grows
-  -- with how many `opposes` edges touch the known set, so degree is the
-  -- dimension left to watch once relation extraction starts writing them.
+  -- Capped, like get_feed's. The two functions disagreed about how much a
+  -- reader "knows" -- get_feed has always bounded this and this one bounded
+  -- nothing -- so the same reader could get different answers from a source
+  -- page and a feed page. Uncapped it is also linear in a whole reading
+  -- history on a function every source page calls.
   with known_ideas as (
     select ks.pull_id, p2.embedding
     from public.knowledge_states ks
@@ -415,37 +390,20 @@ begin
       and p2.embedding is not null
       and public.retrievability(ks.stability, ks.last_seen_at)
           > public.known_retrievability_floor()
-    order by public.retrievability(ks.stability, ks.last_seen_at) desc
-    limit 500
+    order by public.retrievability(ks.stability, ks.last_seen_at) desc, ks.pull_id
+    limit public.known_comparison_cap()
   ),
-  -- Same two stages as get_feed, and for the same reasons: restricted to what
-  -- the reader knows, then widened to restatements of it.
-  opposed_direct as materialized (
+  -- The same edge-exact exclusion as get_feed; the reasoning is in the header.
+  opposed_pairs as materialized (
     select pr.from_pull_id as candidate, ki.pull_id as known
     from public.pull_relations pr
     join known_ideas ki on ki.pull_id = pr.to_pull_id
     where pr.kind = 'opposes'
-    union all
+    union
     select pr.to_pull_id as candidate, ki.pull_id as known
     from public.pull_relations pr
     join known_ideas ki on ki.pull_id = pr.from_pull_id
     where pr.kind = 'opposes'
-  ),
-  -- The same propagation and the same gate as get_feed; the reasoning is in the
-  -- header and is not repeated here.
-  opposed_pairs as materialized (
-    select distinct od.candidate, k2.pull_id as known
-    from opposed_direct od
-    join known_ideas k1 on k1.pull_id = od.known
-    join known_ideas k2
-      on (k1.embedding OPERATOR(extensions.<=>) k2.embedding)
-         < public.delta_covered_distance()
-     and not exists (
-       select 1 from public.pull_relations pr2
-       where pr2.kind = 'opposes'
-         and ((pr2.from_pull_id = k1.pull_id and pr2.to_pull_id = k2.pull_id)
-           or (pr2.from_pull_id = k2.pull_id and pr2.to_pull_id = k1.pull_id))
-     )
   ),
   candidates as (
     select p.id, p.embedding, p.estimated_read_seconds,

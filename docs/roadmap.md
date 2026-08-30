@@ -129,19 +129,24 @@ Three things that building it changed:
   planner ignores them, and at a few thousand relations it switches to an index-only scan
   and `kind` disappears from `Filter`. Not yet a committed check — the plan shape would
   fit `db:test` and belongs there before it is quoted as fact.
-- **Propagating opposition through paraphrase has to be gated by the relation, not by
-  distance.** The first version widened the exclusion set to everything within the
-  threshold of an opposed idea — which is the same blindness one level up, since a
-  contradiction is inside that threshold too. For a reader holding _both_ sides of a
-  debate it excluded both, leaving nothing to compare against, and served an idea they
-  already held as maximally novel. Caught in review, not by the tests that existed at the
-  time; `delta_negation.sql` now has the case, and it fails without the gate.
+- **Widening the exclusion through paraphrase is unsound, and no gate rescues it.** A
+  reader knows a _claim_, usually through several phrasings, while only one carries an
+  `opposes` edge — so the exclusion was widened to anything within the threshold of an
+  opposed idea. That is the same blindness one level up: a contradiction is inside that
+  threshold too, so the widening also dropped ideas the candidate _agreed_ with, and a
+  reader holding both sides of a debate was served an idea they already held as maximally
+  novel. Gating the widening on an `opposes` edge looked like the fix and is not: the
+  widening exists _because_ edges are sparse, and the gate reads a missing edge as "not
+  opposed". Both cannot be true of the same graph, and at ~0% annotation coverage the gate
+  would essentially never fire. Two reviewers reproduced it independently, from different
+  fixtures.
 
-  The gate is exact-pair and the propagation is transitive, so one hop remains open: a
-  paraphrase of an opposing known idea that carries no edge of its own is still swept in.
-  Closing it needs edges dense enough to describe claims rather than pulls — relation
-  extraction's job. The residual is strictly smaller than the bug it replaces, since it
-  takes a second unannotated restatement to appear at all.
+  So exclusion is edge-exact. That is **incomplete** — a reader who knows an unannotated
+  restatement still has the contradiction hidden — and `delta_negation.sql` asserts the
+  limitation rather than papering over it, so the day it stops holding somebody has to
+  make a decision. Incomplete fails the way the old Delta already failed; the widening
+  failed by serving known ideas as novel, which is a new way to be wrong. Closing it needs
+  edges dense enough to describe claims rather than pulls — relation extraction's job.
 
 - **The two Delta functions disagreed about how much a reader knows.** `get_feed` has
   always capped the known set at 500 by retrievability; `get_source_delta` capped nothing,

@@ -210,40 +210,7 @@ begin
       'counted as a saving is a false claim in the banner.', skipped, skipped_blank;
   end if;
 
-  -- ------------- 3. it survives a reader who knows the claim several ways
-  -- The edge names two pulls, but a reader knows a CLAIM, usually through more
-  -- than one phrasing. Give this reader a second restatement of Mill carrying
-  -- no edge of its own: on proximity alone it would re-cover the contradiction,
-  -- and the exclusion would then work only for readers who barely know the
-  -- topic and fail for the ones with a stake in the disagreement.
-  --
-  -- Opposition therefore propagates through paraphrase, and this is the
-  -- assertion that holds it there.
-  perform set_config('role', 'postgres', true);
-  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
-  values (reader_knows, mill_echo_id, 100, now());
-  update public.pulls set embedding = (select embedding from public.pulls where id = mill_id)
-  where id = mill_echo_id;
-
-  perform set_config('role', 'authenticated', true);
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = thoreau_id
-  ) into present;
-
-  if not present then
-    raise exception
-      'the contradiction was re-covered by a restatement. The reader knows Mill '
-      'AND a paraphrase of Mill; only the first carries an `opposes` edge. '
-      'Opposition must propagate through paraphrase, or this fix only works for '
-      'readers who barely know the topic.';
-  end if;
-
-  -- ------------------------------------------ 4. get_source_delta agrees
+  -- ------------------------------------------ 3. get_source_delta agrees
   -- The same rule has to hold on a source page, which counts rather than ranks.
   perform set_config('request.jwt.claims',
     json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
@@ -255,6 +222,55 @@ begin
     raise exception
       'get_source_delta counted a contradiction as known: %. The reader knows '
       'nothing in Walden -- only an idea that the Walden pull opposes.', delta;
+  end if;
+
+  -- A mutant that deleted this function's exclusion used to leave the suite
+  -- green, because every other assertion here only exercises get_feed and the
+  -- two carry near-identical SQL. Pin the reported shape as well as the count,
+  -- so the source page has an assertion of its own that bites.
+  if (delta ->> 'new')::int <> 1 or (delta ->> 'total')::int <> 1 then
+    raise exception
+      'get_source_delta should report the single Walden pull as new: %', delta;
+  end if;
+
+  -- ------------------------------------------ 4. the limitation, on purpose
+  -- Recorded as an assertion rather than a comment, because it is the boundary
+  -- of what this fix claims and the next person will want to know it is known.
+  --
+  -- The reader holds a SECOND phrasing of Mill that carries no `opposes` edge
+  -- of its own. Exclusion is edge-exact, so that phrasing still covers the
+  -- contradiction and it disappears again. An earlier design widened the
+  -- exclusion by distance to catch this; it was removed because distance cannot
+  -- tell a restatement from a contradiction, so the widening also dropped ideas
+  -- the candidate AGREED with and served them as novel. Incomplete beats wrong:
+  -- this fails the way the old Delta already failed, rather than inventing a
+  -- new way to mislead.
+  --
+  -- Relation extraction is what closes it, by annotating claims rather than
+  -- pulls. When it does, this assertion should be inverted.
+  perform set_config('role', 'postgres', true);
+  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
+  values (reader_knows, mill_echo_id, 100, now());
+  update public.pulls set embedding = (select embedding from public.pulls where id = mill_id)
+  where id = mill_echo_id;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+
+  select exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r ->> 'id')::uuid = thoreau_id
+  ) into present;
+
+  if present then
+    raise exception
+      'the known limitation no longer holds: a contradiction survived a reader '
+      'who knows an unannotated restatement of the opposed idea. If exclusion '
+      'was deliberately widened, invert this assertion -- and make sure the '
+      'widening cannot drop ideas the candidate agrees with.';
   end if;
 
   -- ----------------------------------- 5. control: the edge is what does it

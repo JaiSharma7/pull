@@ -52,7 +52,11 @@ BEGIN
 END $$;
 
 -- 3. Every foreign key must be supported by an index whose leading column is
---    the first column of the constraint.
+--    the first column of the constraint, and which covers the whole table. A
+--    PARTIAL index does not: it serves only the rows matching its predicate, so
+--    accepting one here would let a FK look supported while the rows outside
+--    the predicate still sequential-scan. Noticed when this repo gained its
+--    first partial indexes, one of which leads with a FK column.
 DO $$
 DECLARE
   offenders text;
@@ -67,6 +71,7 @@ BEGIN
       FROM pg_index i
       WHERE i.indrelid = con.conrelid
         AND i.indkey[0] = con.conkey[1]
+        AND i.indpred IS NULL
     );
 
   IF offenders IS NOT NULL THEN
