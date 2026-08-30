@@ -44,6 +44,75 @@ sizing axis is the reason it is here: it holds up at both 42px headline and 14px
 4. `border-radius` ≤ 4px on cards. Candy rounding is precisely the look we avoid.
 5. Colour is never the only signal.
 6. No hardcoded hex outside `tokens.css`.
+7. **The session has visible edges.** See below — this is the law that separates the
+   product from a feed, so it constrains layout as hard as the others constrain colour.
+
+## The viewport
+
+### Law 7 — a session must show its bounds
+
+Shorts and Reels are the anti-pattern, and they are engineered rather than careless.
+They go full-bleed, hide every piece of chrome, and keep the next item already sliding
+into frame. The reader is never shown how much is left, because there is no "left" — the
+runway is infinite by construction, and that is the whole mechanism.
+
+This product's claim is the opposite: _enough for today_. A bounded sitting that ends,
+with a number attached to what it was worth. That claim is not made by copy, it is made
+by layout. So:
+
+- **Never full-bleed.** The reading column stays at `--measure` at every screen size.
+  Extra width buys structure and peripheral context; it never buys a longer line.
+- **The rails stay on screen** above 60rem. They _are_ the edges. What they show — what
+  this session has done, what the Delta spared you — is the visible evidence that a
+  session is a finite thing.
+- **Never slide the next card into frame.** Advancing is the reader's act.
+- **The end is a screen, not an absence.** `Enough` exists because a feed that merely
+  runs out of content has told the reader nothing.
+
+A useful test: if a screenshot of this app could be mistaken for a video feed with the
+sound off, the layout is wrong.
+
+### Dimensions adapt to the machine, continuously
+
+A reader on a Surface Laptop, a MacBook and a 27-inch monitor should each get a layout
+proportioned for what they actually have — not one of three fixed layouts chosen by
+whichever breakpoint they happen to fall past.
+
+Three things vary, and only one of them used to be considered.
+
+```
+                width           height        density
+                ─────           ──────        ───────
+16:9 laptop     1920            1080          scaling 100–125%
+Surface 3:2     1504 @150%      1002          scaling 150–200%, so CSS px
+                1128 @200%       752          differ by 33% on the SAME screen
+MacBook 16:10   1512             982
+27" monitor     2560            1440
+```
+
+- **Width** was handled, but in two jumps. The rails are now `clamp()`ed, so a 70rem
+  window is proportioned for 70rem instead of for 60. The reading column is exempt on
+  purpose: it is the one dimension that must not respond.
+- **Height** was not considered at all. Every rule keyed on width alone, which silently
+  assumes 16:9. A 3:2 Surface at 200% scaling has just 47rem of height, and that is
+  where a card, its rails and the tally stop fitting together. Under 48rem the vertical
+  rhythm tightens and display type drops a step — spacing gives, context never does.
+- **Density** belongs to the reader, and is why the type scale is `clamp(rem + vw, …)`
+  rather than pure `vw`. A pure viewport scale ignores an OS or browser font-size
+  preference completely; keeping a `rem` term means a reader who has asked for larger
+  text still gets it. This matters more here than in most products, because Windows
+  laptops ship at 150% scaling by default and the reader usually did not choose it.
+
+Consequences, and they are not optional:
+
+- Type is a fluid scale, never fixed steps. A window dragged from 1000px to 1400px
+  should change continuously rather than stay still and then jump.
+- Use `dvh`/`svh`, never `vh`. Mobile browser chrome makes `vh` taller than the visible
+  area, which puts primary actions underneath the address bar.
+- Test at 375×667, **1128×752** (Surface at 200%), 1504×1002 (Surface at 150%) and
+  1920×1080. The second is the tight one, and the one most likely to be skipped.
+- A new fixed `rem` dimension inside a layout rule is a smell. Ask what it should be
+  proportional to before writing it.
 
 ## Card anatomy
 

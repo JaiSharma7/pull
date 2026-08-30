@@ -308,8 +308,23 @@
  * the one thing this layout exists to protect.
  */
 @media (min-width: 60rem) {
+  /*
+   * The rails absorb the extra width; the reading column never does.
+   *
+   * These were two fixed steps — 12/15rem, jumping to 15/19rem at 88rem — so every
+   * window between 60 and 88rem got furniture sized for the narrowest of them. A
+   * Surface Laptop at 200% scaling is 70.5rem wide and was styled as though it were
+   * 60. `clamp` lets the rails take up the slack continuously instead of at one jump.
+   *
+   * The middle track stays `minmax(0, 1fr)` and the column inside it stays pinned to
+   * --measure at every width. That is the point of the whole layout: extra pixels buy
+   * structure and peripheral context, never a longer line.
+   */
   .shell__body {
-    grid-template-columns: 12rem minmax(0, 1fr) 15rem;
+    grid-template-columns:
+      clamp(12rem, 9rem + 5vw, 16rem)
+      minmax(0, 1fr)
+      clamp(15rem, 11rem + 6.5vw, 20rem);
   }
 
   .shell__rail,
@@ -331,9 +346,36 @@
   }
 }
 
-@media (min-width: 88rem) {
-  .shell__body {
-    grid-template-columns: 15rem minmax(0, 1fr) 19rem;
+/*
+ * Height is a budget too, and nothing here was spending it.
+ *
+ * Every rule in this file keyed on width alone, which assumes a 16:9 laptop. A
+ * Surface Laptop is 3:2 and a MacBook 16:10, so two machines of the same width can
+ * differ by hundreds of vertical pixels — and the short one is where a card, its
+ * rails and the session tally stop fitting together.
+ *
+ * Under 48rem of height the vertical rhythm tightens and the display sizes come down
+ * a step. This is the opposite of what a video feed does: Reels reclaims a short
+ * viewport by going full-bleed and hiding its chrome, because its goal is to remove
+ * any sense of an edge. Ours is to keep the edges visible, so what gives is the
+ * spacing, never the context.
+ */
+@media (max-height: 48rem) and (min-width: 60rem) {
+  .shell__rail,
+  .shell__aside {
+    padding-block: var(--space-4);
+  }
+
+  .shell__group + .shell__group {
+    margin-top: var(--space-4);
+  }
+
+  .titlepage {
+    padding-block: var(--space-5);
+  }
+
+  .titlepage__title {
+    font-size: var(--step-3);
   }
 }
 
