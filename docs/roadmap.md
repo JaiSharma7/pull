@@ -39,9 +39,32 @@ query).
 
 ## Round 2 — generation
 
-Wire the step-machine to real providers. Canonical summary pipeline, claim anchors,
-generated cards, hero artwork, cost ledger reporting, rate limiting, and private
-user generation in the Pull Studio. **The only round that needs API keys.**
+### Deployment ✅
+
+The app and the step-machine are live. What that took, so it is repeatable:
+
+- `vercel.json` configures the monorepo build; `apps/web/.env.production` carries the
+  publishable key and project URL, so a deploy needs no dashboard step.
+- All three Edge Functions are deployed. `worker` runs with `verify_jwt` off and
+  authenticates the dispatcher itself — see `supabase/functions/README.md`.
+- `enable_generation_dispatcher_with_token` mints a token into Vault and schedules
+  `pg_cron` every 10s, so turning generation on never requires reading the service_role
+  key out of the dashboard.
+- Verified end to end: a job walked all twelve steps to `succeeded`, wrote twelve
+  `job_steps` rows and three `cost_ledger` rows (the three provider steps), and the worker
+  returns 401 to a request with no token or a wrong one.
+
+One deviation from law 5's spirit worth recording: `pnpm build` never worked on a cold
+checkout (`TS6310` — `--noEmit` in `tsc -b` applies to referenced composite projects).
+CI hid it because its typecheck job runs first and warms the graph. Fixed, and CI's
+`pnpm build` is now a real check rather than a cached no-op.
+
+### Still to do
+
+Wire the step-machine to real providers — the Gemini key is in Vault and reachable
+through `generation_secret`, but `runStep` still calls stubs and writes no content.
+Canonical summary pipeline, claim anchors, generated cards, hero artwork, cost ledger
+reporting, rate limiting, and private user generation in the Pull Studio.
 
 Then public-domain ingest workers — Gutenberg, arXiv, Wikisource, open-access journals —
 to grow the corpus without rights exposure.
