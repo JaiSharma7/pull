@@ -1780,6 +1780,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
       plan_interleave: {
         Args: {
           p_cards_before?: number
@@ -1816,6 +1817,7 @@ export type Database = {
           p_input_tokens: number
           p_job_id: string
           p_model: string
+          p_output?: Json
           p_output_tokens: number
           p_prompt_version: string
           p_provider: string
