@@ -286,7 +286,7 @@ describe('reuse skips the paid work', () => {
         requester_id: 'reader-1',
       },
       db: {
-        findPublishedSummaryByHash: async () => reuse,
+        findPublishedSummaryByHash: async (_hash: string, _requesterId: string | null) => reuse,
         upsertWork: async (input: { kind: string; rightsStatus: string }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
@@ -407,6 +407,78 @@ describe('reuse skips the paid work', () => {
     // entitled to see it: the job succeeds and the requester gets nothing.
     expect(received.createSummary?.visibility).toBe('private');
     expect(received.createSummary?.authorId).toBe('reader-1');
+  });
+
+  /**
+   * Reuse is the cost argument, but it can only reuse what the requester could
+   * read. Summaries are published with the job's visibility, which defaults to
+   * private — so matching on `status = 'published'` alone handed the second
+   * submitter of a source the first submitter's private summary, skipped the
+   * paid work, and reported success on a result `summary_is_readable` then
+   * refused to show them.
+   */
+  describe('reuse respects who may read the summary', () => {
+    function lookupWith(
+      summaries: { id: string; status: string; visibility: string; author_id: string | null }[],
+    ) {
+      // Mirrors the predicate in db.ts against the same row shapes PostgREST
+      // returns, so the rule is asserted rather than the query string.
+      return (requesterId: string | null) =>
+        summaries.find(
+          (s) =>
+            s.status === 'published' &&
+            (s.visibility === 'public' || (s.author_id !== null && s.author_id === requesterId)),
+        ) ?? null;
+    }
+
+    it('reuses a public summary for anyone', () => {
+      const find = lookupWith([
+        { id: 's-pub', status: 'published', visibility: 'public', author_id: 'someone-else' },
+      ]);
+      expect(find('reader-2')?.id).toBe('s-pub');
+      expect(find(null)?.id).toBe('s-pub');
+    });
+
+    it('does not hand one reader another reader’s private summary', () => {
+      const find = lookupWith([
+        { id: 's-priv', status: 'published', visibility: 'private', author_id: 'reader-1' },
+      ]);
+      // The bug: this used to return s-priv, and the job succeeded with a
+      // result the requester could not open.
+      expect(find('reader-2')).toBeNull();
+    });
+
+    it('does reuse a reader’s own earlier private summary', () => {
+      const find = lookupWith([
+        { id: 's-priv', status: 'published', visibility: 'private', author_id: 'reader-1' },
+      ]);
+      expect(find('reader-1')?.id).toBe('s-priv');
+    });
+
+    it('ignores a draft even when it is public', () => {
+      const find = lookupWith([
+        { id: 's-draft', status: 'draft', visibility: 'public', author_id: null },
+      ]);
+      expect(find('reader-1')).toBeNull();
+    });
+  });
+
+  it('passes the requester into the reuse lookup', async () => {
+    let sawRequester: string | null | undefined;
+    const { deps } = harness(null);
+    const spied = {
+      ...deps,
+      db: {
+        ...deps.db,
+        findPublishedSummaryByHash: async (_hash: string, requesterId: string | null) => {
+          sawRequester = requesterId;
+          return null;
+        },
+      },
+    };
+
+    await runPipelineStep('acquire', { ...spied, priorOutputs: {} } as never);
+    expect(sawRequester).toBe('reader-1');
   });
 
   it('records the model that answered, not the head of the provider chain', async () => {

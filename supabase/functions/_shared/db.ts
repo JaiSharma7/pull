@@ -26,7 +26,7 @@ function must<T>(result: { data: T; error: unknown }, what: string): T {
 
 export function createPipelineDb(supabase: Db): PipelineDb {
   return {
-    async findPublishedSummaryByHash(contentHash) {
+    async findPublishedSummaryByHash(contentHash, requesterId) {
       // `works.content_hash` is the canonical identity of a source. Joining
       // through to a published summary in one query keeps the reuse decision to
       // a single round trip, because it sits directly in front of the only
@@ -34,16 +34,43 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       const rows = must(
         await supabase
           .from('works')
-          .select('id, summaries(id, status)')
+          .select('id, summaries(id, status, visibility, author_id)')
           .eq('content_hash', contentHash)
           .limit(1),
         'find published summary by hash',
-      ) as { id: string; summaries: { id: string; status: string }[] | null }[] | null;
+      ) as
+        | {
+            id: string;
+            summaries:
+              { id: string; status: string; visibility: string; author_id: string | null }[] | null;
+          }[]
+        | null;
 
       const work = rows?.[0];
       if (!work) return null;
-      const published = (work.summaries ?? []).find((s) => s.status === 'published');
-      return published ? { workId: work.id, summaryId: published.id } : null;
+
+      /*
+       * Reuse only what this requester could actually read.
+       *
+       * Summaries are published with the job's visibility, which defaults to
+       * `private`. Matching on `status = 'published'` alone meant the second
+       * person to submit a given source adopted the first person's private
+       * summary: the job skipped synthesis, reported success, and produced a
+       * result `summary_is_readable` then refused to show them. A job that
+       * succeeds and returns nothing is worse than one that fails, because
+       * nothing anywhere records that something went wrong.
+       *
+       * This does not weaken the cost argument in law 2. What amortises across
+       * thousands of readers is the *public* canonical summary, and that is
+       * exactly the branch still taken here; a private summary was never
+       * shareable, so declining to share it costs nothing that was ever real.
+       */
+      const reusable = (work.summaries ?? []).find(
+        (s) =>
+          s.status === 'published' &&
+          (s.visibility === 'public' || (s.author_id !== null && s.author_id === requesterId)),
+      );
+      return reusable ? { workId: work.id, summaryId: reusable.id } : null;
     },
 
     async upsertWork({ title, kind, contentHash, rightsStatus }) {

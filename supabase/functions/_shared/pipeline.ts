@@ -143,8 +143,16 @@ export interface PipelineDb {
    * "has this exact source already been summarised" only saves money if it can
    * be asked before the expensive call, not after it.
    */
+  /**
+   * `requesterId` is not optional and is not for filtering convenience: reuse
+   * must be limited to what this requester could read, or the job adopts a
+   * summary it cannot show them. Public summaries are reusable by anyone —
+   * which is the case the economics actually rest on — and a reader's own
+   * private summaries are reusable by that reader.
+   */
   findPublishedSummaryByHash(
     contentHash: string,
+    requesterId: string | null,
   ): Promise<{ workId: string; summaryId: string } | null>;
   upsertWork(input: {
     title: string;
@@ -532,7 +540,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        * provider is called. Asked afterwards — where it used to be — a duplicate
        * request still paid in full and then discarded the result.
        */
-      const reuse = await db.findPublishedSummaryByHash(hash);
+      const reuse = await db.findPublishedSummaryByHash(hash, job.requester_id);
       if (reuse) await db.attachSummaryToJob(job.id, reuse.summaryId, reuse.workId);
 
       // Truncated rather than refused: a long work still produces a useful

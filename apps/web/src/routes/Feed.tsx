@@ -82,6 +82,18 @@ export function Feed({
   const [offline, setOffline] = useState(false);
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
+  /**
+   * Saves made *in this session*, which is not the size of `saved`.
+   *
+   * `saved` is the reader's whole persistent library — `fetchSavedPullIds`
+   * loads every id so cards render with the right state. Reporting its size
+   * under "This session" credited a returning reader with all of it before they
+   * had done anything, which is the one kind of number this product must not
+   * inflate: the rail exists to say what this sitting was worth, and a counter
+   * that starts at 200 says nothing at all. Its siblings `read` and `recalled`
+   * both start at zero; this now matches them.
+   */
+  const [savedThisSession, setSavedThisSession] = useState(0);
   /** Interrupt slots already answered or skipped, so they are not shown twice. */
   const [handledSlots, setHandledSlots] = useState<Set<string>>(new Set());
   const seenRef = useRef<Set<string>>(new Set());
@@ -92,12 +104,12 @@ export function Feed({
   useEffect(() => {
     onStats?.({
       read: readCount,
-      saved: saved.size,
+      saved: savedThisSession,
       recalled,
       skippedKnown: feed?.skippedKnownCount ?? 0,
       minutesSaved: feed?.minutesSaved ?? 0,
     });
-  }, [onStats, readCount, saved, recalled, feed]);
+  }, [onStats, readCount, savedThisSession, recalled, feed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +263,11 @@ export function Feed({
         else next.add(row.id);
         return next;
       }); // optimistic — saving is free and unlimited, so never blocks
+      // Net for the session, so un-saving something kept a moment ago takes the
+      // number back down rather than leaving the rail claiming a save that no
+      // longer exists. Floored at zero: un-saving a card kept on a previous day
+      // is not this session going negative.
+      setSavedThisSession((n) => (wasSaved ? Math.max(0, n - 1) : n + 1));
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
       } catch {

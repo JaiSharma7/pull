@@ -13,7 +13,32 @@ import { runPipelineStep, type JobRow, type StepResult } from '../_shared/pipeli
  * that is what the 150s wall-clock limit forbids.
  */
 
-const BATCH = 5;
+/**
+ * The most messages one invocation will handle — and, importantly, an upper
+ * bound rather than a number claimed up front.
+ *
+ * Claiming five at once was safe while every step was a stub returning
+ * instantly. It stopped being safe the moment the steps made real provider
+ * calls: pgmq increments `read_ct` on delivery, not on execution, so five
+ * messages claimed and two executed still charged all five a delivery. Three
+ * such invocations and `read_ct > MAX_ATTEMPTS` fails a job at a step that never
+ * once ran — a job killed for the worker's scheduling, with nothing in
+ * `job_steps` to show why.
+ *
+ * So messages are claimed one at a time, immediately before being run.
+ */
+const MAX_MESSAGES_PER_INVOCATION = 5;
+
+/**
+ * Wall-clock bounds, well inside the platform's 150s ceiling.
+ *
+ * A single `synthesize` can spend two 60-second provider attempts, so the
+ * question before claiming another message is not "is there time left" but "is
+ * there time for the slowest thing that could be behind it". `RESERVE` is that
+ * slowest thing; the loop stops rather than claim a message it might not reach.
+ */
+const INVOCATION_DEADLINE_MS = 110_000;
+const RESERVE_FOR_ONE_STEP_MS = 40_000;
 /** Steps that invoke a provider, and so must produce a ledger row. */
 const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
 /**
@@ -183,17 +208,33 @@ Deno.serve(async (req) => {
     });
   }
 
-  const messages = must(
-    await supabase.rpc('claim_generation_messages', {
-      p_count: BATCH,
-      p_visibility_seconds: VISIBILITY_SECONDS,
-    }),
-    'claim queue messages',
-  ) as QueueMessage[] | null;
-
   const processed: unknown[] = [];
+  const invocationStarted = Date.now();
 
-  for (const msg of messages ?? []) {
+  for (let claimed = 0; claimed < MAX_MESSAGES_PER_INVOCATION; claimed++) {
+    // Only ask for a message once there is room to run the slowest step it
+    // could turn out to be. The first is always attempted, so an invocation
+    // never returns having done nothing while work was waiting.
+    if (
+      claimed > 0 &&
+      Date.now() - invocationStarted > INVOCATION_DEADLINE_MS - RESERVE_FOR_ONE_STEP_MS
+    ) {
+      break;
+    }
+
+    // One at a time. `read_ct` is charged on delivery, so a message claimed and
+    // not run is a retry spent on nothing.
+    const batch = must(
+      await supabase.rpc('claim_generation_messages', {
+        p_count: 1,
+        p_visibility_seconds: VISIBILITY_SECONDS,
+      }),
+      'claim queue messages',
+    ) as QueueMessage[] | null;
+
+    const msg = batch?.[0];
+    if (!msg) break;
+
     const { jobId, step } = msg.message;
     const started = Date.now();
 
