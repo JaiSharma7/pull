@@ -103,7 +103,30 @@ export function App() {
 
         <main id="main" className="shell__main">
           <div className="shell__column">
-            {tab === 'feed' && <Feed userId={session.user.id} onStats={setStats} />}
+            {/*
+              The feed is hidden rather than unmounted, and that is a correctness
+              choice rather than a performance one.
+
+              `readCount`, `recalled` and `savedThisSession` live in `Feed`. Unmounting
+              on a tab switch reset all three to zero and the reporting effect then
+              pushed those zeros straight into the rail — so reading five ideas, saving
+              two, glancing at the Library and coming back showed 0 / 0 / 0. A product
+              whose whole claim is an honest account of one sitting had a counter that
+              forgot the sitting whenever you looked away from it. `Feed` argues at
+              length about never inflating that number; silently zeroing it is the same
+              failure pointed the other way.
+
+              It also refetched page 0 on every return, reshuffling the reader's place.
+
+              `hidden` is enough on both counts: a `display: none` subtree has no
+              layout, so IntersectionObserver reports nothing intersecting and no card
+              can be counted as read while the reader is elsewhere. It is also removed
+              from the accessibility tree, so the hidden feed is not reachable by a
+              screen reader or by tabbing.
+            */}
+            <div hidden={tab !== 'feed'}>
+              <Feed userId={session.user.id} onStats={setStats} />
+            </div>
             {tab === 'review' && <Review />}
             {tab === 'library' && <Library userId={session.user.id} />}
           </div>

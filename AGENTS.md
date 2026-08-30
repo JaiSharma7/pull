@@ -17,27 +17,49 @@ merges only when both are satisfied.
 
 1. **All four CI checks green** — `lint`, `typecheck`, `test`, `db`.
 
-2. **Request Codex review.** Comment `@codex review` on the PR. Then _wait_. Do not
-   merge, and do not start unrelated feature work on the same branch, while it is
-   pending.
+2. **Codex reviews the first pass only.** Comment `@codex review` once, on the opening
+   diff of a PR. Then _wait_. Do not merge, and do not start unrelated feature work on
+   the same branch, while it is pending.
+
+   One pass, not a loop. Codex is metered, and a rate-limited reviewer stalls a branch
+   at the exact moment there is most to review. Its value is concentrated in the first
+   look at a large unfamiliar diff, where it reliably finds enum members Postgres will
+   reject, columns that do not exist, and grants nobody checked — the flat, factual
+   mistakes that survive typechecking. Spend it there.
 
 3. **Address every Codex comment.** For each one: fix it and push, or reply on that
    thread explaining precisely why it does not apply. "Out of scope" is a legitimate
-   answer; silence is not. Re-request review after pushing.
+   answer; silence is not.
 
-4. **Repeat 2–3 until Codex signs off.** A round that returns new findings is not a
-   pass. On a large PR, expect at least two rounds — a first review of a big diff that
-   returns nothing usually means the reviewer did not run, so check before believing it.
+4. **Then review in parallel, and repeat _that_ until it comes back clean.** Four
+   specialists over non-overlapping slices of the diff, run at once:
 
-5. **Then run `/code-review` scoped to the branch**, and address its findings the same
-   way. Running it _after_ Codex is deliberate: it reviews the code that will actually
-   merge, including everything the Codex rounds changed.
+   | Reviewer   | Slice                                           |
+   | ---------- | ----------------------------------------------- |
+   | security   | auth, RLS, SSRF, secrets, migrations            |
+   | typescript | async correctness, state machines, types        |
+   | database   | migrations, policies, grants, concurrency       |
+   | frontend   | `apps/web`, the design laws, what a reader sees |
 
-6. **Merge** — only once both reviewers are satisfied and all four checks are green on
-   the final head.
+   This is the loop, and it is the one that must not be cut short. **A round that
+   returns new findings is not a pass**, and the reason is specific rather than
+   procedural: on this codebase, fixes have repeatedly _created_ the next
+   vulnerability. Setting `summaries.author_id` was necessary to make a private
+   summary readable by its requester, and it is what made an author able to publish
+   that summary to the world. Round 2's findings were consequences of round 1's fixes
+   three separate times. Re-review after fixing is not diligence theatre; it is where
+   half the real findings come from.
 
-If Codex is not installed on the repository, its review never arrives. Say so and stop;
-do not wait indefinitely, and do not merge around the gate on the assumption it passed.
+   Prefer reviewers that verify. A finding demonstrated against a running stack under
+   real RLS is worth ten that are reasoned about, and the difference is not effort —
+   it is whether the claim is true.
+
+5. **Merge** — only once the parallel round comes back clean and all four checks are
+   green on the final head.
+
+If Codex is not installed, or is rate-limited, say so and continue from step 4 rather
+than waiting indefinitely. Do not merge around step 4 on the assumption it would have
+passed — that step is the gate now, and skipping it is skipping the whole thing.
 
 ## Secrets
 

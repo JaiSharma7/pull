@@ -401,6 +401,31 @@ export function Feed({
     return <p className="meta">Loading…</p>;
   }
 
+  /*
+   * Nothing to read is not the same as having read enough.
+   *
+   * These two were one condition, so a reader the catalogue had nothing for was
+   * congratulated for finishing it: "Enough for today. Ideas read 0 · Recalled 0",
+   * on their first screen, having done nothing. Worse, the one way out —
+   * "Keep reading anyway" — refetched with a new seed, got zero rows again, and
+   * rendered the identical screen. A dead end that reads as an achievement.
+   *
+   * This is the state a brand-new reader hits before generation has populated
+   * `pulls`, which is precisely the state this project is in on the day it opens.
+   */
+  if (feed.rows.length === 0 && readCount === 0) {
+    return (
+      <div className="stack measure">
+        <p className="meta">For You</p>
+        <h1>Nothing here yet.</h1>
+        <p>
+          New Pulls are still being drawn from their sources. This is a young library — check back
+          shortly and there will be something worth keeping.
+        </p>
+      </div>
+    );
+  }
+
   if (done || feed.rows.length === 0) {
     return (
       <Enough
