@@ -1,5 +1,3 @@
-import type { CSSProperties } from 'react';
-
 export interface EnoughProps {
   ideasRead: number;
   recalled: number;
@@ -24,22 +22,36 @@ export function Enough({ ideasRead, recalled, minutesSaved, onContinue }: Enough
         Enough for today.
       </h2>
 
-      <dl className="stack" style={{ '--stack-gap': 'var(--space-2)' } as CSSProperties}>
+      {/*
+        The numbers are the product's whole claim, so they are set like a result rather
+        than a receipt. Two counts sit side by side at --step-5 with their labels beneath;
+        time saved is separated below a rule and carries the accent, because it is the one
+        number that *is* the business model — time saved rather than time spent is the
+        whole difference between this and a feed. See docs/design-first-run.md.
+      */}
+      <dl className="tally" style={{ margin: 0 }}>
         <div>
-          <dt className="meta">Ideas read</dt>
-          <dd style={{ margin: 0, fontSize: 'var(--step-2)' }}>{ideasRead}</dd>
-        </div>
-        <div>
-          <dt className="meta">Recalled</dt>
-          <dd style={{ margin: 0, fontSize: 'var(--step-2)' }}>{recalled}</dd>
-        </div>
-        <div>
-          <dt className="meta">Time saved by skipping what you knew</dt>
-          <dd style={{ margin: 0, fontSize: 'var(--step-2)', color: 'var(--accent)' }}>
-            {minutesSaved < 1 ? 'under a minute' : `${minutesSaved} min`}
+          <dd className="tally__value" style={{ margin: 0 }}>
+            {ideasRead}
           </dd>
+          <dt className="tally__label">{ideasRead === 1 ? 'idea' : 'ideas'}</dt>
+        </div>
+        <div>
+          <dd className="tally__value" style={{ margin: 0 }}>
+            {recalled}
+          </dd>
+          <dt className="tally__label">recalled</dt>
         </div>
       </dl>
+
+      <hr className="rule" />
+
+      <p style={{ color: 'var(--accent)', fontSize: 'var(--step-1)' }}>
+        {minutesSaved < 1 ? 'Under a minute saved' : `${minutesSaved} minutes saved`}
+      </p>
+      <p className="meta" style={{ marginTop: 'calc(var(--space-2) * -1)' }}>
+        against reading the sources in full
+      </p>
 
       <p className="pull-card__body">Mind fed. Go and use some of it.</p>
 

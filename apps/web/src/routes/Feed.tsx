@@ -417,10 +417,27 @@ export function Feed({
     return (
       <div className="stack measure">
         <p className="meta">For You</p>
-        <h1>Nothing here yet.</h1>
+        <h1 style={{ fontSize: 'var(--step-3)' }}>Nothing here yet.</h1>
         <p>
           New Pulls are still being drawn from their sources. This is a young library — check back
           shortly and there will be something worth keeping.
+        </p>
+
+        <hr className="rule" />
+
+        {/*
+          It says what will arrive, not only that nothing has. An empty state that reports
+          emptiness and stops gives a reader no reason to come back, and this is the one
+          screen where explaining the product is not filler. No icon and no illustration —
+          both are what a product reaches for when it does not trust its own sentence. No
+          retry button either: nothing is broken, so a control that re-runs the same query
+          and returns the same nothing is a dead end wearing an affordance, which is the
+          exact bug this state was split out of.
+        */}
+        <p className="meta">What arrives here</p>
+        <p style={{ color: 'var(--text-soft)' }}>
+          Ideas from books, films, papers, talks and documentaries — one at a time, anchored to a
+          real source and argued with rather than summarised.
         </p>
       </div>
     );

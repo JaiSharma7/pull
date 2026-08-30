@@ -396,3 +396,141 @@
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * The title page — sign in, and step two of it.
+ *
+ * See docs/design-first-run.md. One axis, centred on both, capped at --measure.
+ * The screen it replaces was a 544px column pinned to left: 0 with 900px of dead
+ * space beside it, which is what .measure does on its own: it caps width and does
+ * not centre. On the first thing a stranger sees, that reads as broken rather
+ * than spare.
+ * ------------------------------------------------------------------------ */
+.titlepage {
+  display: grid;
+  /* svh, not vh: mobile browser chrome makes vh taller than the visible area, so
+     the primary button ends up underneath the address bar on exactly the devices
+     where it matters most. */
+  min-height: 100svh;
+  place-content: center;
+  padding: var(--space-8) var(--space-5);
+}
+
+.titlepage__inner {
+  width: 100%;
+  max-width: var(--measure);
+  text-align: center;
+}
+
+.titlepage__mark {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The sentence is the brand, so the sentence is what is large. A big logo is what
+   a product does when it has nothing to say. */
+.titlepage__title {
+  font-size: var(--step-4);
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.titlepage__lede {
+  color: var(--text-soft);
+  text-wrap: pretty;
+}
+
+.titlepage__promise {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.titlepage__sent,
+.titlepage__error {
+  font-size: var(--step--1);
+}
+
+.titlepage__error {
+  color: var(--accent);
+}
+
+.titlepage__alts {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+/* Forms centre-align their labels here, which reads wrong for an input the eye has
+   to track along. Left-align the field, keep the page centred. */
+.titlepage__inner .field {
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------------------
+ * Segmented sign-in code.
+ *
+ * Structure ported from 21st.dev's one-time-password pattern; none of its styling.
+ * Boxes rather than a field because progress through a six-digit code should be
+ * visible without counting characters.
+ * ------------------------------------------------------------------------ */
+.code {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-2);
+  max-width: 20rem;
+}
+
+.code__box {
+  min-width: 0;
+  padding: var(--space-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--step-2);
+  text-align: center;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+}
+
+.code__box:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------------------------------------------------------------------------
+ * Enough — the numbers are the claim, so they are set like a result.
+ * ------------------------------------------------------------------------ */
+.tally {
+  display: flex;
+  gap: var(--space-7);
+  justify-content: center;
+}
+
+.tally__value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--step-5);
+  line-height: 1;
+  /* Proportional digits make a row of numbers ragged, and these sit in a row. */
+  font-variant-numeric: tabular-nums;
+}
+
+.tally__label {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The only ornament law 1 allows. A hairline, full width of its container, with the
+   default <hr> border, margin and inset removed so it is a rule rather than a groove. */
+.rule {
+  width: 100%;
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}

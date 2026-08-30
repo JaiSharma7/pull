@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { CodeInput } from '../components/CodeInput.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -59,6 +60,8 @@ export function Auth() {
   // Read once, during the first render, because it consumes the hash as it reads.
   const [error, setError] = useState<string | null>(readRedirectError);
   const [busy, setBusy] = useState(false);
+  /** So a complete code can submit the form without the reader reaching for the button. */
+  const formRef = useRef<HTMLFormElement>(null);
 
   async function requestCode(e: React.FormEvent) {
     e.preventDefault();
@@ -115,71 +118,121 @@ export function Auth() {
     setError(null);
   }
 
-  return (
-    <main className="stack measure" style={{ padding: 'var(--space-8) var(--space-5)' }}>
-      <p className="meta">What a Pull</p>
-      <h1>Pull something worth keeping.</h1>
-      <p>
-        Ideas from books, films, papers and talks — anchored to real sources, argued with, and
-        actually remembered. No subscription, and nothing worth having behind one.
-      </p>
+  /**
+   * Ask for another code without losing the address.
+   *
+   * The only previous exit from this screen was "use a different email", which discards
+   * a correct address — the wrong affordance for the actual problem, which is almost
+   * always a slow email rather than a wrong one. It also gives somewhere to go when
+   * Supabase's built-in SMTP rate limit fires, whose message ("you can only request this
+   * after 51 seconds") is otherwise a dead end.
+   */
+  async function resend() {
+    setBusy(true);
+    setError(null);
+    setCode('');
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      setError(error ? error.message : 'Sent. Check your email again.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reach the server.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      {sent ? (
-        <form onSubmit={verifyCode} className="stack">
-          <p role="status">
-            We sent a sign-in email to <strong>{email}</strong>. Enter the code below, or open the
-            link in the email if it has one instead.
-          </p>
-          <label className="field">
-            <span className="field__label">Sign-in code</span>
-            <input
-              className="field__input"
-              type="text"
-              required
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              // Codes are six digits today, but the length is a server-side detail and a
-              // hard maxLength would silently truncate a longer one into a wrong code.
-              pattern="[0-9]*"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-            />
-          </label>
-          {error && (
-            <p role="alert" style={{ color: 'var(--accent)' }}>
-              {error}
+  /*
+   * The title page.
+   *
+   * Centred on both axes and capped at --measure, so the screen has one axis and
+   * nothing on it competes. It was previously a 544px column pinned to left: 0 with
+   * 900px of dead space beside it — which reads as a broken layout rather than a spare
+   * one, on the first thing anyone sees.
+   *
+   * Step two is this same screen advanced, not a different one: the masthead, the title
+   * and the rule hold their positions so the page does not appear to jump when the code
+   * form replaces the email form. See docs/design-first-run.md.
+   */
+  return (
+    <main className="titlepage">
+      <div className="titlepage__inner stack">
+        <p className="meta titlepage__mark">What a Pull</p>
+        <h1 className="titlepage__title">Pull something worth keeping.</h1>
+        <p className="titlepage__lede">
+          Ideas from books, films, papers and talks — anchored to real sources, argued with, and
+          actually remembered.
+        </p>
+
+        <hr className="rule" />
+
+        {sent ? (
+          <form onSubmit={verifyCode} className="stack" ref={formRef}>
+            <p role="status" className="titlepage__sent">
+              We sent a code to <strong>{email}</strong>
             </p>
-          )}
-          <button type="submit" className="btn btn--primary" disabled={busy}>
-            {busy ? 'Checking…' : 'Sign in'}
-          </button>
-          <button type="button" className="btn btn--plain" onClick={startOver} disabled={busy}>
-            Use a different email
-          </button>
-        </form>
-      ) : (
-        <form onSubmit={requestCode} className="stack">
-          <label className="field">
-            <span className="field__label">Email</span>
-            <input
-              className="field__input"
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          {error && (
-            <p role="alert" style={{ color: 'var(--accent)' }}>
-              {error}
+            <div className="field">
+              <span className="field__label" id="code-label">
+                Sign-in code
+              </span>
+              <CodeInput
+                value={code}
+                onChange={setCode}
+                disabled={busy}
+                // A complete code submits. At six digits there is exactly one thing the
+                // reader wants, and making them reach for a button is friction with no
+                // purpose behind it.
+                onComplete={() => formRef.current?.requestSubmit()}
+              />
+            </div>
+            {error && (
+              <p role="alert" className="titlepage__error">
+                {error}
+              </p>
+            )}
+            <button type="submit" className="btn btn--primary" disabled={busy}>
+              {busy ? 'Checking…' : 'Sign in'}
+            </button>
+            <p className="titlepage__alts">
+              <button type="button" className="btn btn--plain" onClick={resend} disabled={busy}>
+                Send it again
+              </button>
+              <span aria-hidden="true"> · </span>
+              <button type="button" className="btn btn--plain" onClick={startOver} disabled={busy}>
+                Use another email
+              </button>
             </p>
-          )}
-          <button type="submit" className="btn btn--primary" disabled={busy}>
-            {busy ? 'Sending…' : 'Send a sign-in code'}
-          </button>
-        </form>
-      )}
+          </form>
+        ) : (
+          <form onSubmit={requestCode} className="stack">
+            <label className="field">
+              <span className="field__label">Email</span>
+              <input
+                className="field__input"
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            {error && (
+              <p role="alert" className="titlepage__error">
+                {error}
+              </p>
+            )}
+            <button type="submit" className="btn btn--primary" disabled={busy}>
+              {busy ? 'Sending…' : 'Send a sign-in code'}
+            </button>
+          </form>
+        )}
+
+        {/* Last, because it is the strongest sentence on the screen and it answers the
+            objection a reader has at exactly this moment. It was buried mid-paragraph. */}
+        <p className="titlepage__promise">No subscription, and nothing worth having behind one.</p>
+      </div>
     </main>
   );
 }
