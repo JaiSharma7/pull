@@ -99,4 +99,4 @@ See `content-policy.md`.
 | `content-policy.md` | Rights, copyright posture, §512                   |
 | `roadmap.md`        | Build order across rounds                         |
 
-Governing rules live in `CLAUDE.md` (the six laws) and `AGENTS.md` (the review gate).
+Governing rules live in `CLAUDE.md` (the seven laws) and `AGENTS.md` (the review gate).

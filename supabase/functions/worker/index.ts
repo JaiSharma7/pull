@@ -73,6 +73,56 @@ async function runStep(jobId: string, step: Step) {
 
 const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
 
+/** Length-independent comparison, so a wrong token leaks nothing through timing. */
+function secureEquals(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Who is allowed to tick the machine.
+ *
+ * There are two supported dispatchers and this accepts either, because the repository
+ * documents both and picking one would silently break the other:
+ *
+ *   • `enable_generation_dispatcher_with_token` sends `x-worker-token` from Vault. Used
+ *     when the function is deployed with JWT verification off, which is what lets the
+ *     dispatcher be scheduled without anyone reading the service_role key out of the
+ *     dashboard.
+ *   • `enable_generation_dispatcher` sends the service_role key as a bearer token. The
+ *     platform has already verified it when `verify_jwt` is on, but this function cannot
+ *     tell whether that happened, so it compares against the key it was given itself.
+ *
+ * Fails closed. A worker with no credential configured refuses every request rather than
+ * running open: this endpoint spends money, and "misconfigured" must not mean "public".
+ */
+async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why: string }> {
+  const bearer = req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+  if (secureEquals(bearer, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))) return { ok: true };
+
+  const presented = req.headers.get('x-worker-token');
+
+  // Env first so a local stack can run without touching Vault, which `db:reset` wipes.
+  let expected = Deno.env.get('WORKER_DISPATCH_TOKEN') ?? null;
+  if (!expected) {
+    const { data, error } = await supabase.rpc('generation_secret', {
+      p_name: 'worker_dispatch_token',
+    });
+    if (error) return { ok: false, why: `dispatch token unreadable: ${error.message}` };
+    expected = data as string | null;
+  }
+
+  if (!expected) {
+    return {
+      ok: false,
+      why: 'no dispatch token configured — run enable_generation_dispatcher_with_token',
+    };
+  }
+  return secureEquals(presented, expected) ? { ok: true } : { ok: false, why: 'bad token' };
+}
+
 /**
  * Move the job on and enqueue its successor.
  *
@@ -95,7 +145,15 @@ async function advance(jobId: string, step: Step) {
   );
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  const auth = await authorised(req);
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.why }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
   const messages = must(
     await supabase.rpc('claim_generation_messages', {
       p_count: BATCH,

@@ -5,7 +5,7 @@ remember it — across books, films, documentaries, podcasts, papers, essays and
 
 > **What other learning apps call premium, we call learning.**
 
-## The six laws
+## The seven laws
 
 These are not preferences. A change that breaks one is wrong even if it is elegant,
 and reviewers should reject it on that basis alone.
@@ -41,6 +41,27 @@ and reviewers should reject it on that basis alone.
 6. **Migration law — append-only.**
    Never edit a migration that has been pushed. Add a new one that supersedes it.
    Editing history silently diverges every environment that already applied it.
+
+7. **Secrets law — the browser gets the publishable key and nothing else.**
+   Anything in a `VITE_*` variable is compiled into the bundle every visitor downloads.
+   Treat it as printed on the homepage. Exactly one credential belongs there: the
+   Supabase **publishable** key (`sb_publishable_…`), which is designed for the browser
+   and which RLS — not secrecy — is what actually protects.
+
+   Everything else is server-only and must never appear in `apps/web/`, in a `VITE_*`
+   variable, in client-reachable code, or in any committed file:
+
+   | Credential                            | Lives only in                                                                       |
+   | ------------------------------------- | ----------------------------------------------------------------------------------- |
+   | `sb_secret_…` / `service_role`        | Edge Function env (`SUPABASE_SERVICE_ROLE_KEY`), injected by the platform           |
+   | `GOOGLE_AI_API_KEY`, any provider key | Edge Function secrets, or Vault read by the worker through a `security definer` RPC |
+   | Storage S3 access/secret pair         | Server-side callers only                                                            |
+   | The generation dispatch token         | Vault                                                                               |
+
+   A key that reaches a commit is **rotated**, not quietly removed from the diff — git
+   history keeps it, and so does every clone. The same rule holds for local-stack keys:
+   they are well-known defaults, so committing them teaches the wrong habit and makes a
+   real leak harder to spot in review.
 
 ## Stack
 
@@ -79,4 +100,4 @@ pnpm db:lint        # the schema invariants CI check 4 runs
 ## Definition of done
 
 Format, lint, typecheck and tests pass; `pnpm db:lint` is clean; Supabase advisors report
-no security findings; the diff obeys the six laws. Then the review gate in `AGENTS.md`.
+no security findings; the diff obeys the seven laws. Then the review gate in `AGENTS.md`.

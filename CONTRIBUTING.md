@@ -21,11 +21,12 @@ replays every migration from zero and asserts that RLS is enabled with a policy 
 every public table, that every foreign key has an index, and that every
 `SECURITY DEFINER` function pins its `search_path`.
 
-## The six laws
+## The seven laws
 
 Read `CLAUDE.md`. In short: never look like Deepstash; no LLM in the read path; the
 five free features stay free; analysis not reproduction; RLS in the migration that
-creates the table; migrations are append-only.
+creates the table; migrations are append-only; and the browser gets the publishable
+key and nothing else.
 
 A PR that breaks one of these is rejected on that basis, however good the code is.
 
