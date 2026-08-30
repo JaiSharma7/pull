@@ -20,9 +20,21 @@ supabase/.temp/
 supabase/.env
 
 # env
-.env
-.env*.local
+#
+# Ignore by default, then allow back the three that are committed on purpose.
+# Law 7 in CLAUDE.md: .env.development points at the local stack and
+# .env.production at the hosted project, both carrying only the publishable key,
+# so a fresh clone runs with no setup. Everything else — and every *.local
+# override — stays out.
+#
+# The negations are load-bearing. A bare `.env*` also matches those three, and
+# they survive today only because they are already tracked; deleting and
+# re-adding one would silently drop it from the repo.
+.env*
 !.env.example
+!.env.development
+!.env.production
+.env*.local
 
 # editors / os
 .DS_Store
@@ -41,4 +53,3 @@ logs/
 
 # claude local overrides
 .claude/settings.local.json
-.env*
