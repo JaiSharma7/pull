@@ -1738,7 +1738,12 @@ export type Database = {
         }
         Returns: string
       }
+      enable_generation_dispatcher_with_token: {
+        Args: { p_project_url: string; p_seconds?: number }
+        Returns: string
+      }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
+      generation_secret: { Args: { p_name: string }; Returns: string }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {
@@ -1861,6 +1866,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      set_worker_secret: {
+        Args: { p_name: string; p_value: string }
+        Returns: string
       }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
