@@ -21,7 +21,13 @@
     "written from memory and 28 of 61 entries were 404s — which is why the script has a",
     "--check mode and why it runs before any seeding. Re-verify after editing:",
     "",
-    "  node scripts/seed-corpus.mjs --check"
+    "  node scripts/seed-corpus.mjs --check",
+    "",
+    "`author` is for whoever reads this file. It is deliberately NOT carried into the",
+    "job target, because `works` has no author column and `upsertWork` takes only",
+    "title, kind, contentHash and rightsStatus — so passing it would imply an",
+    "attribution the database never stores. Attribution is a schema change, not a",
+    "manifest field."
   ],
   "sources": [
     {
