@@ -11,7 +11,7 @@
  * made by the worker, once per canonical summary, and lands in `cost_ledger`.
  */
 
-import { BilledProviderError } from './providers.ts';
+import { BilledProviderError, TOPIC_SLUGS } from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -167,8 +167,29 @@ const SUMMARY_SCHEMA = {
         required: ['headline', 'body', 'whyItMatters'],
       },
     },
+    /*
+     * Classification rides along with the summary rather than being its own step.
+     *
+     * It is the same call, so it costs no extra request and very few extra output
+     * tokens — which matters, because `topic_affinity` is 28% of the score in
+     * `get_feed` and until now every generated work scored zero on it. A separate
+     * `classify` step would have meant a thirteenth entry in STEPS, a second
+     * provider call per source, and a state machine that in-flight jobs no longer
+     * matched.
+     *
+     * `enum` is what makes this worth doing: the API rejects a slug outside the
+     * list, so the usual failure — a plausible value that only Postgres refuses,
+     * after synthesis has been paid for — cannot happen here. `narrowTopics` still
+     * runs on the way to the database, because a schema the provider enforces is
+     * not the same as one this code enforces, and stub or future providers do not
+     * go through Gemini at all.
+     */
+    topics: {
+      type: 'ARRAY',
+      items: { type: 'STRING', enum: TOPIC_SLUGS as unknown as string[] },
+    },
   },
-  required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls'],
+  required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls', 'topics'],
 } as const;
 
 class GeminiError extends Error {

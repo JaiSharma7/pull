@@ -83,7 +83,55 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       return reusable ? { workId: work.id, summaryId: reusable.id } : null;
     },
 
-    async upsertWork({ title, kind, contentHash, rightsStatus }) {
+    async upsertWork({ title, kind, contentHash, rightsStatus, topics }) {
+      /*
+       * File a newly created work under its topics.
+       *
+       * Separate from the insert on purpose. `work_topics` is a join table with no
+       * bearing on whether the summary is readable, so a failure here must not fail
+       * a job that has already paid for synthesis — an unclassified work is a worse
+       * feed position, while a failed job is nothing at all.
+       *
+       * Slugs are resolved rather than trusted: `narrowTopics` has already dropped
+       * anything outside the mirrored taxonomy, and this drops anything the mirror
+       * claims but the database has not actually been migrated to carry. That second
+       * gap is real — the Edge Function deploys independently of the migration, so
+       * for a window they disagree.
+       *
+       * Weight 1.0 for the first slug, 0.6 for the rest: `topic_affinity` multiplies
+       * this by the reader's preference and takes the max, so the model's ordering
+       * becomes primary-versus-secondary rather than being discarded.
+       */
+      const fileUnderTopics = async (workId: string) => {
+        if (topics.length === 0) return;
+        try {
+          const rows = must(
+            await supabase.from('topics').select('id, slug').in('slug', topics),
+            'look up topics',
+          ) as { id: string; slug: string }[] | null;
+
+          const bySlug = new Map((rows ?? []).map((r) => [r.slug, r.id]));
+          const links = topics
+            .map((slug, index) => ({
+              work_id: workId,
+              topic_id: bySlug.get(slug),
+              weight: index === 0 ? 1.0 : 0.6,
+            }))
+            .filter((link): link is { work_id: string; topic_id: string; weight: number } =>
+              Boolean(link.topic_id),
+            );
+          if (links.length === 0) return;
+
+          // Ignores a duplicate rather than raising: two jobs can race onto the same
+          // work through the 23505 adoption path below, and the second one filing the
+          // same topics is a no-op, not an error.
+          await supabase.from('work_topics').upsert(links, { onConflict: 'work_id,topic_id' });
+        } catch {
+          // Deliberately swallowed. See above: classification is worth less than the
+          // summary it accompanies, and the job must survive its absence.
+        }
+      };
+
       const existing = must(
         await supabase.from('works').select('id').eq('content_hash', contentHash).limit(1),
         'look up work',
@@ -133,7 +181,9 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         return { workId: raced.id, existing: true };
       }
 
-      return { workId: (data as { id: string }).id, existing: false };
+      const workId = (data as { id: string }).id;
+      await fileUnderTopics(workId);
+      return { workId, existing: false };
     },
 
     async createSummary({

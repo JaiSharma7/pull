@@ -3,6 +3,7 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  narrowTopics,
   NO_USAGE,
   RIGHTS_STATUSES,
   runPipelineStep,
@@ -15,7 +16,7 @@ import {
   MAX_SOURCE_CHARS,
   segment,
 } from './source.ts';
-import { stubSummaryProvider } from './providers.ts';
+import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
 const SYNTHESIZED = {
@@ -210,6 +211,30 @@ describe('enum narrowing at the boundary', () => {
     // become publishable by accident. `resolve_identity` refuses anything that
     // is not public_domain or licensed.
     expect(['public_domain', 'licensed']).not.toContain(asRightsStatus('totally-made-up'));
+  });
+
+  it('drops unknown topic slugs instead of substituting one', () => {
+    // Unlike kind and rights, there is no safe default: inventing a topic would
+    // corrupt the signal `topic_affinity` steers by, and an empty list is read
+    // correctly as no affinity.
+    expect(narrowTopics(['philosophy', 'not-a-topic'])).toEqual(['philosophy']);
+    expect(narrowTopics(['not-a-topic'])).toEqual([]);
+    expect(narrowTopics(undefined)).toEqual([]);
+    expect(narrowTopics('philosophy')).toEqual([]);
+    for (const slug of TOPIC_SLUGS) expect(narrowTopics([slug])).toEqual([slug]);
+  });
+
+  it('de-duplicates topics and bounds how many one work carries', () => {
+    // `work_topics` is unique on (work_id, topic_id), and the model does return a
+    // parent alongside its child often enough to matter.
+    expect(narrowTopics(['ethics', 'ethics'])).toEqual(['ethics']);
+    expect(narrowTopics(TOPIC_SLUGS.slice(0, 10))).toHaveLength(4);
+  });
+
+  it('preserves order, because the first topic is filed as the primary one', () => {
+    // `upsertWork` weights the first slug 1.0 and the rest 0.6, so an order the
+    // narrowing scrambled would silently demote the model's primary choice.
+    expect(narrowTopics(['science', 'philosophy'])).toEqual(['science', 'philosophy']);
   });
 });
 
