@@ -51,6 +51,23 @@ pnpm dev             # http://127.0.0.1:5173
 
 The seed corpus is public-domain only, so the app is usable with **no API keys**.
 
+## Using the hosted service
+
+The hosted app at whatapull.com is governed by two documents, and both are in this
+repository rather than on a landing page nobody can diff:
+
+- **[Privacy Policy](./docs/privacy.md)** — what is collected, which three processors
+  ever see it, and why your reading history never reaches a language model.
+- **[Terms of Service](./docs/terms.md)** — including the five capabilities that stay
+  free permanently, and the DMCA process.
+
+They render inside the app at `/privacy` and `/terms`, from these exact files, ahead of
+the sign-in gate — terms you can only read after accepting them are not terms. Every
+revision is a commit, so what changed and when is public history.
+
+Running your own instance makes you the operator of your own service; those documents
+describe ours, not yours.
+
 ## Contributing
 
 Read `CLAUDE.md` for the seven laws that govern changes, `AGENTS.md` for the review

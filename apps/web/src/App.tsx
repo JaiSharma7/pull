@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
+import { Colophon } from './components/Colophon.js';
+import { Legal, legalDocFor } from './routes/Legal.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
@@ -20,6 +22,17 @@ export function App() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('feed');
   const [stats, setStats] = useState<FeedStats | null>(null);
+  /*
+   * The only routed thing in the app.
+   *
+   * Reading is tab state rather than URLs, deliberately — a Pull is not a page.
+   * The legal documents are the exception: a policy has to have an address you
+   * can send someone, bookmark, and open without an account. So they get real
+   * paths, and this is the smallest thing that gives them one. `vercel.json`
+   * rewrites every path to the bundle and the service worker falls back to it,
+   * so /privacy resolves on a cold load and offline as well as from a link.
+   */
+  const [path, setPath] = useState(() => window.location.pathname);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -30,10 +43,32 @@ export function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Back and forward have to work, or the reader who opened the terms is stuck
+  // in them.
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  function navigate(to: string) {
+    history.pushState(null, '', to);
+    setPath(to);
+    window.scrollTo(0, 0);
+  }
+
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
     return <Specimen />;
   }
+
+  /*
+   * Ahead of both the loading state and the auth gate, on purpose. Terms you
+   * can only reach after accepting them are not terms, and a policy behind a
+   * session is not a policy anyone can check before handing over an address.
+   */
+  const legal = legalDocFor(path);
+  if (legal) return <Legal doc={legal} onNavigate={navigate} />;
 
   if (!ready)
     return (
@@ -41,7 +76,7 @@ export function App() {
         Loading…
       </p>
     );
-  if (!session) return <Auth />;
+  if (!session) return <Auth onNavigate={navigate} />;
 
   return (
     <div className="shell">
@@ -169,6 +204,8 @@ export function App() {
           </div>
         </aside>
       </div>
+
+      <Colophon onNavigate={navigate} />
     </div>
   );
 }
