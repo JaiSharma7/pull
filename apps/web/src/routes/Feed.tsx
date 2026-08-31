@@ -12,46 +12,27 @@ import {
   queueMutation,
   readCachedPulls,
 } from '../lib/offline.js';
+import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
-import { speak } from '../lib/speech.js';
+import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
 import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
-import type { FeedResponse, FeedRow, InterleaveSlot } from '../lib/types.js';
-
-type Item =
-  | { type: 'pull'; row: FeedRow; index: number }
-  | { type: 'interrupt'; slot: InterleaveSlot; row: FeedRow; index: number };
+import type { FeedRow } from '../lib/types.js';
 
 /** Retry schedule for writes queued while the browser is still online. */
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
 
 /**
- * Weave the interrupt slots into the row list.
+ * Whether this browser can speak at all, decided once.
  *
- * A slot replaces the card at that index with a question about an *earlier*
- * card — asking about something the reader has just this second read would be
- * recognition, not recall.
+ * `speechSupported()` is a capability, not state: it cannot change between renders,
+ * and calling it per card per render would be the same answer twenty times over.
+ * Where it is false the Listen control is not rendered at all rather than rendered
+ * dead — a button that silently does nothing is the one way to make a free feature
+ * feel broken (law 3).
  */
-function weave(rows: FeedRow[], slots: InterleaveSlot[]): Item[] {
-  const bySlot = new Map(slots.map((s) => [s.slotIndex, s]));
-  const out: Item[] = [];
-  rows.forEach((row, i) => {
-    const slot = bySlot.get(i);
-    // Only ask about a card this page has actually rendered. Once a session has
-    // pages behind it the planner can place a slot at index 0, where there is
-    // no earlier card *here* — and `Math.max(0, i - 3)` would resolve to the
-    // card at the slot itself, asking the reader to recall something still on
-    // screen. The earlier pages' rows are not in hand, so the honest move is to
-    // let that slot pass rather than invent a target for it.
-    if (slot && i > 0) {
-      const earlier = rows[Math.max(0, i - 3)];
-      if (earlier) out.push({ type: 'interrupt', slot, row: earlier, index: i });
-    }
-    out.push({ type: 'pull', row, index: i });
-  });
-  return out;
-}
+const CAN_SPEAK = speechSupported();
 
 /**
  * What the session rail shows.
@@ -100,8 +81,19 @@ export function Feed({
   refreshKey?: number;
 }) {
   const [session, setSession] = useState(loadSession);
-  const [feed, setFeed] = useState<FeedResponse | null>(null);
+  const [feed, setFeed] = useState<LoadedFeed | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * A failed "More ideas", kept apart from `error`.
+   *
+   * `error` replaces the whole screen, which is right when there is nothing to show
+   * and wrong when there are twenty cards the reader is halfway through. A page that
+   * fails to load must not take the page that succeeded with it.
+   */
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** The card being read aloud, if any. Null is silence. */
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -147,16 +139,23 @@ export function Feed({
 
   useEffect(() => {
     let cancelled = false;
+    // Page 0 is planned against whatever the session has already read, and there is
+    // no previous placement to carry — `p_last_placed` stays absent so the planner
+    // falls back to its own sentinel.
+    const cardsBefore = session.cardsSeen;
     api
       .fetchFeed({
         seed: session.seed,
         page: 0,
-        cardsBefore: session.cardsSeen,
+        cardsBefore,
         usedBudget: session.interruptsShown,
       })
       .then((f) => {
         if (cancelled) return;
-        setFeed(f);
+        // `null` prev, so this replaces rather than appends: a re-run of this effect
+        // is a fresh start (a new seed, a retry, a preference change), and appending
+        // would stack the old rows under the new ones.
+        setFeed(appendPage(null, f, cardsBefore));
         // A successful load is the only proof the connection is back that this
         // component gets. The banner was previously cleared only by the `online`
         // event, which never fires when the failure happened with `onLine` true —
@@ -194,10 +193,14 @@ export function Feed({
           // claim about the session we have no basis for making.
           setFeed({
             rows: cached,
+            slots: [],
             skippedKnownCount: null,
             minutesSaved: null,
-            interleaveSlots: [],
-            page: 0,
+            lastPlaced: null,
+            nextPage: 1,
+            // The cache is everything there is offline, so there is no more to ask
+            // for. Offering "More ideas" here would be a button that can only fail.
+            exhausted: true,
           });
           setOffline(true);
         } else {
@@ -246,6 +249,10 @@ export function Feed({
               write.mutationId,
               write.submittedAt,
             );
+          // Queued by the Review screen, which has no drain of its own. This
+          // component is kept mounted by the shell precisely so the session's state
+          // survives a tab switch, which makes it the one place a drain can live.
+          else if (write.kind === 'recall') await api.gradeRecall(write.pullId, write.grade);
           else await api.recordRead(write.pullId, 0, 0);
         },
         // Read from the live auth session, not from component state. Signing
@@ -308,7 +315,48 @@ export function Feed({
     };
   }, [userId]);
 
-  const items = useMemo(() => (feed ? weave(feed.rows, feed.interleaveSlots) : []), [feed]);
+  /*
+   * The next page.
+   *
+   * A button rather than infinite scroll, deliberately. `docs/product.md` lists
+   * engagement metrics as an anti-goal, and an endless list that loads itself as you
+   * approach the bottom is the mechanic this product exists in opposition to. Asking
+   * for more is a decision the reader makes; the alternative makes it for them.
+   *
+   * Pages accumulate, so the reader keeps their place and the interleave planner can
+   * reach back into earlier pages for something to ask about.
+   */
+  const loadMore = useCallback(() => {
+    if (!feed || loadingMore || feed.exhausted) return;
+    setLoadingMore(true);
+    setMoreError(null);
+    // Snapshot both at request time. They advance as the reader scrolls, and the
+    // planner's answer has to be interpreted against the values it was given.
+    const cardsBefore = session.cardsSeen;
+    api
+      .fetchFeed({
+        seed: session.seed,
+        page: feed.nextPage,
+        cardsBefore,
+        usedBudget: session.interruptsShown,
+        lastPlaced: feed.lastPlaced,
+      })
+      .then((next) => {
+        void cachePulls(next.rows);
+        setFeed((prev) => (prev ? appendPage(prev, next, cardsBefore) : prev));
+      })
+      .catch((e: unknown) => {
+        console.error('Feed page request failed', e);
+        setMoreError(
+          isOfflineFailure(e)
+            ? 'Could not reach the library. Everything above is still yours to read.'
+            : 'Could not load more just now.',
+        );
+      })
+      .finally(() => setLoadingMore(false));
+  }, [feed, loadingMore, session.seed, session.cardsSeen, session.interruptsShown]);
+
+  const items = useMemo(() => (feed ? weave(feed.rows, feed.slots) : []), [feed]);
 
   const onSave = useCallback(
     async (row: FeedRow) => {
@@ -363,6 +411,40 @@ export function Feed({
     },
     [userId],
   );
+
+  /*
+   * Listen, and stop listening.
+   *
+   * `speechSupported()` and `stopSpeaking()` were exported from `lib/speech.ts` and
+   * called from nowhere, so playback was a one-way door: start a card reading, scroll
+   * on, and it kept talking with no control that could stop it. Audio is one of the
+   * five capabilities law 3 promises free forever, and free is exactly when it has to
+   * work properly.
+   *
+   * One card speaks at a time — `speak` cancels whatever is already running, so
+   * tracking a single id matches what the browser actually does.
+   */
+  const onListen = useCallback(
+    (row: FeedRow) => {
+      if (speakingId === row.id) {
+        stopSpeaking();
+        setSpeakingId(null);
+        return;
+      }
+      speak(`${row.headline}. ${row.body}`, {
+        // Guarded on the id: cancelling the previous utterance fires *its* `onend`,
+        // and without the check that ending would clear the card that just started.
+        onEnd: () => setSpeakingId((id) => (id === row.id ? null : id)),
+      });
+      setSpeakingId(row.id);
+    },
+    [speakingId],
+  );
+
+  // Speech outlives the component — `speechSynthesis` is global — so a reader who
+  // signs out mid-sentence would otherwise be followed by a voice with no UI left to
+  // stop it.
+  useEffect(() => () => stopSpeaking(), []);
 
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
@@ -588,13 +670,33 @@ export function Feed({
             onSave={() => void onSave(item.row)}
             onRead={() => onRead(item.row, item.index)}
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
+            listening={speakingId === item.row.id}
+            onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
           />
         ),
       )}
 
-      <button type="button" className="btn" onClick={() => setDone(true)}>
-        That's enough for today
-      </button>
+      {moreError && (
+        <p className="meta" role="status">
+          {moreError}
+        </p>
+      )}
+
+      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+        {/*
+          Hidden once the library is exhausted rather than disabled: a control that
+          can only tell you "no" is worse than no control, and the reader still has
+          "That's enough for today" to end on.
+        */}
+        {!feed.exhausted && (
+          <button type="button" className="btn" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Finding more…' : 'More ideas'}
+          </button>
+        )}
+        <button type="button" className="btn" onClick={() => setDone(true)}>
+          That's enough for today
+        </button>
+      </div>
     </div>
   );
 }
@@ -605,12 +707,17 @@ function PullCardInView({
   onSave,
   onRead,
   onOpenSource,
+  onListen,
+  listening,
 }: {
   row: FeedRow;
   saved: boolean;
   onSave: () => void;
   onRead: () => void;
   onOpenSource?: () => void;
+  /** Absent where the browser cannot speak, so no dead control is rendered. */
+  onListen?: () => void;
+  listening: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -640,7 +747,8 @@ function PullCardInView({
         sourceTrail={row.summaryTitle}
         saved={saved}
         onSave={onSave}
-        onListen={() => speak(`${row.headline}. ${row.body}`)}
+        onListen={onListen}
+        listening={listening}
         onOpenSource={onOpenSource}
       />
     </div>
