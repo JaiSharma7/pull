@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyFocus, readStoredFocus, storeFocus } from './focus-mode.js';
+import {
+  applyFocus,
+  enterFullscreen,
+  exitFullscreen,
+  fullscreenSupported,
+  readStoredFocus,
+  storeFocus,
+} from './focus-mode.js';
 
 /** A stand-in for documentElement that records what was done to it. */
 function fakeRoot() {
@@ -58,5 +65,66 @@ describe('readStoredFocus', () => {
     });
     expect(readStoredFocus()).toBe(false);
     expect(() => storeFocus(true)).not.toThrow();
+  });
+});
+
+/*
+ * Fullscreen is best-effort in every browser worth naming — `requestFullscreen`
+ * rejects outside a user gesture, iPhone Safari does not implement it, and embedded
+ * contexts forbid it. The contract is therefore "never throws", because the click
+ * handler that calls it also toggles the mode that actually carries the feature.
+ */
+describe('fullscreen', () => {
+  const docWith = (over: Partial<Document> & { el?: object }) =>
+    ({
+      documentElement: over.el ?? {},
+      fullscreenElement: null,
+      ...over,
+    }) as unknown as Document;
+
+  it('reports support from the method actually being there', () => {
+    expect(fullscreenSupported(docWith({ el: { requestFullscreen: () => {} } }))).toBe(true);
+    expect(fullscreenSupported(docWith({ el: {} }))).toBe(false);
+  });
+
+  it('does nothing where fullscreen is unsupported', async () => {
+    await expect(enterFullscreen(docWith({ el: {} }))).resolves.toBeUndefined();
+  });
+
+  it('swallows a rejected request rather than breaking the toggle', async () => {
+    // Firefox and Safari both reject when the call is not inside a user gesture.
+    const doc = docWith({
+      el: { requestFullscreen: () => Promise.reject(new Error('not allowed')) },
+    });
+    await expect(enterFullscreen(doc)).resolves.toBeUndefined();
+  });
+
+  it('does not re-request when already fullscreen', async () => {
+    let calls = 0;
+    const doc = docWith({
+      el: {
+        requestFullscreen: () => {
+          calls += 1;
+          return Promise.resolve();
+        },
+      },
+      fullscreenElement: {} as Element,
+    });
+    await enterFullscreen(doc);
+    expect(calls).toBe(0);
+  });
+
+  it('only exits when there is something to exit', async () => {
+    let calls = 0;
+    const doc = docWith({ exitFullscreen: () => ((calls += 1), Promise.resolve()) });
+    await exitFullscreen(doc);
+    expect(calls).toBe(0);
+
+    const inFs = docWith({
+      fullscreenElement: {} as Element,
+      exitFullscreen: () => ((calls += 1), Promise.resolve()),
+    });
+    await exitFullscreen(inFs);
+    expect(calls).toBe(1);
   });
 });

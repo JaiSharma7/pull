@@ -816,7 +816,9 @@ function PullCardInView({
   }, [onRead, onVisible]);
 
   return (
-    <div ref={ref}>
+    // `feed__item` is the scroll-snap target. It wraps the card rather than being the
+    // card, so the snap point sits at the top of the whole unit including its margin.
+    <div ref={ref} className="feed__item">
       <PullCard
         source={{ title: row.work.title, kind: row.work.kind, year: row.work.year }}
         headline={row.headline}

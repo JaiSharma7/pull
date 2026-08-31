@@ -58,3 +58,42 @@ export function applyFocus(
   if (on) root.setAttribute(ATTR, 'on');
   else root.removeAttribute(ATTR);
 }
+
+/*
+ * The browser's own fullscreen, not only a CSS mode.
+ *
+ * Hiding the rails frees the app's chrome; it does nothing about the browser's. A
+ * "full screen mode" that still shows tabs, an address bar and a bookmark strip has
+ * not taken over the screen, and saying it has is the kind of claim this product is
+ * supposed to be careful about.
+ *
+ * Everything here is best-effort by design. `requestFullscreen` rejects unless it is
+ * called during a user gesture, iOS Safari does not implement it on iPhone at all, and
+ * a kiosk or embedded context can forbid it outright. In every one of those cases the
+ * CSS half still works and the reader still gets the larger type — so a rejection is
+ * swallowed rather than surfaced. The one thing that must not happen is an unhandled
+ * rejection taking down the click handler that also toggles the mode.
+ */
+
+/** Whether the browser will even entertain it. Used to decide, never to promise. */
+export function fullscreenSupported(doc: Document): boolean {
+  return typeof doc.documentElement.requestFullscreen === 'function';
+}
+
+export async function enterFullscreen(doc: Document): Promise<void> {
+  if (!fullscreenSupported(doc) || doc.fullscreenElement) return;
+  try {
+    await doc.documentElement.requestFullscreen({ navigationUI: 'hide' });
+  } catch {
+    // Denied, unsupported, or not in a gesture. The CSS half carries the feature.
+  }
+}
+
+export async function exitFullscreen(doc: Document): Promise<void> {
+  if (!doc.fullscreenElement || typeof doc.exitFullscreen !== 'function') return;
+  try {
+    await doc.exitFullscreen();
+  } catch {
+    // Nothing to recover: the reader is already where they asked to be.
+  }
+}
