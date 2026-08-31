@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
+import { History } from './routes/History.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
@@ -13,7 +14,7 @@ import { Specimen } from './routes/Specimen.js';
 import { queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
-type Tab = 'feed' | 'daily' | 'review' | 'library' | 'preferences';
+type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
 
 const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'feed', label: 'For You' },
@@ -22,6 +23,7 @@ const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'daily', label: 'Daily Pull' },
   { id: 'review', label: 'Review' },
   { id: 'library', label: 'Library' },
+  { id: 'history', label: 'History' },
   { id: 'preferences', label: 'Preferences' },
 ];
 
@@ -249,6 +251,7 @@ export function App() {
               {tab === 'daily' && <Daily onNavigate={navigate} />}
               {tab === 'review' && <Review />}
               {tab === 'library' && <Library userId={session.user.id} />}
+              {tab === 'history' && <History onNavigate={navigate} />}
               {tab === 'preferences' && (
                 <Preferences
                   userId={session.user.id}
