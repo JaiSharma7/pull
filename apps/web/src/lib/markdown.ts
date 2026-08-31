@@ -112,8 +112,24 @@ export function parseMarkdown(source: string): Document {
   // Normalise line endings so a CRLF checkout parses identically.
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const blocks: Block[] = [];
-  const unsupported = new Set<string>();
   let i = 0;
+
+  /*
+   * Every line, before any of them is consumed — not just the line that opens a
+   * block.
+   *
+   * Scanning inside the loop only ever saw first lines, because `gather` eats a
+   * block's continuation lines before the loop comes round again. Strikethrough
+   * or an HTML tag on the *second* line of a paragraph therefore passed the
+   * drift guard silently and reached a reader as literal punctuation in a
+   * privacy policy. Found by Codex on the opening diff.
+   */
+  const unsupported = new Set<string>();
+  for (const line of lines) {
+    for (const [pattern, name] of UNSUPPORTED) {
+      if (pattern.test(line)) unsupported.add(name);
+    }
+  }
 
   /** Consecutive lines belonging to one block, joined as a soft-wrapped paragraph. */
   const gather = (keep: (line: string) => boolean, strip: (line: string) => string) => {
@@ -131,10 +147,6 @@ export function parseMarkdown(source: string): Document {
     if (!line.trim()) {
       i += 1;
       continue;
-    }
-
-    for (const [pattern, name] of UNSUPPORTED) {
-      if (pattern.test(line)) unsupported.add(name);
     }
 
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);

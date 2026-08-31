@@ -85,6 +85,18 @@ describe('blocks', () => {
     expect(blocks[1]).toEqual({ kind: 'rule' });
   });
 
+  it('reports an unsupported construct wherever it sits in a block', () => {
+    // The first line of a block was once the only line scanned, so a construct
+    // on a continuation line passed the guard and reached the reader.
+    for (const source of [
+      'A paragraph.\nwith <b>html</b> on its second line',
+      '- an item\n  carrying ~~strikethrough~~ on its continuation',
+      '> a quote\n> with <em>markup</em> below its first line',
+    ]) {
+      expect(parseMarkdown(source).unsupported.length).toBeGreaterThan(0);
+    }
+  });
+
   it('terminates on input that is only blank lines', () => {
     expect(parseMarkdown('\n\n   \n').blocks).toEqual([]);
   });

@@ -24,7 +24,9 @@ the operator of your own service, and this document says nothing about what you 
 - **Your reading history never reaches a language model.** This is architectural rather
   than promised — see [What never reaches a model](#what-never-reaches-a-model).
 - Audio and offline reading happen **on your device** and send us nothing.
-- Delete your account and the personal data goes with it, in one cascade, immediately.
+- Delete your account and your library, history and knowledge model go with it, in one
+  cascade, immediately — with one exception, a document you submitted for generation, called
+  out under [How long we keep things](#how-long-we-keep-things).
 
 ## What we collect
 
@@ -92,12 +94,17 @@ or to any other model provider.** Models run at generation time, once, to turn a
 into a canonical summary that thousands of readers then share. What that call contains is
 the source material and our prompt — not you, not your history, and not your library.
 
-Today the only thing that could carry your own words to a provider is a summary **you**
-generate from a document you supply, and you would be doing that deliberately. Two schema
-columns (`explanations.gap_score`, `graded_at`) anticipate a future feature that would have
-a model grade your Say It Back answers. **Nothing writes to them today, and no explanation
-you have written has ever been sent to a provider.** If that feature ships, this policy
-changes first and the change is a commit you can read.
+**The exception is a document you submit yourself.** If you ask the Studio to generate a
+summary of your own text or a URL, that text is the source, and the pipeline sends it to
+Google as the context for the summary it writes. You are doing that deliberately, but it is
+your content reaching a model provider, and it deserves stating plainly rather than leaving
+as an implication: what never reaches a model is your **reading** — not something you
+supplied to be summarised.
+
+Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
+would have a model grade your Say It Back answers. **Nothing writes to them today, and no
+explanation you have written has ever been sent to a provider.** If that feature ships, this
+policy changes first and the change is a commit you can read.
 
 ## Legal bases for processing (UK/EU)
 
@@ -113,11 +120,11 @@ changes first and the change is a commit you can read.
 
 Three, and only three:
 
-| Processor                      | What it handles                                     | Where                   |
-| ------------------------------ | --------------------------------------------------- | ----------------------- |
-| **Supabase** (and AWS beneath) | Database, authentication, storage, server functions | `ca-central-1`, Canada  |
-| **Vercel**                     | Serving the web app and its static assets           | Global edge network     |
-| **Google** (Gemini API)        | Generating canonical summaries — never your data    | Google's infrastructure |
+| Processor                      | What it handles                                        | Where                   |
+| ------------------------------ | ------------------------------------------------------ | ----------------------- |
+| **Supabase** (and AWS beneath) | Database, authentication, storage, server functions    | `ca-central-1`, Canada  |
+| **Vercel**                     | Serving the web app and its static assets              | Global edge network     |
+| **Google** (Gemini API)        | Generating summaries — including a document you submit | Google's infrastructure |
 
 Sign-in emails are delivered through Supabase Auth's email provider, which necessarily
 sees your address and the code.
@@ -163,8 +170,20 @@ the schema, not a scheduled cleanup job.
 
 Three things survive, all of them severed from you:
 
-- **Generation and cost records.** `generation_jobs.requester_id` is set to null, so the job
-  remains as an accounting record with no one attached. `cost_ledger` never held a user id.
+- **Generation records, including any document you submitted.** `generation_jobs.requester_id`
+  is set to null, so nobody is attached to the job — but the job itself remains, and where you
+  supplied text rather than pointed at a public source, that text remains with it. The
+  submission is stored in `generation_jobs.target`, and the pipeline keeps what it acquired
+  and segmented in `job_steps.output`. **Nulling the requester does not erase the document**,
+  so deleting your account does not today remove text you submitted for generation.
+  `cost_ledger` never held a user id.
+
+  We would rather this were not true, and it is a schema fix rather than a wording one: the
+  source-bearing fields should be erased when the account that produced them is. Until that
+  ships, ask us and we will delete them by hand — and if you want a submitted document gone
+  with certainty, ask before deleting the account, while we can still tell which jobs were
+  yours.
+
 - **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays, so
   deleting an account cannot erase a moderation trail.
 - **Backups**, for up to 30 days, after which they roll off.
