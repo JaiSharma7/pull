@@ -1,0 +1,64 @@
+/*
+ * The Daily Pull.
+ *
+ * Rhythm only; every colour, rule and radius is a token. The picks are a numbered
+ * list separated by hairlines rather than by cards — a card is the feed's unit, one
+ * idea met alone, and this page exists to show a small finite set in a fixed order.
+ *
+ * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
+ */
+
+.daily__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: daily;
+}
+
+.daily__item {
+  counter-increment: daily;
+  padding: var(--space-5) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The ordinal is curation order, not rank, so it is set in the metadata face and kept
+ * faint: useful for finding your place, never the loudest thing in the row. The same
+ * treatment the source page gives its ideas, for the same reason.
+ */
+.daily__headline {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  margin: 0 0 var(--space-2);
+}
+
+.daily__headline::before {
+  content: counter(daily) '. ';
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-faint);
+}
+
+/*
+ * The curator's note, which is the one thing this screen has that the feed does not.
+ *
+ * Marked by a rule in the margin rather than by a tint or a box: a filled panel would
+ * be the one elevated surface on a page that has none, and the accent is spent on
+ * meaning rather than on decoration.
+ */
+.daily__blurb {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent);
+  color: var(--text-soft);
+  font-style: italic;
+}
+
+.daily__body {
+  margin: 0 0 var(--space-2);
+}
+
+.daily__why {
+  color: var(--text-soft);
+  margin: 0 0 var(--space-3);
+}
