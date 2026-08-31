@@ -495,7 +495,16 @@
   gap: var(--space-2);
 }
 
-@media (min-width: 60rem) {
+/*
+ * Exactly where the rail takes over, and not a pixel before.
+ *
+ * These two thresholds are one decision written twice, and they drifted apart the
+ * moment the rail moved from 60rem to 63rem to protect the measure: between 960px and
+ * 1008px the masthead nav had already hidden and the rail had not yet appeared, so
+ * there was **no navigation on the screen at all**. Neither rule looks wrong on its
+ * own; only the gap between them is.
+ */
+@media (min-width: 63rem) {
   .shell__masthead-nav {
     display: none;
   }
