@@ -19,8 +19,14 @@
  */
 
 import type { Step } from './steps.ts';
-import { BilledProviderError } from './providers.ts';
-import type { CanonicalSummary, EmbeddingProvider, SummaryProvider, Usage } from './providers.ts';
+import { BilledProviderError, TOPIC_SLUGS } from './providers.ts';
+import type {
+  CanonicalSummary,
+  EmbeddingProvider,
+  SummaryProvider,
+  TopicSlug,
+  Usage,
+} from './providers.ts';
 import { contentHash, extractText, fetchBounded, MAX_SOURCE_CHARS, segment } from './source.ts';
 
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
@@ -128,6 +134,30 @@ export const RIGHTS_STATUSES = [
 ] as const;
 export type RightsStatus = (typeof RIGHTS_STATUSES)[number];
 
+/** How many topics one work may carry. Beyond this the signal stops meaning anything. */
+const MAX_TOPICS_PER_WORK = 4;
+
+/**
+ * Narrow a model-supplied topic list to slugs Postgres will accept.
+ *
+ * Drops unknown slugs rather than substituting a default. There is no safe default
+ * here: filing an astronomy lecture under `philosophy` to avoid an empty list would
+ * corrupt the one signal a reader's stated preferences steer by, and `topic_affinity`
+ * already treats "no topics" correctly as no affinity.
+ *
+ * De-duplicated because the model occasionally returns a parent and its child twice
+ * over, and `work_topics` is unique on `(work_id, topic_id)`.
+ */
+export function narrowTopics(value: unknown): TopicSlug[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<TopicSlug>();
+  for (const entry of value) {
+    if (TOPIC_SLUGS.includes(entry as TopicSlug)) seen.add(entry as TopicSlug);
+    if (seen.size >= MAX_TOPICS_PER_WORK) break;
+  }
+  return [...seen];
+}
+
 /**
  * A fetched web page is an essay unless the caller says otherwise.
  *
@@ -198,6 +228,13 @@ export interface PipelineDb {
     kind: WorkKind;
     contentHash: string;
     rightsStatus: RightsStatus;
+    /**
+     * Already narrowed by `narrowTopics`. Written to `work_topics` only for a work
+     * this call actually creates: an existing work has been classified once already,
+     * and re-filing it on every reuse would let one job's classification overwrite
+     * another's for a source that has not changed.
+     */
+    topics: TopicSlug[];
   }): Promise<{ workId: string; existing: boolean }>;
   createSummary(input: {
     workId: string;
@@ -550,6 +587,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
             elevatorPitch: string;
             whyItMatters: string;
             pulls: { headline: string; body: string; whyItMatters: string }[];
+            topics?: unknown;
           }
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
@@ -559,6 +597,11 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
+        // `topics` is whatever came back in the synthesize step's stored output, so
+        // it is narrowed here rather than trusted — the same treatment `kind` and
+        // `rights` already get. A job queued before this field existed replays with
+        // no topics at all, which narrows to an empty list rather than throwing.
+        topics: narrowTopics(summary.topics),
       });
 
       const summaryId = await db.createSummary({

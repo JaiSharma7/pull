@@ -9,19 +9,36 @@
     "it were the whole thing — a quiet way to be wrong. Essays, letters, speeches,",
     "single chapters and papers all finish well inside the limit.",
     "",
-    "Wikisource rather than Gutenberg because it has a page per document. Gutenberg",
-    "publishes a file per *book*, so 'Federalist No. 10' there means downloading all 85.",
     "",
     "The mix is deliberate. A feed of nothing but Stoicism makes the Delta look clever",
     "and tells you nothing, because everything sits near everything. Spread across",
     "philosophy, politics, science, economics and craft, 'you already knew this' has to",
     "mean something to be true.",
     "",
+    "Three hosts, chosen by what fits rather than by preference. Wikisource has a page",
+    "per document. The MIT Internet Classics Archive has a page per dialogue or per book",
+    "of a treatise, which is what makes Plato and Aristotle usable at all. Gutenberg",
+    "publishes a file per *book*, so it appears only where the whole book finishes inside",
+    "the limit — 'Federalist No. 10' there would mean downloading all eighty-five.",
+    "",
+    "The classical translations are public domain on their own terms (Jowett, Ross and",
+    "their contemporaries, all long pre-1929). The archives hosting them assert copyright",
+    "over their *presentation*, which is not what is used here: what this pipeline",
+    "publishes is original analysis, never the page it read. See law 4.",
+    "",
     "EVERY URL HERE HAS BEEN FETCHED AND CHECKED. The first draft of this file was",
     "written from memory and 28 of 61 entries were 404s — which is why the script has a",
     "--check mode and why it runs before any seeding. Re-verify after editing:",
     "",
     "  node scripts/seed-corpus.mjs --check",
+    "",
+    "The entries added on 2026-08-31 were verified from Postgres with pg_net instead,",
+    "because the agent container's egress allowlist cannot reach these hosts while the",
+    "database can. Same checks, plus the page <title> compared against the expected work",
+    "— which caught Gutenberg 6762 being *Politics* and not *Rhetoric*, a mistake a 200",
+    "would have waved straight through. Anything over MAX_SOURCE_CHARS was dropped rather",
+    "than accepted and silently truncated, which is most of a full-length book and is why",
+    "so few Gutenberg entries survive here.",
     "",
     "`author` is for whoever reads this file. It is deliberately NOT carried into the",
     "job target, because `works` has no author column and `upsertWork` takes only",
@@ -66,7 +83,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/Life_Without_Principle"
     },
-
     {
       "title": "Of Studies",
       "author": "Francis Bacon",
@@ -91,7 +107,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Great_Place"
     },
-
     {
       "title": "Of Cannibals",
       "author": "Michel de Montaigne",
@@ -104,7 +119,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Essays_of_Montaigne/Book_I/Chapter_XXV"
     },
-
     {
       "title": "Federalist No. 1: General Introduction",
       "author": "Alexander Hamilton",
@@ -129,7 +143,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Federalist_Papers/No._78"
     },
-
     {
       "title": "The Gettysburg Address",
       "author": "Abraham Lincoln",
@@ -154,7 +167,6 @@
       "kind": "lecture",
       "url": "https://en.wikisource.org/wiki/Ain%27t_I_a_Woman%3F"
     },
-
     {
       "title": "A Vindication of the Rights of Woman: Introduction",
       "author": "Mary Wollstonecraft",
@@ -173,7 +185,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Subjection_of_Women/Chapter_1"
     },
-
     {
       "title": "The Wealth of Nations: Of the Division of Labour",
       "author": "Adam Smith",
@@ -192,7 +203,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Theory_of_the_Leisure_Class/Chapter_4"
     },
-
     {
       "title": "On the Origin of Species: Struggle for Existence",
       "author": "Charles Darwin",
@@ -217,7 +227,6 @@
       "kind": "lecture",
       "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_I"
     },
-
     {
       "title": "The Will to Believe",
       "author": "William James",
@@ -230,7 +239,6 @@
       "kind": "lecture",
       "url": "https://en.wikisource.org/wiki/Pragmatism:_A_New_Name_for_Some_Old_Ways_of_Thinking/Lecture_II"
     },
-
     {
       "title": "The Souls of Black Folk: Of Our Spiritual Strivings",
       "author": "W. E. B. Du Bois",
@@ -243,7 +251,6 @@
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/The_Souls_of_Black_Folk/Chapter_3"
     },
-
     {
       "title": "The Prince: Concerning New Principalities",
       "author": "Niccolò Machiavelli",
@@ -267,6 +274,150 @@
       "author": "Oscar Wilde",
       "kind": "essay",
       "url": "https://en.wikisource.org/wiki/Intentions/The_Decay_of_Lying"
+    },
+    {
+      "title": "Apology",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/apology.html"
+    },
+    {
+      "title": "Crito",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/crito.html"
+    },
+    {
+      "title": "Meno",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/meno.html"
+    },
+    {
+      "title": "Phaedo",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/phaedo.html"
+    },
+    {
+      "title": "Symposium",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/symposium.html"
+    },
+    {
+      "title": "Gorgias",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/gorgias.html"
+    },
+    {
+      "title": "The Republic, Book II",
+      "author": "Plato",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plato/republic.2.i.html"
+    },
+    {
+      "title": "Poetics",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/poetics.1.1.html"
+    },
+    {
+      "title": "Rhetoric, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/rhetoric.1.i.html"
+    },
+    {
+      "title": "Metaphysics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/metaphysics.1.i.html"
+    },
+    {
+      "title": "Nicomachean Ethics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/nicomachaen.1.i.html"
+    },
+    {
+      "title": "Nicomachean Ethics, Book II",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/nicomachaen.2.ii.html"
+    },
+    {
+      "title": "On the Soul, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/soul.1.i.html"
+    },
+    {
+      "title": "The Discourses, Book I",
+      "author": "Epictetus",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Epictetus/discourses.1.one.html"
+    },
+    {
+      "title": "Aphorisms",
+      "author": "Hippocrates",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Hippocrates/aphorisms.1.i.html"
+    },
+    {
+      "title": "History of the Peloponnesian War, Book II",
+      "author": "Thucydides",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Thucydides/pelopwar.2.second.html"
+    },
+    {
+      "title": "Discourse on the Method",
+      "author": "Rene Descartes",
+      "kind": "essay",
+      "url": "https://www.gutenberg.org/cache/epub/59/pg59.txt"
+    },
+    {
+      "title": "Caesar",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/caesar.html"
+    },
+    {
+      "title": "Alexander",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/alexandr.html"
+    },
+    {
+      "title": "Lycurgus",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/lycurgus.html"
+    },
+    {
+      "title": "Solon",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/solon.html"
+    },
+    {
+      "title": "On the Sacred Disease",
+      "author": "Hippocrates",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Hippocrates/sacred.html"
+    },
+    {
+      "title": "On the Heavens, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/heavens.1.i.html"
+    },
+    {
+      "title": "Physics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/physics.1.i.html"
     }
   ]
 }

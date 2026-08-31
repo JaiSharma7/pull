@@ -83,14 +83,117 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       return reusable ? { workId: work.id, summaryId: reusable.id } : null;
     },
 
-    async upsertWork({ title, kind, contentHash, rightsStatus }) {
+    async upsertWork({ title, kind, contentHash, rightsStatus, topics }) {
+      /*
+       * File a newly created work under its topics.
+       *
+       * Separate from the insert on purpose. `work_topics` is a join table with no
+       * bearing on whether the summary is readable, so a failure here must not fail
+       * a job that has already paid for synthesis — an unclassified work is a worse
+       * feed position, while a failed job is nothing at all.
+       *
+       * Slugs are resolved rather than trusted: `narrowTopics` has already dropped
+       * anything outside the mirrored taxonomy, and this drops anything the mirror
+       * claims but the database has not actually been migrated to carry. That second
+       * gap is real — the Edge Function deploys independently of the migration, so
+       * for a window they disagree.
+       *
+       * Weight 1.0 for the first slug, 0.6 for the rest: `topic_affinity` multiplies
+       * this by the reader's preference and takes the max, so the model's ordering
+       * becomes primary-versus-secondary rather than being discarded.
+       */
+      const fileUnderTopics = async (workId: string, { onlyIfUnclassified = false } = {}) => {
+        if (topics.length === 0) return;
+        try {
+          /*
+           * An adopted work is filed only when it carries no classification at all.
+           *
+           * Both early returns below hand back a work this call did not create — a
+           * reuse hit, or the loser of the `content_hash` race — and neither reached
+           * this function before, so a work created by an older worker, or by a
+           * winning invocation that died between the insert and the topic write,
+           * stayed at `topic_affinity` = 0.0 for the life of the row with nothing
+           * ever revisiting it.
+           *
+           * The guard is what keeps this from being worse than the gap it closes:
+           * two jobs over one source produce two independent classifications, and
+           * merging them would blend one model's ranking into another's, leaving a
+           * work with two primaries and no way to tell which. First classification
+           * wins; a later one declines rather than argues. Racy by construction, and
+           * harmlessly so — the upsert's `on conflict do nothing` makes a lost race a
+           * no-op rather than a duplicate.
+           */
+          if (onlyIfUnclassified) {
+            const existingTopics = must(
+              await supabase.from('work_topics').select('work_id').eq('work_id', workId).limit(1),
+              'check existing classification',
+            ) as { work_id: string }[] | null;
+            if (existingTopics && existingTopics.length > 0) return;
+          }
+
+          const rows = must(
+            await supabase.from('topics').select('id, slug').in('slug', topics),
+            'look up topics',
+          ) as { id: string; slug: string }[] | null;
+
+          const bySlug = new Map((rows ?? []).map((r) => [r.slug, r.id]));
+          /*
+           * Weight is assigned *after* resolving, not from the model's index.
+           *
+           * Ranking off the original position looks equivalent and is not: if the
+           * primary slug is one the database does not carry — the deploy-versus-
+           * migration window this function's header anticipates — it is dropped, and
+           * every surviving link is left at 0.6. The work then has no primary topic
+           * at all and scores 40% under what it should in `topic_affinity`, quietly
+           * and for as long as the row lives. Whichever topic survives first is the
+           * most central one that actually exists, which is the honest answer.
+           */
+          const links = topics
+            .map((slug) => bySlug.get(slug))
+            .filter((id): id is string => Boolean(id))
+            .map((topic_id, rank) => ({
+              work_id: workId,
+              topic_id,
+              weight: rank === 0 ? 1.0 : 0.6,
+            }));
+          if (links.length === 0) return;
+
+          // Ignores a duplicate rather than raising: two jobs can race onto the same
+          // work through the 23505 adoption path below, and the second one filing the
+          // same topics is a no-op, not an error.
+          must(
+            await supabase.from('work_topics').upsert(links, { onConflict: 'work_id,topic_id' }),
+            'file work under topics',
+          );
+        } catch (e) {
+          /*
+           * Swallowed, but never silent.
+           *
+           * Classification is worth less than the summary it accompanies, so this
+           * must not fail a job that has already paid for synthesis. But an
+           * unclassified work is invisible in exactly the way that matters — the job
+           * reports success, no step row records a problem, and the only symptom is a
+           * work no reader's preferences can ever reach. Without this line the
+           * difference between "the model returned no topics" and "the write failed"
+           * is unrecoverable after the fact.
+           */
+          console.error(
+            `work_topics: failed to file ${workId} under [${topics.join(', ')}]:`,
+            e instanceof Error ? e.message : e,
+          );
+        }
+      };
+
       const existing = must(
         await supabase.from('works').select('id').eq('content_hash', contentHash).limit(1),
         'look up work',
       ) as { id: string }[] | null;
 
       const found = existing?.[0];
-      if (found) return { workId: found.id, existing: true };
+      if (found) {
+        await fileUnderTopics(found.id, { onlyIfUnclassified: true });
+        return { workId: found.id, existing: true };
+      }
 
       const slug =
         title
@@ -130,10 +233,13 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           await supabase.from('works').select('id').eq('content_hash', contentHash).single(),
           'adopt concurrently created work',
         ) as { id: string };
+        await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
         return { workId: raced.id, existing: true };
       }
 
-      return { workId: (data as { id: string }).id, existing: false };
+      const workId = (data as { id: string }).id;
+      await fileUnderTopics(workId);
+      return { workId, existing: false };
     },
 
     async createSummary({
