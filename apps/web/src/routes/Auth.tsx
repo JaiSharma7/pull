@@ -211,6 +211,17 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
       setError(link.message);
       return;
     }
+    /*
+     * `verifyOtp` takes `{ email, token }` — a code alone cannot complete a sign-in.
+     * That was unreachable while this form lived behind the code step, because getting
+     * there meant an address had already been entered. Now that it opens on the first
+     * screen, a reader can paste a code into an empty form, and the resulting
+     * "Token has expired or is invalid" would blame the code for a missing address.
+     */
+    if (link.kind === 'code' && !(link.email ?? email).trim()) {
+      setError('Enter the email address you asked for that code with, then try again.');
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -349,16 +360,6 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
               <button type="button" className="btn btn--plain" onClick={startOver} disabled={busy}>
                 Use another email
               </button>
-              <span aria-hidden="true"> · </span>
-              <button
-                type="button"
-                className="btn btn--plain"
-                aria-expanded={showPaste}
-                onClick={() => setShowPaste((v) => !v)}
-                disabled={busy}
-              >
-                No code in the email?
-              </button>
             </p>
           </form>
         ) : (
@@ -386,10 +387,35 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
         )}
 
         {/*
-          A sibling of the code form, never a child of it: nested forms are invalid
+         * Reachable from BOTH steps, which is the whole point and was the bug.
+         *
+         * This started life inside the code step, so it required `sent` — and `sent`
+         * only becomes true after `signInWithOtp` *succeeds*. That put the escape hatch
+         * behind the door it exists to open: when Supabase's SMTP rate limit fires, the
+         * send fails, the code step never renders, and the one route in that needs no
+         * email is unreachable. The failure that makes this necessary is precisely the
+         * failure that hid it.
+         *
+         * So it lives outside the branch, and the wording changes rather than the
+         * availability.
+         */}
+        <p className="titlepage__alts">
+          <button
+            type="button"
+            className="btn btn--plain"
+            aria-expanded={showPaste}
+            onClick={() => setShowPaste((v) => !v)}
+            disabled={busy}
+          >
+            {sent ? 'No code in the email?' : 'Already have a link or code?'}
+          </button>
+        </p>
+
+        {/*
+          A sibling of the forms above, never a child of one: nested forms are invalid
           HTML and the inner one silently loses its own submit handler.
         */}
-        {sent && showPaste && (
+        {showPaste && (
           <form onSubmit={usePastedLink} className="stack">
             <hr className="rule" />
             <label className="field">
@@ -404,9 +430,9 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
               />
             </label>
             <p className="meta" id="paste-help">
-              Two things work here. Copy the link out of the email without opening it — or, if you
-              already clicked it and landed on a page that would not load, copy that page&rsquo;s
-              whole address out of the address bar. The sign-in is inside it either way.
+              Anything that carries a sign-in works here. The link from the email, unopened. The
+              whole address of a page you landed on that would not load — the sign-in is still
+              inside it. Or the six-digit code on its own.
             </p>
             <button type="submit" className="btn btn--primary" disabled={busy || !pasted.trim()}>
               {busy ? 'Checking…' : 'Sign in with that'}
