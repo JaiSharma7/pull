@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
+import { isEmailRateLimited } from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { supabase } from '../lib/supabase.js';
@@ -138,8 +139,31 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
         // Only used if the email carries a link rather than a code. Harmless otherwise.
         options: { emailRedirectTo: window.location.origin },
       });
-      if (error) setError(error.message);
-      else setSent(true);
+      if (error) {
+        /*
+         * The dead end this exists to remove.
+         *
+         * A rate-limited send left the reader on a screen whose only action was the
+         * one that caused it, with the route that needs no email collapsed behind a
+         * link they had no reason to open. Measured on 2026-08-31: the owner was
+         * locked out of their own product for two hours, retrying, while a valid
+         * session sat one unopened panel away — and each retry pushed the window out.
+         *
+         * So the panel opens itself, and the message names the way through rather
+         * than only the problem. This is the one failure where "try again" is the
+         * wrong advice, so it is the one failure that must not offer it.
+         */
+        if (isEmailRateLimited(error)) {
+          setShowPaste(true);
+          setError(
+            'Too many sign-in emails have been requested, so the next one will not arrive ' +
+              'for a while — asking again makes the wait longer. If you already have a link ' +
+              'or a code from an earlier email, paste it below and it will still work.',
+          );
+        } else {
+          setError(error.message);
+        }
+      } else setSent(true);
     } catch (e) {
       setError(
         e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
@@ -285,7 +309,16 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
         email,
         options: { emailRedirectTo: window.location.origin },
       });
-      setError(error ? error.message : 'Sent. Check your email again.');
+      if (error && isEmailRateLimited(error)) {
+        // Same reasoning as `requestCode`: this is the button that caused the problem.
+        setShowPaste(true);
+        setError(
+          'Too many sign-in emails have been requested. Asking again makes the wait ' +
+            'longer — paste an earlier link or code below instead.',
+        );
+      } else {
+        setError(error ? error.message : 'Sent. Check your email again.');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reach the server.');
     } finally {
