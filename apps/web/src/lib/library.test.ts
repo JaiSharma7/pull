@@ -22,6 +22,11 @@ const item = (id: string, workId: string, workTitle: string): LibraryItem => ({
   whyItMatters: null,
   savedAt: '2026-08-30T00:00:00Z',
   work: { id: workId, title: workTitle, kind: 'book' },
+  saveId: `save-${id}`,
+  stashId: null,
+  note: null,
+  archived: false,
+  readLater: false,
 });
 
 describe('groupByWork', () => {

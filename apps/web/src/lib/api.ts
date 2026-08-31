@@ -208,7 +208,7 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
     const { data, error } = await supabase
       .from('saved_items')
       .select(
-        'created_at, pull_id, pulls(id, headline, body, why_it_matters, summaries(works(id, title, kind)))',
+        'id, created_at, pull_id, stash_id, note, archived, read_later, pulls(id, headline, body, why_it_matters, summaries(works(id, title, kind)))',
       )
       .eq('user_id', userId)
       .not('pull_id', 'is', null)
@@ -218,7 +218,12 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
     if (error) throw rpcError(error);
 
     const rows = (data ?? []) as unknown as {
+      id: string;
       created_at: string;
+      stash_id: string | null;
+      note: string | null;
+      archived: boolean;
+      read_later: boolean;
       pulls: {
         id: string;
         headline: string;
@@ -241,6 +246,11 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
         whyItMatters: r.pulls.why_it_matters,
         savedAt: r.created_at,
         work: work ?? { id: '', title: 'Unknown source', kind: null },
+        saveId: r.id,
+        stashId: r.stash_id,
+        note: r.note,
+        archived: r.archived,
+        readLater: r.read_later,
       });
     }
 

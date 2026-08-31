@@ -1,0 +1,93 @@
+/*
+ * The Library, and the collections above it.
+ *
+ * Controls are text with a pressed state, not chips with a fill. Design law 5
+ * says colour is never the only signal, and at this density a row of tinted
+ * pills would also be the closest this product has come to looking like the
+ * thing law 1 exists to avoid.
+ *
+ * Every colour, rule and radius is a token. No gradient, no shadow, no second
+ * accent, nothing that scrolls inside itself.
+ */
+
+.library__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-3) 0 var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.library__filters,
+.library__collections {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+
+/*
+ * The pressed state carries weight and a rule, not just the accent — the same
+ * treatment the navigation uses, for the same reason: `aria-pressed` is not a
+ * visual signal, and a reader who cannot separate oxblood from ink would
+ * otherwise have no way to tell which filter is on.
+ */
+.library__filter[aria-pressed='true'] {
+  color: var(--accent);
+  font-weight: 500;
+  border-bottom: 1px solid var(--accent);
+}
+
+.library__collection {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.library__remove {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+}
+
+.library__item {
+  padding-bottom: var(--space-4);
+}
+
+.library__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-2) 0 0;
+}
+
+.library__assign {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/*
+ * A real `<select>`, styled down rather than replaced. A custom listbox here
+ * would be a keyboard-navigation surface to get wrong for no gain — the native
+ * one is already operable, announced, and works on a phone.
+ */
+.library__select {
+  width: auto;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--step--1);
+}
+
+/*
+ * A reader's own note, marked the way the Daily Pull marks a curator's: a rule
+ * in the margin rather than a tinted panel, because a filled box would be the
+ * one elevated surface on a page that has none.
+ */
+.library__note {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--rule-strong);
+  color: var(--text-soft);
+}
