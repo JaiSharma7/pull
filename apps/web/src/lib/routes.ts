@@ -36,3 +36,19 @@ export function anchoredPullId(hash: string): string | null {
   const id = hash.slice('#p-'.length);
   return id.length > 0 ? id : null;
 }
+
+/**
+ * A query parameter from a path that may also carry a fragment.
+ *
+ * `/pull/:id` resolves to `/source/<workId>?s=<summaryId>#p-<pullId>`, so the value
+ * has a fragment glued to its end unless the fragment is removed first. Written here
+ * beside `routeParam` rather than inline in the shell because the two have to agree
+ * about the order those suffixes come off in, and agreement is easier to keep when
+ * it is in one file with tests.
+ */
+export function queryParam(pathname: string, key: string): string | null {
+  const query = pathname.split('?')[1]?.split('#')[0];
+  if (!query) return null;
+  const value = new URLSearchParams(query).get(key);
+  return value && value.length > 0 ? value : null;
+}

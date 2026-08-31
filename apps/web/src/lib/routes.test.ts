@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchoredPullId, routeParam } from './routes.js';
+import { anchoredPullId, queryParam, routeParam } from './routes.js';
 
 const UUID = '0e825ac9-6df4-495a-8028-1868c7d35e95';
 const PULL = '43005e69-e1c6-4fdd-bf34-dee342db375e';
@@ -56,5 +56,26 @@ describe('anchoredPullId', () => {
     expect(anchoredPullId('')).toBeNull();
     expect(anchoredPullId('#p-')).toBeNull();
     expect(anchoredPullId('#main')).toBeNull();
+  });
+});
+
+describe('queryParam', () => {
+  it('reads a value that has a fragment glued to it', () => {
+    // The shape /pull/:id actually produces.
+    expect(queryParam(`/source/${UUID}?s=${PULL}#p-${PULL}`, 's')).toBe(PULL);
+  });
+
+  it('reads a value with no fragment', () => {
+    expect(queryParam(`/source/${UUID}?s=${PULL}`, 's')).toBe(PULL);
+  });
+
+  it('returns null when the key, the query or the value is absent', () => {
+    expect(queryParam(`/source/${UUID}`, 's')).toBeNull();
+    expect(queryParam(`/source/${UUID}?other=1`, 's')).toBeNull();
+    expect(queryParam(`/source/${UUID}?s=`, 's')).toBeNull();
+  });
+
+  it('does not read the fragment as a query', () => {
+    expect(queryParam(`/source/${UUID}#s=nope`, 's')).toBeNull();
   });
 });
