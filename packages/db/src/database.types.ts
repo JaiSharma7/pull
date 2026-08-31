@@ -56,6 +56,24 @@ export type Database = {
           },
         ]
       }
+      blocked_email_domains: {
+        Row: {
+          created_at: string
+          domain: string
+          reason: string
+        }
+        Insert: {
+          created_at?: string
+          domain: string
+          reason?: string
+        }
+        Update: {
+          created_at?: string
+          domain?: string
+          reason?: string
+        }
+        Relationships: []
+      }
       citation_anchors: {
         Row: {
           confidence: number

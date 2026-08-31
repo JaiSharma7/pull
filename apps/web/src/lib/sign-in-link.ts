@@ -31,6 +31,16 @@
 export type SignInLink =
   /** A complete session, already minted. Spend it with `setSession`. */
   | { kind: 'session'; accessToken: string; refreshToken: string }
+  /**
+   * The refresh half on its own. Spend it with `refreshSession`.
+   *
+   * A refresh token alone is enough to mint a whole session, which makes this the one
+   * route in that touches no email at all — the way back when the mail itself is the
+   * thing that is broken. Supabase's built-in SMTP is rate-limited per hour and counts
+   * every request, so a reader who has been retrying a sign-in that silently failed can
+   * exhaust it and then be unable to ask for the code that would let them in.
+   */
+  | { kind: 'refresh'; refreshToken: string }
   /** An unspent link, still hashed. Spend it with `verifyOtp({ token_hash })`. */
   | { kind: 'token-hash'; tokenHash: string; type: string }
   /** A six-digit code. Spend it with `verifyOtp({ email, token })`. */
@@ -95,9 +105,17 @@ export function parseSignInLink(raw: string): SignInLink {
 
   const accessToken = hash.get('access_token');
   const refreshToken = hash.get('refresh_token');
-  // Both halves or neither: `setSession` needs the refresh token to be a session that
-  // outlives the hour, and a session that silently expires is worse than no session.
   if (accessToken && refreshToken) return { kind: 'session', accessToken, refreshToken };
+  /*
+   * The asymmetry here is deliberate, and it is not a shortcut.
+   *
+   * A refresh token alone is *more* than enough — `refreshSession` exchanges it for a
+   * whole new session, access half included. An access token alone is *less* than
+   * enough: `setSession` will take it and produce a session that cannot refresh, so it
+   * works and then silently stops working an hour later, which is worse than a clean
+   * refusal. So one half is accepted and the other is rejected.
+   */
+  if (refreshToken) return { kind: 'refresh', refreshToken };
 
   const tokenHash = query.get('token');
   if (tokenHash) {

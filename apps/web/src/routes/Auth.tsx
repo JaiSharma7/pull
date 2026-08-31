@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
+import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { supabase } from '../lib/supabase.js';
 
@@ -101,6 +102,29 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
 
   async function requestCode(e: React.FormEvent) {
     e.preventDefault();
+
+    /*
+     * Refused before the request, not after.
+     *
+     * Supabase's built-in SMTP is rate-limited **per hour and counts every request**,
+     * not every delivery — so the send budget is shared between real readers and
+     * anyone pointing a script at this form. A few dozen throwaway addresses exhaust
+     * the hour and the next genuine reader is told to wait, with no way to shorten it.
+     * Stopping here costs nothing and spends none of it.
+     *
+     * The browser is not where this is enforced — a script hitting the Auth endpoint
+     * never runs this line. The `BEFORE INSERT` trigger on `auth.users` is the block
+     * that cannot be routed around; this is the half that protects the budget and
+     * answers the person immediately.
+     */
+    if (isDisposableEmail(email)) {
+      setError(
+        'That looks like a disposable address. Use one you can actually receive mail at — ' +
+          'we ask for an email and nothing else, and this is the only thing we use it for.',
+      );
+      return;
+    }
+
     setBusy(true);
     setError(null);
     // try/finally, not try/catch-then-reset: supabase-js converts its own AuthErrors
@@ -198,18 +222,23 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
               access_token: link.accessToken,
               refresh_token: link.refreshToken,
             })
-          : link.kind === 'token-hash'
-            ? await supabase.auth.verifyOtp({
-                token_hash: link.tokenHash,
-                // Narrowed at the boundary: the type rides in from a URL, and an
-                // unrecognised one is a value TypeScript would accept and GoTrue reject.
-                type: link.type === 'signup' ? 'signup' : 'magiclink',
-              })
-            : await supabase.auth.verifyOtp({
-                email: link.email ?? email,
-                token: link.code,
-                type: 'email',
-              });
+          : // Exchanges the refresh half for a whole new session. The one route in that
+            // needs no email at all, which is what makes it the answer when the mail
+            // itself — a spent SMTP rate limit, a swallowed message — is the problem.
+            link.kind === 'refresh'
+            ? await supabase.auth.refreshSession({ refresh_token: link.refreshToken })
+            : link.kind === 'token-hash'
+              ? await supabase.auth.verifyOtp({
+                  token_hash: link.tokenHash,
+                  // Narrowed at the boundary: the type rides in from a URL, and an
+                  // unrecognised one is a value TypeScript would accept and GoTrue reject.
+                  type: link.type === 'signup' ? 'signup' : 'magiclink',
+                })
+              : await supabase.auth.verifyOtp({
+                  email: link.email ?? email,
+                  token: link.code,
+                  type: 'email',
+                });
       if (error) setError(error.message);
       // On success App.tsx's auth listener swaps this screen out; nothing to do here.
     } catch (e) {

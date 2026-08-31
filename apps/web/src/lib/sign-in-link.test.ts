@@ -26,6 +26,27 @@ describe('parseSignInLink', () => {
     });
   });
 
+  it('accepts the refresh half alone, because it is enough to mint a session', () => {
+    /*
+     * The only route in that touches no email. Supabase's built-in SMTP is rate-limited
+     * per hour and counts requests rather than deliveries, so a reader retrying a
+     * sign-in that silently failed can exhaust the budget and then be unable to ask for
+     * the very code that would let them in.
+     */
+    expect(parseSignInLink('https://pull-puce.vercel.app/#refresh_token=abc123XYZ')).toEqual({
+      kind: 'refresh',
+      refreshToken: 'abc123XYZ',
+    });
+  });
+
+  it('prefers the whole session when both halves are present', () => {
+    // Order matters: `setSession` avoids a network round trip that `refreshSession`
+    // would spend, and the access token is already good.
+    expect(parseSignInLink('http://localhost:3000/#access_token=A&refresh_token=R')).toMatchObject({
+      kind: 'session',
+    });
+  });
+
   it('reads the unclicked link straight out of the email', () => {
     const got = parseSignInLink(
       `${REF}/auth/v1/verify?token=pkce_9f2b&type=magiclink&redirect_to=http://localhost:3000`,
