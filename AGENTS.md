@@ -65,12 +65,18 @@ passed — that step is the gate now, and skipping it is skipping the whole thin
 
 Law 7 in `CLAUDE.md` says what may reach the browser. This is how to hold to it.
 
-**Before every push**, check that the diff introduces no credential outside the one place
-it belongs:
+**Before every push**, the diff is checked for credentials outside the one place they
+belong. This no longer depends on anyone remembering it: `scripts/secret-scan.sh` runs as
+a `PreToolUse` hook on every `git commit` and `git push` and blocks the call on a hit.
 
 ```bash
-git diff --cached | grep -nE 'sb_secret_|service_role|AIza|AQ\.[A-Za-z0-9]|BEGIN [A-Z ]*PRIVATE KEY'
+./scripts/secret-scan.sh --staged   # or --push, or --range <rev-range>
 ```
+
+It reports `file:line` and the kind of credential, never the matched text — a scanner
+that prints the secret it found has written it into the transcript, which is the thing
+law 7 exists to prevent. Its rules require the shape of a _value_, so the many honest
+mentions of `service_role` in migrations and docs do not trip it.
 
 A hit is a stop, not a judgement call.
 
@@ -119,6 +125,24 @@ different values than the committed defaults.
   being waited on, not from habit.
 - Background long jobs rather than blocking on them. Never `sleep` to wait for an
   external event — PR activity arrives as a wake.
+
+## Unattended runs
+
+A night with nobody awake is a different discipline, not a longer session: every question
+is a stall, every ambiguity is a stop, and every optimistic claim is a lie told to someone
+who cannot check it.
+
+- `./scripts/preflight.sh` — what this container can actually do, probed rather than
+  remembered. Run it before anything depends on the answer.
+- `/overnight <objective>` — ground truth, then the autonomy contract (objective,
+  evaluator, baseline, caps, ownership, stop conditions), then approval, then dispatch.
+- `.claude/skills/overnight/SKILL.md` — the rules that replace a person: never ask, never
+  end a turn on a red PR, one writer per file, waves that leave finished work behind,
+  the abbreviated review gate, and the escalations that are worth stopping a night for.
+  `plan-template.md` beside it is the run plan to instantiate.
+- `/handoff` — the evidence packet, with the failures reported rather than rounded away.
+
+`docs/overnight-plan.md` is the worked example: the run of 2026-08-31 with its log intact.
 
 ## PR events
 

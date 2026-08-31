@@ -13,6 +13,8 @@
       "Bash(pnpm db:lint)",
       "Bash(pnpm db:types)",
       "Bash(pnpm db:reset)",
+      "Bash(./scripts/preflight.sh)",
+      "Bash(./scripts/secret-scan.sh:*)",
       "Bash(pnpm turbo:*)",
       "Bash(pnpm exec:*)",
       "Bash(node:*)",
@@ -27,6 +29,7 @@
       "Bash(git push:*)",
       "Bash(git fetch:*)",
       "Bash(git checkout:*)",
+      "Bash(git rebase:*)",
       "Bash(git mv:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
@@ -49,6 +52,10 @@
       "mcp__github__list_commits",
       "mcp__github__list_branches",
       "mcp__github__subscribe_pr_activity",
+      "mcp__github__unsubscribe_pr_activity",
+      "mcp__github__add_reply_to_pull_request_comment",
+      "mcp__github__resolve_review_thread",
+      "mcp__github__get_file_contents",
       "mcp__github__get_check_run",
       "mcp__Supabase",
       "mcp__Vercel"
@@ -81,6 +88,17 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/secret-scan.sh --hook"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
