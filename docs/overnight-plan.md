@@ -60,16 +60,16 @@ picker that measurably steers the feed; and no screen that lies when a request f
 
 ## 2. Environment constraints (verified — not assumptions)
 
-| Constraint | Consequence |
-| --- | --- |
-| **No Docker daemon** | `pnpm db:start` / `db:reset` / `db:lint` **cannot run**. CI check 4 is the *only* migration replay oracle. Do not waste time trying. |
-| Egress allowlisted: `github.com` yes; `*.supabase.co` and `wikisource.org` **no** | No direct REST calls, no local URL validation via `--check`. All DB work goes through the Supabase MCP. **But the database itself has egress** — see §5.4. |
-| `supabase` / `vercel` / `gh` / `coderabbit` CLIs **not installed** | MCP servers substitute. CodeRabbit is unavailable; `/code-review` is the reviewer. |
-| Supabase MCP connects as **`postgres` superuser** | Seeding, `apply_migration`, Vault and `cron` all reachable — and a careless statement can damage production. Read §6. |
-| Supabase org on **free plan** | No branching. `zjvfwhjwaytyogdxeddo` is the only database. |
-| Vercel **Hobby** — 1 concurrent build | Deploys queue; two are already `BLOCKED` today. **Budget ≤3 pushes per PR.** |
-| **Migration ledger drift** | Production applied the last four migrations under MCP timestamps (`20260831012218`, `012225`, `012249`, `012345`) instead of the repo filenames (`20260830200114`, `20260830203352`, `20260830214412`, `20260831013500`). Content matches; versions don't. **Never run `supabase db push`** — it would re-apply all four. |
-| `.claude/settings.json` has **zero `mcp__github__*` entries** | A session reaching `merge_pull_request` could stall on a prompt. Sessions run with permissions pre-granted; the allowlist is being extended as insurance. |
+| Constraint                                                                        | Consequence                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No Docker daemon**                                                              | `pnpm db:start` / `db:reset` / `db:lint` **cannot run**. CI check 4 is the _only_ migration replay oracle. Do not waste time trying.                                                                                                                                                                                      |
+| Egress allowlisted: `github.com` yes; `*.supabase.co` and `wikisource.org` **no** | No direct REST calls, no local URL validation via `--check`. All DB work goes through the Supabase MCP. **But the database itself has egress** — see §5.4.                                                                                                                                                                |
+| `supabase` / `vercel` / `gh` / `coderabbit` CLIs **not installed**                | MCP servers substitute. CodeRabbit is unavailable; `/code-review` is the reviewer.                                                                                                                                                                                                                                        |
+| Supabase MCP connects as **`postgres` superuser**                                 | Seeding, `apply_migration`, Vault and `cron` all reachable — and a careless statement can damage production. Read §6.                                                                                                                                                                                                     |
+| Supabase org on **free plan**                                                     | No branching. `zjvfwhjwaytyogdxeddo` is the only database.                                                                                                                                                                                                                                                                |
+| Vercel **Hobby** — 1 concurrent build                                             | Deploys queue; two are already `BLOCKED` today. **Budget ≤3 pushes per PR.**                                                                                                                                                                                                                                              |
+| **Migration ledger drift**                                                        | Production applied the last four migrations under MCP timestamps (`20260831012218`, `012225`, `012249`, `012345`) instead of the repo filenames (`20260830200114`, `20260830203352`, `20260830214412`, `20260831013500`). Content matches; versions don't. **Never run `supabase db push`** — it would re-apply all four. |
+| `.claude/settings.json` has **zero `mcp__github__*` entries**                     | A session reaching `merge_pull_request` could stall on a prompt. Sessions run with permissions pre-granted; the allowlist is being extended as insurance.                                                                                                                                                                 |
 
 ---
 
@@ -86,7 +86,7 @@ These replace a human being awake.
    owned by someone else — including anything on the frozen list — **stop and report it in
    your PR body rather than editing it.** A merge conflict at 4am costs more than a seam.
 4. **Rebase before every push.** `main` moves all night. `git fetch origin main && git
-   rebase origin/main`, re-run checks, push.
+rebase origin/main`, re-run checks, push.
 5. **`pnpm check` before every push.** It is the whole local gate; there is no local DB gate.
 6. **Self-merge is authorised** once §7's gate passes. Do not wait for a human.
 7. **Budget:** only the corpus session may cause provider spend, capped at **$1.00
@@ -98,7 +98,7 @@ These replace a human being awake.
    free), law 4 (public domain only), law 5 (RLS), law 6 (append-only), law 7 (only the
    publishable key reaches the browser). A diff that breaks one is wrong even if it works.
 10. **Subscribe to your own PR** (`subscribe_pr_activity`) so CI failures wake you.
-11. **Finished early?** Do not invent features. Take the next item from §10 *Deferred*.
+11. **Finished early?** Do not invent features. Take the next item from §10 _Deferred_.
 
 ---
 
@@ -140,8 +140,8 @@ T+0.** Its first job is to confirm that wave is healthy before enqueuing more.
    roughly one wave per 25 min. **Never one big batch** (§1.3).
 5. **Expand the manifest** toward ~110–120 sources total, deliberately widening beyond
    18th–19th-century Anglo-American moral philosophy into science, economics, psychology,
-   rights, craft, medicine and logic. The manifest's own `$comment` argues this: *"A feed of
-   nothing but Stoicism makes the Delta look clever and tells you nothing."* Validation
+   rights, craft, medicine and logic. The manifest's own `$comment` argues this: _"A feed of
+   nothing but Stoicism makes the Delta look clever and tells you nothing."_ Validation
    per §5.4. **Law 4 is absolute: if you are not certain a work is public domain, leave it
    out.** Short works only — `acquire` truncates at 200,000 chars.
 6. **Honesty constraint:** `scripts/corpus/public-domain.json`'s `$comment` currently claims
@@ -168,19 +168,20 @@ boring**; Wave 2 is gated on it.
 3. **Ship every Wave-2 seam already wired**, so no Wave-2 session edits `App.tsx`. Create
    these as honest one-paragraph stubs, then never touch them again:
 
-   | File (created by S2, then frozen) | Owned for the night by |
-   | --- | --- |
-   | `routes/Source.tsx` (exports `Source`, `PullRedirect`) | **S3** |
-   | `routes/Preferences.tsx` (exports `Preferences`, `OnboardingGate`) | **S4** |
-   | `routes/Daily.tsx` | **S5** |
-   | `lib/source-api.ts` | **S3** |
-   | `lib/preferences-api.ts` | **S4** |
-   | `lib/daily-api.ts` | **S5** |
-   | `packages/ui/src/styles/{source,preferences,daily}.css` (empty, imported from `index.css`) | S3 / S4 / S5 |
+   | File (created by S2, then frozen)                                                          | Owned for the night by |
+   | ------------------------------------------------------------------------------------------ | ---------------------- |
+   | `routes/Source.tsx` (exports `Source`, `PullRedirect`)                                     | **S3**                 |
+   | `routes/Preferences.tsx` (exports `Preferences`, `OnboardingGate`)                         | **S4**                 |
+   | `routes/Daily.tsx`                                                                         | **S5**                 |
+   | `lib/source-api.ts`                                                                        | **S3**                 |
+   | `lib/preferences-api.ts`                                                                   | **S4**                 |
+   | `lib/daily-api.ts`                                                                         | **S5**                 |
+   | `packages/ui/src/styles/{source,preferences,daily}.css` (empty, imported from `index.css`) | S3 / S4 / S5           |
 
    Also ship the final navigation (`Feed · Review · Library · Preferences`, Daily from the
    colophon) so no Wave-2 session needs a nav edit, and wrap the signed-in shell in a
    pass-through `<OnboardingGate>` that S4 later fills in.
+
 4. Deliberate un-DRY: three small `*-api.ts` files instead of extending `lib/api.ts`, which
    is the hottest conflict surface in the repo. Note the merge-back as follow-up in the PR.
 
@@ -196,12 +197,12 @@ starts lying); CI green; merged; production deploy `READY` at that sha.
 
 ### Wave 2 — gated on S2's merge + a READY production deploy. Four sessions, disjoint files.
 
-| Session | Scope | Owns |
-| --- | --- | --- |
-| **S3 · source** | `/source/:workId`: the work (**columns enumerated, never `select('*')`** — §1.7), its published summary, its pulls in ordinal order with save + listen, and `get_source_delta(workId)` as *"you already hold 3 of 21 ideas here"* — implemented and tested since round 1 with no UI. `PullRedirect` resolves `/pull/:id` → `summary.work_id` → `/source/:workId#p-<id>`, making `og`'s promise true. Wire feed/library source chips. **No SQL.** | `routes/Source.tsx`, `lib/source-api.ts`, `styles/source.css` |
-| **S4 · preferences** | §9. **No SQL, no RPC** — `preference_profiles_own` is `for all using (auth.uid() = user_id)`, so the browser writes its own row. | `routes/Preferences.tsx`, `lib/preferences-api.ts`, `styles/preferences.css` |
-| **S5 · honesty + daily** | `Review.tsx:22` — `.catch(() => setDue([]))` renders an RPC failure as the *success* message *"Nothing is fading. Everything you have saved is still solid."* Split three states: `null` loading, `[]` genuinely nothing due, `Error` → "Could not check what is fading" + retry, mirroring `Feed.tsx`'s existing pattern; `lib/rpc-error.ts` already distinguishes transport failure from server refusal. Then `/daily`: `daily_pulls` is seeded, RLS'd `select using (true)`, and has **zero readers** — curated Daily Pulls are one of law 3's five free-forever promises and exist today only as a label string in `Enough.tsx`. Handle "nothing curated today" as a first-class state. **No SQL.** | `routes/Review.tsx`, `routes/Daily.tsx`, `lib/daily-api.ts`, `styles/daily.css` |
-| **S6 · corpus, continued** | S1 continued: wave cadence, topic backfills, manifest expansion, monitoring. | same as S1 |
+| Session                    | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owns                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **S3 · source**            | `/source/:workId`: the work (**columns enumerated, never `select('*')`** — §1.7), its published summary, its pulls in ordinal order with save + listen, and `get_source_delta(workId)` as _"you already hold 3 of 21 ideas here"_ — implemented and tested since round 1 with no UI. `PullRedirect` resolves `/pull/:id` → `summary.work_id` → `/source/:workId#p-<id>`, making `og`'s promise true. Wire feed/library source chips. **No SQL.**                                                                                                                                                                                                                                                        | `routes/Source.tsx`, `lib/source-api.ts`, `styles/source.css`                   |
+| **S4 · preferences**       | §9. **No SQL, no RPC** — `preference_profiles_own` is `for all using (auth.uid() = user_id)`, so the browser writes its own row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `routes/Preferences.tsx`, `lib/preferences-api.ts`, `styles/preferences.css`    |
+| **S5 · honesty + daily**   | `Review.tsx:22` — `.catch(() => setDue([]))` renders an RPC failure as the _success_ message _"Nothing is fading. Everything you have saved is still solid."_ Split three states: `null` loading, `[]` genuinely nothing due, `Error` → "Could not check what is fading" + retry, mirroring `Feed.tsx`'s existing pattern; `lib/rpc-error.ts` already distinguishes transport failure from server refusal. Then `/daily`: `daily_pulls` is seeded, RLS'd `select using (true)`, and has **zero readers** — curated Daily Pulls are one of law 3's five free-forever promises and exist today only as a label string in `Enough.tsx`. Handle "nothing curated today" as a first-class state. **No SQL.** | `routes/Review.tsx`, `routes/Daily.tsx`, `lib/daily-api.ts`, `styles/daily.css` |
+| **S6 · corpus, continued** | S1 continued: wave cadence, topic backfills, manifest expansion, monitoring.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | same as S1                                                                      |
 
 **Feed pagination and `p_last_placed` are explicitly NOT in Wave 2.** `page: 0` is hardcoded
 and `Feed.tsx` is frozen under S2. If time remains after Wave 3, it is §10 item 1.
@@ -217,12 +218,14 @@ confirm the production deploy is `READY` before starting the next. ~15 min each.
 ## 5. Corpus operations
 
 ### 5.1 The arithmetic
+
 6 steps/min × 12 steps/source ⇒ **30 sources/hour**. A ~4-hour draining window is
 **~110–120 sources**, roughly $0.45 at the measured 0.39¢/source, yielding maybe 700–1,000
 published pulls at 6–8 pulls per source.
 
 ### 5.2 Pacing and hard stops
-Waves of **12**. A wave finishes in ~24 min and *leaves publishable content behind* — so if
+
+Waves of **12**. A wave finishes in ~24 min and _leaves publishable content behind_ — so if
 the night dies at T+2 the owner still wakes to ~50 live sources instead of zero.
 
 Any one of these halts new enqueues: past the drain window; `sum(cost_cents) > 100`; a wave
@@ -232,10 +235,11 @@ increase for 30 minutes.
 **Do not raise the dispatcher tick rate as a first move.** Going 10s → 5s doubles throughput
 and costs almost nothing in invocations, but it doubles concurrent Gemini calls, and
 `isRetryable` treats 429 as retryable inside a shared 100s budget — three 429s and a job
-fails permanently. Make it a *measured* decision only if the canary shows zero 429/503.
+fails permanently. Make it a _measured_ decision only if the canary shows zero 429/503.
 Never below 5s. Rollback is the identical call with `10`.
 
 ### 5.3 Monitoring queries
+
 ```sql
 select status, count(*) from public.generation_jobs group by 1;
 select count(*) as depth from pgmq.q_generation;
@@ -254,19 +258,23 @@ select w.title, p.headline, left(p.body,240) from public.pulls p
  join public.summaries s on s.id=p.summary_id join public.works w on w.id=s.work_id
  where s.status='published' order by random() limit 5;
 ```
+
 Triage: an `acquire` error is a bad URL — drop it, never re-enqueue. A `synthesize` 429/503
 is Gemini — pause 15 min, do not change the tick. MAX_TOKENS means the source is too long —
 drop it. **`critic` is structural only** (non-empty body, headline ≤ 200 chars), so a wave
-that reads badly is *stopped*, not tuned at 3am.
+that reads badly is _stopped_, not tuned at 3am.
 
 ### 5.4 Validating URLs without container egress
+
 The container cannot reach Wikisource, so `--check` cannot run. **The database can** — it is
 what dispatches the worker. Use `pg_net`:
+
 ```sql
 select net.http_get(u) from unnest(array['https://en.wikisource.org/wiki/...']) u;
 -- moments later
 select id, status_code, content_type, octet_length(content) as bytes from net._http_response;
 ```
+
 **Calibrate first** against three URLs already known good from the committed manifest, and
 set the accept band from that ground truth — this measures raw HTML where `--check` measures
 visible text (expect ~3–5×). Confirm pg_net's response-size cap in the same run; a truncated
@@ -294,12 +302,12 @@ Daily: none. Routing: none. **Exactly one session writes SQL tonight.**
    it, let check 4 fail, read the exact diff from the job log
    (`mcp__github__get_job_logs`, `failed_only: true`), apply verbatim, push once.
 5. **Apply with `mcp__Supabase__apply_migration`**, `name` = the repo filename stem. MCP
-   mints its own version string; accept it — the *name* is what makes the row recognisable.
+   mints its own version string; accept it — the _name_ is what makes the row recognisable.
 6. **Verify after applying; never assume.** This repo's sharpest lesson is `20260830200114`:
    a column-level `revoke` that ran cleanly, reported success, passed review, and changed no
    privilege at all. Every migration carries a paired verification query whose output goes in
    the PR body.
-7. **Advisors after every apply.** A *new* security finding is a stop. Three are known and
+7. **Advisors after every apply.** A _new_ security finding is a stop. Three are known and
    accepted: `enqueue_generation_job` being SECURITY DEFINER (deliberate), leaked-password
    protection off in Auth, and duplicate indexes on `artworks`.
 8. **Write the compensating SQL before applying.** Append-only means rollback is a new
@@ -333,14 +341,14 @@ Replaces the four-reviewer `AGENTS.md` gate for this run. Per PR:
 The corpus session writes it and constrains Gemini to it; the preferences picker offers it.
 **Existing slugs must not be renamed** — `work_topics` already references them.
 
-| Parent | Children |
-| --- | --- |
-| `philosophy` | `ethics`*, `stoicism`*, `logic`, `metaphysics`, `aesthetics` |
-| `psychology` | `attention`*, `habits`*, `learning`, `emotion` |
-| `science` | `evolution`*, `physics`*, `chemistry`, `astronomy`, `medicine` |
-| `society` | `economics`*, `liberty`*, `government`, `justice`, `education` |
-| `arts-and-letters` | `literature`, `rhetoric`, `criticism` |
-| `history` | `biography`, `revolutions` |
+| Parent             | Children                                                       |
+| ------------------ | -------------------------------------------------------------- |
+| `philosophy`       | `ethics`_, `stoicism`_, `logic`, `metaphysics`, `aesthetics`   |
+| `psychology`       | `attention`_, `habits`_, `learning`, `emotion`                 |
+| `science`          | `evolution`_, `physics`_, `chemistry`, `astronomy`, `medicine` |
+| `society`          | `economics`_, `liberty`_, `government`, `justice`, `education` |
+| `arts-and-letters` | `literature`, `rhetoric`, `criticism`                          |
+| `history`          | `biography`, `revolutions`                                     |
 
 `*` already exists. Target **≥8 topics with ≥8 sources each** — a picker where half the
 topics are empty is worse than no picker. If this table changes, update this section in the
@@ -357,15 +365,15 @@ the browser reads and writes its own row through PostgREST.
 **Ship only controls that reach the read path.** A control that changes nothing is a lie,
 and an honest account is this product's whole claim:
 
-| Column | Read by | Ship? |
-| --- | --- | --- |
-| `topic_weights` | `topic_affinity()` → 28% of the score | **yes** |
-| `excluded_topics` | `get_feed` pool filter | **yes** |
-| `media_kinds` | `get_feed` pool filter | **yes** |
-| `interrupt_rate` | `plan_interleave` (`0` disables interrupts) | **yes** |
-| `daily_minutes`, `technical_level`, `novelty`, `spoilers`, `counter_rate` | nothing | **no** |
+| Column                                                                    | Read by                                     | Ship?   |
+| ------------------------------------------------------------------------- | ------------------------------------------- | ------- |
+| `topic_weights`                                                           | `topic_affinity()` → 28% of the score       | **yes** |
+| `excluded_topics`                                                         | `get_feed` pool filter                      | **yes** |
+| `media_kinds`                                                             | `get_feed` pool filter                      | **yes** |
+| `interrupt_rate`                                                          | `plan_interleave` (`0` disables interrupts) | **yes** |
+| `daily_minutes`, `technical_level`, `novelty`, `spoilers`, `counter_rate` | nothing                                     | **no**  |
 
-- **Topics** are a **three-state control** — *More of this* / *Default* / *Not for me* — not
+- **Topics** are a **three-state control** — _More of this_ / _Default_ / _Not for me_ — not
   a checkbox, because the model genuinely has three states and `excluded_topics` is a
   different mechanism from a low weight. "More" writes `topic_weights[slug] = 1.0`; "Not for
   me" writes the slug into `excluded_topics`; "Default" writes neither. Read topics from the
@@ -378,7 +386,7 @@ and an honest account is this product's whole claim:
 - **Onboarding is required, and it is one screen, not a flow.** `onboarded_at` already exists.
   Without it the picker is a settings page nobody opens and 28% of the ranking score stays
   flat forever. `OnboardingGate` reads `onboarded_at` once; if null it renders the same
-  screen in onboarding mode with one headline (*"What do you want to learn about?"*) and two
+  screen in onboarding mode with one headline (_"What do you want to learn about?"_) and two
   exits — **Start reading** (writes weights + `onboarded_at`) and **Show me everything**
   (writes `onboarded_at` only). If it is set, **or if the read fails**, it renders children:
   **fail open, never trap a reader behind a settings screen because a query 500'd.** That
@@ -398,7 +406,7 @@ and an honest account is this product's whole claim:
    either — lockfile churn for no reader-visible gain.
 2. **Search.** No tsvector, no RPC, no UI. Round 3.
 3. **Wiring `refresh_knowledge_vector`.** The `uvec` term is a constant `0.5` for every card,
-   so it is *inert* — it does not distort ranking, it wastes 18% of the weight budget. The
+   so it is _inert_ — it does not distort ranking, it wastes 18% of the weight budget. The
    roadmap frames it as a decision (call it on a cron, or drop the term and redistribute),
    not a chore. **This is a change from an earlier draft of this plan.**
 4. **Relation extraction** to make PR #5 effective on generated content. PR #5 is edge-exact
@@ -462,11 +470,12 @@ and an honest account is this product's whole claim:
    the exact cost, and the rollback handles below.
 
 **Rollback:**
+
 - **Frontend, one action, no git:** promote the last known-good production deployment —
   `dpl_7nnFN8oYzXAdEKK9jDdk5wcJ5cGz`, sha `3b6c5a4`, the pre-night production build.
 - **Git:** every merge is a merge commit; `git revert -m 1 <merge-sha>`. Never force-push.
 - **Schema:** append-only; the compensating migration was written before the apply (§6.8).
-- **Content:** generated content is additive, so rollback is not a delete — *retire* it:
+- **Content:** generated content is additive, so rollback is not a delete — _retire_ it:
   `update public.summaries set status='retired' where id = any('{...}');`
   `get_feed` filters on `status='published'`, so this removes it from every reader instantly
   while preserving the audit trail, job history and cost record.
