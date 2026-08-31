@@ -41,7 +41,6 @@
       "mcp__github__create_pull_request",
       "mcp__github__update_pull_request",
       "mcp__github__update_pull_request_branch",
-      "mcp__github__merge_pull_request",
       "mcp__github__add_issue_comment",
       "mcp__github__get_job_logs",
       "mcp__github__actions_list",
@@ -68,7 +67,8 @@
       "mcp__Vercel__pause_project",
       "mcp__Vercel__unpause_project",
       "mcp__Vercel__deploy_to_vercel",
-      "mcp__Vercel__create_git_project"
+      "mcp__Vercel__create_git_project",
+      "mcp__github__merge_pull_request"
     ],
     "deny": [
       "Bash(git push --force:*)",

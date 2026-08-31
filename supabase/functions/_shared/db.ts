@@ -102,9 +102,35 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * this by the reader's preference and takes the max, so the model's ordering
        * becomes primary-versus-secondary rather than being discarded.
        */
-      const fileUnderTopics = async (workId: string) => {
+      const fileUnderTopics = async (workId: string, { onlyIfUnclassified = false } = {}) => {
         if (topics.length === 0) return;
         try {
+          /*
+           * An adopted work is filed only when it carries no classification at all.
+           *
+           * Both early returns below hand back a work this call did not create — a
+           * reuse hit, or the loser of the `content_hash` race — and neither reached
+           * this function before, so a work created by an older worker, or by a
+           * winning invocation that died between the insert and the topic write,
+           * stayed at `topic_affinity` = 0.0 for the life of the row with nothing
+           * ever revisiting it.
+           *
+           * The guard is what keeps this from being worse than the gap it closes:
+           * two jobs over one source produce two independent classifications, and
+           * merging them would blend one model's ranking into another's, leaving a
+           * work with two primaries and no way to tell which. First classification
+           * wins; a later one declines rather than argues. Racy by construction, and
+           * harmlessly so — the upsert's `on conflict do nothing` makes a lost race a
+           * no-op rather than a duplicate.
+           */
+          if (onlyIfUnclassified) {
+            const existingTopics = must(
+              await supabase.from('work_topics').select('work_id').eq('work_id', workId).limit(1),
+              'check existing classification',
+            ) as { work_id: string }[] | null;
+            if (existingTopics && existingTopics.length > 0) return;
+          }
+
           const rows = must(
             await supabase.from('topics').select('id, slug').in('slug', topics),
             'look up topics',
@@ -164,7 +190,10 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       ) as { id: string }[] | null;
 
       const found = existing?.[0];
-      if (found) return { workId: found.id, existing: true };
+      if (found) {
+        await fileUnderTopics(found.id, { onlyIfUnclassified: true });
+        return { workId: found.id, existing: true };
+      }
 
       const slug =
         title
@@ -204,6 +233,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           await supabase.from('works').select('id').eq('content_hash', contentHash).single(),
           'adopt concurrently created work',
         ) as { id: string };
+        await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
         return { workId: raced.id, existing: true };
       }
 
