@@ -1128,6 +1128,7 @@ export type Database = {
           id: string
           image_asset_id: string | null
           ordinal: number
+          search_tsv: unknown
           spoiler_level: Database["public"]["Enums"]["spoiler_level"]
           summary_id: string
           updated_at: string
@@ -1144,6 +1145,7 @@ export type Database = {
           id?: string
           image_asset_id?: string | null
           ordinal: number
+          search_tsv?: unknown
           spoiler_level?: Database["public"]["Enums"]["spoiler_level"]
           summary_id: string
           updated_at?: string
@@ -1160,6 +1162,7 @@ export type Database = {
           id?: string
           image_asset_id?: string | null
           ordinal?: number
+          search_tsv?: unknown
           spoiler_level?: Database["public"]["Enums"]["spoiler_level"]
           summary_id?: string
           updated_at?: string
@@ -1686,6 +1689,7 @@ export type Database = {
           kind: Database["public"]["Enums"]["work_kind"]
           quality_score: number
           rights_status: Database["public"]["Enums"]["rights_status"]
+          search_tsv: unknown
           slug: string
           subtitle: string | null
           title: string
@@ -1702,6 +1706,7 @@ export type Database = {
           kind: Database["public"]["Enums"]["work_kind"]
           quality_score?: number
           rights_status?: Database["public"]["Enums"]["rights_status"]
+          search_tsv?: unknown
           slug: string
           subtitle?: string | null
           title: string
@@ -1718,6 +1723,7 @@ export type Database = {
           kind?: Database["public"]["Enums"]["work_kind"]
           quality_score?: number
           rights_status?: Database["public"]["Enums"]["rights_status"]
+          search_tsv?: unknown
           slug?: string
           subtitle?: string | null
           title?: string
@@ -1873,9 +1879,22 @@ export type Database = {
         Args: { p_user_id?: string }
         Returns: undefined
       }
+      related_pulls: {
+        Args: { p_limit?: number; p_pull_id: string }
+        Returns: Json
+      }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
+      }
+      search_catalogue: {
+        Args: {
+          p_kinds?: Database["public"]["Enums"]["work_kind"][]
+          p_limit_ideas?: number
+          p_limit_sources?: number
+          p_query: string
+        }
+        Returns: Json
       }
       seeded_unit: {
         Args: { page: number; salt?: string; seed: number; slot: number }

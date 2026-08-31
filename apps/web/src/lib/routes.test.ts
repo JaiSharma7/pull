@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchoredPullId, queryParam, routeParam } from './routes.js';
+import { anchoredPullId, isPath, queryParam, routeParam } from './routes.js';
 
 const UUID = '0e825ac9-6df4-495a-8028-1868c7d35e95';
 const PULL = '43005e69-e1c6-4fdd-bf34-dee342db375e';
@@ -77,5 +77,36 @@ describe('queryParam', () => {
 
   it('does not read the fragment as a query', () => {
     expect(queryParam(`/source/${UUID}#s=nope`, 's')).toBeNull();
+  });
+});
+
+describe('isPath', () => {
+  it('matches the bare path', () => {
+    expect(isPath('/search', '/search')).toBe(true);
+  });
+
+  it('ignores a query string, which is the whole reason it exists', () => {
+    expect(isPath('/search?q=liberty', '/search')).toBe(true);
+  });
+
+  it('ignores a fragment, and a fragment glued after a query', () => {
+    expect(isPath('/search#top', '/search')).toBe(true);
+    expect(isPath('/search?q=a#top', '/search')).toBe(true);
+  });
+
+  it('ignores trailing slashes on either side', () => {
+    expect(isPath('/search/', '/search')).toBe(true);
+    expect(isPath('/search', '/search/')).toBe(true);
+  });
+
+  it('does not match a deeper path that merely starts the same way', () => {
+    expect(isPath('/searching', '/search')).toBe(false);
+    expect(isPath('/search/results', '/search')).toBe(false);
+  });
+
+  it('treats the root as the root however it is spelled', () => {
+    expect(isPath('/', '/')).toBe(true);
+    expect(isPath('/?q=x', '/')).toBe(true);
+    expect(isPath('//', '/')).toBe(true);
   });
 });

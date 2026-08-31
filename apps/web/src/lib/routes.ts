@@ -52,3 +52,18 @@ export function queryParam(pathname: string, key: string): string | null {
   const value = new URLSearchParams(query).get(key);
   return value && value.length > 0 ? value : null;
 }
+
+/**
+ * Is this path exactly one route, ignoring the query and the fragment?
+ *
+ * `routeParam` answers "what id does this path carry"; some routes carry none.
+ * `/search?q=liberty` is the first of them, and comparing `location.pathname`
+ * directly would have been enough right up until the first trailing slash or the
+ * first query string — the two things `routeParam` already exists because of.
+ * One place that knows the order those suffixes come off in.
+ */
+export function isPath(pathname: string, exact: string): boolean {
+  const clean = pathname.split('#')[0]!.split('?')[0]!.replace(/\/+$/, '') || '/';
+  const target = exact.replace(/\/+$/, '') || '/';
+  return clean === target;
+}

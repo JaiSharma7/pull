@@ -10,6 +10,7 @@ import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
+import { Search } from './routes/Search.js';
 import { Specimen } from './routes/Specimen.js';
 import {
   applyFocus,
@@ -18,7 +19,7 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
-import { queryParam, routeParam } from './lib/routes.js';
+import { isPath, queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
@@ -33,6 +34,17 @@ const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'history', label: 'History' },
   { id: 'preferences', label: 'Preferences' },
 ];
+
+/**
+ * Places with an address, as opposed to modes the shell is in.
+ *
+ * Reading stays tab state — a Pull is not a page — but `/search?q=liberty` has to
+ * be a thing you can send someone, bookmark, and reload. Kept beside `SECTIONS`
+ * rather than folded into it because the two behave differently: choosing a
+ * section changes what the shell is showing, choosing a destination changes the
+ * URL and every tab steps aside for it.
+ */
+const DESTINATIONS: { path: string; label: string }[] = [{ path: '/search', label: 'Search' }];
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -213,7 +225,9 @@ export function App() {
    * a route opened while a section is showing. One guard, applied to every tab, so
    * the next screen added cannot reintroduce it.
    */
-  const routeOpen = sourceId !== null || pullId !== null;
+  const searchOpen = isPath(path, '/search');
+  const searchQuery = queryParam(path, 'q') ?? '';
+  const routeOpen = sourceId !== null || pullId !== null || searchOpen;
 
   if (!ready)
     return (
@@ -245,11 +259,30 @@ export function App() {
                 key={s.id}
                 type="button"
                 className="btn btn--plain"
-                aria-current={tab === s.id ? 'page' : undefined}
-                style={tab === s.id ? { color: 'var(--accent)' } : undefined}
+                aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
+                style={tab === s.id && !routeOpen ? { color: 'var(--accent)' } : undefined}
                 onClick={() => goToTab(s.id)}
               >
                 {s.label}
+              </button>
+            ))}
+            {/*
+              A destination is current when its URL is open, and a section is
+              current only when no route is. Without the `!routeOpen` above, a
+              reader on /search had two elements marked aria-current="page" —
+              "For You" and "Search" — which a screen reader reports as two
+              current locations in one navigation.
+            */}
+            {DESTINATIONS.map((d) => (
+              <button
+                key={d.path}
+                type="button"
+                className="btn btn--plain"
+                aria-current={isPath(path, d.path) ? 'page' : undefined}
+                style={isPath(path, d.path) ? { color: 'var(--accent)' } : undefined}
+                onClick={() => navigate(d.path)}
+              >
+                {d.label}
               </button>
             ))}
           </nav>
@@ -299,10 +332,21 @@ export function App() {
                   key={s.id}
                   type="button"
                   className="btn btn--plain shell__nav-item"
-                  aria-current={tab === s.id ? 'page' : undefined}
+                  aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
                   onClick={() => goToTab(s.id)}
                 >
                   {s.label}
+                </button>
+              ))}
+              {DESTINATIONS.map((d) => (
+                <button
+                  key={d.path}
+                  type="button"
+                  className="btn btn--plain shell__nav-item"
+                  aria-current={isPath(path, d.path) ? 'page' : undefined}
+                  onClick={() => navigate(d.path)}
+                >
+                  {d.label}
                 </button>
               ))}
             </nav>
@@ -349,6 +393,13 @@ export function App() {
               )}
               {pullId !== null && (
                 <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+              )}
+              {searchOpen && (
+                <Search
+                  query={searchQuery}
+                  onNavigate={navigate}
+                  onSearch={(q) => navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search')}
+                />
               )}
               {tab === 'daily' && !routeOpen && (
                 <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />

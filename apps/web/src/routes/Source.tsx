@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { anchoredPullId } from '../lib/routes.js';
+import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
@@ -17,6 +18,21 @@ import type { SourceDelta } from '../lib/types.js';
  * engagement metrics as an anti-goal, and the number a reader is shown is the one the
  * product is actually optimising for.
  */
+
+/**
+ * How an authored edge reads to a person.
+ *
+ * The enum is `relation_kind` in the database. Anything unrecognised falls through
+ * to the raw value rather than being dropped, so a member added by a migration
+ * shows up as itself instead of silently disappearing from the page.
+ */
+const RELATION_LABEL: Record<string, string> = {
+  opposes: 'Argues against this',
+  elaborates: 'Elaborates on this',
+  ancestor: 'This idea came from it',
+  descendant: 'Grew out of this idea',
+  related: 'Related',
+};
 
 /** Minutes, from the estimate the pipeline stored per Pull. */
 function readingMinutes(seconds: number | null): number | null {
@@ -43,6 +59,16 @@ export function Source({
 }) {
   const [detail, setDetail] = useState<SourceDetail | null>(null);
   const [delta, setDelta] = useState<SourceDelta | null>(null);
+  /*
+   * Ideas elsewhere in the library that this one is close to.
+   *
+   * Supplementary, so a failure renders nothing rather than an error: the page's
+   * job is this source, and a broken sidebar must not take the source down with
+   * it. Empty and failed look the same here on purpose — neither claims there
+   * are no related ideas, which is the sentence that would be a lie.
+   */
+  const [related, setRelated] = useState<RelatedPull[]>([]);
+  const [relatedTo, setRelatedTo] = useState<string | null>(null);
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
    * from `fetchSource` is a work that does not exist; an error is an error. Review
@@ -113,6 +139,41 @@ export function Source({
     const pullId = anchoredPullId(window.location.hash);
     if (!pullId) return;
     document.getElementById(`p-${pullId}`)?.scrollIntoView({ block: 'start' });
+  }, [detail]);
+
+  /*
+   * Ideas close to the one the reader actually came for.
+   *
+   * `related_pulls` is anchored on a single Pull, and the honest anchor is the one
+   * named by the fragment — a reader who followed a shared `/pull/:id` link came
+   * for that idea, not for the source's first. Falls back to the first when there
+   * is no anchor, so the section still appears for someone who opened the source
+   * directly.
+   *
+   * Authored `pull_relations` edges come back first and carry a relation kind;
+   * the rest are nearest stored embeddings. Neither costs a provider call — the
+   * anchor is a column, not a query somebody had to embed.
+   */
+  useEffect(() => {
+    if (!detail || detail.pulls.length === 0) return;
+    let live = true;
+    const anchored = anchoredPullId(window.location.hash);
+    const anchor = detail.pulls.find((p) => p.id === anchored) ?? detail.pulls[0]!;
+
+    fetchRelatedPulls(anchor.id, 5)
+      .then((rows) => {
+        if (!live) return;
+        setRelated(rows);
+        setRelatedTo(anchor.headline);
+      })
+      .catch((e: unknown) => {
+        console.error('Related ideas request failed', e);
+        /* Supplementary. The source page stands without it. */
+      });
+
+    return () => {
+      live = false;
+    };
   }, [detail]);
 
   if (missing) {
@@ -232,6 +293,40 @@ export function Source({
           <p>{work.description}</p>
         </>
       ) : null}
+
+      {related.length > 0 && (
+        <>
+          <h2 className="meta source__group">Close to this</h2>
+          {relatedTo ? <p className="meta source__related-anchor">{relatedTo}</p> : null}
+          <ul className="source__related">
+            {related.map((r) => (
+              <li key={r.id} className="source__related-item">
+                <p className="pull-card__chip">{r.workTitle}</p>
+                <button
+                  type="button"
+                  className="btn btn--plain source__related-link"
+                  onClick={() => onNavigate(`/pull/${r.id}`)}
+                >
+                  {r.headline}
+                </button>
+                {/*
+                  An authored edge and a measured neighbour are different claims and
+                  are labelled differently. "Argues against this" is something a
+                  person asserted and can be held to; a vector distance is not, and
+                  dressing one as the other is how a Counterpull surface starts
+                  lying about what it knows.
+                */}
+                {r.relation ? (
+                  <p className="meta source__related-kind">
+                    {RELATION_LABEL[r.relation] ?? r.relation}
+                    {r.rationale ? ` — ${r.rationale}` : ''}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <div className="source__foot">
         <button type="button" className="btn btn--plain" onClick={() => onNavigate('/')}>
