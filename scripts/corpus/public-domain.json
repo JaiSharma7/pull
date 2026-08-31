@@ -382,6 +382,48 @@
       "author": "Rene Descartes",
       "kind": "essay",
       "url": "https://www.gutenberg.org/cache/epub/59/pg59.txt"
+    },
+    {
+      "title": "Caesar",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/caesar.html"
+    },
+    {
+      "title": "Alexander",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/alexandr.html"
+    },
+    {
+      "title": "Lycurgus",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/lycurgus.html"
+    },
+    {
+      "title": "Solon",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/solon.html"
+    },
+    {
+      "title": "On the Sacred Disease",
+      "author": "Hippocrates",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Hippocrates/sacred.html"
+    },
+    {
+      "title": "On the Heavens, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/heavens.1.i.html"
+    },
+    {
+      "title": "Physics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/physics.1.i.html"
     }
   ]
 }
