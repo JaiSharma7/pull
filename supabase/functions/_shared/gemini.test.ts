@@ -101,3 +101,84 @@ describe('the provider budget', () => {
     expect(calls).toBe(0);
   });
 });
+
+describe('the model chain under an exhausted quota', () => {
+  /**
+   * A 429 is what a spent daily quota looks like, and Gemini meters per model — so
+   * it is precisely the condition a fallback chain exists to survive. It was also
+   * the one status that did not trigger one.
+   *
+   * On 2026-08-31 the head of the chain ran out mid-run and ten queued sources
+   * failed at `synthesize` in a row, each burning its attempts against a model that
+   * could not answer, while a configured fallback was never tried. These pin both
+   * halves of the fix: fall through on 429, and do not retry it in place.
+   */
+  function fetchReturning(statusByModel: Record<string, number>, seen: string[]): typeof fetch {
+    return ((url: string) => {
+      const model = Object.keys(statusByModel).find((m) => String(url).includes(m)) ?? '?';
+      seen.push(model);
+      const status = statusByModel[model] ?? 500;
+      if (status !== 200) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: status } }), { status }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        title: 'T',
+                        elevatorPitch: 'E',
+                        whyItMatters: 'W',
+                        pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }],
+                        topics: ['philosophy'],
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          }),
+          { status: 200 },
+        ),
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  it('falls through to the next model when the first is out of quota', async () => {
+    const seen: string[] = [];
+    const provider = createGeminiSummaryProvider(
+      configWith({ fetchImpl: fetchReturning({ 'model-a': 429, 'model-b': 200 }, seen) }),
+    );
+
+    const result = await provider.generateSummary({
+      workTitle: 'W',
+      kind: 'essay',
+      context: 'text',
+    });
+
+    // The model that actually answered is the one recorded, or provenance is fiction.
+    expect(result.model).toBe('model-b');
+    expect(seen).toContain('model-b');
+  });
+
+  it('does not retry a 429 against the same model', async () => {
+    // The retry is immediate — there is no backoff — so a spent quota is still spent
+    // milliseconds later. All a second call buys is another rejection and less budget
+    // for the model that might have answered.
+    const seen: string[] = [];
+    const provider = createGeminiSummaryProvider(
+      configWith({ fetchImpl: fetchReturning({ 'model-a': 429, 'model-b': 200 }, seen) }),
+    );
+
+    await provider.generateSummary({ workTitle: 'W', kind: 'essay', context: 'text' });
+
+    expect(seen.filter((m) => m === 'model-a')).toHaveLength(1);
+  });
+});

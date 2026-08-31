@@ -13,11 +13,77 @@ export interface SummaryInput {
   context: string;
 }
 
+/**
+ * Every `topics.slug` a generated work may be filed under.
+ *
+ * Mirrors the taxonomy seeded by `20260831025500_topics_with_something_behind_them`
+ * and the four parents that predate it, for the same reason `WORK_KINDS` is mirrored
+ * in `pipeline.ts`: the model is told what the allowed values are, and the boundary
+ * narrows anything else away before Postgres is asked.
+ *
+ * It lives here rather than beside the other enum mirrors because both the provider
+ * that emits these and the pipeline that narrows them already import this module,
+ * and a provider reaching into the orchestrator for a constant would be the wrong
+ * direction to depend in.
+ *
+ * Parents are includable on purpose. A work about ethics generally, with no narrower
+ * home, is better filed under `philosophy` than under a child that misdescribes it.
+ *
+ * If the taxonomy migration changes, this changes in the same commit.
+ */
+export const TOPIC_SLUGS = [
+  'philosophy',
+  'ethics',
+  'stoicism',
+  'logic',
+  'metaphysics',
+  'aesthetics',
+  'psychology',
+  'attention',
+  'habits',
+  'learning',
+  'emotion',
+  'science',
+  'evolution',
+  'physics',
+  'chemistry',
+  'astronomy',
+  'medicine',
+  'society',
+  'economics',
+  'liberty',
+  'government',
+  'justice',
+  'education',
+  'arts-and-letters',
+  'literature',
+  'rhetoric',
+  'criticism',
+  'history',
+  'biography',
+  'revolutions',
+] as const;
+export type TopicSlug = (typeof TOPIC_SLUGS)[number];
+
 export interface CanonicalSummary {
   title: string;
   elevatorPitch: string;
   whyItMatters: string;
   pulls: { headline: string; body: string; whyItMatters: string }[];
+  /**
+   * Topic slugs this work belongs under, from the fixed taxonomy in `pipeline.ts`.
+   *
+   * Optional because a provider that predates this field is still a valid provider —
+   * an absent list means "unclassified", which is what every generated work was until
+   * now. It is not optional in effect: `topic_affinity` returns 0.0 for a work with no
+   * `work_topics` rows, and that term is 28% of the score in `get_feed`, so an
+   * unclassified work is one a reader's stated preferences can never reach.
+   *
+   * Produced by the same call that produces the summary, which is the whole point —
+   * law 2 permits a model at generation time and forbids one in the read path, so the
+   * classification is paid for once here and then stored.
+   */
+  topics?: string[];
 }
 
 export interface Usage {
@@ -108,6 +174,11 @@ export const stubSummaryProvider: SummaryProvider = {
               'The stub provider produces one Pull so the pipeline can be exercised end to end without an API key.',
           },
         ],
+        // A real slug, not a placeholder: `upsertWork` looks these up against
+        // `public.topics` and silently drops what it cannot find, so an invented
+        // one would make the stub exercise the drop path instead of the write
+        // path — and the write path is the one worth exercising without a key.
+        topics: ['philosophy'],
       },
       usage: { inputTokens: 0, outputTokens: 0, costCents: 0 },
       model: 'stub',

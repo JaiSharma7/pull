@@ -11,7 +11,7 @@
  * made by the worker, once per canonical summary, and lands in `cost_ledger`.
  */
 
-import { BilledProviderError } from './providers.ts';
+import { BilledProviderError, TOPIC_SLUGS } from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -167,8 +167,35 @@ const SUMMARY_SCHEMA = {
         required: ['headline', 'body', 'whyItMatters'],
       },
     },
+    /*
+     * Classification rides along with the summary rather than being its own step.
+     *
+     * It is the same call, so it costs no extra request and very few extra output
+     * tokens — which matters, because `topic_affinity` is 28% of the score in
+     * `get_feed` and until now every generated work scored zero on it. A separate
+     * `classify` step would have meant a thirteenth entry in STEPS, a second
+     * provider call per source, and a state machine that in-flight jobs no longer
+     * matched.
+     *
+     * `enum` is what makes this worth doing: the API rejects a slug outside the
+     * list, so the usual failure — a plausible value that only Postgres refuses,
+     * after synthesis has been paid for — cannot happen here. `narrowTopics` still
+     * runs on the way to the database, because a schema the provider enforces is
+     * not the same as one this code enforces, and stub or future providers do not
+     * go through Gemini at all.
+     */
+    topics: {
+      type: 'ARRAY',
+      items: { type: 'STRING', enum: TOPIC_SLUGS as unknown as string[] },
+      // Bounded at both ends. Without minItems an empty array satisfies the schema,
+      // and `required` below would be met by a response that classified nothing —
+      // the feature failing silently rather than visibly, which is the failure mode
+      // this file already exists to avoid.
+      minItems: 1,
+      maxItems: 4,
+    },
   },
-  required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls'],
+  required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls', 'topics'],
 } as const;
 
 class GeminiError extends Error {
@@ -219,8 +246,18 @@ function budgetFrom(config: GeminiConfig) {
   };
 }
 
-/** 429 and 5xx are worth one more try; a 400 means the request itself is wrong. */
-const isRetryable = (status: number) => status === 429 || status >= 500;
+/**
+ * A 5xx is worth one more try on the same model; a 400 means the request itself is
+ * wrong and a 429 means this model has no quota left.
+ *
+ * 429 was retried here and it never helped. The retry is immediate — there is no
+ * backoff, because the worker already retries the whole step — so a quota that is
+ * exhausted is still exhausted a few milliseconds later. All it bought was a second
+ * wasted call against the same limit, and a step budget spent before the chain could
+ * try a model that might answer. Measured on 2026-08-31: 27 failed synthesize steps,
+ * every one of them two 429s against the same model.
+ */
+const isRetryable = (status: number) => status >= 500;
 
 async function callGemini(
   path: string,
@@ -292,7 +329,23 @@ function firstTextPart(payload: Record<string, unknown>): string {
 }
 
 /** Availability problems, as opposed to "this request is wrong". Only these fall over. */
-const isUnavailable = (status: number | undefined) => status === 404 || status === 503;
+/**
+ * Statuses that mean "try the next model", rather than "this request is wrong".
+ *
+ * 429 belongs here and its absence cost a night's generation. Gemini meters quota
+ * **per model**, so an exhausted daily limit on the head of the chain is exactly the
+ * condition a fallback exists for — and it was the one condition that did not trigger
+ * one. On 2026-08-31 `gemini-3.6-flash` ran out mid-run and the chain never tried
+ * `gemini-3.7-flash`: ten queued sources failed at `synthesize` in a row, each burning
+ * three attempts against a model that could not answer, while a configured fallback
+ * sat unused.
+ *
+ * Falling through on a quota error costs one call against the next model's own limit.
+ * If that is exhausted too the job fails as it would have anyway, so the downside is
+ * bounded and the upside is the chain doing the job it was written for.
+ */
+const isUnavailable = (status: number | undefined) =>
+  status === 404 || status === 429 || status === 503;
 
 export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvider {
   return {
@@ -409,6 +462,15 @@ function buildSummaryPrompt(input: SummaryInput): string {
     `Each pull must be one atomic idea that stands on its own out of context, in plain`,
     `language, with a headline that states the idea rather than teasing it. "whyItMatters"`,
     `should say what changes if the reader believes it — not restate the body.`,
+    ``,
+    // Without this the schema is still satisfied by an empty array, and the whole
+    // classification feature no-ops silently: the work is filed under nothing,
+    // topic_affinity returns 0.0, and no reader's stated interests ever reach it.
+    `Also file this work under one to four topics from this list, most central first:`,
+    TOPIC_SLUGS.join(', '),
+    `Choose the narrowest that genuinely fit. A parent topic is the right answer only`,
+    `when no child of it does — filing a work under a topic it merely touches is worse`,
+    `than filing it under fewer.`,
     ``,
     `Context:`,
     input.context || '(no additional context supplied)',

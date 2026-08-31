@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
+import { TRANSPORT_ERROR } from './rpc-error.js';
 import type { FeedRow } from './types.js';
 
 /**
@@ -245,4 +246,41 @@ export function onReconnect(handler: () => void): () => void {
   if (typeof window === 'undefined') return () => undefined;
   window.addEventListener('online', handler);
   return () => window.removeEventListener('online', handler);
+}
+
+/**
+ * Was this failure the network, or the server?
+ *
+ * The feed's catch used to fall back to cache whenever the cache had anything, and set
+ * `offline` regardless of why the fetch failed. So a 500, an expired JWT or an RLS
+ * misconfiguration all rendered "Offline — reading from your downloaded copies" over
+ * stale content, on a connection that was plainly working. That is not merely an
+ * unhelpful message: it is a confident wrong diagnosis, and it hides exactly the class
+ * of failure worth hearing about in the first week of use.
+ *
+ * Three signals, and the third is the one that actually fires in practice:
+ *
+ *   navigator.onLine === false   the browser is certain there is no network. Trusted
+ *                                only in this direction — `true` means "an interface
+ *                                is up", which is not the same as reachable, so it is
+ *                                never used to prove the opposite.
+ *   error instanceof TypeError   what `fetch` rejects with directly. Real for a bare
+ *                                fetch; almost never seen through supabase-js.
+ *   name === TRANSPORT_ERROR     the same failure after postgrest-js has caught it.
+ *
+ * That third case is the important one and it was missing. postgrest-js does not let
+ * a fetch rejection propagate: it resolves with an error object instead, so by the
+ * time this is called the `TypeError` is a string inside a message and `instanceof`
+ * can never match. Checking only the first two conditions meant a reader on hotel
+ * wifi or a dropped VPN — interface up, requests failing — was shown an error while
+ * their downloaded Pulls sat unread in IndexedDB. That is a law 3 promise broken in
+ * exactly the situation offline reading exists for.
+ *
+ * Anything else is the server's problem, and should reach the reader as an error they
+ * can retry rather than as a shrug about connectivity.
+ */
+export function isOfflineFailure(error: unknown): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  if (error instanceof TypeError) return true;
+  return error instanceof Error && error.name === TRANSPORT_ERROR;
 }
