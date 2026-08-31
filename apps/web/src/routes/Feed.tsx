@@ -12,6 +12,7 @@ import {
   queueMutation,
   readCachedPulls,
 } from '../lib/offline.js';
+import { createDwellTracker } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
@@ -392,6 +393,64 @@ export function Feed({
     [saved, userId],
   );
 
+  /*
+   * One tracker for the whole feed, not one per card.
+   *
+   * Dwell is a property of the session rather than of a component: a card that
+   * unmounts on a tab switch and remounts on the way back is the same idea being read
+   * twice, and per-card state would report those as two short glances instead of one
+   * long read.
+   */
+  const dwellRef = useRef(createDwellTracker());
+
+  const onCardVisible = useCallback((pullId: string, visible: boolean) => {
+    const t = dwellRef.current;
+    if (visible) t.enter(pullId, Date.now());
+    else t.leave(pullId, Date.now());
+  }, []);
+
+  /*
+   * Send what has been measured, and keep the tab honest about what counts.
+   *
+   * `record_read` resolves conflicts with `greatest(existing, excluded)`, so these
+   * carry running totals and are safe to repeat — which is what makes the `pagehide`
+   * flush worth attempting even though its delivery cannot be checked.
+   *
+   * `visibilitychange` does double duty: it stops the clock on a backgrounded tab,
+   * and it is the only reliable "the reader is leaving" signal on mobile Safari,
+   * where `beforeunload` frequently never fires at all.
+   */
+  useEffect(() => {
+    const t = dwellRef.current;
+    const flush = () => {
+      for (const { id, dwellMs } of t.report(Date.now())) {
+        api.recordRead(id, dwellMs, 0).catch(() => {
+          // Losing a dwell report costs a measurement, never a read: the read itself
+          // was recorded when the card first came into view. Totals are cumulative,
+          // so the next flush carries the same ground this one did.
+        });
+      }
+    };
+
+    const onVisibility = () => {
+      const visible = document.visibilityState === 'visible';
+      t.setVisible(visible, Date.now());
+      if (!visible) flush();
+    };
+
+    // A minute is a compromise: often enough that a long read is not lost with the
+    // tab, rare enough that it is not a write per scroll.
+    const timer = setInterval(flush, 60_000);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, []);
+
   const onRead = useCallback(
     (row: FeedRow, index: number) => {
       if (seenRef.current.has(row.id)) return;
@@ -669,6 +728,7 @@ export function Feed({
             saved={saved.has(item.row.id)}
             onSave={() => void onSave(item.row)}
             onRead={() => onRead(item.row, item.index)}
+            onVisible={(visible) => onCardVisible(item.row.id, visible)}
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
             listening={speakingId === item.row.id}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
@@ -706,6 +766,7 @@ function PullCardInView({
   saved,
   onSave,
   onRead,
+  onVisible,
   onOpenSource,
   onListen,
   listening,
@@ -714,6 +775,8 @@ function PullCardInView({
   saved: boolean;
   onSave: () => void;
   onRead: () => void;
+  /** Called with true when the card comes into view and false when it leaves. */
+  onVisible: (visible: boolean) => void;
   onOpenSource?: () => void;
   /** Absent where the browser cannot speak, so no dead control is rendered. */
   onListen?: () => void;
@@ -721,20 +784,36 @@ function PullCardInView({
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
-  // A card counts as read once it has actually been on screen, not merely
-  // rendered below the fold.
+  /*
+   * Both edges now, not just the first one.
+   *
+   * This observer only ever reported `isIntersecting`, which is all "counts as read"
+   * needs — but it is half of what "how long was it read for" needs, and that is why
+   * `dwell_ms` was written as a literal 0 at the one call site and every row in
+   * production holds zero.
+   *
+   * `onVisible(false)` on unmount as well as on leaving the viewport: a card removed
+   * by a tab switch or a re-render never fires a non-intersecting entry, and without
+   * the cleanup its interval stays open until something else closes it.
+   */
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     const io = new IntersectionObserver(
       (entries) => {
-        for (const e of entries) if (e.isIntersecting) onRead();
+        for (const e of entries) {
+          if (e.isIntersecting) onRead();
+          onVisible(e.isIntersecting);
+        }
       },
       { threshold: 0.6 },
     );
     io.observe(el);
-    return () => io.disconnect();
-  }, [onRead]);
+    return () => {
+      io.disconnect();
+      onVisible(false);
+    };
+  }, [onRead, onVisible]);
 
   return (
     <div ref={ref}>

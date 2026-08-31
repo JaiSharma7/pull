@@ -127,6 +127,36 @@
   --rule-strong: var(--text);
 }
 
+/*
+ * Focus mode — the same reading, physically larger.
+ *
+ * The base scale tops out around 17px, so a 2560px display shows a phone's line
+ * inside a 544px column and spends the rest of the screen on furniture and margin.
+ * The words never get any of it.
+ *
+ * The answer is not a longer line: 66 characters is comfortable because of how eyes
+ * track, not because of how many pixels are spare. So the type grows and `--measure`
+ * grows with it in the same proportion — characters per line are unchanged, and
+ * everything is simply bigger. That is what a laptop should buy over a phone.
+ *
+ * Only the reading steps move. `--step--1` (metadata) is deliberately left alone so
+ * the furniture does not grow with the prose and reclaim the room this just freed.
+ */
+:root[data-focus='on'] {
+  --step-0: clamp(1.0625rem, 1rem + 0.35vw, 1.375rem);
+  --step-1: clamp(1.25rem, 1.15rem + 0.5vw, 1.625rem);
+  --step-2: clamp(1.5rem, 1.3rem + 0.85vw, 2.125rem);
+  --step-3: clamp(1.9531rem, 1.6rem + 1.4vw, 2.75rem);
+  --step-4: clamp(2.4414rem, 1.95rem + 2.1vw, 3.5rem);
+  --step-5: clamp(3.0518rem, 2.3rem + 3vw, 4.5rem);
+  /*
+   * Scaled from the body step, not restated as a bigger constant. A second literal
+   * would drift the moment either value was tuned, and the whole point is that the
+   * ratio between them — the character count — is the thing being held fixed.
+   */
+  --measure: calc(var(--step-0) * 32);
+}
+
 :root[data-text='large'] {
   --step-0: 1.1875rem;
   --step--1: 1rem;

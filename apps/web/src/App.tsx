@@ -11,6 +11,7 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
+import { applyFocus, readStoredFocus, storeFocus } from './lib/focus-mode.js';
 import { queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
@@ -29,6 +30,14 @@ const SECTIONS: { id: Tab; label: string }[] = [
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
+  /*
+   * Read once during the first render, not in an effect.
+   *
+   * An effect would paint the normal scale first and then jump to the focus scale on
+   * the next frame — a visible reflow of every line of text on every load, for a
+   * reader who has already said which one they want.
+   */
+  const [focus, setFocus] = useState(readStoredFocus);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('feed');
   const [stats, setStats] = useState<FeedStats | null>(null);
@@ -50,6 +59,11 @@ export function App() {
    * so /privacy resolves on a cold load and offline as well as from a link.
    */
   const [path, setPath] = useState(() => window.location.pathname);
+
+  // The attribute is the single source of truth for the CSS; this keeps it in step.
+  useEffect(() => {
+    applyFocus(focus, document.documentElement);
+  }, [focus]);
 
   useEffect(() => {
     /*
@@ -194,10 +208,32 @@ export function App() {
             ))}
           </nav>
 
+          {/*
+            In the masthead rather than in Preferences, because it is a reading control
+            and the moment a reader wants it is while they are reading. Burying a
+            display setting two screens away means it is found once and never again.
+
+            The masthead itself stays visible in focus mode: a full-screen reading mode
+            with no visible way out is the pattern this product exists not to be.
+          */}
           <button
             type="button"
             className="btn btn--plain"
             style={{ marginLeft: 'auto' }}
+            aria-pressed={focus}
+            title="Larger type, no rails. The line length stays the same."
+            onClick={() => {
+              const next = !focus;
+              setFocus(next);
+              storeFocus(next);
+            }}
+          >
+            {focus ? 'Exit focus' : 'Focus'}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn--plain"
             onClick={() => void supabase.auth.signOut()}
           >
             Sign out

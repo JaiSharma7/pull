@@ -190,10 +190,10 @@ describe('The Archive viewport laws', () => {
     const ownRule = (css: string, selector: string) =>
       css.match(new RegExp(`(^|[;}]|\\n)\\s*\\${selector}\\s*\\{[^}]*\\}`))?.[0] ?? '';
 
-    const twoPane = block('60rem');
-    expect(twoPane, 'no two-pane rule found at 60rem').not.toBe('');
+    const twoPane = block('63rem');
+    expect(twoPane, 'no two-pane rule found at 63rem').not.toBe('');
     const railRule = ownRule(twoPane, '.shell__rail');
-    expect(railRule, 'no .shell__rail rule of its own at 60rem').not.toBe('');
+    expect(railRule, 'no .shell__rail rule of its own at 63rem').not.toBe('');
     expect(railRule, 'the navigation rail is hidden where it should appear').toMatch(
       /display:\s*block/,
     );
@@ -206,18 +206,36 @@ describe('The Archive viewport laws', () => {
       /display:\s*block/,
     );
 
-    // Three tracks only once all three fit. A three-column grid declared at 60rem is
-    // exactly the bug this test exists to keep out.
-    const gridAt = (css: string) =>
-      css.match(/\.shell__body\s*\{[^}]*grid-template-columns:([^;]*);/)?.[1] ?? '';
+    /*
+     * The outer tracks must be identical, because that is what centres the column.
+     *
+     * `.shell__column` sets `margin-inline: auto`, which centres it in the *middle
+     * track* — and the middle track is centred in the window only when the tracks
+     * either side of it are equal. They were not, and the column drifted across the
+     * window as it grew: measured in a browser, 98px right of centre at 1024px (a rail
+     * with nothing balancing it) and 25–32px left of centre above 1200px (an aside
+     * declared wider than the rail). Nothing in the CSS looked wrong; the asymmetry
+     * was two clamps written independently.
+     *
+     * Pinned as one shared value used twice rather than as two values that happen to
+     * match, since two matching literals are one careless edit away from not matching.
+     */
+    const grid =
+      twoPane.match(/\.shell__body\s*\{[^}]*grid-template-columns:([^;]*);/)?.[1]?.trim() ?? '';
+    expect(grid, 'no grid declared at 63rem').not.toBe('');
+    const tracks = grid.split(/\s+(?![^(]*\))/).filter(Boolean);
+    expect(tracks.length, `expected three tracks, got "${grid}"`).toBe(3);
+    expect(tracks[0], 'the outer tracks differ, so the reading column is off-centre').toBe(
+      tracks[2],
+    );
+    expect(tracks[1], 'the middle track is not the flexible one').toMatch(/minmax\(0,\s*1fr\)/);
+
+    // The aside must not redeclare a width of its own; that is how the asymmetry
+    // returned last time. It may only become visible in the track already reserved.
     expect(
-      gridAt(twoPane).split('clamp(').length - 1,
-      'the 60rem grid reserves a track for the aside, which squeezes the measure',
-    ).toBe(1);
-    expect(
-      gridAt(threePane).split('clamp(').length - 1,
-      'the 66rem grid does not lay out all three panes',
-    ).toBe(2);
+      threePane,
+      'the 66rem block redeclares the grid, which risks reintroducing the asymmetry',
+    ).not.toMatch(/grid-template-columns/);
   });
 
   it('lets the masthead navigation wrap', () => {
