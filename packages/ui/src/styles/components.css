@@ -496,6 +496,19 @@
 }
 
 /*
+ * The masthead is the ONLY navigation below 63rem, so its current item cannot
+ * be marked by colour alone — design law 5, and `aria-current` is not a visual
+ * signal. Weight and a hairline underneath, the same treatment the rail already
+ * gives `.shell__nav-item[aria-current]`, so the two navs agree and neither
+ * depends on a reader distinguishing oxblood from ink.
+ */
+.shell__masthead-item[aria-current='page'] {
+  color: var(--accent);
+  font-weight: 500;
+  border-bottom: 1px solid var(--accent);
+}
+
+/*
  * Exactly where the rail takes over, and not a pixel before.
  *
  * These two thresholds are one decision written twice, and they drifted apart the

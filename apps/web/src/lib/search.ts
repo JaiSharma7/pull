@@ -195,18 +195,37 @@ export function countLine(result: SearchResult): string {
 }
 
 /**
- * The sentence that ends the list.
+ * The sentence that ends the results, and it is two different sentences.
  *
- * Two different terminal states, and conflating them is the bug: a list showing
- * everything there is has ended, while a truncated one has been cut. Only the
- * second invites the reader to narrow the query — telling someone to be more
- * specific when they are already looking at every match is an instruction they
- * cannot act on.
+ * A list showing everything there is has ENDED; a truncated one has been CUT.
+ * Only the second invites the reader to narrow the query — telling someone to be
+ * more specific when they are already looking at every match is an instruction
+ * they cannot act on.
+ *
+ * It covers BOTH lists, and the reason is a query like "Walden": the word is in
+ * a work's title and in no pull's text, so `ideas` is 0 while `sources` is 1.
+ * An earlier version keyed only on `counts.ideas`, returned the empty string,
+ * and left the page ending on a horizontal rule and a blank paragraph — which
+ * is exactly the "feed that merely runs out" law 7 exists to refuse. Truncation
+ * is derived from the rendered arrays rather than from the `capped` flag, so a
+ * capped source list is reported too; the flag only ever described the ideas.
  */
 export function terminalLine(result: SearchResult): string {
-  const shown = result.ideas.length;
-  const { ideas, capped } = result.counts;
-  if (ideas === 0) return '';
-  if (!capped) return `That is every idea matching “${result.query}”.`;
-  return `Showing the ${shown} closest of ${ideas}. Narrow the search to see others.`;
+  const { ideas, sources } = result.counts;
+  // Nothing matched at all: the empty state owns that screen and says more than
+  // a trailing sentence could.
+  if (ideas === 0 && sources === 0) return '';
+
+  const withheld: string[] = [];
+  if (ideas > result.ideas.length) {
+    withheld.push(`${result.ideas.length} of ${ideas} ideas`);
+  }
+  if (sources > result.sources.length) {
+    withheld.push(`${result.sources.length} of ${sources} sources`);
+  }
+
+  if (withheld.length > 0) {
+    return `Showing ${withheld.join(' and ')}. Narrow the search to see others.`;
+  }
+  return `That is everything matching \u201C${result.query}\u201D.`;
 }

@@ -165,7 +165,7 @@ describe('countLine', () => {
 });
 
 describe('terminalLine', () => {
-  it('says nothing at all when there was nothing to end', () => {
+  it('says nothing when nothing matched at all', () => {
     expect(terminalLine(EMPTY_RESULT)).toBe('');
   });
 
@@ -173,23 +173,67 @@ describe('terminalLine', () => {
     const line = terminalLine(
       result({
         query: 'liberty',
-        ideas: [{ id: 'p1' } as never],
+        ideas: [{ id: 'p1' }] as never,
+        sources: [{ id: 'w1' }] as never,
         counts: { ideas: 1, sources: 1, capped: false },
       }),
     );
-    expect(line).toContain('every idea');
+    expect(line).toBe('That is everything matching \u201Cliberty\u201D.');
     expect(line).not.toContain('Narrow');
   });
 
-  it('distinguishes a truncated list, and counts what is on screen', () => {
+  it('reports a truncated idea list, counting what is on screen', () => {
+    expect(
+      terminalLine(
+        result({
+          query: 'habit',
+          ideas: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never,
+          sources: [{ id: 'w1' }] as never,
+          counts: { ideas: 40, sources: 1, capped: true },
+        }),
+      ),
+    ).toBe('Showing 3 of 40 ideas. Narrow the search to see others.');
+  });
+
+  it('reports a truncated source list too, which `capped` never described', () => {
+    expect(
+      terminalLine(
+        result({
+          query: 'liberty',
+          ideas: [{ id: 'a' }] as never,
+          sources: [{ id: 'w1' }, { id: 'w2' }] as never,
+          counts: { ideas: 1, sources: 12, capped: false },
+        }),
+      ),
+    ).toBe('Showing 2 of 12 sources. Narrow the search to see others.');
+  });
+
+  it('reports both when both are cut', () => {
+    expect(
+      terminalLine(
+        result({
+          query: 'x',
+          ideas: [{ id: 'a' }] as never,
+          sources: [{ id: 'w1' }] as never,
+          counts: { ideas: 40, sources: 12, capped: true },
+        }),
+      ),
+    ).toBe('Showing 1 of 40 ideas and 1 of 12 sources. Narrow the search to see others.');
+  });
+
+  it('never goes blank when a query matched a source but no idea', () => {
+    // "Walden" is in a work title and in no pull's text. The page must still end
+    // on a sentence rather than on a rule and an empty paragraph.
     const line = terminalLine(
       result({
-        query: 'habit',
-        ideas: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never,
-        counts: { ideas: 40, sources: 9, capped: true },
+        query: 'Walden',
+        ideas: [],
+        sources: [{ id: 'w1' }] as never,
+        counts: { ideas: 0, sources: 1, capped: false },
       }),
     );
-    expect(line).toBe('Showing the 3 closest of 40. Narrow the search to see others.');
+    expect(line).not.toBe('');
+    expect(line).toBe('That is everything matching \u201CWalden\u201D.');
   });
 });
 

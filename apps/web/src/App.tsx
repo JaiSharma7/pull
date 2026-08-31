@@ -46,6 +46,26 @@ const SECTIONS: { id: Tab; label: string }[] = [
  * section changes what the shell is showing, choosing a destination changes the
  * URL and every tab steps aside for it.
  */
+/**
+ * The address, including its query string.
+ *
+ * `window.location.pathname` drops `?q=…`, and everything downstream reads this
+ * one string — so with the pathname alone `/search?q=liberty` was routable only
+ * while the app itself had just pushed it. A cold load, a reload, a shared link
+ * and the Back button all produced `/search` with no query, and the screen said
+ * "What are you looking for?" while the address bar still read `?q=liberty`.
+ * Back was the worst of them: it restored the URL, popstate fired, and the box
+ * emptied itself.
+ *
+ * The fragment is deliberately not included. `anchoredPullId` reads
+ * `location.hash` directly at the moment it scrolls, and folding it in here
+ * would make every anchored Pull a distinct `path` value and re-render the
+ * source page on a hash change that only ever moves the viewport.
+ */
+function readLocation(): string {
+  return window.location.pathname + window.location.search;
+}
+
 const DESTINATIONS: { path: string; label: string }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
@@ -81,7 +101,7 @@ export function App() {
    * rewrites every path to the bundle and the service worker falls back to it,
    * so /privacy resolves on a cold load and offline as well as from a link.
    */
-  const [path, setPath] = useState(() => window.location.pathname);
+  const [path, setPath] = useState(readLocation);
 
   // The attribute is the single source of truth for the CSS; this keeps it in step.
   useEffect(() => {
@@ -162,7 +182,7 @@ export function App() {
   // Back and forward have to work, or the reader who opened the terms is stuck
   // in them.
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
+    const onPop = () => setPath(readLocation());
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -177,7 +197,7 @@ export function App() {
    */
   function goToTab(next: Tab) {
     setTab(next);
-    if (window.location.pathname !== '/') navigate('/');
+    if (readLocation() !== '/') navigate('/');
   }
 
   function navigate(to: string) {
@@ -266,9 +286,8 @@ export function App() {
               <button
                 key={s.id}
                 type="button"
-                className="btn btn--plain"
+                className="btn btn--plain shell__masthead-item"
                 aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
-                style={tab === s.id && !routeOpen ? { color: 'var(--accent)' } : undefined}
                 onClick={() => goToTab(s.id)}
               >
                 {s.label}
@@ -285,9 +304,8 @@ export function App() {
               <button
                 key={d.path}
                 type="button"
-                className="btn btn--plain"
+                className="btn btn--plain shell__masthead-item"
                 aria-current={isPath(path, d.path) ? 'page' : undefined}
-                style={isPath(path, d.path) ? { color: 'var(--accent)' } : undefined}
                 onClick={() => navigate(d.path)}
               >
                 {d.label}
