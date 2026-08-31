@@ -11,7 +11,13 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
-import { applyFocus, readStoredFocus, storeFocus } from './lib/focus-mode.js';
+import {
+  applyFocus,
+  enterFullscreen,
+  exitFullscreen,
+  readStoredFocus,
+  storeFocus,
+} from './lib/focus-mode.js';
 import { queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
@@ -64,6 +70,46 @@ export function App() {
   useEffect(() => {
     applyFocus(focus, document.documentElement);
   }, [focus]);
+
+  /*
+   * Escape leaves fullscreen without asking the app, so the app has to listen.
+   *
+   * The browser exits fullscreen on Escape unconditionally and there is no way to
+   * prevent it. Without this the reader would press Escape, get their tabs back, and
+   * still be looking at a page that had hidden its own navigation and thought it was
+   * in focus mode — a state nothing in the UI would explain.
+   */
+  useEffect(() => {
+    const onChange = () => {
+      if (!document.fullscreenElement && focus) {
+        setFocus(false);
+        storeFocus(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, [focus]);
+
+  /*
+   * Scroll friction belongs to the feed, and only while the feed is what is on screen.
+   *
+   * Scoped here rather than in `Feed` because the feed stays mounted behind the other
+   * tabs — hidden, not unmounted, so the session tallies survive a tab switch. A
+   * `data-reading` set on mount would therefore keep snapping the Library and the
+   * Colophon, which is friction with nothing behind it.
+   *
+   * The route check is derived from `path` rather than read from `routeOpen`, which is
+   * computed further down after two early returns — a hook below those runs
+   * conditionally, which React forbids and the linter catches.
+   */
+  useEffect(() => {
+    const onRoute = routeParam(path, '/source') !== null || routeParam(path, '/pull') !== null;
+    const reading = tab === 'feed' && !onRoute;
+    const root = document.documentElement;
+    if (reading) root.setAttribute('data-reading', 'feed');
+    else root.removeAttribute('data-reading');
+    return () => root.removeAttribute('data-reading');
+  }, [tab, path]);
 
   useEffect(() => {
     /*
@@ -226,6 +272,10 @@ export function App() {
               const next = !focus;
               setFocus(next);
               storeFocus(next);
+              // Inside the click, because `requestFullscreen` is rejected outside a
+              // user gesture. Awaiting it would also delay the CSS half behind a
+              // permission decision the CSS half does not depend on.
+              void (next ? enterFullscreen(document) : exitFullscreen(document));
             }}
           >
             {focus ? 'Exit focus' : 'Focus'}

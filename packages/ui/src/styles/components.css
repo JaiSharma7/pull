@@ -853,3 +853,59 @@
 :root[data-focus='on'] .shell__main {
   padding-block: var(--space-7);
 }
+
+/* Reading friction ---------------------------------------------------------
+ *
+ * A slight resistance in the scroll, so the feed cannot be flicked past.
+ *
+ * This is the opposite of what it looks like. Reels and Shorts use snapping to make
+ * moving on *effortless* — one flick, the next thing is already there, and the cost of
+ * not stopping is zero. The same primitive pointed the other way makes stopping the
+ * default: `scroll-snap-stop: always` means one gesture advances one idea, however
+ * hard it is thrown. You can still leave whenever you like; you just cannot leave
+ * without passing each thing on the way.
+ *
+ * `proximity`, not `mandatory`. Mandatory fights a reader who is part way down a card
+ * taller than their window, and a card that cannot be read to the end is a worse
+ * outcome than a card that can be skimmed past. Proximity settles the scroll when it
+ * is already close and otherwise stays out of the way.
+ *
+ * Scoped by `data-reading` rather than applied to the document, because snapping the
+ * Library or the Colophon would be friction with nothing behind it.
+ */
+:root[data-reading='feed'] {
+  scroll-snap-type: y proximity;
+  /* Clear of the sticky masthead, so a snapped card is not tucked under it. */
+  scroll-padding-block-start: var(--space-7);
+}
+
+.feed__item {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+/*
+ * Off entirely for a reader who has asked for less motion.
+ *
+ * Snapping moves the viewport somewhere the reader did not put it, which is exactly
+ * what that preference is about — and the friction is a nudge, never a load-bearing
+ * part of the product. A nudge is the first thing to drop.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-reading='feed'] {
+    scroll-snap-type: none;
+  }
+}
+
+/*
+ * Focus mode gives the card the room the rails gave up.
+ *
+ * `.pull-card` caps itself at 40rem, which is the reason focus mode still looked small
+ * in a wide window: the column grew to ~704px and the card inside it stayed at 640,
+ * so the setting appeared to do nothing but shrink the furniture. In focus the column
+ * is already the constraint, and a second cap underneath it is just a narrower answer
+ * to the same question.
+ */
+:root[data-focus='on'] .pull-card {
+  max-width: none;
+}
