@@ -3,18 +3,20 @@ import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
+import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
 import { supabase } from './lib/supabase.js';
 
-type Tab = 'feed' | 'review' | 'library';
+type Tab = 'feed' | 'review' | 'library' | 'preferences';
 
 const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'feed', label: 'For You' },
   { id: 'review', label: 'Review' },
   { id: 'library', label: 'Library' },
+  { id: 'preferences', label: 'Preferences' },
 ];
 
 export function App() {
@@ -101,66 +103,67 @@ export function App() {
   if (!session) return <Auth onNavigate={navigate} />;
 
   return (
-    <div className="shell">
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
+    <OnboardingGate userId={session.user.id}>
+      <div className="shell">
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
 
-      <header className="shell__masthead">
-        <span className="shell__wordmark">What a Pull</span>
+        <header className="shell__masthead">
+          <span className="shell__wordmark">What a Pull</span>
 
-        {/*
+          {/*
           The sections live in the masthead below 60rem and in the left rail
           above it. Rendering both and hiding one would put two controls with
           the same name in the accessibility tree, so the rail is the only
           copy on wide screens and this one steps aside for it.
         */}
-        <nav aria-label="Sections" className="shell__masthead-nav">
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              className="btn btn--plain"
-              aria-current={tab === s.id ? 'page' : undefined}
-              style={tab === s.id ? { color: 'var(--accent)' } : undefined}
-              onClick={() => setTab(s.id)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </nav>
-
-        <button
-          type="button"
-          className="btn btn--plain"
-          style={{ marginLeft: 'auto' }}
-          onClick={() => void supabase.auth.signOut()}
-        >
-          Sign out
-        </button>
-      </header>
-
-      <div className="shell__body">
-        <aside className="shell__rail" aria-label="Sections">
-          <p className="meta shell__group">Reading</p>
-          <nav className="shell__nav">
+          <nav aria-label="Sections" className="shell__masthead-nav">
             {SECTIONS.map((s) => (
               <button
                 key={s.id}
                 type="button"
-                className="btn btn--plain shell__nav-item"
+                className="btn btn--plain"
                 aria-current={tab === s.id ? 'page' : undefined}
+                style={tab === s.id ? { color: 'var(--accent)' } : undefined}
                 onClick={() => setTab(s.id)}
               >
                 {s.label}
               </button>
             ))}
           </nav>
-        </aside>
 
-        <main id="main" className="shell__main">
-          <div className="shell__column">
-            {/*
+          <button
+            type="button"
+            className="btn btn--plain"
+            style={{ marginLeft: 'auto' }}
+            onClick={() => void supabase.auth.signOut()}
+          >
+            Sign out
+          </button>
+        </header>
+
+        <div className="shell__body">
+          <aside className="shell__rail" aria-label="Sections">
+            <p className="meta shell__group">Reading</p>
+            <nav className="shell__nav">
+              {SECTIONS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="btn btn--plain shell__nav-item"
+                  aria-current={tab === s.id ? 'page' : undefined}
+                  onClick={() => setTab(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </nav>
+          </aside>
+
+          <main id="main" className="shell__main">
+            <div className="shell__column">
+              {/*
               The feed is hidden rather than unmounted, and that is a correctness
               choice rather than a performance one.
 
@@ -181,53 +184,57 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
-            <div hidden={tab !== 'feed'}>
-              <Feed userId={session.user.id} onStats={setStats} />
+              <div hidden={tab !== 'feed'}>
+                <Feed userId={session.user.id} onStats={setStats} />
+              </div>
+              {tab === 'review' && <Review />}
+              {tab === 'library' && <Library userId={session.user.id} />}
+              {tab === 'preferences' && (
+                <Preferences userId={session.user.id} onDone={() => setTab('feed')} />
+              )}
             </div>
-            {tab === 'review' && <Review />}
-            {tab === 'library' && <Library userId={session.user.id} />}
-          </div>
-        </main>
+          </main>
 
-        <aside className="shell__aside" aria-label="This session">
-          <div className="shell__group">
-            <p className="meta">This session</p>
-            <div className="shell__stat">
-              <span>Ideas met</span>
-              <span className="shell__stat-value">{stats?.read ?? 0}</span>
+          <aside className="shell__aside" aria-label="This session">
+            <div className="shell__group">
+              <p className="meta">This session</p>
+              <div className="shell__stat">
+                <span>Ideas met</span>
+                <span className="shell__stat-value">{stats?.read ?? 0}</span>
+              </div>
+              <div className="shell__stat">
+                <span>Saved</span>
+                <span className="shell__stat-value">{stats?.saved ?? 0}</span>
+              </div>
+              <div className="shell__stat">
+                <span>Recalled</span>
+                <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
+              </div>
             </div>
-            <div className="shell__stat">
-              <span>Saved</span>
-              <span className="shell__stat-value">{stats?.saved ?? 0}</span>
-            </div>
-            <div className="shell__stat">
-              <span>Recalled</span>
-              <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
-            </div>
-          </div>
 
-          {/*
+            {/*
             Time saved rather than time spent, in the one accent colour — it is
             the number the product is optimising for, and putting it here keeps
             it in view during a session instead of only at the end of one.
           */}
-          <div className="shell__group">
-            <p className="meta">The Delta</p>
-            <div className="shell__stat">
-              <span>Already knew</span>
-              <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
+            <div className="shell__group">
+              <p className="meta">The Delta</p>
+              <div className="shell__stat">
+                <span>Already knew</span>
+                <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
+              </div>
+              <div className="shell__stat">
+                <span>Time saved</span>
+                <span className="shell__stat-value shell__stat-value--accent">
+                  {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
+                </span>
+              </div>
             </div>
-            <div className="shell__stat">
-              <span>Time saved</span>
-              <span className="shell__stat-value shell__stat-value--accent">
-                {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
-              </span>
-            </div>
-          </div>
-        </aside>
-      </div>
+          </aside>
+        </div>
 
-      <Colophon onNavigate={navigate} />
-    </div>
+        <Colophon onNavigate={navigate} />
+      </div>
+    </OnboardingGate>
   );
 }
