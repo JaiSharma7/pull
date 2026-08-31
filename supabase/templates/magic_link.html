@@ -104,9 +104,29 @@
         Click the code once to select it. It expires shortly and works only once.
       </p>
 
+      <!--
+        The address is written out rather than built from .SiteURL, and that is
+        the whole point of this link.
+
+        .SiteURL and .ConfirmationURL both route through the project's Site
+        URL, which is hosted configuration no code in this repository can set. When it
+        is wrong — and it was, pointing at localhost:3000 — GoTrue still verifies the
+        link and still mints a real session, then redirects it somewhere that does not
+        serve the app. Nothing errors; the reader simply lands on a dead page holding a
+        session they cannot spend.
+
+        .TokenHash lets this link point at the app directly. No redirect happens,
+        so neither Site URL nor the redirect allow-list can break it, and the session is
+        created in the tab the reader already has open. The app calls verifyOtp with the
+        hash on arrival — see readUrlToken in apps/web/src/routes/Auth.tsx.
+
+        The cost of writing the address here is that a new deployment domain has to be
+        changed in two places. That is a real cost, and it buys a sign-in that cannot be
+        broken by a setting nobody remembers exists.
+      -->
       <p style="margin: 0 0 32px">
         <a
-          href="{{ .SiteURL }}/?code={{ .Token }}&amp;email={{ .Email }}"
+          href="https://pull-puce.vercel.app/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink"
           style="
             font-family: system-ui, sans-serif;
             font-size: 16px;
@@ -118,16 +138,16 @@
             border-radius: 4px;
           "
         >
-          Or sign in without typing it
+          Sign me in
         </a>
       </p>
 
       <hr style="border: 0; border-top: 1px solid rgba(20, 18, 14, 0.12); margin: 0 0 24px" />
 
       <p style="font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.6; margin: 0">
-        Still stuck?
-        <a href="{{ .ConfirmationURL }}" style="color: #8c2f26">This link</a>
-        signs you in directly — but only in the browser it opens in.
+        Still stuck? Enter the code above at
+        <a href="https://pull-puce.vercel.app" style="color: #8c2f26">pull-puce.vercel.app</a>
+        in the browser you started from.
       </p>
 
       <p

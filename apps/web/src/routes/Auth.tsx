@@ -85,16 +85,57 @@ function readPrefill(): { code: string; email: string } | null {
   return { code, email: email ?? '' };
 }
 
+/**
+ * A `token_hash` link, verified here rather than by GoTrue.
+ *
+ * This is the shape that makes sign-in work for people who are not the owner. A
+ * `{{ .ConfirmationURL }}` link goes to GoTrue's `/verify`, which mints the session
+ * and then **redirects it to the project's Site URL** — hosted configuration this
+ * repository cannot set, and wrong, so every successful sign-in landed on a dead page.
+ *
+ * `{{ .TokenHash }}` lets the email point straight at this app instead. No redirect
+ * happens, so Site URL never enters into it, and the session is created in the tab the
+ * reader already has open. It is also immune to the redirect allow-list, which is the
+ * other hosted setting that silently breaks sign-in on a new deployment.
+ *
+ * Read from the query string only. The fragment belongs to supabase-js, whose
+ * `detectSessionInUrl` consumes `#access_token` at module load — racing it here would
+ * mean two things trying to spend one credential.
+ *
+ * Cleared from the address bar as it is read: a single-use token in browser history is
+ * a credential in browser history, and re-visiting it could only ever fail.
+ */
+function readUrlToken(): { tokenHash: string; type: 'signup' | 'magiclink' } | null {
+  const params = new URLSearchParams(window.location.search);
+  const tokenHash = params.get('token_hash')?.trim();
+  if (!tokenHash) return null;
+
+  const raw = params.get('type');
+  history.replaceState(null, '', window.location.pathname);
+  // Narrowed at the boundary: the value arrives from a URL, and an unrecognised one is
+  // something TypeScript would accept and GoTrue would reject.
+  return { tokenHash, type: raw === 'signup' ? 'signup' : 'magiclink' };
+}
+
 export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   // Read during the first render, because reading consumes the query string.
   const [prefill] = useState(readPrefill);
+  const [urlToken] = useState(readUrlToken);
   const [email, setEmail] = useState(prefill?.email ?? '');
   const [code, setCode] = useState(prefill?.code ?? '');
   /* A link that carried a code lands straight on the code step rather than the form. */
   const [sent, setSent] = useState(prefill !== null);
   // Read once, during the first render, because it consumes the hash as it reads.
   const [error, setError] = useState<string | null>(readRedirectError);
-  const [busy, setBusy] = useState(false);
+  /*
+   * Busy from the first paint when a link is being verified, not a tick later.
+   *
+   * Seeding this rather than setting it inside the effect avoids a cascading render,
+   * and is also what the reader should see: arriving on a `token_hash` link, the very
+   * first frame is already working on it rather than showing an empty form that is
+   * about to be replaced.
+   */
+  const [busy, setBusy] = useState(urlToken !== null);
   /** Whatever the reader pasted, before it has been worked out. See `usePastedLink`. */
   const [pasted, setPasted] = useState('');
   const [showPaste, setShowPaste] = useState(false);
@@ -207,6 +248,36 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   useEffect(() => {
     if (prefill?.code && prefill.email) formRef.current?.requestSubmit();
   }, [prefill]);
+
+  /*
+   * A clicked email link completes on arrival, with nothing to press.
+   *
+   * The reader has already proved they hold the mailbox; asking them to confirm that
+   * again on this screen would be ceremony. On success `App`'s auth listener swaps the
+   * screen out, so there is nothing to do with the result here beyond reporting a
+   * failure — an expired or already-spent link has to say so rather than silently
+   * leaving an empty form.
+   */
+  useEffect(() => {
+    if (!urlToken) return;
+    let cancelled = false;
+    supabase.auth
+      .verifyOtp({ token_hash: urlToken.tokenHash, type: urlToken.type })
+      .then(({ error }) => {
+        if (cancelled || !error) return;
+        setError(error.message);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Could not reach the server.');
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [urlToken]);
 
   /*
    * The escape hatch for a sign-in that worked and still left the reader outside.

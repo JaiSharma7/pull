@@ -54,6 +54,19 @@ describe('parseSignInLink', () => {
     expect(got).toEqual({ kind: 'token-hash', tokenHash: 'pkce_9f2b', type: 'magiclink' });
   });
 
+  it('reads a token_hash link, which is the form that needs no redirect at all', () => {
+    /*
+     * `{{ .TokenHash }}` lets the email link point straight at this app, so GoTrue
+     * never redirects and the project's Site URL — the setting that broke every
+     * sign-in before this — stops mattering to anyone.
+     */
+    expect(
+      parseSignInLink(
+        'https://pull-puce.vercel.app/auth/confirm?token_hash=pkce_ab12&type=magiclink',
+      ),
+    ).toEqual({ kind: 'token-hash', tokenHash: 'pkce_ab12', type: 'magiclink' });
+  });
+
   it('keeps the type a first-ever link carries, rather than assuming a returning reader', () => {
     // A signup token is not in the table `magiclink` looks in. Defaulting the type would
     // turn a brand-new reader's first click into "invalid or expired".
