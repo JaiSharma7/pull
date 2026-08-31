@@ -312,7 +312,7 @@ describe('reuse skips the paid work', () => {
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
     const received: {
-      upsertWork?: { kind: string; rightsStatus: string };
+      upsertWork?: { kind: string; rightsStatus: string; topics: string[] };
       createSummary?: { authorId: string | null; visibility: string };
     } = {};
 
@@ -358,7 +358,7 @@ describe('reuse skips the paid work', () => {
       },
       db: {
         findPublishedSummaryByHash: async (_hash: string, _requesterId: string | null) => reuse,
-        upsertWork: async (input: { kind: string; rightsStatus: string }) => {
+        upsertWork: async (input: { kind: string; rightsStatus: string; topics: string[] }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
         },
@@ -588,6 +588,60 @@ describe('reuse skips the paid work', () => {
 
     expect(received.upsertWork?.kind).toBe('essay');
     expect(WORK_KINDS).toContain(received.upsertWork?.kind);
+  });
+
+  it('forwards the narrowed topics from synthesize into upsertWork', async () => {
+    /*
+     * `narrowTopics` being correct in isolation proves nothing about whether
+     * `template` calls it. Without this, deleting the wiring entirely leaves the
+     * suite green and every generated work silently unclassified — which is the
+     * whole defect this feature exists to fix, reintroduced one level up.
+     */
+    const { deps, received } = harness(null);
+    const job = { ...deps.job, target: { text: 'x'.repeat(400) } };
+
+    const identity = await runPipelineStep('resolve_identity', { ...deps, job } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: {
+        acquire: acquired.output,
+        // 'philosophy' is real, 'not-a-topic' is not, and order is meaningful:
+        // `upsertWork` files the first surviving slug as the primary one.
+        synthesize: { ...SYNTHESIZED, topics: ['philosophy', 'not-a-topic', 'ethics'] },
+      },
+    } as never);
+
+    expect(received.upsertWork?.topics).toEqual(['philosophy', 'ethics']);
+  });
+
+  it('passes an empty topic list rather than failing when synthesize classified nothing', async () => {
+    // A job queued before the topics field existed replays with no topics at all.
+    // An unclassified work is a worse feed position; a job that dies at `template`
+    // after synthesis has been billed is nothing at all.
+    const { deps, received } = harness(null);
+    const job = { ...deps.job, target: { text: 'x'.repeat(400) } };
+
+    const identity = await runPipelineStep('resolve_identity', { ...deps, job } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+
+    expect(received.upsertWork?.topics).toEqual([]);
   });
 
   it('writes a real rights_status, and defaults an unknown one to review_required', async () => {

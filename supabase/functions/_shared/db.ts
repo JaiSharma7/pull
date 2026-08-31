@@ -111,24 +111,50 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           ) as { id: string; slug: string }[] | null;
 
           const bySlug = new Map((rows ?? []).map((r) => [r.slug, r.id]));
+          /*
+           * Weight is assigned *after* resolving, not from the model's index.
+           *
+           * Ranking off the original position looks equivalent and is not: if the
+           * primary slug is one the database does not carry — the deploy-versus-
+           * migration window this function's header anticipates — it is dropped, and
+           * every surviving link is left at 0.6. The work then has no primary topic
+           * at all and scores 40% under what it should in `topic_affinity`, quietly
+           * and for as long as the row lives. Whichever topic survives first is the
+           * most central one that actually exists, which is the honest answer.
+           */
           const links = topics
-            .map((slug, index) => ({
+            .map((slug) => bySlug.get(slug))
+            .filter((id): id is string => Boolean(id))
+            .map((topic_id, rank) => ({
               work_id: workId,
-              topic_id: bySlug.get(slug),
-              weight: index === 0 ? 1.0 : 0.6,
-            }))
-            .filter((link): link is { work_id: string; topic_id: string; weight: number } =>
-              Boolean(link.topic_id),
-            );
+              topic_id,
+              weight: rank === 0 ? 1.0 : 0.6,
+            }));
           if (links.length === 0) return;
 
           // Ignores a duplicate rather than raising: two jobs can race onto the same
           // work through the 23505 adoption path below, and the second one filing the
           // same topics is a no-op, not an error.
-          await supabase.from('work_topics').upsert(links, { onConflict: 'work_id,topic_id' });
-        } catch {
-          // Deliberately swallowed. See above: classification is worth less than the
-          // summary it accompanies, and the job must survive its absence.
+          must(
+            await supabase.from('work_topics').upsert(links, { onConflict: 'work_id,topic_id' }),
+            'file work under topics',
+          );
+        } catch (e) {
+          /*
+           * Swallowed, but never silent.
+           *
+           * Classification is worth less than the summary it accompanies, so this
+           * must not fail a job that has already paid for synthesis. But an
+           * unclassified work is invisible in exactly the way that matters — the job
+           * reports success, no step row records a problem, and the only symptom is a
+           * work no reader's preferences can ever reach. Without this line the
+           * difference between "the model returned no topics" and "the write failed"
+           * is unrecoverable after the fact.
+           */
+          console.error(
+            `work_topics: failed to file ${workId} under [${topics.join(', ')}]:`,
+            e instanceof Error ? e.message : e,
+          );
         }
       };
 

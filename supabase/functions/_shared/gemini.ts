@@ -187,6 +187,12 @@ const SUMMARY_SCHEMA = {
     topics: {
       type: 'ARRAY',
       items: { type: 'STRING', enum: TOPIC_SLUGS as unknown as string[] },
+      // Bounded at both ends. Without minItems an empty array satisfies the schema,
+      // and `required` below would be met by a response that classified nothing —
+      // the feature failing silently rather than visibly, which is the failure mode
+      // this file already exists to avoid.
+      minItems: 1,
+      maxItems: 4,
     },
   },
   required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls', 'topics'],
@@ -430,6 +436,15 @@ function buildSummaryPrompt(input: SummaryInput): string {
     `Each pull must be one atomic idea that stands on its own out of context, in plain`,
     `language, with a headline that states the idea rather than teasing it. "whyItMatters"`,
     `should say what changes if the reader believes it — not restate the body.`,
+    ``,
+    // Without this the schema is still satisfied by an empty array, and the whole
+    // classification feature no-ops silently: the work is filed under nothing,
+    // topic_affinity returns 0.0, and no reader's stated interests ever reach it.
+    `Also file this work under one to four topics from this list, most central first:`,
+    TOPIC_SLUGS.join(', '),
+    `Choose the narrowest that genuinely fit. A parent topic is the right answer only`,
+    `when no child of it does — filing a work under a topic it merely touches is worse`,
+    `than filing it under fewer.`,
     ``,
     `Context:`,
     input.context || '(no additional context supplied)',
