@@ -257,32 +257,56 @@ export function App() {
   const routeOpen =
     sourceId !== null || pullId !== null || searchOpen || exploreOpen || topicSlug !== null;
 
+  /*
+   * The library is readable without an account, and it always was.
+   *
+   * `anon` has held select on works, summaries, pulls, topics and daily_pulls
+   * since round 1, and `summaries_read_published` narrows it to published and
+   * public rows — so the database has been ready for this the whole time and
+   * only the client gate was wrong. Verified against the hosted project: as
+   * `anon`, the catalogue reports 42 sources, a topic page fills, search
+   * returns ideas, and `get_source_delta` answers.
+   *
+   * It matters most for a link somebody shares. `og` has been redirecting
+   * browsers to `/pull/:id` since round 2, and until now that path put a
+   * stranger on a sign-in form — so every share this product has ever produced
+   * ended at a wall. A shared idea now opens on the idea.
+   *
+   * The personal surfaces stay gated, and not for lack of nerve: the feed is
+   * ranked against a reader's own history, Review reads their memory, and
+   * Library, History and Preferences are all rows keyed to a user. There is
+   * nothing to show a visitor on any of them.
+   */
+  const publicRoute =
+    sourceId !== null || pullId !== null || searchOpen || exploreOpen || topicSlug !== null;
+  const visitor = !session;
+
   if (!ready)
     return (
       <p className="meta" style={{ padding: 'var(--space-6)' }}>
         Loading…
       </p>
     );
-  if (!session) return <Auth onNavigate={navigate} />;
+  if (!session && !publicRoute) return <Auth onNavigate={navigate} />;
 
-  return (
-    <OnboardingGate userId={session.user.id}>
-      <div className="shell">
-        <a className="skip-link" href="#main">
-          Skip to content
-        </a>
+  const shell = (
+    <div className="shell">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
 
-        <header className="shell__masthead">
-          <span className="shell__wordmark">What a Pull</span>
+      <header className="shell__masthead">
+        <span className="shell__wordmark">What a Pull</span>
 
-          {/*
+        {/*
           The sections live in the masthead below 60rem and in the left rail
           above it. Rendering both and hiding one would put two controls with
           the same name in the accessibility tree, so the rail is the only
           copy on wide screens and this one steps aside for it.
         */}
-          <nav aria-label="Sections" className="shell__masthead-nav">
-            {SECTIONS.map((s) => (
+        <nav aria-label="Sections" className="shell__masthead-nav">
+          {!visitor &&
+            SECTIONS.map((s) => (
               <button
                 key={s.id}
                 type="button"
@@ -293,27 +317,27 @@ export function App() {
                 {s.label}
               </button>
             ))}
-            {/*
+          {/*
               A destination is current when its URL is open, and a section is
               current only when no route is. Without the `!routeOpen` above, a
               reader on /search had two elements marked aria-current="page" —
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-            {DESTINATIONS.map((d) => (
-              <button
-                key={d.path}
-                type="button"
-                className="btn btn--plain shell__masthead-item"
-                aria-current={isPath(path, d.path) ? 'page' : undefined}
-                onClick={() => navigate(d.path)}
-              >
-                {d.label}
-              </button>
-            ))}
-          </nav>
+          {DESTINATIONS.map((d) => (
+            <button
+              key={d.path}
+              type="button"
+              className="btn btn--plain shell__masthead-item"
+              aria-current={isPath(path, d.path) ? 'page' : undefined}
+              onClick={() => navigate(d.path)}
+            >
+              {d.label}
+            </button>
+          ))}
+        </nav>
 
-          {/*
+        {/*
             In the masthead rather than in Preferences, because it is a reading control
             and the moment a reader wants it is while they are reading. Burying a
             display setting two screens away means it is found once and never again.
@@ -321,25 +345,36 @@ export function App() {
             The masthead itself stays visible in focus mode: a full-screen reading mode
             with no visible way out is the pattern this product exists not to be.
           */}
-          <button
-            type="button"
-            className="btn btn--plain"
-            style={{ marginLeft: 'auto' }}
-            aria-pressed={focus}
-            title="Larger type, no rails. The line length stays the same."
-            onClick={() => {
-              const next = !focus;
-              setFocus(next);
-              storeFocus(next);
-              // Inside the click, because `requestFullscreen` is rejected outside a
-              // user gesture. Awaiting it would also delay the CSS half behind a
-              // permission decision the CSS half does not depend on.
-              void (next ? enterFullscreen(document) : exitFullscreen(document));
-            }}
-          >
-            {focus ? 'Exit focus' : 'Focus'}
-          </button>
+        <button
+          type="button"
+          className="btn btn--plain"
+          style={{ marginLeft: 'auto' }}
+          aria-pressed={focus}
+          title="Larger type, no rails. The line length stays the same."
+          onClick={() => {
+            const next = !focus;
+            setFocus(next);
+            storeFocus(next);
+            // Inside the click, because `requestFullscreen` is rejected outside a
+            // user gesture. Awaiting it would also delay the CSS half behind a
+            // permission decision the CSS half does not depend on.
+            void (next ? enterFullscreen(document) : exitFullscreen(document));
+          }}
+        >
+          {focus ? 'Exit focus' : 'Focus'}
+        </button>
 
+        {visitor ? (
+          /*
+              A door, not a wall. A visitor reached this screen through a shared
+              link or the catalogue; the offer to keep what they find is the
+              reason to sign in, and it belongs where they already are rather
+              than in front of the thing they came for.
+            */
+          <button type="button" className="btn btn--plain" onClick={() => navigate('/')}>
+            Sign in to keep these
+          </button>
+        ) : (
           <button
             type="button"
             className="btn btn--plain"
@@ -347,13 +382,15 @@ export function App() {
           >
             Sign out
           </button>
-        </header>
+        )}
+      </header>
 
-        <div className="shell__body">
-          <aside className="shell__rail" aria-label="Sections">
-            <p className="meta shell__group">Reading</p>
-            <nav className="shell__nav">
-              {SECTIONS.map((s) => (
+      <div className="shell__body">
+        <aside className="shell__rail" aria-label="Sections">
+          <p className="meta shell__group">{visitor ? 'Browse' : 'Reading'}</p>
+          <nav className="shell__nav">
+            {!visitor &&
+              SECTIONS.map((s) => (
                 <button
                   key={s.id}
                   type="button"
@@ -364,23 +401,23 @@ export function App() {
                   {s.label}
                 </button>
               ))}
-              {DESTINATIONS.map((d) => (
-                <button
-                  key={d.path}
-                  type="button"
-                  className="btn btn--plain shell__nav-item"
-                  aria-current={isPath(path, d.path) ? 'page' : undefined}
-                  onClick={() => navigate(d.path)}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </nav>
-          </aside>
+            {DESTINATIONS.map((d) => (
+              <button
+                key={d.path}
+                type="button"
+                className="btn btn--plain shell__nav-item"
+                aria-current={isPath(path, d.path) ? 'page' : undefined}
+                onClick={() => navigate(d.path)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </nav>
+        </aside>
 
-          <main id="main" className="shell__main">
-            <div className="shell__column">
-              {/*
+        <main id="main" className="shell__main">
+          <div className="shell__column">
+            {/*
               The feed is hidden rather than unmounted, and that is a correctness
               choice rather than a performance one.
 
@@ -401,6 +438,7 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
+            {session && (
               <div hidden={tab !== 'feed' || routeOpen}>
                 <Feed
                   userId={session.user.id}
@@ -409,51 +447,59 @@ export function App() {
                   onOpenSource={(id) => navigate(`/source/${id}`)}
                 />
               </div>
-              {sourceId !== null && (
-                <Source
-                  key={`${sourceId}:${summaryParam ?? ''}`}
-                  workId={sourceId}
-                  summaryId={summaryParam ?? undefined}
-                  onNavigate={navigate}
-                />
-              )}
-              {pullId !== null && (
-                <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
-              )}
-              {exploreOpen && <Explore onNavigate={navigate} />}
-              {topicSlug !== null && (
-                // Keyed on the slug so moving between topics is a fresh
-                // component rather than one that has to remember to reset its
-                // limit — the same reason `Source` is keyed on its work id.
-                <Topic key={topicSlug} slug={decodeURIComponent(topicSlug)} onNavigate={navigate} />
-              )}
-              {searchOpen && (
-                <Search
-                  query={searchQuery}
-                  onNavigate={navigate}
-                  onSearch={(q) => navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search')}
-                />
-              )}
-              {tab === 'daily' && !routeOpen && (
-                <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
-              )}
-              {tab === 'review' && !routeOpen && <Review />}
-              {tab === 'library' && !routeOpen && <Library userId={session.user.id} />}
-              {tab === 'history' && !routeOpen && (
-                <History onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
-              )}
-              {tab === 'preferences' && !routeOpen && (
-                <Preferences
-                  userId={session.user.id}
-                  onDone={() => {
-                    setPrefsSaved((n) => n + 1);
-                    setTab('feed');
-                  }}
-                />
-              )}
-            </div>
-          </main>
+            )}
+            {sourceId !== null && (
+              <Source
+                key={`${sourceId}:${summaryParam ?? ''}`}
+                workId={sourceId}
+                summaryId={summaryParam ?? undefined}
+                onNavigate={navigate}
+              />
+            )}
+            {pullId !== null && (
+              <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+            )}
+            {exploreOpen && <Explore onNavigate={navigate} />}
+            {topicSlug !== null && (
+              // Keyed on the slug so moving between topics is a fresh
+              // component rather than one that has to remember to reset its
+              // limit — the same reason `Source` is keyed on its work id.
+              <Topic key={topicSlug} slug={decodeURIComponent(topicSlug)} onNavigate={navigate} />
+            )}
+            {searchOpen && (
+              <Search
+                query={searchQuery}
+                onNavigate={navigate}
+                onSearch={(q) => navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search')}
+              />
+            )}
+            {session && tab === 'daily' && !routeOpen && (
+              <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+            )}
+            {session && tab === 'review' && !routeOpen && <Review />}
+            {session && tab === 'library' && !routeOpen && <Library userId={session.user.id} />}
+            {session && tab === 'history' && !routeOpen && (
+              <History onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+            )}
+            {session && tab === 'preferences' && !routeOpen && (
+              <Preferences
+                userId={session.user.id}
+                onDone={() => {
+                  setPrefsSaved((n) => n + 1);
+                  setTab('feed');
+                }}
+              />
+            )}
+          </div>
+        </main>
 
+        {/*
+            The tally is an account of one sitting — ideas met, kept, recalled,
+            and the time the Delta spared. Every number in it is derived from a
+            reader's own history, so for a visitor it would be five zeroes and a
+            dash presented as a result. Omitted rather than emptied.
+          */}
+        {!visitor && (
           <aside className="shell__aside" aria-label="This session">
             <div className="shell__group">
               <p className="meta">This session</p>
@@ -490,10 +536,17 @@ export function App() {
               </div>
             </div>
           </aside>
-        </div>
-
-        <Colophon onNavigate={navigate} />
+        )}
       </div>
-    </OnboardingGate>
+
+      <Colophon onNavigate={navigate} />
+    </div>
   );
+
+  /*
+   * `OnboardingGate` reads the preference row keyed to a user and decides
+   * whether the picker has been seen, so it can only wrap a session. A visitor
+   * gets the shell directly — there is no preference to have not set yet.
+   */
+  return session ? <OnboardingGate userId={session.user.id}>{shell}</OnboardingGate> : shell;
 }

@@ -205,7 +205,7 @@ export function Search({
           <h2>Could not search the library.</h2>
           <p>
             {error.offline
-              ? 'You appear to be offline. Saved Pulls are still readable in your Library.'
+              ? 'You appear to be offline. Searching needs a connection.'
               : 'Something went wrong reaching the library.'}
           </p>
           <p className="meta">{error.message}</p>

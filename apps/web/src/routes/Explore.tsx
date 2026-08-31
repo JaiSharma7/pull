@@ -57,7 +57,7 @@ export function Explore({ onNavigate }: { onNavigate: (to: string) => void }) {
         <h1>Could not open the catalogue.</h1>
         <p>
           {offline
-            ? 'You appear to be offline. Saved Pulls are still readable in your Library.'
+            ? 'You appear to be offline. The catalogue needs a connection.'
             : 'Something went wrong reaching the library.'}
         </p>
         <p className="meta">{error}</p>

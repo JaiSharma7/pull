@@ -79,7 +79,7 @@ export function Topic({ slug, onNavigate }: { slug: string; onNavigate: (to: str
         <h1>Could not open this topic.</h1>
         <p>
           {offline
-            ? 'You appear to be offline. Saved Pulls are still readable in your Library.'
+            ? 'You appear to be offline. The catalogue needs a connection.'
             : 'Something went wrong reaching the library.'}
         </p>
         <p className="meta">{error}</p>

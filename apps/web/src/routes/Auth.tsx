@@ -566,6 +566,21 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
         {/* Last, because it is the strongest sentence on the screen and it answers the
             objection a reader has at exactly this moment. It was buried mid-paragraph. */}
         <p className="titlepage__promise">No subscription, and nothing worth having behind one.</p>
+
+        {/*
+         * A way in that is not the front door.
+         *
+         * The library has always been readable without an account — `anon` holds
+         * select on every published row — and this screen was the only thing
+         * standing in front of it. Asking a stranger to hand over an address
+         * before they have seen a single idea is the wrong order, and it is also
+         * what every shared link used to run into.
+         */}
+        <p className="titlepage__promise">
+          <button type="button" className="btn btn--plain" onClick={() => onNavigate('/explore')}>
+            Or look around first
+          </button>
+        </p>
       </div>
     </main>
   );
