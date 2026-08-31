@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
 import { supabase } from '../lib/supabase.js';
 
@@ -53,10 +53,42 @@ function readRedirectError(): string | null {
   );
 }
 
+/**
+ * The code and address a one-click email link carries.
+ *
+ * The email's primary action is `{{ .SiteURL }}/?code={{ .Token }}&email={{ .Email }}`,
+ * which exists because mail clients run no JavaScript: there is no way to put a copy
+ * button in an email, so the next best thing is a link that means the reader never has
+ * to copy anything.
+ *
+ * **Both parts are required**, and that is why the address rides along. `verifyOtp`
+ * takes `{ email, token }` — a code alone cannot complete a sign-in, and the tab the
+ * link opens is very often not the tab that started it (a phone opening mail in one
+ * browser and the link in another). Without the address, a link opened anywhere else
+ * would prefill a code into an empty form and stall on the one field the reader would
+ * then have to remember.
+ *
+ * Read once and cleared from the address bar immediately: a sign-in code in browser
+ * history is a credential in browser history, and it is single-use besides, so leaving
+ * it there could only ever mislead a reader into retrying something spent.
+ */
+function readPrefill(): { code: string; email: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code')?.trim();
+  const email = params.get('email')?.trim();
+  if (!code) return null;
+
+  history.replaceState(null, '', window.location.pathname);
+  return { code, email: email ?? '' };
+}
+
 export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [sent, setSent] = useState(false);
+  // Read during the first render, because reading consumes the query string.
+  const [prefill] = useState(readPrefill);
+  const [email, setEmail] = useState(prefill?.email ?? '');
+  const [code, setCode] = useState(prefill?.code ?? '');
+  /* A link that carried a code lands straight on the code step rather than the form. */
+  const [sent, setSent] = useState(prefill !== null);
   // Read once, during the first render, because it consumes the hash as it reads.
   const [error, setError] = useState<string | null>(readRedirectError);
   const [busy, setBusy] = useState(false);
@@ -111,6 +143,18 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
       setBusy(false);
     }
   }
+
+  /*
+   * A link that carried both halves signs in with no further click.
+   *
+   * Submitted through the form rather than by calling the verify path directly, so it
+   * takes exactly the same route — and the same error handling — as a code typed by
+   * hand. A second way into `verifyOtp` would be a second place for its failures to be
+   * handled differently.
+   */
+  useEffect(() => {
+    if (prefill?.code && prefill.email) formRef.current?.requestSubmit();
+  }, [prefill]);
 
   function startOver() {
     setSent(false);

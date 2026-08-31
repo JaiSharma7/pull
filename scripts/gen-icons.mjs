@@ -7,8 +7,10 @@
  * tolerable because the mark is deliberately geometric — flat fills, one accent, no
  * gradient (design law 1) — which is exactly what The Archive calls for anyway.
  *
- * The mark: a bone page on an ink ground with an oxblood rule pulled through it, wider
- * than the page on both sides. A page, and something drawn out of it.
+ * The mark: a magician's top hat in bone on an ink ground, with the band in oxblood.
+ * The product is named for the thing pulled out of it, so the hat is the half you can
+ * draw — three flat bars, no curves, which is what keeps it legible at 16px and what
+ * lets it be encoded here without a rasteriser.
  *
  * Run: node scripts/gen-icons.mjs
  */
@@ -79,26 +81,43 @@ function png(size, pixels) {
  *               maskable icon uses 0.6 so nothing lands outside the safe zone a
  *               launcher may crop to a circle.
  */
-function mark(size, inset) {
+/**
+ * The hat's geometry, shared by the raster and vector paths so they cannot drift.
+ *
+ * Extents are symmetric about the centre (-0.245s to +0.245s) so the mark is optically
+ * centred without a fudge factor: the brim is the heavy end, and letting it sit lower
+ * than the crown is what makes a hat read as standing rather than floating.
+ */
+function hat(size, inset) {
   const c = size / 2;
   const s = size * inset;
-  const pageW = s * 0.46;
-  const pageH = s * 0.62;
-  const ruleW = s * 0.66;
-  const ruleH = s * 0.055;
-  const ruleY = c + s * 0.02;
+  // Taller than wide: a top hat's proportions are the whole silhouette, and a square
+  // crown reads as a bucket. Extents stay symmetric about the centre (±0.275s).
+  const crownW = s * 0.38;
+  const crownTop = c - s * 0.275;
+  const crownH = s * 0.46;
+  const bandH = s * 0.085;
+  const bandTop = crownTop + crownH - bandH;
+  const brimW = s * 0.78;
+  const brimTop = crownTop + crownH;
+  const brimH = s * 0.09;
+  return { c, crownW, crownTop, crownH, bandH, bandTop, brimW, brimTop, brimH };
+}
 
-  const inPage = (x, y) =>
-    x >= c - pageW / 2 && x < c + pageW / 2 && y >= c - pageH / 2 && y < c + pageH / 2;
-  const inRule = (x, y) =>
-    x >= c - ruleW / 2 && x < c + ruleW / 2 && y >= ruleY && y < ruleY + ruleH;
+function mark(size, inset) {
+  const h = hat(size, inset);
+
+  const inBox = (x, y, w, top, height) =>
+    x >= h.c - w / 2 && x < h.c + w / 2 && y >= top && y < top + height;
 
   return (x, y) => {
-    // Sample at the pixel centre so the two shapes meet cleanly at any size.
+    // Sample at the pixel centre so the shapes meet cleanly at any size.
     const px = x + 0.5;
     const py = y + 0.5;
-    if (inRule(px, py)) return OXBLOOD;
-    if (inPage(px, py)) return BONE;
+    // Band before crown: it is drawn over the crown's lower edge, so it has to win.
+    if (inBox(px, py, h.crownW, h.bandTop, h.bandH)) return OXBLOOD;
+    if (inBox(px, py, h.crownW, h.crownTop, h.crownH)) return BONE;
+    if (inBox(px, py, h.brimW, h.brimTop, h.brimH)) return BONE;
     return INK;
   };
 }
@@ -106,17 +125,13 @@ function mark(size, inset) {
 const hex = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 
 function svg(size = 512, inset = 1) {
-  const c = size / 2;
-  const s = size * inset;
-  const pageW = s * 0.46;
-  const pageH = s * 0.62;
-  const ruleW = s * 0.66;
-  const ruleH = s * 0.055;
-  const ruleY = c + s * 0.02;
+  const h = hat(size, inset);
+  // Same order as `mark`: crown, then brim, then the band over the crown's lower edge.
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="What a Pull">
   <rect width="${size}" height="${size}" fill="${hex(INK)}"/>
-  <rect x="${c - pageW / 2}" y="${c - pageH / 2}" width="${pageW}" height="${pageH}" fill="${hex(BONE)}"/>
-  <rect x="${c - ruleW / 2}" y="${ruleY}" width="${ruleW}" height="${ruleH}" fill="${hex(OXBLOOD)}"/>
+  <rect x="${h.c - h.crownW / 2}" y="${h.crownTop}" width="${h.crownW}" height="${h.crownH}" fill="${hex(BONE)}"/>
+  <rect x="${h.c - h.brimW / 2}" y="${h.brimTop}" width="${h.brimW}" height="${h.brimH}" fill="${hex(BONE)}"/>
+  <rect x="${h.c - h.crownW / 2}" y="${h.bandTop}" width="${h.crownW}" height="${h.bandH}" fill="${hex(OXBLOOD)}"/>
 </svg>
 `;
 }
