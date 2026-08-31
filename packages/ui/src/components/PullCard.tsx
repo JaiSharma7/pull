@@ -74,6 +74,10 @@ export function PullCard({
             <button
               type="button"
               className="btn btn--plain pull-card__chip pull-card__chip--link"
+              // The visible text is metadata, so on its own it announces as a title
+              // with no indication it does anything -- unlike Save and Listen, which
+              // carry explicit labels. The underline is a sighted-only affordance.
+              aria-label={`Open the source: ${source.title}`}
               onClick={onOpenSource}
             >
               {chip.map((part, i) => (

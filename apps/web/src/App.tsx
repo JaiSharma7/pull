@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
@@ -9,6 +9,7 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
+import { routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'review' | 'library' | 'preferences';
@@ -83,6 +84,19 @@ export function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  /*
+   * Choosing a section leaves any open route.
+   *
+   * The rail and masthead only set tab state, so from a source page "Library" used
+   * to render Source and Library stacked in one column, and "For You" did nothing at
+   * all — the feed stays hidden while a route is open. A section is a destination,
+   * so selecting one has to return to the app's own path.
+   */
+  function goToTab(next: Tab) {
+    setTab(next);
+    if (window.location.pathname !== '/') navigate('/');
+  }
+
   function navigate(to: string) {
     history.pushState(null, '', to);
     setPath(to);
@@ -96,18 +110,10 @@ export function App() {
    * to a URL that immediately redirects again — a reader pressing Back twice to leave
    * would go nowhere.
    */
-  function replaceWith(to: string) {
+  const replaceWith = useCallback((to: string) => {
     history.replaceState(null, '', to);
     setPath(to);
-  }
-
-  /** `/source/<uuid>` and `/pull/<uuid>`, ignoring a trailing slash and any anchor. */
-  function routeParam(prefix: string): string | null {
-    const clean = path.replace(/\/+$/, '') || '/';
-    if (!clean.startsWith(`${prefix}/`)) return null;
-    const id = clean.slice(prefix.length + 1);
-    return id.length > 0 && !id.includes('/') ? id : null;
-  }
+  }, []);
 
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
@@ -122,8 +128,8 @@ export function App() {
   const legal = legalDocFor(path);
   if (legal) return <Legal doc={legal} onNavigate={navigate} />;
 
-  const sourceId = routeParam('/source');
-  const pullId = routeParam('/pull');
+  const sourceId = routeParam(path, '/source');
+  const pullId = routeParam(path, '/pull');
 
   if (!ready)
     return (
@@ -157,7 +163,7 @@ export function App() {
                 className="btn btn--plain"
                 aria-current={tab === s.id ? 'page' : undefined}
                 style={tab === s.id ? { color: 'var(--accent)' } : undefined}
-                onClick={() => setTab(s.id)}
+                onClick={() => goToTab(s.id)}
               >
                 {s.label}
               </button>
@@ -184,7 +190,7 @@ export function App() {
                   type="button"
                   className="btn btn--plain shell__nav-item"
                   aria-current={tab === s.id ? 'page' : undefined}
-                  onClick={() => setTab(s.id)}
+                  onClick={() => goToTab(s.id)}
                 >
                   {s.label}
                 </button>

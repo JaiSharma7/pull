@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
+import { anchoredPullId } from '../lib/routes.js';
 import { fetchSource, fetchWorkIdForPull, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
@@ -87,6 +88,22 @@ export function Source({
       live = false;
     };
   }, [workId]);
+
+  /*
+   * Scroll to the anchored Pull once the list exists.
+   *
+   * `replaceState` does not perform fragment navigation, and the element is not in
+   * the document until the fetch resolves — so a shared `/pull/:id` link would land
+   * on the right page at the wrong place, which is most of the way to landing on the
+   * wrong page. Reads `location.hash` rather than taking a prop because the anchor is
+   * a property of the URL, not of this component's inputs.
+   */
+  useEffect(() => {
+    if (!detail) return;
+    const pullId = anchoredPullId(window.location.hash);
+    if (!pullId) return;
+    document.getElementById(`p-${pullId}`)?.scrollIntoView({ block: 'start' });
+  }, [detail]);
 
   if (missing) {
     return (

@@ -58,10 +58,18 @@ export interface SourceDetail {
 /**
  * Everything the source page renders, in two round trips.
  *
- * Only published summaries. RLS would already hide a draft belonging to someone
- * else, but a reader's *own* unpublished summary is readable by them — and this is
- * the canonical library view, not their drafts, so the filter is here as well as in
- * the policy.
+ * Published **and public**, deterministically ordered. Filtering on status alone was
+ * not enough on either count:
+ *
+ * `summaries_author_insert` (20260830203352) permits a reader's own published-private
+ * summary, and `summary_is_readable` lets them read it — so the canonical page could
+ * quietly render their private row instead of the library's, for them and nobody else.
+ *
+ * And `get_source_delta` counts pulls across every readable published summary of the
+ * work, so an unordered `limit(1)` could pair "you already hold 9 of these 18" with a
+ * list of nine. The Delta describing a different summary than the one underneath it is
+ * worse than no Delta: it is a specific, checkable claim that happens to be false.
+ * `published_at` gives the pairing something stable to agree on.
  */
 export async function fetchSource(workId: string): Promise<SourceDetail | null> {
   const { data: workRows, error: workError } = await supabase
@@ -82,6 +90,8 @@ export async function fetchSource(workId: string): Promise<SourceDetail | null> 
     )
     .eq('work_id', workId)
     .eq('status', 'published')
+    .eq('visibility', 'public')
+    .order('published_at', { ascending: true })
     .limit(1);
   if (summaryError) throw rpcError(summaryError);
 

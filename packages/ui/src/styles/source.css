@@ -90,18 +90,22 @@
 /*
  * The source chip, when it opens something.
  *
- * Inherits the card's own chip styling and only adds what a control needs: no
- * button padding or border, and the underline appears on hover and focus so the
- * affordance is discoverable without shouting over the idea beneath it.
+ * Strips only what makes a button look like a button. The first version also set
+ * font, letter-spacing, text-transform and color to `inherit`, which was exactly
+ * backwards: this file is imported after components.css at equal specificity, so
+ * those won against `.pull-card__chip` and `.btn` and the clickable chip lost the
+ * mono face, the tracking, the uppercase and `--text-muted` — rendering as
+ * full-contrast body text, and giving the same content two different treatments
+ * depending on which screen it was on.
+ *
+ * The class carries no typography of its own now. Whatever `.pull-card__chip` says
+ * is what a chip looks like, clickable or not.
  */
 .pull-card__chip--link {
   padding: 0;
   border: 0;
+  background: none;
   text-align: left;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  color: inherit;
   cursor: pointer;
 }
 
