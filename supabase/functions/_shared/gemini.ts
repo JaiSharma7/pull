@@ -11,7 +11,12 @@
  * made by the worker, once per canonical summary, and lands in `cost_ledger`.
  */
 
-import { BilledProviderError, TOPIC_SLUGS } from './providers.ts';
+import {
+  BilledProviderError,
+  buildSummaryPrompt,
+  ProviderUnavailableError,
+  TOPIC_SLUGS,
+} from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -391,12 +396,26 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
         }
       }
 
+      /*
+       * The whole chain is out, and none of it was charged for.
+       *
+       * `ProviderUnavailableError` rather than the raw `GeminiError`, because this is
+       * exactly the condition a second vendor can answer: every model returned 404,
+       * 429 or 503, so nothing metered and nothing is lost by asking elsewhere. See
+       * `createFallbackSummaryProvider`.
+       *
+       * A budget exhaustion does *not* arrive here — it carries no status, so the loop
+       * above rethrows it rather than moving on. That is deliberate: running out of
+       * wall clock is not something another vendor fixes, and starting a fresh call
+       * inside an invocation the platform kills at 150s would only lose the step later.
+       */
       if (!payload) {
-        throw lastError instanceof Error
-          ? lastError
-          : new GeminiError(
-              `No summary model available (tried ${config.summaryModels.join(', ')})`,
-            );
+        const tried = config.summaryModels.join(', ') || '(none configured)';
+        const because = lastError instanceof Error ? `: ${lastError.message}` : '';
+        throw new ProviderUnavailableError(
+          `No Gemini summary model available (tried ${tried})${because}`,
+          'gemini',
+        );
       }
 
       /*
@@ -440,41 +459,6 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
       return { summary, usage, model };
     },
   };
-}
-
-/**
- * The prompt is analysis, not reproduction (law 4). It asks for claims, arguments and
- * consequences the reader can act on — never a condensed retelling that could stand in
- * for the original. See docs/content-policy.md.
- */
-function buildSummaryPrompt(input: SummaryInput): string {
-  return [
-    `You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.`,
-    ``,
-    `Source: ${input.workTitle}`,
-    `Medium: ${input.kind}`,
-    ``,
-    `Write an original analysis of the ideas in this work: its claims, the arguments`,
-    `behind them, and what follows from them. Do not retell the work section by section,`,
-    `and do not produce anything that could substitute for reading it. Quote only where a`,
-    `phrase itself is the point, and keep quotations short.`,
-    ``,
-    `Each pull must be one atomic idea that stands on its own out of context, in plain`,
-    `language, with a headline that states the idea rather than teasing it. "whyItMatters"`,
-    `should say what changes if the reader believes it — not restate the body.`,
-    ``,
-    // Without this the schema is still satisfied by an empty array, and the whole
-    // classification feature no-ops silently: the work is filed under nothing,
-    // topic_affinity returns 0.0, and no reader's stated interests ever reach it.
-    `Also file this work under one to four topics from this list, most central first:`,
-    TOPIC_SLUGS.join(', '),
-    `Choose the narrowest that genuinely fit. A parent topic is the right answer only`,
-    `when no child of it does — filing a work under a topic it merely touches is worse`,
-    `than filing it under fewer.`,
-    ``,
-    `Context:`,
-    input.context || '(no additional context supplied)',
-  ].join('\n');
 }
 
 export function createGeminiEmbeddingProvider(config: GeminiConfig): EmbeddingProvider {

@@ -207,3 +207,107 @@ export const disabledImageProvider: ImageProvider = {
     return null;
   },
 };
+
+/**
+ * A provider that could not answer, and did not charge for failing to.
+ *
+ * The distinction from `BilledProviderError` is the whole reason this exists. That one
+ * says "you have been charged and got nothing usable"; this one says "nothing happened".
+ * Only the second is safe to recover from by asking somebody else, because recovering
+ * from the first would leave a real charge with no row in `cost_ledger` — law 2 counts
+ * every model call, not every successful one.
+ *
+ * Thrown when an entire vendor is unreachable for the request: an exhausted daily quota,
+ * a model that does not exist, a service returning 503 across every configured model.
+ */
+export class ProviderUnavailableError extends Error {
+  readonly provider: string | undefined;
+
+  constructor(message: string, provider?: string) {
+    super(message);
+    this.name = 'ProviderUnavailableError';
+    this.provider = provider;
+  }
+}
+
+/**
+ * Ask the second provider only when the first one could not be asked at all.
+ *
+ * Gemini's free tier meters **per model per day**. When it is spent, `gemini.ts` walks
+ * its whole model chain, gets 429 from each, and throws — and every queued source then
+ * fails at `synthesize` until the quota window rolls over. On 2026-08-31 that stalled a
+ * night's generation with a perfectly healthy pipeline behind it.
+ *
+ * The fall-through condition is deliberately the narrowest one that fixes that:
+ *
+ * - `ProviderUnavailableError` → try the fallback. Nothing was charged, so nothing is
+ *   lost by asking elsewhere.
+ * - `BilledProviderError` → **rethrow**. The primary metered a call; that charge has to
+ *   reach `cost_ledger`, and swallowing it to retry elsewhere would hide real spend
+ *   behind an apparent success. The step retries and reaches here again.
+ * - anything else → rethrow. A malformed request, a bug, a network failure mid-stream:
+ *   none of them are evidence the primary is out of quota, and paying a second vendor to
+ *   rediscover a local bug is the expensive way to find out.
+ *
+ * A second provider is a second bill, so it is only ever constructed when one is
+ * explicitly configured — see `resolveProviders`.
+ */
+export function createFallbackSummaryProvider(
+  primary: SummaryProvider,
+  fallback: SummaryProvider,
+): SummaryProvider {
+  return {
+    // Both names, because `job_steps.provider` should say which chain ran, and the
+    // model returned per call already says which one actually answered.
+    name: `${primary.name}->${fallback.name}`,
+
+    async generateSummary(input) {
+      try {
+        return await primary.generateSummary(input);
+      } catch (e) {
+        if (!(e instanceof ProviderUnavailableError)) throw e;
+        // Logged rather than silent: a deployment quietly running on its more expensive
+        // fallback for a week is exactly the kind of spend nobody notices until the bill.
+        console.warn(
+          `[providers] ${primary.name} unavailable (${e.message}); falling back to ${fallback.name}`,
+        );
+        return await fallback.generateSummary(input);
+      }
+    },
+  };
+}
+
+/**
+ * The prompt is analysis, not reproduction (law 4). It asks for claims, arguments and
+ * consequences the reader can act on — never a condensed retelling that could stand in
+ * for the original. See docs/content-policy.md.
+ */
+export function buildSummaryPrompt(input: SummaryInput): string {
+  return [
+    `You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.`,
+    ``,
+    `Source: ${input.workTitle}`,
+    `Medium: ${input.kind}`,
+    ``,
+    `Write an original analysis of the ideas in this work: its claims, the arguments`,
+    `behind them, and what follows from them. Do not retell the work section by section,`,
+    `and do not produce anything that could substitute for reading it. Quote only where a`,
+    `phrase itself is the point, and keep quotations short.`,
+    ``,
+    `Each pull must be one atomic idea that stands on its own out of context, in plain`,
+    `language, with a headline that states the idea rather than teasing it. "whyItMatters"`,
+    `should say what changes if the reader believes it — not restate the body.`,
+    ``,
+    // Without this the schema is still satisfied by an empty array, and the whole
+    // classification feature no-ops silently: the work is filed under nothing,
+    // topic_affinity returns 0.0, and no reader's stated interests ever reach it.
+    `Also file this work under one to four topics from this list, most central first:`,
+    TOPIC_SLUGS.join(', '),
+    `Choose the narrowest that genuinely fit. A parent topic is the right answer only`,
+    `when no child of it does — filing a work under a topic it merely touches is worse`,
+    `than filing it under fewer.`,
+    ``,
+    `Context:`,
+    input.context || '(no additional context supplied)',
+  ].join('\n');
+}

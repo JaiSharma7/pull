@@ -228,3 +228,68 @@ describe('geminiConfigFrom', () => {
     );
   });
 });
+
+/*
+ * The fallback is opt-in because it is the only provider in this file that costs real
+ * money on a deployment whose primary is free. Every assertion below is about it
+ * staying off unless somebody deliberately turned it on — a fallback that engages by
+ * accident is a bill nobody reads until it arrives.
+ */
+describe('resolveProviders — the paid fallback', () => {
+  it('is absent unless asked for, even with a key sitting right there', async () => {
+    const providers = await resolveProviders(
+      envOf({ GOOGLE_AI_API_KEY: 'k', ANTHROPIC_API_KEY: 'sk-ant-test' }),
+      noVault().getSecret,
+    );
+
+    expect(providers.summary.name).toBe('gemini');
+  });
+
+  it('never asks Vault for a key it was not told to want', async () => {
+    // Vault reads are a round trip on every worker cold start; asking for a secret no
+    // configured provider could use is waste on every step of every job.
+    const vault = vaultWith({ google_ai_api_key: 'k', anthropic_api_key: 'sk-ant-test' });
+    await resolveProviders(envOf({}), vault.getSecret);
+
+    expect(vault.asked).not.toContain('anthropic_api_key');
+  });
+
+  it('chains Gemini to Anthropic when both are configured', async () => {
+    const providers = await resolveProviders(
+      envOf({
+        GOOGLE_AI_API_KEY: 'k',
+        SUMMARY_FALLBACK_PROVIDER: 'anthropic',
+        ANTHROPIC_API_KEY: 'sk-ant-test',
+      }),
+      noVault().getSecret,
+    );
+
+    expect(providers.summary.name).toBe('gemini->anthropic');
+  });
+
+  it('resolves the fallback key from Vault, so it can be switched on without a redeploy', async () => {
+    const vault = vaultWith({ google_ai_api_key: 'k', anthropic_api_key: 'sk-ant-test' });
+    const providers = await resolveProviders(
+      envOf({ SUMMARY_FALLBACK_PROVIDER: 'anthropic' }),
+      vault.getSecret,
+    );
+
+    expect(providers.summary.name).toBe('gemini->anthropic');
+    expect(vault.asked).toContain('anthropic_api_key');
+  });
+
+  it('runs the primary alone when the fallback was asked for but has no key', async () => {
+    /*
+     * Deliberately silent, unlike the primary's REQUIRE_REAL_PROVIDERS check. A missing
+     * *primary* is dangerous because the deployment keeps answering with stub prose and
+     * nothing errors; a missing fallback costs nothing and loses nothing — the queue
+     * simply behaves as it did before anyone tried to add one.
+     */
+    const providers = await resolveProviders(
+      envOf({ GOOGLE_AI_API_KEY: 'k', SUMMARY_FALLBACK_PROVIDER: 'anthropic' }),
+      noVault().getSecret,
+    );
+
+    expect(providers.summary.name).toBe('gemini');
+  });
+});

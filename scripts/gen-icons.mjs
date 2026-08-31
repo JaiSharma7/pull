@@ -91,16 +91,35 @@ function png(size, pixels) {
 function hat(size, inset) {
   const c = size / 2;
   const s = size * inset;
-  // Taller than wide: a top hat's proportions are the whole silhouette, and a square
-  // crown reads as a bucket. Extents stay symmetric about the centre (±0.275s).
-  const crownW = s * 0.38;
-  const crownTop = c - s * 0.275;
-  const crownH = s * 0.46;
-  const bandH = s * 0.085;
+  /*
+   * Proportioned for 16px first, because that is where this mark is actually read.
+   *
+   * The previous numbers were reasonable on paper and failed in the browser tab. The
+   * band sits at the base of the crown, so the *lit* part of the crown is what the eye
+   * measures — and at 0.38w × (0.46 − 0.085)h that part was 1.01:1. A square. Rendered
+   * at 16, 24 and 32px it read as a pale box with a red underline; nobody looking at it
+   * saw a hat, which is the only thing a mark has to do.
+   *
+   * Two numbers carry the silhouette, and both are pushed:
+   *
+   * - **The lit crown is 1.40:1 tall**, not square. Height came up and width went down,
+   *   because narrowing does more for the read than heightening at the same pixel cost.
+   * - **The brim is 2.5× the crown's width and half again as thick.** A top hat is the
+   *   only common hat whose brim is dramatically wider than its crown, so that contrast
+   *   is the whole recognition cue — and at 16px the old 0.09s brim landed on 1.4 device
+   *   pixels and antialiased itself into nothing.
+   *
+   * Extents stay symmetric about the centre. Anything changed here wants re-rendering at
+   * 16px and looking at, not reasoning about; `scripts/gen-icons.mjs` is fast to re-run.
+   */
+  const crownW = s * 0.33;
+  const crownTop = c - s * 0.33;
+  const crownH = s * 0.54;
+  const bandH = s * 0.078;
   const bandTop = crownTop + crownH - bandH;
-  const brimW = s * 0.78;
+  const brimW = s * 0.83;
   const brimTop = crownTop + crownH;
-  const brimH = s * 0.09;
+  const brimH = s * 0.125;
   return { c, crownW, crownTop, crownH, bandH, bandTop, brimW, brimTop, brimH };
 }
 

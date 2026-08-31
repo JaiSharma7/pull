@@ -10,6 +10,46 @@
     "
   >
     <div style="max-width: 34rem; margin: 0 auto">
+      <!--
+        The mark, drawn as table cells rather than an image.
+
+        Every mail client blocks remote images by default and most strip inline SVG,
+        so an <img> mark is one that a majority of readers see as a broken-image box —
+        worse than no mark at all. Three filled boxes need nothing loaded and nothing
+        allowed, and they are exactly what the mark already is: crown, band, brim, in
+        the proportions of `apps/web/public/favicon.svg`.
+
+        Inverted against that file on purpose. The favicon sits on ink and is drawn in
+        bone; this sits on bone, so it is drawn in ink. Same mark, same one accent
+        (law 1) — the ground changed, not the palette.
+
+        `line-height: 0; font-size: 0` on each cell kills the phantom descender space
+        that would otherwise open a gap between crown and brim in Outlook.
+      -->
+      <table
+        role="presentation"
+        cellpadding="0"
+        cellspacing="0"
+        border="0"
+        style="border-collapse: collapse; margin: 0 0 16px"
+      >
+        <tr>
+          <td align="center" style="line-height: 0; font-size: 0; width: 55px">
+            <div style="width: 22px; height: 30px; background: #14120e"></div>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="line-height: 0; font-size: 0; width: 55px">
+            <div style="width: 22px; height: 5px; background: #8c2f26"></div>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="line-height: 0; font-size: 0; width: 55px">
+            <div style="width: 55px; height: 8px; background: #14120e"></div>
+          </td>
+        </tr>
+      </table>
+
       <p
         style="
           font-family: ui-monospace, 'SF Mono', Menlo, monospace;

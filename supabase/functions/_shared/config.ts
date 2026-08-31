@@ -8,13 +8,22 @@
  */
 
 import {
+  createFallbackSummaryProvider,
   disabledImageProvider,
   stubEmbeddingProvider,
   stubSummaryProvider,
+  TOPIC_SLUGS,
   type EmbeddingProvider,
   type ImageProvider,
   type SummaryProvider,
 } from './providers.ts';
+import {
+  createAnthropicSummaryProvider,
+  DEFAULT_INPUT_USD_PER_MTOK as ANTHROPIC_DEFAULT_INPUT_USD_PER_MTOK,
+  DEFAULT_MAX_TOKENS as ANTHROPIC_DEFAULT_MAX_TOKENS,
+  DEFAULT_OUTPUT_USD_PER_MTOK as ANTHROPIC_DEFAULT_OUTPUT_USD_PER_MTOK,
+  DEFAULT_SUMMARY_MODEL,
+} from './anthropic.ts';
 import {
   createGeminiEmbeddingProvider,
   createGeminiSummaryProvider,
@@ -60,6 +69,24 @@ const numberFrom = (env: Env, key: string, fallback: number): number => {
 const DEFAULT_INPUT_USD_PER_MTOK = 0.75;
 const DEFAULT_OUTPUT_USD_PER_MTOK = 3.0;
 const DEFAULT_EMBEDDING_USD_PER_MTOK = 0.15;
+
+export function anthropicConfigFrom(env: Env, apiKey: string) {
+  return {
+    apiKey,
+    summaryModel: env.get('ANTHROPIC_SUMMARY_MODEL') ?? DEFAULT_SUMMARY_MODEL,
+    maxTokens: numberFrom(env, 'ANTHROPIC_MAX_TOKENS', ANTHROPIC_DEFAULT_MAX_TOKENS),
+    inputUsdPerMTok: numberFrom(
+      env,
+      'ANTHROPIC_INPUT_USD_PER_MTOK',
+      ANTHROPIC_DEFAULT_INPUT_USD_PER_MTOK,
+    ),
+    outputUsdPerMTok: numberFrom(
+      env,
+      'ANTHROPIC_OUTPUT_USD_PER_MTOK',
+      ANTHROPIC_DEFAULT_OUTPUT_USD_PER_MTOK,
+    ),
+  };
+}
 
 export function geminiConfigFrom(env: Env, apiKey: string): GeminiConfig {
   const configured = env.get('GEMINI_SUMMARY_MODELS');
@@ -136,11 +163,37 @@ export async function resolveProviders(
   // what keeps `pnpm db:reset` and a fresh contributor's clone working with no account.
   const gemini = apiKey ? geminiConfigFrom(env, apiKey) : null;
 
+  /*
+   * The fallback, when there is one.
+   *
+   * Opt-in and off by default, because a second provider is a second bill. Gemini's
+   * free tier is metered per model per day; when it is spent every queued source fails
+   * at `synthesize` until the window rolls over, and the queue stops for a reason that
+   * has nothing to do with the pipeline. Setting `SUMMARY_FALLBACK_PROVIDER=anthropic`
+   * and supplying a key says: keep going, on paid tokens, rather than stop.
+   *
+   * Silently absent when no key resolves. That is the same shape as the Gemini path
+   * above and for the same reason — a deployment with no fallback configured is a
+   * supported state, not a crash — but it is also why `REQUIRE_REAL_PROVIDERS` covers
+   * only the primary: a fallback that quietly is not there costs nothing and loses
+   * nothing, while a *primary* that quietly is not there serves readers stub prose.
+   */
+  const wantFallback = env.get('SUMMARY_FALLBACK_PROVIDER');
+  const anthropicKey =
+    wantFallback === 'anthropic'
+      ? (env.get('ANTHROPIC_API_KEY') ?? (await getSecret('anthropic_api_key')))
+      : null;
+
+  const primarySummary =
+    wantSummary === 'gemini' && gemini ? createGeminiSummaryProvider(gemini) : stubSummaryProvider;
+
   return {
-    summary:
-      wantSummary === 'gemini' && gemini
-        ? createGeminiSummaryProvider(gemini)
-        : stubSummaryProvider,
+    summary: anthropicKey
+      ? createFallbackSummaryProvider(
+          primarySummary,
+          createAnthropicSummaryProvider(anthropicConfigFrom(env, anthropicKey), TOPIC_SLUGS),
+        )
+      : primarySummary,
     embedding:
       wantEmbedding === 'gemini' && gemini
         ? createGeminiEmbeddingProvider(gemini)
