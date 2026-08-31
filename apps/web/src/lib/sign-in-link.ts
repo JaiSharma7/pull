@@ -117,7 +117,16 @@ export function parseSignInLink(raw: string): SignInLink {
    */
   if (refreshToken) return { kind: 'refresh', refreshToken };
 
-  const tokenHash = query.get('token');
+  /*
+   * `token_hash` first, then `token`.
+   *
+   * `token_hash` is what an email template emits from `{{ .TokenHash }}` — the form
+   * that lets a link point straight at this app instead of at GoTrue's `/verify`, so
+   * no redirect happens and the project's Site URL never enters into it. `token` is
+   * the older shape, from a `{{ .ConfirmationURL }}` link copied before it was
+   * clicked. Both spend the same way.
+   */
+  const tokenHash = query.get('token_hash') ?? query.get('token');
   if (tokenHash) {
     // `type` decides which table GoTrue looks in. Defaulting to `magiclink` is right for
     // a returning reader; a first-ever link is `signup` and says so.
