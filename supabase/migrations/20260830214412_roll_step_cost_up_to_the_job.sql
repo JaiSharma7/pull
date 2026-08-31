@@ -19,6 +19,14 @@
 -- produced something. A `synthesize` that was billed and then rejected for returning
 -- no pulls costs exactly what a good one costs.
 --
+-- One dependency worth naming, because breaking it fails silently. These updates land
+-- because `generation_jobs` does not `force row level security` and both functions are
+-- owned by `postgres`, so the owner bypasses RLS — the table has a select policy and
+-- no update policy at all. Adding `force row level security` here, which is a
+-- plausible instinct under law 5, would make both RPCs update zero rows and raise
+-- nothing: cost accrual would simply stop. If that hardening is ever wanted, it needs
+-- an update policy for the owner in the same migration.
+--
 -- Append-only per law 6: these supersede 20260830160437 and 20260830181229.
 
 create or replace function public.record_job_step(
@@ -140,11 +148,31 @@ grant execute on function public.record_failed_job_step(
   uuid, text, int, text, int, text, text, int, int, numeric, boolean
 ) to service_role;
 
--- Backfill what the missing increment already lost. Idempotent by construction: it
--- assigns the sum rather than adding to it, so replaying changes nothing.
+-- Backfill what the missing increment already lost.
+--
+-- Idempotent twice over, and the second guard is the one that is easy to miss.
+-- Assigning the sum rather than adding to it makes `cost_cents` converge on replay —
+-- but `generation_jobs` carries a `before update` trigger stamping `updated_at`
+-- (20260829124649), so an UPDATE that changes nothing still rewrites when the row was
+-- last touched. Without the `is distinct from` clause this migration would tell every
+-- job in the table it was modified at deploy time, and any sweeper or triage query
+-- ordered by `updated_at` would surface the entire historical corpus as freshly
+-- active. The column would stop meaning anything, silently.
+--
+-- The per-step increment above does bump `updated_at`, which is correct — the job
+-- genuinely changed — but it is now one row version per step rather than one per
+-- transition. Worth knowing before reading that column as a heartbeat.
+--
+-- Safe to re-run after deploying, and worth doing: a worker session that committed a
+-- step while this migration was still open would have used the old function bodies
+-- and gone uncounted. Re-running costs one no-op scan.
 update public.generation_jobs j
    set cost_cents = coalesce(
          (select sum(coalesce(s.cost_cents, 0)) from public.job_steps s where s.job_id = j.id),
          0
        )
- where exists (select 1 from public.job_steps s where s.job_id = j.id);
+ where exists (select 1 from public.job_steps s where s.job_id = j.id)
+   and j.cost_cents is distinct from coalesce(
+         (select sum(coalesce(s.cost_cents, 0)) from public.job_steps s where s.job_id = j.id),
+         0
+       );
