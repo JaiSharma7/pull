@@ -39,8 +39,12 @@ export function App() {
       .getSession()
       .then(({ data }) => setSession(data.session))
       .catch((e: unknown) => {
+        // Log only. `null` is already the initial state, so assigning it here could
+        // never do anything *except* revoke a session `onAuthStateChange` had
+        // already delivered — auth-js emits INITIAL_SESSION on its own independent
+        // path, and a slow rejection from a lock timeout arriving afterwards would
+        // drop a signed-in reader back to the sign-in screen mid-session.
         console.error('Could not restore the session', e);
-        setSession(null);
       })
       .finally(() => setReady(true));
 

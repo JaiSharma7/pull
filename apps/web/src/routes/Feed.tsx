@@ -131,6 +131,11 @@ export function Feed({
       .then((f) => {
         if (cancelled) return;
         setFeed(f);
+        // A successful load is the only proof the connection is back that this
+        // component gets. The banner was previously cleared only by the `online`
+        // event, which never fires when the failure happened with `onLine` true —
+        // so a transport failure would raise it and nothing would lower it again.
+        setOffline(false);
         void cachePulls(f.rows);
       })
       .catch(async (e: unknown) => {
@@ -150,6 +155,14 @@ export function Feed({
          * tells the reader to go check their wifi instead.
          */
         const cached = isOfflineFailure(e) ? await readCachedPulls() : [];
+
+        // Re-checked after the await, not only before it. Opening IndexedDB and
+        // reading it is a real gap, and this branch is now reachable twice over:
+        // the retry button re-runs the effect, and so does "Keep reading anyway".
+        // A stale handler resuming here would clobber the newer request's state
+        // and raise the offline banner over rows it did not fetch.
+        if (cancelled) return;
+
         if (cached.length > 0) {
           setFeed({
             rows: cached,

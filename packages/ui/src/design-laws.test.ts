@@ -127,11 +127,22 @@ describe('The Archive viewport laws', () => {
     }
   });
 
-  it('pins the reading column to --measure rather than letting it grow', () => {
-    // The one dimension that must not respond. Extra width buys structure and
-    // peripheral context; a 1400px line is one nobody can track back to the start of.
-    const all = cssFiles.map(code).join('\n');
-    expect(all, 'the reading column no longer caps its width').toMatch(
+  it('pins the reading column to --measure at every width, not only wide ones', () => {
+    /*
+     * The one dimension that must not respond. Extra width buys structure and
+     * peripheral context; a 1400px line is one nobody can track back to the start of.
+     *
+     * Media queries are stripped before matching, and that is the whole point of the
+     * assertion rather than an implementation detail. Searching the file as a whole
+     * would pass on a stylesheet that caps the column only above 60rem — leaving it
+     * unbounded on a phone, which is the exact failure this law describes.
+     */
+    const withoutMediaQueries = cssFiles
+      .map(code)
+      .join('\n')
+      .replace(/@media[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
+
+    expect(withoutMediaQueries, 'the reading column no longer caps its width').toMatch(
       /\.shell__column\s*\{[^}]*max-width:\s*var\(--measure\)/,
     );
   });
@@ -151,9 +162,16 @@ describe('The Archive viewport laws', () => {
     const all = cssFiles.map(code).join('\n');
     const wide = all.match(/@media \(min-width: 60rem\)\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(wide, 'no three-pane rule found at 60rem').not.toBe('');
-    expect(wide, 'the rails are hidden where they should appear').toMatch(
-      /\.shell__rail[\s\S]*?display:\s*block/,
-    );
+
+    // The rail's own rule, not a span of text containing both strings. A lazy
+    // `[\s\S]*?` between them crosses rule boundaries, so it would pass on
+    // `.shell__rail { display: none } .shell__masthead-nav { display: block }` —
+    // rails hidden, law broken, test green. That arrangement is one tidy-up away:
+    // a second `@media (min-width: 60rem)` block already exists in components.css
+    // and merging them would produce exactly it.
+    const railRule = wide.match(/\.shell__rail[^{]*\{[^}]*\}/)?.[0] ?? '';
+    expect(railRule, 'no .shell__rail rule inside the three-pane breakpoint').not.toBe('');
+    expect(railRule, 'the rails are hidden where they should appear').toMatch(/display:\s*block/);
   });
 
   it('scales the base type scale fluidly rather than in fixed steps', () => {

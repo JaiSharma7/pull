@@ -28,6 +28,7 @@ export function Library({ userId }: { userId: string }) {
         if (!cancelled) setItems(rows);
       })
       .catch((e: unknown) => {
+        console.error('Library request failed', e);
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       });
     return () => {
@@ -62,10 +63,15 @@ export function Library({ userId }: { userId: string }) {
     }
   }
 
+  // Same reasoning as the feed's error state: the detail goes to the console where
+  // it helps whoever is debugging, and the reader gets a sentence rather than
+  // `permission denied for function ...`. Rendering the raw message here while
+  // arguing against it three files away would have been the inconsistency, not the
+  // fix.
   if (error)
     return (
       <p role="alert" className="measure">
-        Could not load your library: {error}
+        Could not load your library just now.
       </p>
     );
 
