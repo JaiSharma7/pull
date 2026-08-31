@@ -7,6 +7,51 @@
 
 ---
 
+## 0. Run log — what actually happened
+
+Updated as the night proceeds. Read this before acting; it supersedes the plan below
+wherever the two disagree.
+
+**Landed and verified:**
+
+- Canary wave of 6 (Emerson/Thoreau) — 6/6 `succeeded`, 22 pulls, **zero missing
+  embeddings**. The pipeline works end to end on real sources.
+- `20260831025500_topics_with_something_behind_them` applied to production and verified
+  on both halves: **topics 12 → 30** (6 parents), and `media_kinds` now carries
+  `lecture, video, interview` — confirmed changed on the stored row, not merely in
+  `information_schema`.
+- Pipeline now classifies: `TOPIC_SLUGS` + `narrowTopics` (`providers.ts` /
+  `pipeline.ts`), a `topics` field on `SUMMARY_SCHEMA` constrained by `enum`, and
+  `upsertWork` writing `work_topics`. 107 tests pass in `@wap/functions` (3 new).
+- All 13 existing works backfilled with topics. **`topic_affinity` verified live**:
+  Self-Reliance scores 1.000 for a philosophy reader and 0.000 for a physics reader.
+  The 28% ranking term is no longer dead.
+- Wave 2 enqueued: 12 sources (Bacon, Montaigne, Federalist, two Lincoln lectures).
+
+**Decisions taken, with reasons:**
+
+- **The worker is deliberately NOT redeployed tonight.** Deploying via
+  `mcp__Supabase__deploy_edge_function` means reproducing ~114KB across 8 files verbatim
+  through a tool call; a single transcription error stops the worker booting and stalls
+  the whole queue — which is the night's main deliverable — with nobody awake to notice.
+  The committed code change is correct and tested; it takes effect the next time someone
+  deploys with a real CLI token (`scripts/go-live.sh`). **Until then, every new wave's
+  works must be topic-backfilled by hand in SQL**, which is one statement per wave and
+  is what the run log above did for the first 13.
+- **Cost is ~3× the roadmap's estimate.** Measured at **~1.26¢/source**, not 0.39¢.
+  100 cents therefore buys ~70 sources, not 250. The working ceiling is the approved
+  plan's **$5**, not the 100¢ in §5.2 — revise that number, do not trust it.
+
+**Still blocked:**
+
+- **The session fleet could not be spawned.** The orchestrator session is recorded
+  server-side as `permission_mode: "plan"`, and a child "cannot be more permissive than
+  the parent" — so `bypassPermissions` and `dontAsk` are both refused, and a child in
+  `plan` mode would block forever on an approval prompt. The parent's mode must be
+  changed before §8 can run at all.
+
+---
+
 ## 1. Where the repo actually stands
 
 The engineering is far ahead of the product. 56 migrations, 38 RLS'd tables, a verified
