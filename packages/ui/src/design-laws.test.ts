@@ -104,3 +104,80 @@ describe('The Archive design laws', () => {
     expect(tokens).toMatch(/\[data-theme='dark'\]/);
   });
 });
+
+/**
+ * Law 7 — a session must show its bounds.
+ *
+ * Shorts and Reels go full-bleed, hide their chrome and keep the next item sliding
+ * into frame, so the reader is never shown how much is left. This product claims the
+ * opposite — *enough for today* — and that claim is made by layout, not by copy.
+ *
+ * It was prose in `docs/design.md` while the colour laws were enforced here, which is
+ * the asymmetry that let two fixed breakpoints sit in the layout for a whole round
+ * without anyone noticing they made a 70rem window render as a 60rem one.
+ */
+describe('The Archive viewport laws', () => {
+  it('never uses vh — mobile chrome makes it taller than the visible area', () => {
+    // `100vh` puts primary actions underneath the address bar on exactly the devices
+    // where a mis-placed button is hardest to recover from. `dvh`/`svh` are the
+    // measurements that describe what the reader can actually see.
+    for (const f of cssFiles) {
+      const vh = [...code(f).matchAll(/\b\d*\.?\d+vh\b/g)].map((m) => m[0]);
+      expect(vh, `${f} uses ${vh.join(', ')} — use dvh or svh`).toEqual([]);
+    }
+  });
+
+  it('pins the reading column to --measure rather than letting it grow', () => {
+    // The one dimension that must not respond. Extra width buys structure and
+    // peripheral context; a 1400px line is one nobody can track back to the start of.
+    const all = cssFiles.map(code).join('\n');
+    expect(all, 'the reading column no longer caps its width').toMatch(
+      /\.shell__column\s*\{[^}]*max-width:\s*var\(--measure\)/,
+    );
+  });
+
+  it('defines --measure once, in tokens.css', () => {
+    // A second definition is how a screen quietly acquires its own idea of a
+    // comfortable line length.
+    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
+      expect(code(f), `${f} redefines --measure`).not.toMatch(/--measure:\s*[^;]+;/);
+    }
+  });
+
+  it('keeps the session rails on screen above the three-pane breakpoint', () => {
+    // The rails are the edges. What they show — what this session has done, what the
+    // Delta spared you — is the visible evidence that a session is a finite thing,
+    // so hiding them at a wide viewport would remove the only thing saying so.
+    const all = cssFiles.map(code).join('\n');
+    const wide = all.match(/@media \(min-width: 60rem\)\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(wide, 'no three-pane rule found at 60rem').not.toBe('');
+    expect(wide, 'the rails are hidden where they should appear').toMatch(
+      /\.shell__rail[\s\S]*?display:\s*block/,
+    );
+  });
+
+  it('scales the base type scale fluidly rather than in fixed steps', () => {
+    /*
+     * Fixed rem steps rendered the same 39px headline on a 1504px laptop and a 375px
+     * phone, changing only at two breakpoints in between. Every step in the base scale
+     * is clamped now, and each keeps a `rem` term so an OS or browser font-size
+     * preference still applies — a pure `vw` scale ignores the reader entirely.
+     *
+     * Scoped to the base `:root` block deliberately. `:root[data-text='large']`
+     * overrides these with larger fixed values, and that is correct rather than a
+     * violation: a reader who has asked for large text does not want it to shrink
+     * again on a small screen. Fluidity serves the default; the override exists to
+     * escape the default.
+     */
+    const tokens = read('tokens.css');
+    const base = tokens.match(/:root\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(base, 'no base :root block found').not.toBe('');
+
+    const steps = [...base.matchAll(/--step-{1,2}\d:\s*([^;]+);/g)].map((m) => m[1]!.trim());
+    expect(steps.length, 'no type scale found in :root').toBeGreaterThan(4);
+    for (const value of steps) {
+      expect(value, `type step "${value}" is not fluid`).toMatch(/clamp\(/);
+      expect(value, `type step "${value}" ignores the reader's font size`).toMatch(/rem/);
+    }
+  });
+});

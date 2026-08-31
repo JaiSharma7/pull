@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PullCard } from '@wap/ui';
 import * as api from '../lib/api.js';
+import { groupByWork, type WorkGroup } from '../lib/library.js';
+import { speak } from '../lib/speech.js';
 import type { LibraryItem, SourceDelta } from '../lib/types.js';
 
 /**
@@ -33,31 +35,30 @@ export function Library({ userId }: { userId: string }) {
     };
   }, [userId]);
 
-  const groups = useMemo(() => {
-    const byWork = new Map<string, { title: string; kind: string | null; items: LibraryItem[] }>();
-    for (const item of items ?? []) {
-      const key = item.work.id || item.work.title;
-      const group = byWork.get(key);
-      if (group) group.items.push(item);
-      else byWork.set(key, { title: item.work.title, kind: item.work.kind, items: [item] });
-    }
-    return [...byWork.entries()];
-  }, [items]);
+  const groups = useMemo(() => groupByWork(items ?? []), [items]);
 
   /**
    * Fetched when a source is opened rather than for every group on mount: the
    * Delta scans the reader's known set per candidate, so N sources on screen
    * would be N of those scans to answer a question nobody has asked yet.
+   *
+   * `key` drives the open/closed state and `workId` is what may reach the database.
+   * They are different values for an orphaned Pull, and conflating them is what sent
+   * the string "Unknown source" into a `uuid` parameter — see `lib/library.ts`.
    */
-  function toggle(workId: string) {
-    const next = openWork === workId ? null : workId;
+  function toggle(group: WorkGroup) {
+    const next = openWork === group.key ? null : group.key;
     setOpenWork(next);
-    if (next && workId && !delta[workId]) {
+
+    // A Pull whose work has been deleted has no Delta to ask for. Skipping is not a
+    // silent failure: there is genuinely nothing to show, and asking anyway was the
+    // request that raised 22P02 and got swallowed.
+    if (next && group.workId && !delta[group.workId]) {
       api
-        .fetchSourceDelta(workId)
-        .then((d) => setDelta((prev) => ({ ...prev, [workId]: d })))
+        .fetchSourceDelta(group.workId)
+        .then((d) => setDelta((prev) => ({ ...prev, [group.workId]: d })))
         // A missing Delta costs the reader a line of context, not their library.
-        .catch(() => undefined);
+        .catch((e: unknown) => console.error('Could not load the source Delta', e));
     }
   }
 
@@ -86,17 +87,19 @@ export function Library({ userId }: { userId: string }) {
     <div className="stack">
       <p className="meta">Library · {items.length} kept</p>
 
-      {groups.map(([key, group]) => {
-        const open = openWork === key;
-        const d = delta[key];
+      {groups.map((group) => {
+        const open = openWork === group.key;
+        // Keyed by workId, not by the group key: an orphan has no Delta and must not
+        // read one belonging to whatever else shares its position.
+        const d = group.workId ? delta[group.workId] : undefined;
         return (
-          <section key={key} className="stack">
+          <section key={group.key} className="stack">
             <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
               <button
                 type="button"
                 className="btn btn--plain"
                 aria-expanded={open}
-                onClick={() => toggle(key)}
+                onClick={() => toggle(group)}
                 style={{ textAlign: 'left' }}
               >
                 {group.title}
@@ -125,6 +128,12 @@ export function Library({ userId }: { userId: string }) {
                   whyItMatters={item.whyItMatters}
                   sourceTrail={group.title}
                   saved
+                  // Law 3: audio is free forever, and the Library is where a reader
+                  // comes back to something they kept — so it is the screen where
+                  // listening matters most. The Feed had this and the Library did
+                  // not, which made the promise conditional on where you happened
+                  // to be standing. `speak` is Web Speech, on-device and free.
+                  onListen={() => speak(`${item.headline}. ${item.body}`)}
                 />
               ))}
           </section>

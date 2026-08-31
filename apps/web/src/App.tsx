@@ -22,10 +22,28 @@ export function App() {
   const [stats, setStats] = useState<FeedStats | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setReady(true);
-    });
+    /*
+     * `ready` must become true on every path, including the failing ones.
+     *
+     * supabase-js converts its own AuthErrors into `{ data, error }` but rethrows
+     * anything else — a DNS failure, an offline device, a wedged Web Lock inside
+     * `_acquireLock`. Without a catch, that rejection left `ready` false forever and
+     * the reader sat looking at "Loading…" in 12px grey text: no error, no sign-in
+     * form, and no way out but a reload that does the same thing again.
+     *
+     * Falling through to the sign-in screen is always the better failure. A reader
+     * who is actually signed in gets their session back from `onAuthStateChange`
+     * moments later; a reader who is not can at least start.
+     */
+    supabase.auth
+      .getSession()
+      .then(({ data }) => setSession(data.session))
+      .catch((e: unknown) => {
+        console.error('Could not restore the session', e);
+        setSession(null);
+      })
+      .finally(() => setReady(true));
+
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);

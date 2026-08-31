@@ -4,6 +4,7 @@ import {
   cachePulls,
   drainPending,
   hasPending,
+  isOfflineFailure,
   onPendingQueued,
   queueMutation,
   readCachedPulls,
@@ -302,5 +303,65 @@ describe('identity revalidation', () => {
       later.push(pullId);
     });
     expect(later).toEqual(['second']);
+  });
+});
+
+/**
+ * Telling "the network is gone" apart from "the server said no".
+ *
+ * The feed used to treat every failure as offline whenever the cache had anything,
+ * so a 500 or an expired JWT rendered "Offline — reading from your downloaded copies"
+ * on a working connection. The server errors are the ones worth surfacing early, and
+ * they were the ones being hidden.
+ */
+describe('isOfflineFailure', () => {
+  const withOnline = <T>(value: boolean | undefined, run: () => T): T => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      value: value === undefined ? undefined : { onLine: value },
+      configurable: true,
+    });
+    try {
+      return run();
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'navigator', original);
+      else Reflect.deleteProperty(globalThis, 'navigator');
+    }
+  };
+
+  it('is true when the browser says there is no network', () => {
+    // Whatever the error was, there is no point calling it a server problem.
+    expect(withOnline(false, () => isOfflineFailure(new Error('anything')))).toBe(true);
+  });
+
+  it('is true for the TypeError fetch rejects with when a request never completes', () => {
+    // DNS failure, connection refused, CORS preflight failure.
+    expect(withOnline(true, () => isOfflineFailure(new TypeError('Failed to fetch')))).toBe(true);
+  });
+
+  it('is false for a server error that actually arrived', () => {
+    // The case that mattered: a response came back and said no. `onLine` is true,
+    // and this must reach the reader as a retryable error, not as a connectivity shrug.
+    const rlsFailure = new Error('permission denied for function get_feed');
+    expect(withOnline(true, () => isOfflineFailure(rlsFailure))).toBe(false);
+  });
+
+  it('does not trust navigator.onLine to prove the connection works', () => {
+    // `onLine === true` only means an interface is up, not that anything is
+    // reachable — so it is never used in that direction. A TypeError still wins.
+    expect(withOnline(true, () => isOfflineFailure(new TypeError('Load failed')))).toBe(true);
+  });
+
+  it('survives an environment with no navigator at all', () => {
+    // Server-side rendering, and the Node test environment this suite runs in.
+    expect(withOnline(undefined, () => isOfflineFailure(new Error('boom')))).toBe(false);
+    expect(withOnline(undefined, () => isOfflineFailure(new TypeError('boom')))).toBe(true);
+  });
+
+  it('treats a non-Error rejection as a server problem', () => {
+    // Erring toward showing the reader an error they can retry, rather than
+    // silently serving stale cache for a reason nobody established.
+    expect(withOnline(true, () => isOfflineFailure('a string'))).toBe(false);
+    expect(withOnline(true, () => isOfflineFailure(null))).toBe(false);
   });
 });
