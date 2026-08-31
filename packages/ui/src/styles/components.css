@@ -307,6 +307,27 @@
  * the rails would push the measure under a comfortable line length, which is
  * the one thing this layout exists to protect.
  */
+/*
+ * A pane appears only once it can pay for itself.
+ *
+ * Both rails used to arrive together at 60rem, and measuring the result showed the
+ * layout getting *worse* as the window got bigger: at 959px the reading column was a
+ * full 544px, and at 961px it was 481px. Two pixels of extra window cost 63 pixels of
+ * line. It stayed under the measure until 1040px — an 80px band that includes 1024,
+ * which is what a split screen or a scaled display actually gives you.
+ *
+ * The comment above says this breakpoint exists so the rails cannot "push the measure
+ * under a comfortable line length, which is the one thing this layout exists to
+ * protect". It was set 80px too low to keep that promise. So the panes now come in one
+ * at a time, each at the width where the middle track can still reach --measure with
+ * it present.
+ *
+ * The rail goes first because it is navigation, and the aside second because it is
+ * peripheral context — the session tally is also reported on the Enough screen, so it
+ * is the one that can wait. That ordering is the design law applied rather than
+ * argued with: extra pixels buy structure and context, never a longer line, and when
+ * there are not enough pixels the context yields, not the line.
+ */
 @media (min-width: 60rem) {
   /*
    * The rails absorb the extra width; the reading column never does.
@@ -315,11 +336,35 @@
    * window between 60 and 88rem got furniture sized for the narrowest of them. A
    * Surface Laptop at 200% scaling is 70.5rem wide and was styled as though it were
    * 60. `clamp` lets the rails take up the slack continuously instead of at one jump.
-   *
-   * The middle track stays `minmax(0, 1fr)` and the column inside it stays pinned to
-   * --measure at every width. That is the point of the whole layout: extra pixels buy
-   * structure and peripheral context, never a longer line.
    */
+  .shell__body {
+    grid-template-columns: clamp(12rem, 9rem + 5vw, 16rem) minmax(0, 1fr);
+  }
+
+  .shell__rail,
+  .shell__aside {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .shell__rail {
+    display: block;
+    /* Separated by hairlines, never by elevation. */
+    border-right: 1px solid var(--rule);
+  }
+}
+
+/*
+ * 66rem is where the third pane fits without taking from the line.
+ *
+ * Measured, not guessed: at 65rem the middle track lands exactly on --measure with no
+ * slack at all, which a browser zoom or a larger root font would immediately spend.
+ * 66rem leaves about 22px of headroom, so the column holds its width through a step
+ * of zoom rather than only at exactly 100%.
+ */
+@media (min-width: 66rem) {
   .shell__body {
     grid-template-columns:
       clamp(12rem, 9rem + 5vw, 16rem)
@@ -327,21 +372,8 @@
       clamp(15rem, 11rem + 6.5vw, 20rem);
   }
 
-  .shell__rail,
   .shell__aside {
     display: block;
-    position: sticky;
-    top: 0;
-    align-self: start;
-    padding: var(--space-6) var(--space-4);
-  }
-
-  /* Separated by hairlines, never by elevation. */
-  .shell__rail {
-    border-right: 1px solid var(--rule);
-  }
-
-  .shell__aside {
     border-left: 1px solid var(--rule);
   }
 }
@@ -428,8 +460,22 @@
  * controls with the same name in the accessibility tree, so each breakpoint
  * removes the copy it is not using from the document entirely.
  */
+/*
+ * Wraps, because the number of sections is not fixed.
+ *
+ * The parent masthead wraps but this did not, so the nav stayed one unbreakable row
+ * and pushed past the viewport: six buttons measured 517px inside a 375px window,
+ * giving the whole page a horizontal scrollbar. It fit while there were four
+ * sections and broke when Daily Pull and History were added — the kind of bug that
+ * arrives with a feature that never touched this file.
+ *
+ * `min-width: 0` as well as the wrap: a flex item's floor is its content by default,
+ * so without it the nav refuses to shrink inside the masthead however it wraps.
+ */
 .shell__masthead-nav {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: var(--space-2);
 }
 

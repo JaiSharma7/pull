@@ -155,23 +155,88 @@ describe('The Archive viewport laws', () => {
     }
   });
 
-  it('keeps the session rails on screen above the three-pane breakpoint', () => {
-    // The rails are the edges. What they show — what this session has done, what the
-    // Delta spared you — is the visible evidence that a session is a finite thing,
-    // so hiding them at a wide viewport would remove the only thing saying so.
+  it('brings each rail in at the width where it can pay for itself', () => {
+    /*
+     * The rails are the edges. What they show — what this session has done, what the
+     * Delta spared you — is the visible evidence that a session is a finite thing, so
+     * hiding them at a wide viewport would remove the only thing saying so.
+     *
+     * They arrive one at a time, and that is this law meeting a stronger one rather
+     * than being relaxed. Both used to appear together at 60rem, and measuring it in a
+     * browser showed the layout getting *worse* as the window grew: at 959px the
+     * reading column was a full 544px and at 961px it was 481px, staying under the
+     * measure until 1040px. Two pixels of window cost 63 pixels of line, across a band
+     * that includes 1024 — a split screen, or a scaled display.
+     *
+     * `.shell__column`'s own comment calls the measure "the one thing this layout
+     * exists to protect", so where the two collide the line wins and the peripheral
+     * context waits. The rail (navigation) comes in at 60rem, the aside (the session
+     * tally, also reported on the Enough screen) at 66rem.
+     *
+     * Both thresholds are pinned here because both are load-bearing: lowering the
+     * aside's reintroduces the bug, and raising the rail's would strand navigation on
+     * a laptop that has room for it.
+     */
     const all = cssFiles.map(code).join('\n');
-    const wide = all.match(/@media \(min-width: 60rem\)\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(wide, 'no three-pane rule found at 60rem').not.toBe('');
 
-    // The rail's own rule, not a span of text containing both strings. A lazy
+    const block = (minWidth: string) =>
+      all.match(new RegExp(`@media \\(min-width: ${minWidth}\\)\\s*\\{[\\s\\S]*?\\n\\}`))?.[0] ??
+      '';
+
+    // The element's own rule, not a span of text containing both strings. A lazy
     // `[\s\S]*?` between them crosses rule boundaries, so it would pass on
     // `.shell__rail { display: none } .shell__masthead-nav { display: block }` —
-    // rails hidden, law broken, test green. That arrangement is one tidy-up away:
-    // a second `@media (min-width: 60rem)` block already exists in components.css
-    // and merging them would produce exactly it.
-    const railRule = wide.match(/\.shell__rail[^{]*\{[^}]*\}/)?.[0] ?? '';
-    expect(railRule, 'no .shell__rail rule inside the three-pane breakpoint').not.toBe('');
-    expect(railRule, 'the rails are hidden where they should appear').toMatch(/display:\s*block/);
+    // rails hidden, law broken, test green.
+    const ownRule = (css: string, selector: string) =>
+      css.match(new RegExp(`(^|[;}]|\\n)\\s*\\${selector}\\s*\\{[^}]*\\}`))?.[0] ?? '';
+
+    const twoPane = block('60rem');
+    expect(twoPane, 'no two-pane rule found at 60rem').not.toBe('');
+    const railRule = ownRule(twoPane, '.shell__rail');
+    expect(railRule, 'no .shell__rail rule of its own at 60rem').not.toBe('');
+    expect(railRule, 'the navigation rail is hidden where it should appear').toMatch(
+      /display:\s*block/,
+    );
+
+    const threePane = block('66rem');
+    expect(threePane, 'no three-pane rule found at 66rem').not.toBe('');
+    const asideRule = ownRule(threePane, '.shell__aside');
+    expect(asideRule, 'no .shell__aside rule of its own at 66rem').not.toBe('');
+    expect(asideRule, 'the session aside is hidden where it should appear').toMatch(
+      /display:\s*block/,
+    );
+
+    // Three tracks only once all three fit. A three-column grid declared at 60rem is
+    // exactly the bug this test exists to keep out.
+    const gridAt = (css: string) =>
+      css.match(/\.shell__body\s*\{[^}]*grid-template-columns:([^;]*);/)?.[1] ?? '';
+    expect(
+      gridAt(twoPane).split('clamp(').length - 1,
+      'the 60rem grid reserves a track for the aside, which squeezes the measure',
+    ).toBe(1);
+    expect(
+      gridAt(threePane).split('clamp(').length - 1,
+      'the 66rem grid does not lay out all three panes',
+    ).toBe(2);
+  });
+
+  it('lets the masthead navigation wrap', () => {
+    /*
+     * The number of sections is not fixed, and this nav is the only copy of them below
+     * 60rem. It was a single unbreakable flex row: six buttons measured 517px inside a
+     * 375px window and gave the whole page a horizontal scrollbar. It fit at four
+     * sections and broke when Daily Pull and History were added — a layout bug shipped
+     * by a change that never touched this file, which is why it is pinned rather than
+     * left to the next person to notice.
+     */
+    const nav = read('components.css').match(/\.shell__masthead-nav\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(nav, 'no .shell__masthead-nav rule found').not.toBe('');
+    expect(nav, 'the masthead navigation cannot wrap, so it overflows narrow windows').toMatch(
+      /flex-wrap:\s*wrap/,
+    );
+    expect(nav, 'the nav cannot shrink below its content without min-width: 0').toMatch(
+      /min-width:\s*0/,
+    );
   });
 
   it('scales the base type scale fluidly rather than in fixed steps', () => {
