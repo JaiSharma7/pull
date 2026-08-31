@@ -1,0 +1,266 @@
+{
+  "$comment": [
+    "Sources for the MVP corpus. Every entry is unambiguously public domain — first",
+    "published well before 1929 — which is what lets `rights_status: public_domain`",
+    "clear both rights gates and reach the feed. See law 4 and docs/content-policy.md.",
+    "",
+    "Short works on purpose. `acquire` truncates at MAX_SOURCE_CHARS (200,000), so a",
+    "full-length book would be summarised from its opening third and labelled as though",
+    "it were the whole thing — a quiet way to be wrong. Essays, letters, speeches,",
+    "single chapters and papers all finish well inside the limit.",
+    "",
+    "Wikisource rather than Gutenberg because it has a page per document. Gutenberg",
+    "publishes a file per *book*, so 'Federalist No. 10' there means downloading all 85.",
+    "",
+    "The mix is deliberate. A feed of nothing but Stoicism makes the Delta look clever",
+    "and tells you nothing, because everything sits near everything. Spread across",
+    "philosophy, politics, science, economics and craft, 'you already knew this' has to",
+    "mean something to be true.",
+    "",
+    "EVERY URL HERE HAS BEEN FETCHED AND CHECKED. The first draft of this file was",
+    "written from memory and 28 of 61 entries were 404s — which is why the script has a",
+    "--check mode and why it runs before any seeding. Re-verify after editing:",
+    "",
+    "  node scripts/seed-corpus.mjs --check"
+  ],
+  "sources": [
+    {
+      "title": "Self-Reliance",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Self-Reliance"
+    },
+    {
+      "title": "Compensation",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Compensation"
+    },
+    {
+      "title": "Circles",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Circles"
+    },
+    {
+      "title": "The Over-Soul",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/The_Over-Soul"
+    },
+    {
+      "title": "Civil Disobedience",
+      "author": "Henry David Thoreau",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Civil_Disobedience_(Thoreau)"
+    },
+    {
+      "title": "Life Without Principle",
+      "author": "Henry David Thoreau",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Life_Without_Principle"
+    },
+
+    {
+      "title": "Of Studies",
+      "author": "Francis Bacon",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Studies"
+    },
+    {
+      "title": "Of Truth",
+      "author": "Francis Bacon",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Truth"
+    },
+    {
+      "title": "Of Innovations",
+      "author": "Francis Bacon",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Innovations"
+    },
+    {
+      "title": "Of Great Place",
+      "author": "Francis Bacon",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Great_Place"
+    },
+
+    {
+      "title": "Of Cannibals",
+      "author": "Michel de Montaigne",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Essays_of_Montaigne/Book_I/Chapter_XXX"
+    },
+    {
+      "title": "Of the Education of Children",
+      "author": "Michel de Montaigne",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Essays_of_Montaigne/Book_I/Chapter_XXV"
+    },
+
+    {
+      "title": "Federalist No. 1: General Introduction",
+      "author": "Alexander Hamilton",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Federalist_Papers/No._1"
+    },
+    {
+      "title": "Federalist No. 10: The Union as a Safeguard Against Faction",
+      "author": "James Madison",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Federalist_Papers/No._10"
+    },
+    {
+      "title": "Federalist No. 51: The Structure of the Government",
+      "author": "James Madison",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Federalist_Papers/No._51"
+    },
+    {
+      "title": "Federalist No. 78: The Judiciary Department",
+      "author": "Alexander Hamilton",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Federalist_Papers/No._78"
+    },
+
+    {
+      "title": "The Gettysburg Address",
+      "author": "Abraham Lincoln",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/Gettysburg_Address"
+    },
+    {
+      "title": "Second Inaugural Address",
+      "author": "Abraham Lincoln",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/Abraham_Lincoln%27s_Second_Inaugural_Address"
+    },
+    {
+      "title": "What to the Slave is the Fourth of July?",
+      "author": "Frederick Douglass",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/What_to_the_Slave_Is_the_Fourth_of_July%3F"
+    },
+    {
+      "title": "Ain't I a Woman?",
+      "author": "Sojourner Truth",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/Ain%27t_I_a_Woman%3F"
+    },
+
+    {
+      "title": "A Vindication of the Rights of Woman: Introduction",
+      "author": "Mary Wollstonecraft",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/A_Vindication_of_the_Rights_of_Woman/Introduction"
+    },
+    {
+      "title": "Common Sense",
+      "author": "Thomas Paine",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Common_Sense_(1776)/Common_Sense"
+    },
+    {
+      "title": "The Subjection of Women: Chapter I",
+      "author": "John Stuart Mill",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Subjection_of_Women/Chapter_1"
+    },
+
+    {
+      "title": "The Wealth of Nations: Of the Division of Labour",
+      "author": "Adam Smith",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Wealth_of_Nations/Book_I/Chapter_1"
+    },
+    {
+      "title": "The Wealth of Nations: Of the Principle which gives Occasion to the Division of Labour",
+      "author": "Adam Smith",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Wealth_of_Nations/Book_I/Chapter_2"
+    },
+    {
+      "title": "The Theory of the Leisure Class: Conspicuous Consumption",
+      "author": "Thorstein Veblen",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Theory_of_the_Leisure_Class/Chapter_4"
+    },
+
+    {
+      "title": "On the Origin of Species: Struggle for Existence",
+      "author": "Charles Darwin",
+      "kind": "paper",
+      "url": "https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_III"
+    },
+    {
+      "title": "On the Origin of Species: Natural Selection",
+      "author": "Charles Darwin",
+      "kind": "paper",
+      "url": "https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_IV"
+    },
+    {
+      "title": "On the Origin of Species: Difficulties on Theory",
+      "author": "Charles Darwin",
+      "kind": "paper",
+      "url": "https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_VI"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture I",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_I"
+    },
+
+    {
+      "title": "The Will to Believe",
+      "author": "William James",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Will_to_Believe"
+    },
+    {
+      "title": "What Pragmatism Means",
+      "author": "William James",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/Pragmatism:_A_New_Name_for_Some_Old_Ways_of_Thinking/Lecture_II"
+    },
+
+    {
+      "title": "The Souls of Black Folk: Of Our Spiritual Strivings",
+      "author": "W. E. B. Du Bois",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Souls_of_Black_Folk/Chapter_1"
+    },
+    {
+      "title": "The Souls of Black Folk: Of Mr. Booker T. Washington and Others",
+      "author": "W. E. B. Du Bois",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Souls_of_Black_Folk/Chapter_3"
+    },
+
+    {
+      "title": "The Prince: Concerning New Principalities",
+      "author": "Niccolò Machiavelli",
+      "kind": "book",
+      "url": "https://en.wikisource.org/wiki/The_Prince_(Marriott)/Chapter_6"
+    },
+    {
+      "title": "The Poetic Principle",
+      "author": "Edgar Allan Poe",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Poetic_Principle"
+    },
+    {
+      "title": "The Philosophy of Composition",
+      "author": "Edgar Allan Poe",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Philosophy_of_Composition"
+    },
+    {
+      "title": "The Decay of Lying",
+      "author": "Oscar Wilde",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Intentions/The_Decay_of_Lying"
+    }
+  ]
+}
