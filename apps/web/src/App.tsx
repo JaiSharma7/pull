@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
+import { Explore } from './routes/Explore.js';
 import { History } from './routes/History.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
@@ -11,6 +12,7 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
+import { Topic } from './routes/Topic.js';
 import { Specimen } from './routes/Specimen.js';
 import {
   applyFocus,
@@ -44,7 +46,10 @@ const SECTIONS: { id: Tab; label: string }[] = [
  * section changes what the shell is showing, choosing a destination changes the
  * URL and every tab steps aside for it.
  */
-const DESTINATIONS: { path: string; label: string }[] = [{ path: '/search', label: 'Search' }];
+const DESTINATIONS: { path: string; label: string }[] = [
+  { path: '/explore', label: 'Explore' },
+  { path: '/search', label: 'Search' },
+];
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -227,7 +232,10 @@ export function App() {
    */
   const searchOpen = isPath(path, '/search');
   const searchQuery = queryParam(path, 'q') ?? '';
-  const routeOpen = sourceId !== null || pullId !== null || searchOpen;
+  const exploreOpen = isPath(path, '/explore');
+  const topicSlug = routeParam(path, '/topic');
+  const routeOpen =
+    sourceId !== null || pullId !== null || searchOpen || exploreOpen || topicSlug !== null;
 
   if (!ready)
     return (
@@ -393,6 +401,13 @@ export function App() {
               )}
               {pullId !== null && (
                 <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+              )}
+              {exploreOpen && <Explore onNavigate={navigate} />}
+              {topicSlug !== null && (
+                // Keyed on the slug so moving between topics is a fresh
+                // component rather than one that has to remember to reset its
+                // limit — the same reason `Source` is keyed on its work id.
+                <Topic key={topicSlug} slug={decodeURIComponent(topicSlug)} onNavigate={navigate} />
               )}
               {searchOpen && (
                 <Search

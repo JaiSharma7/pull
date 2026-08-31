@@ -1,3 +1,5 @@
+import { int, isRecord, nonNull, nullableInt, nullableStr, rows, str } from './shape.js';
+
 /**
  * Search, minus the network.
  *
@@ -99,32 +101,9 @@ export const EMPTY_RESULT: SearchResult = {
  * the RPC changes shape — and this repo has already been bitten once by values
  * TypeScript accepted and the database did not. So the boundary is narrowed
  * here, with the same posture the pipeline uses: an unrecognised value is
- * dropped rather than propagated.
+ * dropped rather than propagated. The primitives live in `lib/shape.ts`, shared
+ * with every other RPC shaper.
  * -------------------------------------------------------------------------- */
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
-
-function nullableStr(v: unknown): string | null {
-  return typeof v === 'string' ? v : null;
-}
-
-function nullableInt(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-function int(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
-}
-
-function rows(v: unknown): Record<string, unknown>[] {
-  return Array.isArray(v) ? v.filter(isRecord) : [];
-}
 
 /**
  * A row without an id cannot be linked to or keyed, so it is dropped rather than
@@ -171,10 +150,6 @@ function shapeNeighbour(r: Record<string, unknown>): SearchNeighbour | null {
     headline: str(r.headline),
     workTitle: str(r.workTitle),
   };
-}
-
-function nonNull<T>(v: T | null): v is T {
-  return v !== null;
 }
 
 export function shapeSearchResult(raw: unknown): SearchResult {

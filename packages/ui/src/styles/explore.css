@@ -1,0 +1,134 @@
+/*
+ * The catalogue.
+ *
+ * Index lines, not cards. A card is the feed's unit — one idea met alone — and a
+ * column of them is the exact screenshot law 7 says could be mistaken for a
+ * video feed with the sound off. A contents page could not be, which is why
+ * every row here is a name, a hairline and a number.
+ *
+ * Nothing scrolls inside itself. An inner scroll pane is how an unbounded list
+ * gets built by accident; the page must have a bottom the reader can reach.
+ *
+ * Every colour, rule and radius is a token. No gradient, no shadow, no second
+ * accent. See law 1 and docs/design.md.
+ */
+
+/*
+ * The size of the library, and of a topic. Tabular figures because these are
+ * numbers first and a sentence second, and proportional digits make a row of
+ * counts look approximate.
+ */
+.explore__totals {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  margin: 0 0 var(--space-5);
+}
+
+.explore__parents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explore__parent {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * Name left, count right, on one baseline. `space-between` rather than a fixed
+ * column so the row is proportioned to the reading measure at every width —
+ * a new fixed rem dimension inside a layout rule is a smell.
+ */
+.explore__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.explore__parent-name {
+  padding-left: 0;
+  padding-right: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+}
+
+.explore__count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/*
+ * Children wrap inline rather than stacking. A parent with five children should
+ * read as one entry in a catalogue, not as six — and at 375px they still wrap
+ * onto as many lines as they need without a media query.
+ */
+.explore__children {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.explore__child {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.explore__child-name {
+  padding-left: 0;
+  padding-right: 0;
+  font-size: var(--step-0);
+}
+
+.explore__child-count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/* One topic's sources. Same index treatment, one level down. */
+.explore__sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explore__source {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.explore__source-title {
+  padding-left: 0;
+  padding-right: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+}
+
+.explore__source-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--text-soft);
+}
+
+.explore__source-meta {
+  margin: var(--space-2) 0 0;
+  text-transform: none;
+  letter-spacing: 0;
+}

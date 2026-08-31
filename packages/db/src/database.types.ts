@@ -1772,6 +1772,7 @@ export type Database = {
       }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
       generation_secret: { Args: { p_name: string }; Returns: string }
+      get_catalogue: { Args: never; Returns: Json }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {
@@ -1785,6 +1786,7 @@ export type Database = {
         Returns: Json
       }
       get_source_delta: { Args: { p_work_id: string }; Returns: Json }
+      get_topic: { Args: { p_limit?: number; p_slug: string }; Returns: Json }
       grade_recall: {
         Args: {
           p_grade: Database["public"]["Enums"]["recall_grade"]
