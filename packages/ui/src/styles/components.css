@@ -328,7 +328,7 @@
  * argued with: extra pixels buy structure and context, never a longer line, and when
  * there are not enough pixels the context yields, not the line.
  */
-@media (min-width: 60rem) {
+@media (min-width: 63rem) {
   /*
    * The rails absorb the extra width; the reading column never does.
    *
@@ -337,8 +337,26 @@
    * Surface Laptop at 200% scaling is 70.5rem wide and was styled as though it were
    * 60. `clamp` lets the rails take up the slack continuously instead of at one jump.
    */
+  /*
+   * Symmetric furniture, because a centred column is not the same as a column
+   * centred in its track.
+   *
+   * `.shell__column` has always had `margin-inline: auto`, which centres it inside
+   * the middle grid track — and the middle track is only centred in the window when
+   * the tracks either side of it are equal. They were not. Measured in a browser:
+   * at 1024px the reading column sat **98px right of centre** (a rail on the left and
+   * nothing balancing it), and from 1200px up it sat 25–32px left of centre, because
+   * the aside was the wider of the two. The column drifted across the window as it
+   * grew, which reads as a bug even to someone who could not say why.
+   *
+   * One track width, used twice. The right-hand track is reserved from 60rem even
+   * though the aside does not appear until 66rem: empty, it is the counterweight that
+   * makes the middle track land in the centre, and reserving it early costs nothing
+   * the measure needs — at 60rem the middle track is 576px against a 544px measure.
+   */
   .shell__body {
-    grid-template-columns: clamp(12rem, 9rem + 5vw, 16rem) minmax(0, 1fr);
+    --furniture: clamp(12rem, 9rem + 5vw, 16rem);
+    grid-template-columns: var(--furniture) minmax(0, 1fr) var(--furniture);
   }
 
   .shell__rail,
@@ -365,13 +383,11 @@
  * of zoom rather than only at exactly 100%.
  */
 @media (min-width: 66rem) {
-  .shell__body {
-    grid-template-columns:
-      clamp(12rem, 9rem + 5vw, 16rem)
-      minmax(0, 1fr)
-      clamp(15rem, 11rem + 6.5vw, 20rem);
-  }
-
+  /*
+   * The track is already there and already the right width — the aside only becomes
+   * visible in it. It used to be declared wider than the rail here, which is what
+   * pulled the reading column left of centre on every screen above 1200px.
+   */
   .shell__aside {
     display: block;
     border-left: 1px solid var(--rule);
