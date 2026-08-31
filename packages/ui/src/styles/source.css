@@ -1,0 +1,113 @@
+/*
+ * The source page.
+ *
+ * Layout and rhythm only; every colour, rule and radius is a token. The ideas are a
+ * numbered list separated by hairlines rather than by cards, because a card is the
+ * feed's unit — one idea met alone — and this page exists to show them in sequence.
+ *
+ * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
+ */
+
+.source__subtitle {
+  color: var(--text-muted);
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.source__pitch {
+  font-size: var(--step-1);
+}
+
+.source__group {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+
+/*
+ * The Delta reads as a result, not a notice.
+ *
+ * Bracketed by rules top and bottom rather than boxed: a box would be the one
+ * elevated surface on a page that has none, and the accent is spent on the single
+ * number that matters instead of on a container.
+ */
+.source__delta {
+  margin-top: var(--space-5);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.source__delta-new {
+  color: var(--accent);
+}
+
+.source__pulls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: pull;
+}
+
+.source__pull {
+  counter-increment: pull;
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The ordinal sits in the margin where there is room for it and inline where there
+ * is not. It is reading order rather than rank, so it is set in the metadata face
+ * and kept faint: useful for finding your place, never the loudest thing in the row.
+ */
+.source__pull-headline {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: 0 0 var(--space-2);
+}
+
+.source__pull-headline::before {
+  content: counter(pull) '. ';
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-faint);
+}
+
+.source__pull-body {
+  margin: 0 0 var(--space-2);
+}
+
+.source__pull-more,
+.source__pull-why {
+  color: var(--text-soft);
+  margin: 0 0 var(--space-2);
+}
+
+.source__foot {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The source chip, when it opens something.
+ *
+ * Inherits the card's own chip styling and only adds what a control needs: no
+ * button padding or border, and the underline appears on hover and focus so the
+ * affordance is discoverable without shouting over the idea beneath it.
+ */
+.pull-card__chip--link {
+  padding: 0;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pull-card__chip--link:hover,
+.pull-card__chip--link:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}

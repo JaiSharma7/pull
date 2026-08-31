@@ -16,6 +16,14 @@ export interface PullCardProps {
   example?: string | null;
   /** Chapter, timestamp or section the claim is anchored to. */
   sourceTrail?: string | null;
+  /**
+   * Open the source this Pull came from.
+   *
+   * Optional because the chip has always been able to stand as plain text, and a
+   * card rendered without a destination — the design specimen, an offline row whose
+   * work is not cached — should not present a control that goes nowhere.
+   */
+  onOpenSource?: () => void;
   saved?: boolean;
   onSave?: () => void;
   onListen?: () => void;
@@ -43,6 +51,7 @@ export function PullCard({
   onSave,
   onListen,
   onAsk,
+  onOpenSource,
   children,
 }: PullCardProps) {
   const [flipped, setFlipped] = useState(false);
@@ -54,14 +63,36 @@ export function PullCard({
     <article className="flip" data-flipped={flipped}>
       <div className="flip__inner">
         <div className="pull-card flip__face flip__face--front" inert={flipped}>
-          <p className="pull-card__chip">
-            {chip.map((part, i) => (
-              <span key={part}>
-                {i > 0 && <span className="pull-card__chip-sep"> · </span>}
-                {part}
-              </span>
-            ))}
-          </p>
+          {/*
+            The chip becomes the way into the source when there is one to open.
+            A button rather than a link because the shell routes in-process, and
+            `btn--plain` keeps it looking like the metadata it already was: this is
+            an affordance the reader discovers, not a call to action competing with
+            the idea underneath it.
+          */}
+          {onOpenSource ? (
+            <button
+              type="button"
+              className="btn btn--plain pull-card__chip pull-card__chip--link"
+              onClick={onOpenSource}
+            >
+              {chip.map((part, i) => (
+                <span key={part}>
+                  {i > 0 && <span className="pull-card__chip-sep"> · </span>}
+                  {part}
+                </span>
+              ))}
+            </button>
+          ) : (
+            <p className="pull-card__chip">
+              {chip.map((part, i) => (
+                <span key={part}>
+                  {i > 0 && <span className="pull-card__chip-sep"> · </span>}
+                  {part}
+                </span>
+              ))}
+            </p>
+          )}
           <hr className="pull-card__rule" />
 
           <h2 className="pull-card__headline">{headline}</h2>

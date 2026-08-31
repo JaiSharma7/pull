@@ -4,6 +4,7 @@ import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
+import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
@@ -88,6 +89,26 @@ export function App() {
     window.scrollTo(0, 0);
   }
 
+  /*
+   * Navigate without leaving a back-stack entry.
+   *
+   * `/pull/:id` only ever resolves to a source, so pushing it would make Back return
+   * to a URL that immediately redirects again — a reader pressing Back twice to leave
+   * would go nowhere.
+   */
+  function replaceWith(to: string) {
+    history.replaceState(null, '', to);
+    setPath(to);
+  }
+
+  /** `/source/<uuid>` and `/pull/<uuid>`, ignoring a trailing slash and any anchor. */
+  function routeParam(prefix: string): string | null {
+    const clean = path.replace(/\/+$/, '') || '/';
+    if (!clean.startsWith(`${prefix}/`)) return null;
+    const id = clean.slice(prefix.length + 1);
+    return id.length > 0 && !id.includes('/') ? id : null;
+  }
+
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
     return <Specimen />;
@@ -100,6 +121,9 @@ export function App() {
    */
   const legal = legalDocFor(path);
   if (legal) return <Legal doc={legal} onNavigate={navigate} />;
+
+  const sourceId = routeParam('/source');
+  const pullId = routeParam('/pull');
 
   if (!ready)
     return (
@@ -191,9 +215,20 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
-              <div hidden={tab !== 'feed'}>
-                <Feed userId={session.user.id} onStats={setStats} refreshKey={prefsSaved} />
+              <div hidden={tab !== 'feed' || sourceId !== null || pullId !== null}>
+                <Feed
+                  userId={session.user.id}
+                  onStats={setStats}
+                  refreshKey={prefsSaved}
+                  onOpenSource={(id) => navigate(`/source/${id}`)}
+                />
               </div>
+              {sourceId !== null && (
+                <Source key={sourceId} workId={sourceId} onNavigate={navigate} />
+              )}
+              {pullId !== null && (
+                <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+              )}
               {tab === 'review' && <Review />}
               {tab === 'library' && <Library userId={session.user.id} />}
               {tab === 'preferences' && (
