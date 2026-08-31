@@ -1770,6 +1770,7 @@ export type Database = {
         Args: { p_project_url: string; p_seconds?: number }
         Returns: string
       }
+      enable_log_retention: { Args: { p_cron?: string }; Returns: number }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
       generation_secret: { Args: { p_name: string }; Returns: string }
       get_catalogue: { Args: never; Returns: Json }
@@ -1827,6 +1828,14 @@ export type Database = {
           kind: Database["public"]["Enums"]["interrupt_kind"]
           slot_index: number
         }[]
+      }
+      prune_operational_logs: {
+        Args: {
+          p_cron_days?: number
+          p_output_days?: number
+          p_response_hours?: number
+        }
+        Returns: Json
       }
       record_failed_job_step: {
         Args: {
