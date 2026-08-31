@@ -1,0 +1,117 @@
+/*
+ * The source page.
+ *
+ * Layout and rhythm only; every colour, rule and radius is a token. The ideas are a
+ * numbered list separated by hairlines rather than by cards, because a card is the
+ * feed's unit — one idea met alone — and this page exists to show them in sequence.
+ *
+ * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
+ */
+
+.source__subtitle {
+  color: var(--text-muted);
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.source__pitch {
+  font-size: var(--step-1);
+}
+
+.source__group {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+
+/*
+ * The Delta reads as a result, not a notice.
+ *
+ * Bracketed by rules top and bottom rather than boxed: a box would be the one
+ * elevated surface on a page that has none, and the accent is spent on the single
+ * number that matters instead of on a container.
+ */
+.source__delta {
+  margin-top: var(--space-5);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.source__delta-new {
+  color: var(--accent);
+}
+
+.source__pulls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: pull;
+}
+
+.source__pull {
+  counter-increment: pull;
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The ordinal sits in the margin where there is room for it and inline where there
+ * is not. It is reading order rather than rank, so it is set in the metadata face
+ * and kept faint: useful for finding your place, never the loudest thing in the row.
+ */
+.source__pull-headline {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: 0 0 var(--space-2);
+}
+
+.source__pull-headline::before {
+  content: counter(pull) '. ';
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text-faint);
+}
+
+.source__pull-body {
+  margin: 0 0 var(--space-2);
+}
+
+.source__pull-more,
+.source__pull-why {
+  color: var(--text-soft);
+  margin: 0 0 var(--space-2);
+}
+
+.source__foot {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The source chip, when it opens something.
+ *
+ * Strips only what makes a button look like a button. The first version also set
+ * font, letter-spacing, text-transform and color to `inherit`, which was exactly
+ * backwards: this file is imported after components.css at equal specificity, so
+ * those won against `.pull-card__chip` and `.btn` and the clickable chip lost the
+ * mono face, the tracking, the uppercase and `--text-muted` — rendering as
+ * full-contrast body text, and giving the same content two different treatments
+ * depending on which screen it was on.
+ *
+ * The class carries no typography of its own now. Whatever `.pull-card__chip` says
+ * is what a chip looks like, clickable or not.
+ */
+.pull-card__chip--link {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pull-card__chip--link:hover,
+.pull-card__chip--link:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}

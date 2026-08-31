@@ -72,9 +72,18 @@ export function Feed({
   userId,
   onStats,
   refreshKey = 0,
+  onOpenSource,
 }: {
   userId: string | null;
   onStats?: (stats: FeedStats) => void;
+  /**
+   * Open the source behind a card.
+   *
+   * Optional so `Feed` stays renderable without a router — the design specimen does
+   * exactly that — and so a shell with nowhere to send the reader renders the chip
+   * as the plain metadata it has always been rather than a control that goes nowhere.
+   */
+  onOpenSource?: (workId: string) => void;
   /**
    * Bumped by the shell when something outside this component changed what the
    * feed should contain — today, a reader saving their preferences.
@@ -578,6 +587,7 @@ export function Feed({
             saved={saved.has(item.row.id)}
             onSave={() => void onSave(item.row)}
             onRead={() => onRead(item.row, item.index)}
+            onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
           />
         ),
       )}
@@ -594,11 +604,13 @@ function PullCardInView({
   saved,
   onSave,
   onRead,
+  onOpenSource,
 }: {
   row: FeedRow;
   saved: boolean;
   onSave: () => void;
   onRead: () => void;
+  onOpenSource?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -629,6 +641,7 @@ function PullCardInView({
         saved={saved}
         onSave={onSave}
         onListen={() => speak(`${row.headline}. ${row.body}`)}
+        onOpenSource={onOpenSource}
       />
     </div>
   );

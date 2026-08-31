@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
+import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
+import { routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'review' | 'library' | 'preferences';
@@ -82,11 +84,36 @@ export function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  /*
+   * Choosing a section leaves any open route.
+   *
+   * The rail and masthead only set tab state, so from a source page "Library" used
+   * to render Source and Library stacked in one column, and "For You" did nothing at
+   * all — the feed stays hidden while a route is open. A section is a destination,
+   * so selecting one has to return to the app's own path.
+   */
+  function goToTab(next: Tab) {
+    setTab(next);
+    if (window.location.pathname !== '/') navigate('/');
+  }
+
   function navigate(to: string) {
     history.pushState(null, '', to);
     setPath(to);
     window.scrollTo(0, 0);
   }
+
+  /*
+   * Navigate without leaving a back-stack entry.
+   *
+   * `/pull/:id` only ever resolves to a source, so pushing it would make Back return
+   * to a URL that immediately redirects again — a reader pressing Back twice to leave
+   * would go nowhere.
+   */
+  const replaceWith = useCallback((to: string) => {
+    history.replaceState(null, '', to);
+    setPath(to);
+  }, []);
 
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
@@ -100,6 +127,9 @@ export function App() {
    */
   const legal = legalDocFor(path);
   if (legal) return <Legal doc={legal} onNavigate={navigate} />;
+
+  const sourceId = routeParam(path, '/source');
+  const pullId = routeParam(path, '/pull');
 
   if (!ready)
     return (
@@ -133,7 +163,7 @@ export function App() {
                 className="btn btn--plain"
                 aria-current={tab === s.id ? 'page' : undefined}
                 style={tab === s.id ? { color: 'var(--accent)' } : undefined}
-                onClick={() => setTab(s.id)}
+                onClick={() => goToTab(s.id)}
               >
                 {s.label}
               </button>
@@ -160,7 +190,7 @@ export function App() {
                   type="button"
                   className="btn btn--plain shell__nav-item"
                   aria-current={tab === s.id ? 'page' : undefined}
-                  onClick={() => setTab(s.id)}
+                  onClick={() => goToTab(s.id)}
                 >
                   {s.label}
                 </button>
@@ -191,9 +221,20 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
-              <div hidden={tab !== 'feed'}>
-                <Feed userId={session.user.id} onStats={setStats} refreshKey={prefsSaved} />
+              <div hidden={tab !== 'feed' || sourceId !== null || pullId !== null}>
+                <Feed
+                  userId={session.user.id}
+                  onStats={setStats}
+                  refreshKey={prefsSaved}
+                  onOpenSource={(id) => navigate(`/source/${id}`)}
+                />
               </div>
+              {sourceId !== null && (
+                <Source key={sourceId} workId={sourceId} onNavigate={navigate} />
+              )}
+              {pullId !== null && (
+                <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+              )}
               {tab === 'review' && <Review />}
               {tab === 'library' && <Library userId={session.user.id} />}
               {tab === 'preferences' && (

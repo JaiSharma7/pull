@@ -58,3 +58,29 @@ describe('PullCard', () => {
     expect(html).not.toContain('Listen');
   });
 });
+
+describe('the source chip', () => {
+  /**
+   * The chip is how a reader reaches the source, and it has to stay plain text when
+   * there is nowhere to send them.
+   *
+   * The same failure shape as Listen above: `onOpenSource` is optional, so a screen
+   * that forgets it produces neither a type error nor a runtime error — just a card
+   * whose only route into the source silently is not there. And rendering a control
+   * unconditionally would be the mirror of that, offering a button that does nothing
+   * on the specimen and on any row whose work is not resolvable.
+   */
+  it('renders the chip as plain text when there is no source to open', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, base));
+    expect(html).toContain('On Liberty');
+    expect(html).not.toContain('pull-card__chip--link');
+  });
+
+  it('renders the chip as a button when a source can be opened', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, onOpenSource: () => {} }));
+    expect(html).toContain('pull-card__chip--link');
+    expect(html).toContain('<button');
+    // The source is still legible as metadata, not replaced by a generic label.
+    expect(html).toContain('On Liberty');
+  });
+});
