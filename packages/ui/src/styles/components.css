@@ -820,3 +820,27 @@
   color: var(--text-muted);
   line-height: 1.6;
 }
+
+/*
+ * Focus mode gives the reader the width back.
+ *
+ * The rails are peripheral context — where you are, and what this session has done —
+ * and a reader who has asked to focus has said what they want the screen for. They
+ * come back the moment focus is turned off; nothing here is destroyed, only hidden,
+ * so the session tally keeps counting behind it.
+ *
+ * The masthead stays. It carries the way out of this mode, and a full-screen reading
+ * mode with no visible exit is the pattern this product exists not to be.
+ */
+:root[data-focus='on'] .shell__rail,
+:root[data-focus='on'] .shell__aside {
+  display: none;
+}
+
+:root[data-focus='on'] .shell__body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-focus='on'] .shell__main {
+  padding-block: var(--space-7);
+}
