@@ -9,7 +9,7 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Specimen } from './routes/Specimen.js';
-import { routeParam } from './lib/routes.js';
+import { queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'review' | 'library' | 'preferences';
@@ -129,6 +129,8 @@ export function App() {
   if (legal) return <Legal doc={legal} onNavigate={navigate} />;
 
   const sourceId = routeParam(path, '/source');
+  // `?s=<summaryId>`, set by the /pull/:id redirect so the anchor resolves.
+  const summaryParam = queryParam(path, 's');
   const pullId = routeParam(path, '/pull');
 
   if (!ready)
@@ -230,7 +232,12 @@ export function App() {
                 />
               </div>
               {sourceId !== null && (
-                <Source key={sourceId} workId={sourceId} onNavigate={navigate} />
+                <Source
+                  key={`${sourceId}:${summaryParam ?? ''}`}
+                  workId={sourceId}
+                  summaryId={summaryParam ?? undefined}
+                  onNavigate={navigate}
+                />
               )}
               {pullId !== null && (
                 <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />

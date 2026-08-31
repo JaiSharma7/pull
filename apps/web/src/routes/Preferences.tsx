@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { WorkKind } from '@wap/schemas';
+import { WORK_KINDS, type WorkKind } from '@wap/schemas';
 import {
   fetchAvailableMediaKinds,
   fetchPreferences,
@@ -123,12 +123,19 @@ export function Preferences({
    * what it says, and the harder version of that mistake to notice because the screen
    * closes and the feed looks plausible either way.
    *
-   * Every available medium rather than the current selection, for the same reason:
-   * "everything" is a stated preference for the whole corpus, not the subset that
-   * happened to be toggled on when the reader gave up on the question.
+   * Every *supported* medium, not every currently-available one. `mediaOptions` is a
+   * snapshot of what the corpus contains at this moment, and on a growing corpus
+   * writing that snapshot is a trap: a reader onboarding when only books existed
+   * would have `['book']` stored forever, and every medium ingested afterwards would
+   * be filtered out of their feed by `w.kind = any(media)` — having chosen "show me
+   * everything". The corpus gained `lecture` inside an hour on 2026-08-31, so this is
+   * not hypothetical.
+   *
+   * It is also the argument I made against normalising stored media down to the
+   * rendered set, applied to the code I wrote immediately afterwards.
    */
   function skip() {
-    void save({ stances: {}, mediaKinds: mediaOptions });
+    void save({ stances: {}, mediaKinds: [...WORK_KINDS] });
   }
 
   if (error && !prefs) {

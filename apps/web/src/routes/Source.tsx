@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { anchoredPullId } from '../lib/routes.js';
-import { fetchSource, fetchWorkIdForPull, type SourceDetail } from '../lib/source-api.js';
+import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
 /**
@@ -26,9 +26,19 @@ function readingMinutes(seconds: number | null): number | null {
 
 export function Source({
   workId,
+  summaryId,
   onNavigate,
 }: {
   workId: string;
+  /**
+   * The summary a Pull named, when the reader arrived through `/pull/:id`.
+   *
+   * Without it the page picks a summary of its own accord, and when that differs
+   * from the one the Pull belongs to the anchor names an element that is not on the
+   * page: a shared link lands at the top of a source whose ideas are not the one
+   * that was shared, with every query having succeeded.
+   */
+  summaryId?: string;
   onNavigate: (to: string) => void;
 }) {
   const [detail, setDetail] = useState<SourceDetail | null>(null);
@@ -52,7 +62,7 @@ export function Source({
   useEffect(() => {
     let live = true;
 
-    fetchSource(workId)
+    fetchSource(workId, summaryId)
       .then((d) => {
         if (!live) return;
         if (!d) {
@@ -87,7 +97,7 @@ export function Source({
     return () => {
       live = false;
     };
-  }, [workId]);
+  }, [workId, summaryId]);
 
   /*
    * Scroll to the anchored Pull once the list exists.
@@ -255,10 +265,12 @@ export function PullRedirect({
 
   useEffect(() => {
     let live = true;
-    fetchWorkIdForPull(pullId)
-      .then((workId) => {
+    fetchPullLocation(pullId)
+      .then((found) => {
         if (!live) return;
-        if (workId) onReplace(`/source/${workId}#p-${pullId}`);
+        // The summary rides along in the query string so the source page renders the
+        // one this Pull is actually in, rather than picking another of the work's.
+        if (found) onReplace(`/source/${found.workId}?s=${found.summaryId}#p-${pullId}`);
         else setMissing(true);
       })
       .catch(() => {

@@ -47,6 +47,51 @@ export interface SourcePull {
   estimatedReadSeconds: number | null;
 }
 
+/** Both summary queries select the same columns; drift between them is a silent bug. */
+const SUMMARY_COLUMNS =
+  'id, title, elevator_pitch, why_it_matters, ' +
+  'pulls(id, ordinal, headline, body, why_it_matters, explanation, estimated_read_seconds)';
+
+interface SummaryRow {
+  title: string | null;
+  elevator_pitch: string | null;
+  why_it_matters: string | null;
+  pulls:
+    | {
+        id: string;
+        ordinal: number;
+        headline: string;
+        body: string;
+        why_it_matters: string | null;
+        explanation: string | null;
+        estimated_read_seconds: number | null;
+      }[]
+    | null;
+}
+
+function shapeSummary(row: SummaryRow): Omit<SourceDetail, 'work'> {
+  return {
+    summaryTitle: row.title,
+    elevatorPitch: row.elevator_pitch,
+    whyItMatters: row.why_it_matters,
+    // Ordinal order, because `insertPulls` assigns it as the reading order and this
+    // page is the one place the ideas are meant to be met in sequence rather than
+    // ranked. Sorted here rather than in the query: PostgREST does not guarantee an
+    // embedded resource's order without an explicit order on the embed.
+    pulls: [...(row.pulls ?? [])]
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((p) => ({
+        id: p.id,
+        ordinal: p.ordinal,
+        headline: p.headline,
+        body: p.body,
+        whyItMatters: p.why_it_matters,
+        explanation: p.explanation,
+        estimatedReadSeconds: p.estimated_read_seconds,
+      })),
+  };
+}
+
 export interface SourceDetail {
   work: SourceWork;
   summaryTitle: string | null;
@@ -71,7 +116,10 @@ export interface SourceDetail {
  * worse than no Delta: it is a specific, checkable claim that happens to be false.
  * `published_at` gives the pairing something stable to agree on.
  */
-export async function fetchSource(workId: string): Promise<SourceDetail | null> {
+export async function fetchSource(
+  workId: string,
+  preferSummaryId?: string,
+): Promise<SourceDetail | null> {
   const { data: workRows, error: workError } = await supabase
     .from('works')
     .select(WORK_COLUMNS)
@@ -82,12 +130,23 @@ export async function fetchSource(workId: string): Promise<SourceDetail | null> 
   const work = (workRows ?? [])[0] as SourceWork | undefined;
   if (!work) return null;
 
+  /*
+   * `preferSummaryId` names the summary a Pull actually belongs to.
+   *
+   * `/pull/:id` resolves to a *work*, and the page then picks a summary of its own
+   * accord. When those differ the anchor `#p-<pullId>` names an element that is not
+   * on the page, so a shared link lands at the top of a source whose ideas are not
+   * the one that was shared — and nothing reports it, because every query succeeded.
+   *
+   * Falls back to the canonical row when the preferred one is not readable or not
+   * published, so a stale link degrades to the right source rather than to an error.
+   */
+  const preferred = preferSummaryId ? await fetchSummaryById(preferSummaryId, workId) : null;
+  if (preferred) return { work, ...preferred };
+
   const { data: summaryRows, error: summaryError } = await supabase
     .from('summaries')
-    .select(
-      'id, title, elevator_pitch, why_it_matters, ' +
-        'pulls(id, ordinal, headline, body, why_it_matters, explanation, estimated_read_seconds)',
-    )
+    .select(SUMMARY_COLUMNS)
     .eq('work_id', workId)
     .eq('status', 'published')
     .eq('visibility', 'public')
@@ -95,63 +154,50 @@ export async function fetchSource(workId: string): Promise<SourceDetail | null> 
     .limit(1);
   if (summaryError) throw rpcError(summaryError);
 
-  const summary = (summaryRows ?? [])[0] as
-    | {
-        title: string | null;
-        elevator_pitch: string | null;
-        why_it_matters: string | null;
-        pulls:
-          | {
-              id: string;
-              ordinal: number;
-              headline: string;
-              body: string;
-              why_it_matters: string | null;
-              explanation: string | null;
-              estimated_read_seconds: number | null;
-            }[]
-          | null;
-      }
-    | undefined;
+  const summary = (summaryRows ?? [])[0] as SummaryRow | undefined;
+  if (!summary) {
+    return { work, summaryTitle: null, elevatorPitch: null, whyItMatters: null, pulls: [] };
+  }
+  return { work, ...shapeSummary(summary) };
+}
 
-  return {
-    work,
-    summaryTitle: summary?.title ?? null,
-    elevatorPitch: summary?.elevator_pitch ?? null,
-    whyItMatters: summary?.why_it_matters ?? null,
-    // Ordinal order, because `insertPulls` assigns it as the reading order and the
-    // page is the one place the ideas are meant to be met in sequence rather than
-    // ranked. Sorted here rather than in the query: an embedded resource's order is
-    // not guaranteed by PostgREST without an explicit order on the embed.
-    pulls: [...(summary?.pulls ?? [])]
-      .sort((a, b) => a.ordinal - b.ordinal)
-      .map((p) => ({
-        id: p.id,
-        ordinal: p.ordinal,
-        headline: p.headline,
-        body: p.body,
-        whyItMatters: p.why_it_matters,
-        explanation: p.explanation,
-        estimatedReadSeconds: p.estimated_read_seconds,
-      })),
-  };
+/** One specific summary, when a Pull named it. Null if it is gone or unreadable. */
+async function fetchSummaryById(
+  summaryId: string,
+  workId: string,
+): Promise<Omit<SourceDetail, 'work'> | null> {
+  const { data, error } = await supabase
+    .from('summaries')
+    .select(SUMMARY_COLUMNS)
+    .eq('id', summaryId)
+    .eq('work_id', workId)
+    .eq('status', 'published')
+    .limit(1);
+  // A failure here is not fatal: the caller falls back to the canonical summary.
+  if (error) return null;
+  const row = (data ?? [])[0] as SummaryRow | undefined;
+  return row ? shapeSummary(row) : null;
 }
 
 /**
- * The work a Pull belongs to, so `/pull/:id` can resolve to its source.
+ * The work *and summary* a Pull belongs to, so `/pull/:id` can resolve to both.
  *
  * The deployed `og` Edge Function already redirects browsers to `${APP_ORIGIN}/pull/
  * ${id}`, a path that until now landed on the feed. This is what makes that promise
  * true rather than a redirect into the wrong screen.
  */
-export async function fetchWorkIdForPull(pullId: string): Promise<string | null> {
+export async function fetchPullLocation(
+  pullId: string,
+): Promise<{ workId: string; summaryId: string } | null> {
   const { data, error } = await supabase
     .from('pulls')
-    .select('summaries(work_id)')
+    .select('summary_id, summaries(work_id)')
     .eq('id', pullId)
     .limit(1);
   if (error) throw rpcError(error);
 
-  const row = (data ?? [])[0] as { summaries: { work_id: string } | null } | undefined;
-  return row?.summaries?.work_id ?? null;
+  const row = (data ?? [])[0] as
+    { summary_id: string; summaries: { work_id: string } | null } | undefined;
+  const workId = row?.summaries?.work_id;
+  return workId ? { workId, summaryId: row!.summary_id } : null;
 }
