@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
+import { parseSignInLink } from '../lib/sign-in-link.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -92,6 +93,9 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   // Read once, during the first render, because it consumes the hash as it reads.
   const [error, setError] = useState<string | null>(readRedirectError);
   const [busy, setBusy] = useState(false);
+  /** Whatever the reader pasted, before it has been worked out. See `usePastedLink`. */
+  const [pasted, setPasted] = useState('');
+  const [showPaste, setShowPaste] = useState(false);
   /** So a complete code can submit the form without the reader reaching for the button. */
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -155,6 +159,67 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   useEffect(() => {
     if (prefill?.code && prefill.email) formRef.current?.requestSubmit();
   }, [prefill]);
+
+  /*
+   * The escape hatch for a sign-in that worked and still left the reader outside.
+   *
+   * **Site URL is hosted configuration this repository cannot push**, and when it is
+   * wrong GoTrue verifies the link, mints a real session, and 303s it to an address that
+   * does not serve this app. The auth log records `action: login`; the reader gets a
+   * page that will not load. Nothing throws, so nothing here can catch it — the only
+   * evidence is in the address bar of the page they are staring at.
+   *
+   * So the address bar is the input. `parseSignInLink` works out which of the several
+   * things a reader might be holding they actually pasted, and each kind is spent the
+   * way that kind has to be spent.
+   */
+  async function usePastedLink(e: React.FormEvent) {
+    e.preventDefault();
+    const link = parseSignInLink(pasted);
+
+    if (link.kind === 'unrecognised') {
+      setError(
+        'That does not look like a sign-in link. Paste the whole address, from https:// on.',
+      );
+      return;
+    }
+    if (link.kind === 'error') {
+      setError(link.message);
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      // Each branch reports its own `error`; supabase-js only throws for transport.
+      const { error } =
+        link.kind === 'session'
+          ? await supabase.auth.setSession({
+              access_token: link.accessToken,
+              refresh_token: link.refreshToken,
+            })
+          : link.kind === 'token-hash'
+            ? await supabase.auth.verifyOtp({
+                token_hash: link.tokenHash,
+                // Narrowed at the boundary: the type rides in from a URL, and an
+                // unrecognised one is a value TypeScript would accept and GoTrue reject.
+                type: link.type === 'signup' ? 'signup' : 'magiclink',
+              })
+            : await supabase.auth.verifyOtp({
+                email: link.email ?? email,
+                token: link.code,
+                type: 'email',
+              });
+      if (error) setError(error.message);
+      // On success App.tsx's auth listener swaps this screen out; nothing to do here.
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function startOver() {
     setSent(false);
@@ -255,6 +320,16 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
               <button type="button" className="btn btn--plain" onClick={startOver} disabled={busy}>
                 Use another email
               </button>
+              <span aria-hidden="true"> · </span>
+              <button
+                type="button"
+                className="btn btn--plain"
+                aria-expanded={showPaste}
+                onClick={() => setShowPaste((v) => !v)}
+                disabled={busy}
+              >
+                No code in the email?
+              </button>
             </p>
           </form>
         ) : (
@@ -277,6 +352,35 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
             )}
             <button type="submit" className="btn btn--primary" disabled={busy}>
               {busy ? 'Sending…' : 'Send a sign-in code'}
+            </button>
+          </form>
+        )}
+
+        {/*
+          A sibling of the code form, never a child of it: nested forms are invalid
+          HTML and the inner one silently loses its own submit handler.
+        */}
+        {sent && showPaste && (
+          <form onSubmit={usePastedLink} className="stack">
+            <hr className="rule" />
+            <label className="field">
+              <span className="field__label">Paste the sign-in link</span>
+              <textarea
+                className="field__input"
+                rows={3}
+                value={pasted}
+                onChange={(e) => setPasted(e.target.value)}
+                aria-describedby="paste-help"
+                placeholder="https://…"
+              />
+            </label>
+            <p className="meta" id="paste-help">
+              Two things work here. Copy the link out of the email without opening it — or, if you
+              already clicked it and landed on a page that would not load, copy that page&rsquo;s
+              whole address out of the address bar. The sign-in is inside it either way.
+            </p>
+            <button type="submit" className="btn btn--primary" disabled={busy || !pasted.trim()}>
+              {busy ? 'Checking…' : 'Sign in with that'}
             </button>
           </form>
         )}
