@@ -104,6 +104,24 @@ function validate(entries) {
 
   const urls = new Set(entries.map((s) => s.url));
   if (urls.size !== entries.length) die('duplicate urls in the manifest');
+
+  /*
+   * Also reject the same work reached by two different URLs.
+   *
+   * The URL check alone passes it, and nothing downstream catches it either:
+   * `works.content_hash` is unique, but two archives' renderings of one text differ
+   * in whitespace and boilerplate, so the hashes differ and `acquire`'s reuse lookup
+   * misses. The result is two paid generations and two feed cards for one essay —
+   * a law 2 failure that never raises. Common Sense was in here twice, from
+   * Wikisource and Gutenberg, and only a title comparison found it.
+   */
+  const byTitle = new Map();
+  for (const entry of entries) {
+    const key = entry.title.trim().toLowerCase();
+    const first = byTitle.get(key);
+    if (first) die(`duplicate title in the manifest: "${entry.title}"\n  ${first}\n  ${entry.url}`);
+    byTitle.set(key, entry.url);
+  }
   return entries;
 }
 

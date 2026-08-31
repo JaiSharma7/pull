@@ -3,6 +3,7 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  narrowTopics,
   NO_USAGE,
   RIGHTS_STATUSES,
   runPipelineStep,
@@ -15,7 +16,7 @@ import {
   MAX_SOURCE_CHARS,
   segment,
 } from './source.ts';
-import { stubSummaryProvider } from './providers.ts';
+import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
 const SYNTHESIZED = {
@@ -211,6 +212,30 @@ describe('enum narrowing at the boundary', () => {
     // is not public_domain or licensed.
     expect(['public_domain', 'licensed']).not.toContain(asRightsStatus('totally-made-up'));
   });
+
+  it('drops unknown topic slugs instead of substituting one', () => {
+    // Unlike kind and rights, there is no safe default: inventing a topic would
+    // corrupt the signal `topic_affinity` steers by, and an empty list is read
+    // correctly as no affinity.
+    expect(narrowTopics(['philosophy', 'not-a-topic'])).toEqual(['philosophy']);
+    expect(narrowTopics(['not-a-topic'])).toEqual([]);
+    expect(narrowTopics(undefined)).toEqual([]);
+    expect(narrowTopics('philosophy')).toEqual([]);
+    for (const slug of TOPIC_SLUGS) expect(narrowTopics([slug])).toEqual([slug]);
+  });
+
+  it('de-duplicates topics and bounds how many one work carries', () => {
+    // `work_topics` is unique on (work_id, topic_id), and the model does return a
+    // parent alongside its child often enough to matter.
+    expect(narrowTopics(['ethics', 'ethics'])).toEqual(['ethics']);
+    expect(narrowTopics(TOPIC_SLUGS.slice(0, 10))).toHaveLength(4);
+  });
+
+  it('preserves order, because the first topic is filed as the primary one', () => {
+    // `upsertWork` weights the first slug 1.0 and the rest 0.6, so an order the
+    // narrowing scrambled would silently demote the model's primary choice.
+    expect(narrowTopics(['science', 'philosophy'])).toEqual(['science', 'philosophy']);
+  });
 });
 
 describe('the stub provider', () => {
@@ -287,7 +312,7 @@ describe('reuse skips the paid work', () => {
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
     const received: {
-      upsertWork?: { kind: string; rightsStatus: string };
+      upsertWork?: { kind: string; rightsStatus: string; topics: string[] };
       createSummary?: { authorId: string | null; visibility: string };
     } = {};
 
@@ -333,7 +358,7 @@ describe('reuse skips the paid work', () => {
       },
       db: {
         findPublishedSummaryByHash: async (_hash: string, _requesterId: string | null) => reuse,
-        upsertWork: async (input: { kind: string; rightsStatus: string }) => {
+        upsertWork: async (input: { kind: string; rightsStatus: string; topics: string[] }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
         },
@@ -563,6 +588,60 @@ describe('reuse skips the paid work', () => {
 
     expect(received.upsertWork?.kind).toBe('essay');
     expect(WORK_KINDS).toContain(received.upsertWork?.kind);
+  });
+
+  it('forwards the narrowed topics from synthesize into upsertWork', async () => {
+    /*
+     * `narrowTopics` being correct in isolation proves nothing about whether
+     * `template` calls it. Without this, deleting the wiring entirely leaves the
+     * suite green and every generated work silently unclassified — which is the
+     * whole defect this feature exists to fix, reintroduced one level up.
+     */
+    const { deps, received } = harness(null);
+    const job = { ...deps.job, target: { text: 'x'.repeat(400) } };
+
+    const identity = await runPipelineStep('resolve_identity', { ...deps, job } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: {
+        acquire: acquired.output,
+        // 'philosophy' is real, 'not-a-topic' is not, and order is meaningful:
+        // `upsertWork` files the first surviving slug as the primary one.
+        synthesize: { ...SYNTHESIZED, topics: ['philosophy', 'not-a-topic', 'ethics'] },
+      },
+    } as never);
+
+    expect(received.upsertWork?.topics).toEqual(['philosophy', 'ethics']);
+  });
+
+  it('passes an empty topic list rather than failing when synthesize classified nothing', async () => {
+    // A job queued before the topics field existed replays with no topics at all.
+    // An unclassified work is a worse feed position; a job that dies at `template`
+    // after synthesis has been billed is nothing at all.
+    const { deps, received } = harness(null);
+    const job = { ...deps.job, target: { text: 'x'.repeat(400) } };
+
+    const identity = await runPipelineStep('resolve_identity', { ...deps, job } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...deps,
+      job,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+
+    expect(received.upsertWork?.topics).toEqual([]);
   });
 
   it('writes a real rights_status, and defaults an unknown one to review_required', async () => {

@@ -44,6 +44,20 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       ...jsxA11y.flatConfigs.recommended.rules,
+
+      /*
+       * One addition to the rule's allowed roles, and it is an accessibility
+       * fix rather than an exemption from one.
+       *
+       * A container with `overflow-x: auto` must be focusable, or a keyboard
+       * user cannot scroll it and everything past its right edge is simply
+       * unreachable — WCAG 2.1.1, and what axe reports as
+       * `scrollable-region-focusable`. The remedy is a `region` with a name and
+       * `tabindex="0"`, which is precisely what this rule's default role list
+       * happens not to include. Adding it lets the correct markup pass; a bare
+       * focusable div still does not.
+       */
+      'jsx-a11y/no-noninteractive-tabindex': ['error', { roles: ['tabpanel', 'region'] }],
     },
   },
 );

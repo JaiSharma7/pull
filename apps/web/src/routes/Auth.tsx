@@ -53,7 +53,7 @@ function readRedirectError(): string | null {
   );
 }
 
-export function Auth() {
+export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
@@ -156,6 +156,14 @@ export function Auth() {
    * and the rule hold their positions so the page does not appear to jump when the code
    * form replaces the email form. See docs/design-first-run.md.
    */
+  function go(to: string) {
+    return (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      onNavigate(to);
+    };
+  }
+
   return (
     <main className="titlepage">
       <div className="titlepage__inner stack">
@@ -228,6 +236,25 @@ export function Auth() {
             </button>
           </form>
         )}
+
+        {/*
+          On this screen rather than a footer somewhere, because this is the
+          screen where an email address changes hands. Both documents are
+          readable without an account — they render ahead of this gate — so the
+          notice links to something a reader can actually check before agreeing
+          to it rather than after.
+        */}
+        <p className="titlepage__legal">
+          Signing in accepts our{' '}
+          <a href="/terms" onClick={go('/terms')}>
+            Terms
+          </a>{' '}
+          and{' '}
+          <a href="/privacy" onClick={go('/privacy')}>
+            Privacy Policy
+          </a>
+          . We ask for an email address and nothing else.
+        </p>
 
         {/* Last, because it is the strongest sentence on the screen and it answers the
             objection a reader has at exactly this moment. It was buried mid-paragraph. */}
