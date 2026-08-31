@@ -1,0 +1,54 @@
+/*
+ * History.
+ *
+ * A record, not a scoreboard. Days are separated by hairlines and the date is set in
+ * the metadata face; the headline is the only thing at full contrast, because finding
+ * something again is the whole job of this screen.
+ *
+ * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
+ */
+
+.history__day {
+  margin-top: var(--space-6);
+}
+
+.history__date {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.history__item {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+/*
+ * The headline is the control. Strips only what makes a button look like a button and
+ * carries no typography of its own — `source.css` learned the hard way that setting
+ * font and colour to `inherit` here wins against the shared classes at equal
+ * specificity and gives the same content two different treatments on two screens.
+ */
+.history__link {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history__link:hover,
+.history__link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
+.history__source {
+  margin: var(--space-1) 0 0;
+}
