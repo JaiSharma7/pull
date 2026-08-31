@@ -6,6 +6,7 @@ import {
   cachePulls,
   drainPending,
   hasPending,
+  isOfflineFailure,
   onPendingQueued,
   onReconnect,
   queueMutation,
@@ -82,6 +83,8 @@ export function Feed({
   const [offline, setOffline] = useState(false);
   const [readCount, setReadCount] = useState(0);
   const [recalled, setRecalled] = useState(0);
+  /** Bumped by the retry button to re-run the fetch without disturbing the seed. */
+  const [reloads, setReloads] = useState(0);
   /**
    * The ids saved *in this session* — a set, not a count.
    *
@@ -130,13 +133,38 @@ export function Feed({
       .then((f) => {
         if (cancelled) return;
         setFeed(f);
+        // A successful load is the only proof the connection is back that this
+        // component gets. The banner was previously cleared only by the `online`
+        // event, which never fires when the failure happened with `onLine` true —
+        // so a transport failure would raise it and nothing would lower it again.
+        setOffline(false);
         void cachePulls(f.rows);
       })
       .catch(async (e: unknown) => {
         if (cancelled) return;
-        // Offline reading is free and unlimited, so a dropped connection falls
-        // back to what is cached rather than showing an error.
-        const cached = await readCachedPulls();
+
+        // Kept whatever happens: the detail is what makes a report actionable, and
+        // it stops being available the moment it is turned into a display string.
+        console.error('Feed request failed', e);
+
+        /*
+         * Falling back to cache is for being offline, and only for being offline.
+         *
+         * This used to fall back whenever the cache had anything, so a 500 or an
+         * expired token rendered "Offline — reading from your downloaded copies"
+         * over stale content on a working connection. A confident wrong diagnosis
+         * is worse than none: it hides the failures most worth seeing early, and
+         * tells the reader to go check their wifi instead.
+         */
+        const cached = isOfflineFailure(e) ? await readCachedPulls() : [];
+
+        // Re-checked after the await, not only before it. Opening IndexedDB and
+        // reading it is a real gap, and this branch is now reachable twice over:
+        // the retry button re-runs the effect, and so does "Keep reading anyway".
+        // A stale handler resuming here would clobber the newer request's state
+        // and raise the offline banner over rows it did not fetch.
+        if (cancelled) return;
+
         if (cached.length > 0) {
           // null, not 0: the Delta never ran, and "nothing skipped" is a
           // claim about the session we have no basis for making.
@@ -160,7 +188,7 @@ export function Feed({
     // list while the reader is partway down it — and cards already seen are by
     // then recorded as impressions, so they would not even come back.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.seed]);
+  }, [session.seed, reloads]);
 
   useEffect(() => {
     if (!userId) return;
@@ -393,11 +421,38 @@ export function Feed({
     [handledSlots, userId],
   );
 
+  /*
+   * A sentence a reader can act on, and a way to act on it.
+   *
+   * `rpc-error.ts` fixed the "[object Object]" this used to render, but the result
+   * was that a stranger now read `permission denied for function get_feed` — which
+   * is unhelpful *and* leaks schema internals. The detail belongs in the console,
+   * where it is available to whoever is debugging and to nobody else.
+   *
+   * The retry matters as much as the wording. There was no way out of this screen
+   * except a manual reload, which on a transient failure is a reader lost to a
+   * problem that had already gone away.
+   */
   if (error) {
     return (
-      <p role="alert" className="measure">
-        Could not load the feed: {error}
-      </p>
+      <div className="stack measure" role="alert">
+        <p>Could not load your feed just now.</p>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={() => {
+            setError(null);
+            setFeed(null);
+            // An explicit nonce rather than touching the session: the fetch effect
+            // is keyed on `session.seed`, so a new session object with the same
+            // seed would not re-run it, and changing the seed would reshuffle the
+            // feed — discarding the reader's place as the price of retrying.
+            setReloads((n) => n + 1);
+          }}
+        >
+          Try again
+        </button>
+      </div>
     );
   }
 

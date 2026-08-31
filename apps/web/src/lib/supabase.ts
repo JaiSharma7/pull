@@ -30,9 +30,19 @@ export const supabase: Db = createBrowserClient(url, key);
  */
 let currentUserId: string | null = null;
 
-void supabase.auth.getSession().then(({ data }) => {
-  currentUserId = data.session?.user.id ?? null;
-});
+// `void` silences the lint rule, not the rejection. supabase-js rethrows anything
+// that is not an AuthError — a DNS failure, a wedged Web Lock — and this runs at
+// module scope, so without the catch that surfaces as an uncaught promise rejection
+// before the app has rendered anything. The listener below recovers the value the
+// moment auth resolves, so there is nothing to do here but decline to crash.
+void supabase.auth
+  .getSession()
+  .then(({ data }) => {
+    currentUserId = data.session?.user.id ?? null;
+  })
+  .catch(() => {
+    currentUserId = null;
+  });
 
 supabase.auth.onAuthStateChange((_event, session) => {
   currentUserId = session?.user.id ?? null;
