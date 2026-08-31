@@ -33,13 +33,22 @@
         arrives somewhere the reader is not looking. A typed code always completes in
         the tab they already have open.
       -->
+      <!--
+        `user-select: all` is as close to a copy button as email gets: mail clients run
+        no JavaScript, so one click selecting the whole code is the best available
+        affordance. The link below is the real one-click path — it opens the app with
+        the code already entered, so nothing has to be copied at all.
+      -->
       <p
         style="
           font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-          font-size: 32px;
+          font-size: 36px;
           letter-spacing: 0.18em;
           margin: 0 0 8px;
           color: #8c2f26;
+          user-select: all;
+          -webkit-user-select: all;
+          cursor: text;
         "
       >
         {{ .Token }}
@@ -49,18 +58,36 @@
           font-family: system-ui, sans-serif;
           font-size: 15px;
           color: #6b6459;
-          margin: 0 0 32px;
+          margin: 0 0 24px;
         "
       >
-        Enter this in the tab you started from. It expires shortly and works once.
+        Click the code once to select it. It expires shortly and works only once.
+      </p>
+
+      <p style="margin: 0 0 32px">
+        <a
+          href="{{ .SiteURL }}/?code={{ .Token }}&amp;email={{ .Email }}"
+          style="
+            font-family: system-ui, sans-serif;
+            font-size: 16px;
+            display: inline-block;
+            padding: 12px 20px;
+            background: #14120e;
+            color: #f4f1ea;
+            text-decoration: none;
+            border-radius: 4px;
+          "
+        >
+          Or sign in without typing it
+        </a>
       </p>
 
       <hr style="border: 0; border-top: 1px solid rgba(20, 18, 14, 0.12); margin: 0 0 24px" />
 
       <p style="font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.6; margin: 0">
-        Or
-        <a href="{{ .ConfirmationURL }}" style="color: #8c2f26">open this link</a>
-        instead — same result.
+        Still stuck?
+        <a href="{{ .ConfirmationURL }}" style="color: #8c2f26">This link</a>
+        signs you in directly — but only in the browser it opens in.
       </p>
 
       <p
