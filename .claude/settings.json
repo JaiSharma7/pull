@@ -97,6 +97,15 @@
             "command": "./scripts/secret-scan.sh --hook"
           }
         ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/guard.sh --hook"
+          }
+        ]
       }
     ],
     "SessionStart": [
