@@ -62,7 +62,22 @@
       "mcp__Vercel__get_runtime_errors",
       "mcp__Vercel__get_project_deployment_protection",
       "mcp__Vercel__web_fetch_vercel_url",
-      "mcp__Vercel__search_vercel_documentation"
+      "mcp__Vercel__search_vercel_documentation",
+      "mcp__github__list_pull_requests",
+      "mcp__github__pull_request_read",
+      "mcp__github__create_pull_request",
+      "mcp__github__update_pull_request",
+      "mcp__github__update_pull_request_branch",
+      "mcp__github__merge_pull_request",
+      "mcp__github__add_issue_comment",
+      "mcp__github__get_job_logs",
+      "mcp__github__actions_list",
+      "mcp__github__actions_get",
+      "mcp__github__get_commit",
+      "mcp__github__list_commits",
+      "mcp__github__list_branches",
+      "mcp__github__subscribe_pr_activity",
+      "mcp__github__get_check_run"
     ],
     "ask": [
       "Bash(supabase db push:*)",
@@ -93,7 +108,12 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "./scripts/session-start.sh" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/session-start.sh"
+          }
+        ]
       }
     ]
   }
