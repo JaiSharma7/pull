@@ -34,7 +34,21 @@ function isToday(day: string): boolean {
   return day === `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-export function Daily({ onNavigate }: { onNavigate: (to: string) => void }) {
+export function Daily({
+  onNavigate,
+  onGoToFeed,
+}: {
+  onNavigate: (to: string) => void;
+  /**
+   * Leave for the feed — both the tab and the path.
+   *
+   * `onNavigate('/')` alone changed the URL and left `tab` on `daily`, and the shell
+   * renders Daily on the root path, so the advertised exit put the reader back on the
+   * screen they were trying to leave. A control that does nothing is worse than no
+   * control, and this one was the only way out of an empty state.
+   */
+  onGoToFeed: () => void;
+}) {
   const [curation, setCuration] = useState<DailyCuration | null>(null);
   /*
    * Four states, and the distinction between the last two is the point.
@@ -116,7 +130,7 @@ export function Daily({ onNavigate }: { onNavigate: (to: string) => void }) {
           something, so an empty Daily should send the reader there instead of
           leaving them on a screen with nothing on it.
         */}
-        <button type="button" className="btn" onClick={() => onNavigate('/')}>
+        <button type="button" className="btn" onClick={onGoToFeed}>
           Read the feed instead
         </button>
       </section>

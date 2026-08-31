@@ -1,4 +1,4 @@
-import type { HistoryEntry } from './history.js';
+import { cursorFrom, type HistoryCursor, type HistoryEntry } from './history.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -40,6 +40,8 @@ export interface HistoryPage {
   entries: HistoryEntry[];
   /** Whether another page exists, established by asking for one row more than needed. */
   hasMore: boolean;
+  /** Where to resume. Null when this page was empty. */
+  cursor: HistoryCursor | null;
 }
 
 interface HistoryRow {
@@ -66,31 +68,51 @@ interface HistoryRow {
  * thing actually enforcing. Filtering here would also hide the failure if the policy
  * were ever wrong, which is the opposite of useful.
  *
- * Ordered so the pages partition the set. `occurred_on` alone is not a total order —
- * a day holds many rows — and neither is `created_at` once two reads share a
- * millisecond, so `id` breaks the tie. Without a total order PostgREST may return the
- * same row on two pages and drop another entirely, and a history that quietly loses
- * entries is worse than one that stops.
+ * **Keyset, not offset.** The first version took a page number, and offset pagination
+ * assumes the set does not move under it. This one provably does: the read path writes
+ * a history row every time the reader meets an idea, ordering is newest-first, so every
+ * insert lands above the offset and shifts the rest down — page two then repeats page
+ * one's last entry. Asking for "everything strictly after this exact row" cannot repeat
+ * or skip, however much arrives in between.
  *
- * `hasMore` is established by requesting `PAGE_SIZE + 1` and discarding the extra,
- * rather than by a second count query: a count over an unbounded table gets slower
- * exactly as the feature gets more valuable.
+ * The `or` filter is the tuple comparison `(occurred_on, created_at, id) < (…)` spelled
+ * out, because PostgREST has no row-value syntax. It must stay in lockstep with the
+ * `order` below — a cursor that compares on different columns than the sort is a
+ * silent, intermittent wrong answer.
+ *
+ * `hasMore` comes from requesting one row more than needed rather than a count query,
+ * which would get slower exactly as the feature got more valuable.
  */
-export async function fetchHistoryPage(page = 0): Promise<HistoryPage> {
-  const from = page * PAGE_SIZE;
-  const { data, error } = await supabase
-    .from('history_events')
-    .select(HISTORY_COLUMNS)
+export async function fetchHistoryPage(cursor: HistoryCursor | null = null): Promise<HistoryPage> {
+  let query = supabase.from('history_events').select(HISTORY_COLUMNS);
+
+  if (cursor) {
+    const { occurredOn: d, createdAt: c, id } = cursor;
+    // Timestamps are double-quoted: `created_at` carries `+00:00` and `:`, and an
+    // unquoted value inside `or(...)` is parsed against PostgREST's own grammar.
+    query = query.or(
+      [
+        `occurred_on.lt.${d}`,
+        `and(occurred_on.eq.${d},created_at.lt."${c}")`,
+        `and(occurred_on.eq.${d},created_at.eq."${c}",id.lt.${id})`,
+      ].join(','),
+    );
+  }
+
+  const { data, error } = await query
     .order('occurred_on', { ascending: false })
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
-    .range(from, from + PAGE_SIZE);
+    .limit(PAGE_SIZE + 1);
   if (error) throw rpcError(error);
 
   const rows = (data ?? []) as unknown as HistoryRow[];
   const hasMore = rows.length > PAGE_SIZE;
 
-  const entries = rows.slice(0, PAGE_SIZE).flatMap((r) => {
+  // Sliced before shaping, so the cursor is taken from the last row actually shown.
+  // Taking it from a row that was dropped as unreadable would skip everything between.
+  const page = rows.slice(0, PAGE_SIZE);
+  const entries = page.flatMap((r) => {
     const pull = r.pulls;
     const work = pull?.summaries?.works;
     // A row whose pull or work is no longer readable is dropped rather than rendered
@@ -115,5 +137,23 @@ export async function fetchHistoryPage(page = 0): Promise<HistoryPage> {
     ];
   });
 
-  return { entries, hasMore };
+  /*
+   * The cursor comes from the last *fetched* row, not the last rendered one.
+   *
+   * Those differ whenever the tail of a page was dropped as unreadable, and resuming
+   * from the last rendered entry would re-fetch every dropped row on the next page —
+   * which drops them again, so the reader could never get past them.
+   */
+  const lastFetched = page[page.length - 1];
+  return {
+    entries,
+    hasMore,
+    cursor: lastFetched
+      ? {
+          occurredOn: lastFetched.occurred_on,
+          createdAt: lastFetched.created_at,
+          id: lastFetched.id,
+        }
+      : cursorFrom(entries),
+  };
 }

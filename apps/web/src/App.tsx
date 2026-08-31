@@ -138,6 +138,22 @@ export function App() {
   // `?s=<summaryId>`, set by the /pull/:id redirect so the anchor resolves.
   const summaryParam = queryParam(path, 's');
   const pullId = routeParam(path, '/pull');
+  /*
+   * A route is open, so no tab may render underneath it.
+   *
+   * `tab` and `path` are two independent pieces of state, and only the feed ever
+   * guarded against both being active at once. That was survivable while Review,
+   * Library and Preferences had no links into a route — nothing could put them in
+   * that position. Daily and History both link to `/pull/:id`, which made the latent
+   * bug real: opening a Pull from either rendered `PullRedirect`, and then `Source`,
+   * *stacked underneath the whole list they were opened from*.
+   *
+   * It is the same failure `goToTab` above was written to fix, arriving from the
+   * other direction — that one was a section chosen while a route was open, this is
+   * a route opened while a section is showing. One guard, applied to every tab, so
+   * the next screen added cannot reintroduce it.
+   */
+  const routeOpen = sourceId !== null || pullId !== null;
 
   if (!ready)
     return (
@@ -229,7 +245,7 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
-              <div hidden={tab !== 'feed' || sourceId !== null || pullId !== null}>
+              <div hidden={tab !== 'feed' || routeOpen}>
                 <Feed
                   userId={session.user.id}
                   onStats={setStats}
@@ -248,11 +264,15 @@ export function App() {
               {pullId !== null && (
                 <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
               )}
-              {tab === 'daily' && <Daily onNavigate={navigate} />}
-              {tab === 'review' && <Review />}
-              {tab === 'library' && <Library userId={session.user.id} />}
-              {tab === 'history' && <History onNavigate={navigate} />}
-              {tab === 'preferences' && (
+              {tab === 'daily' && !routeOpen && (
+                <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+              )}
+              {tab === 'review' && !routeOpen && <Review />}
+              {tab === 'library' && !routeOpen && <Library userId={session.user.id} />}
+              {tab === 'history' && !routeOpen && (
+                <History onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+              )}
+              {tab === 'preferences' && !routeOpen && (
                 <Preferences
                   userId={session.user.id}
                   onDone={() => {
