@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
+import { Daily } from './routes/Daily.js';
 import { Legal, legalDocFor } from './routes/Legal.js';
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
@@ -12,10 +13,13 @@ import { Specimen } from './routes/Specimen.js';
 import { queryParam, routeParam } from './lib/routes.js';
 import { supabase } from './lib/supabase.js';
 
-type Tab = 'feed' | 'review' | 'library' | 'preferences';
+type Tab = 'feed' | 'daily' | 'review' | 'library' | 'preferences';
 
 const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'feed', label: 'For You' },
+  // Second, next to the ranked feed and ahead of the personal sections: it is the one
+  // finite, curated thing in the app, and law 3 promises it free forever.
+  { id: 'daily', label: 'Daily Pull' },
   { id: 'review', label: 'Review' },
   { id: 'library', label: 'Library' },
   { id: 'preferences', label: 'Preferences' },
@@ -242,6 +246,7 @@ export function App() {
               {pullId !== null && (
                 <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
               )}
+              {tab === 'daily' && <Daily onNavigate={navigate} />}
               {tab === 'review' && <Review />}
               {tab === 'library' && <Library userId={session.user.id} />}
               {tab === 'preferences' && (
