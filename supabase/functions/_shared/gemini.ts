@@ -246,8 +246,18 @@ function budgetFrom(config: GeminiConfig) {
   };
 }
 
-/** 429 and 5xx are worth one more try; a 400 means the request itself is wrong. */
-const isRetryable = (status: number) => status === 429 || status >= 500;
+/**
+ * A 5xx is worth one more try on the same model; a 400 means the request itself is
+ * wrong and a 429 means this model has no quota left.
+ *
+ * 429 was retried here and it never helped. The retry is immediate — there is no
+ * backoff, because the worker already retries the whole step — so a quota that is
+ * exhausted is still exhausted a few milliseconds later. All it bought was a second
+ * wasted call against the same limit, and a step budget spent before the chain could
+ * try a model that might answer. Measured on 2026-08-31: 27 failed synthesize steps,
+ * every one of them two 429s against the same model.
+ */
+const isRetryable = (status: number) => status >= 500;
 
 async function callGemini(
   path: string,
@@ -319,7 +329,23 @@ function firstTextPart(payload: Record<string, unknown>): string {
 }
 
 /** Availability problems, as opposed to "this request is wrong". Only these fall over. */
-const isUnavailable = (status: number | undefined) => status === 404 || status === 503;
+/**
+ * Statuses that mean "try the next model", rather than "this request is wrong".
+ *
+ * 429 belongs here and its absence cost a night's generation. Gemini meters quota
+ * **per model**, so an exhausted daily limit on the head of the chain is exactly the
+ * condition a fallback exists for — and it was the one condition that did not trigger
+ * one. On 2026-08-31 `gemini-3.6-flash` ran out mid-run and the chain never tried
+ * `gemini-3.7-flash`: ten queued sources failed at `synthesize` in a row, each burning
+ * three attempts against a model that could not answer, while a configured fallback
+ * sat unused.
+ *
+ * Falling through on a quota error costs one call against the next model's own limit.
+ * If that is exhausted too the job fails as it would have anyway, so the downside is
+ * bounded and the upside is the chain doing the job it was written for.
+ */
+const isUnavailable = (status: number | undefined) =>
+  status === 404 || status === 429 || status === 503;
 
 export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvider {
   return {
