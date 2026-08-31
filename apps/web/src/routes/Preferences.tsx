@@ -101,17 +101,34 @@ export function Preferences({
     });
   }
 
-  async function save() {
+  async function save(override?: { stances: Record<string, TopicStance>; mediaKinds: WorkKind[] }) {
     if (!prefs) return;
     setSaving(true);
     setError(null);
     try {
-      await savePreferences(userId, prefs);
+      await savePreferences(userId, { ...prefs, ...override });
       onDone();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Could not save your preferences.');
       setSaving(false);
     }
+  }
+
+  /*
+   * "Show me everything" has to mean everything, including discarding whatever the
+   * reader had toggled before deciding to skip.
+   *
+   * It shared `save()` with "Start reading", so a reader who set three topics and
+   * then chose to skip had those three persisted — the button doing the opposite of
+   * what it says, and the harder version of that mistake to notice because the screen
+   * closes and the feed looks plausible either way.
+   *
+   * Every available medium rather than the current selection, for the same reason:
+   * "everything" is a stated preference for the whole corpus, not the subset that
+   * happened to be toggled on when the reader gave up on the question.
+   */
+  function skip() {
+    void save({ stances: {}, mediaKinds: mediaOptions });
   }
 
   if (error && !prefs) {
@@ -270,9 +287,9 @@ export function Preferences({
             type="button"
             className="btn btn--plain"
             disabled={saving}
-            // Still a save: it records `onboarded_at` with no topics chosen, which is
-            // a stated preference for everything rather than an unanswered question.
-            onClick={() => void save()}
+            // Still a save: it records `onboarded_at` with nothing weighted up, which
+            // is a stated preference for everything rather than an unanswered question.
+            onClick={skip}
           >
             Show me everything
           </button>
