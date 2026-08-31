@@ -15,6 +15,19 @@ export async function fetchFeed(params: {
   cardsBefore: number;
   usedBudget: number;
   limit?: number;
+  /**
+   * Where the previous page put its last question, in planner space.
+   *
+   * `get_feed` has accepted this since `20260829135224_interleave_gap_and_precision`
+   * and nothing has ever sent it, because the client only ever asked for page 0.
+   * It carries the interleave planner's minimum gap across a page boundary: without
+   * it, a question on the last card of one page leaves slot 0 of the next
+   * immediately eligible and the reader gets two questions one card apart.
+   *
+   * Inert while there was no second page; a live bug the moment there is one. So it
+   * ships with pagination rather than after it.
+   */
+  lastPlaced?: number | null;
 }): Promise<FeedResponse> {
   const { data, error } = await supabase.rpc('get_feed', {
     p_limit: params.limit ?? 20,
@@ -22,6 +35,7 @@ export async function fetchFeed(params: {
     p_page: params.page,
     p_cards_before: params.cardsBefore,
     p_used_budget: params.usedBudget,
+    p_last_placed: params.lastPlaced ?? undefined,
   });
   if (error) throw rpcError(error);
   return data as unknown as FeedResponse;

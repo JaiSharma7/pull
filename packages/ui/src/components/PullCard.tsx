@@ -27,6 +27,15 @@ export interface PullCardProps {
   saved?: boolean;
   onSave?: () => void;
   onListen?: () => void;
+  /**
+   * Whether this card is the one currently being read aloud.
+   *
+   * The Listen button was a one-way door: it started speech and there was no way to
+   * stop it, on a screen where scrolling to the next card leaves the previous one
+   * still talking. A toggle needs to say which way it is pointing, so this drives the
+   * label and `aria-pressed` rather than being inferred from a click.
+   */
+  listening?: boolean;
   onAsk?: () => void;
   /** Rendered under the flip content — counterpoint, conviction controls, etc. */
   children?: ReactNode;
@@ -50,6 +59,7 @@ export function PullCard({
   saved = false,
   onSave,
   onListen,
+  listening = false,
   onAsk,
   onOpenSource,
   children,
@@ -125,9 +135,10 @@ export function PullCard({
                 type="button"
                 className="btn"
                 onClick={onListen}
-                aria-label={`Listen to: ${headline}`}
+                aria-pressed={listening}
+                aria-label={listening ? `Stop reading: ${headline}` : `Listen to: ${headline}`}
               >
-                Listen
+                {listening ? 'Stop' : 'Listen'}
               </button>
             )}
             <button

@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
+import type { RecallGrade } from './grades.js';
 import { TRANSPORT_ERROR } from './rpc-error.js';
 import type { FeedRow } from './types.js';
 
@@ -30,9 +31,42 @@ import type { FeedRow } from './types.js';
  * learning writes carry a `mutationId` minted once per submission, which is
  * what lets the server recognise a replay as a submission it already applied
  * — even when a later stance has superseded it in the meantime.
+ *
+ * `recall` is the one exception, and it earns its place by being queued under a
+ * narrower condition instead — see the note on that member. The lasting fix is a
+ * mutation id on `grade_recall`, the same treatment `set_conviction` and
+ * `save_explanation` already have; until the RPC takes one, the condition is what
+ * keeps the invariant.
  */
 export type PendingWrite =
   | { kind: 'save' | 'unsave' | 'read'; pullId: string }
+  /**
+   * A recall grade — queued under a stricter rule than everything else here.
+   *
+   * `grade_recall` is the one write in this app that is **not** safe to replay. It
+   * multiplies stability (`stability * (2.0 + …)` for a "good") and increments
+   * `reps`, so applying one grade twice roughly squares the interval and the card
+   * silently disappears from review for months. There is no unique index to collide
+   * with and no mutation id to recognise a replay by, because the RPC takes neither.
+   *
+   * That makes the two failures asymmetric, and the asymmetry decides the rule.
+   * Losing a grade is self-correcting: the card stays due and the reader grades it
+   * again. Double-applying one is invisible and wrong in the direction this product
+   * cannot afford — a memory model that quietly stops asking.
+   *
+   * So this kind is queued **only when the request demonstrably never reached the
+   * server** — `isOfflineFailure`, which is `navigator.onLine === false` or the
+   * PostgREST `code: ''` that means the call never got to Postgres. A 500, a refusal
+   * or a timeout mid-flight is dropped rather than queued, because the write may
+   * already have applied. See `Review.tsx`.
+   *
+   * The residual risk is a response lost in transit after the server committed, which
+   * looks like a transport failure and is not one. It is the same class of risk the
+   * `save` and `read` paths already accept, and it is far smaller than losing every
+   * grade of a review session done on a plane — offline being one of the five things
+   * law 3 promises free forever.
+   */
+  | { kind: 'recall'; pullId: string; grade: RecallGrade }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
   | {
       kind: 'conviction';
