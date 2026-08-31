@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { groupByDay, type HistoryEntry } from '../lib/history.js';
+import {
+  formatHistoryDay,
+  groupByDay,
+  type HistoryCursor,
+  type HistoryEntry,
+} from '../lib/history.js';
 import { fetchHistoryPage } from '../lib/history-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
@@ -16,31 +21,18 @@ import { isOfflineFailure } from '../lib/offline.js';
  * to find something again.
  */
 
-/** `2026-08-31` → `Today`, `Yesterday`, or a written date. */
-function formatDay(day: string): string {
-  // Parsed as parts, not `new Date(day)`: an ISO date string is treated as UTC
-  // midnight, which renders as the previous day for every reader west of Greenwich.
-  const [y, m, d] = day.split('-').map(Number);
-  if (!y || !m || !d) return day;
-  const date = new Date(y, m - 1, d);
-
-  const midnight = new Date();
-  midnight.setHours(0, 0, 0, 0);
-  const daysAgo = Math.round((midnight.getTime() - date.getTime()) / 86_400_000);
-  if (daysAgo === 0) return 'Today';
-  if (daysAgo === 1) return 'Yesterday';
-
-  return date.toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'long',
-    ...(date.getFullYear() === midnight.getFullYear() ? {} : { year: 'numeric' }),
-  });
-}
-
-export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
+export function History({
+  onNavigate,
+  onGoToFeed,
+}: {
+  onNavigate: (to: string) => void;
+  /** Leave for the feed — both the tab and the path. See `Daily.tsx`. */
+  onGoToFeed: () => void;
+}) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  const [nextPage, setNextPage] = useState(1);
+  /** Where the next page resumes. Keyset, so inserts between pages cannot repeat a row. */
+  const [cursor, setCursor] = useState<HistoryCursor | null>(null);
   /*
    * Three states, not two: loading, genuinely-nothing-read-yet, and failed.
    *
@@ -59,12 +51,12 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchHistoryPage(0)
+    fetchHistoryPage()
       .then((p) => {
         if (cancelled) return;
         setEntries(p.entries);
         setHasMore(p.hasMore);
-        setNextPage(1);
+        setCursor(p.cursor);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -81,11 +73,13 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     setMoreError(null);
-    fetchHistoryPage(nextPage)
+    fetchHistoryPage(cursor)
       .then((p) => {
         setEntries((prev) => [...(prev ?? []), ...p.entries]);
         setHasMore(p.hasMore);
-        setNextPage((n) => n + 1);
+        // Only advance when the page actually returned a place to resume from; a null
+        // cursor would restart the list from the top on the next press.
+        if (p.cursor) setCursor(p.cursor);
       })
       .catch((e: unknown) => {
         console.error('History page request failed', e);
@@ -94,7 +88,7 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
         setMoreError('Could not load more of your history just now.');
       })
       .finally(() => setLoadingMore(false));
-  }, [loadingMore, hasMore, nextPage]);
+  }, [loadingMore, hasMore, cursor]);
 
   if (error) {
     return (
@@ -113,6 +107,7 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
           onClick={() => {
             setError(null);
             setEntries(null);
+            setCursor(null);
             setReloads((n) => n + 1);
           }}
         >
@@ -134,7 +129,7 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
           Read something and it will show up.
         </p>
         <hr className="rule" />
-        <button type="button" className="btn" onClick={() => onNavigate('/')}>
+        <button type="button" className="btn" onClick={onGoToFeed}>
           Go to the feed
         </button>
       </section>
@@ -151,7 +146,8 @@ export function History({ onNavigate }: { onNavigate: (to: string) => void }) {
       {days.map(({ day, entries: dayEntries }) => (
         <section key={day} className="history__day">
           <h2 className="meta history__date">
-            {formatDay(day)} · {dayEntries.length} {dayEntries.length === 1 ? 'idea' : 'ideas'}
+            {formatHistoryDay(day)} · {dayEntries.length}{' '}
+            {dayEntries.length === 1 ? 'idea' : 'ideas'}
           </h2>
           <ul className="history__list">
             {dayEntries.map((e) => (

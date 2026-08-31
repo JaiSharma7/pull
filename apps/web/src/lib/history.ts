@@ -52,3 +52,70 @@ export function groupByDay(entries: HistoryEntry[]): { day: string; entries: His
   }
   return [...days].map(([day, dayEntries]) => ({ day, entries: dayEntries }));
 }
+
+/** A `Date` as the UTC calendar day Postgres would store, `YYYY-MM-DD`. */
+function utcDay(at: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())}`;
+}
+
+/**
+ * `2026-08-31` → `Today`, `Yesterday`, or a written date.
+ *
+ * Compared in **UTC**, because that is what the day is. `occurred_on` is a stored
+ * generated column computed as `(created_at at time zone 'UTC')::date`, and the first
+ * version of this compared it against *local* midnight. For any reader whose date
+ * differs from UTC's, that is wrong in a way that looks plausible: shortly after local
+ * midnight in UTC+10, something read minutes ago carries the previous UTC date and was
+ * labelled "Yesterday". A history that misdates what you did today is exactly the kind
+ * of quiet wrongness this screen exists to avoid.
+ *
+ * Comparing the day strings settles it without any timezone arithmetic — two UTC days
+ * are equal or they are not. The absolute date is rendered with `timeZone: 'UTC'` for
+ * the same reason: it must name the day the row is filed under, not the day that
+ * instant happens to fall on where the reader is sitting.
+ *
+ * `now` is injectable so this is testable without freezing the clock.
+ */
+export function formatHistoryDay(day: string, now: Date = new Date()): string {
+  const today = utcDay(now);
+  if (day === today) return 'Today';
+  if (day === utcDay(new Date(now.getTime() - 86_400_000))) return 'Yesterday';
+
+  const [y, m, d] = day.split('-').map(Number);
+  if (!y || !m || !d) return day;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+    // The year is noise within the current one and essential outside it.
+    ...(String(y) === today.slice(0, 4) ? {} : { year: 'numeric' }),
+  });
+}
+
+/**
+ * Where the last page ended, as a place in the ordering rather than a count.
+ *
+ * Offset pagination assumes the set does not move under it, and history is the one
+ * list here that provably does: the read path writes a row every time the reader meets
+ * an idea, and the ordering is newest-first, so every insert lands *above* the offset
+ * and shifts everything down. Page two then repeats page one's last entry — and a
+ * delete skips one instead. A deterministic sort does not fix that; it only guarantees
+ * the shifted result is consistently shifted.
+ *
+ * All three parts are needed because all three are in the ORDER BY: `occurred_on` is
+ * not unique across a day, `created_at` is not unique across a millisecond, and `id`
+ * is the only thing that finally breaks the tie.
+ */
+export interface HistoryCursor {
+  occurredOn: string;
+  createdAt: string;
+  id: number;
+}
+
+/** The cursor for the page after these entries, or null when there were none. */
+export function cursorFrom(entries: HistoryEntry[]): HistoryCursor | null {
+  const last = entries[entries.length - 1];
+  if (!last) return null;
+  return { occurredOn: last.occurredOn, createdAt: last.createdAt, id: last.id };
+}

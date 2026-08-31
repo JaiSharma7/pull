@@ -41,6 +41,20 @@ export default defineConfig({
   build: { target: 'es2022', sourcemap: true },
   test: {
     environment: 'node',
+    /*
+     * Not UTC, on purpose.
+     *
+     * `history_events.occurred_on` is a UTC calendar day, and the History screen
+     * labels it "Today"/"Yesterday". The first version compared it against *local*
+     * midnight, which is wrong for every reader whose date differs from UTC's — and
+     * a suite running in UTC cannot fail on it, because there local and UTC agree.
+     * The bug shipped and was found in review rather than by these tests.
+     *
+     * Brisbane is UTC+10 with no daylight saving, so it is reliably offset without
+     * being seasonally ambiguous. Anything that only passes at UTC is a timezone
+     * assumption, and this is how it gets caught here instead of by a reader.
+     */
+    env: { TZ: 'Australia/Brisbane' },
     include: ['src/**/*.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     passWithNoTests: true,
