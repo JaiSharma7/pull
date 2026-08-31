@@ -218,19 +218,42 @@ function sql() {
   );
 
   console.log('     ),');
+  console.log('     -- Only what is genuinely missing.');
+  console.log('     --');
+  console.log('     -- Without this the statement enqueues every entry in the manifest every');
+  console.log('     -- time it runs, including the ones already published — duplicate works in');
+  console.log('     -- the feed and duplicate model spend, which is the one cost law 2 is');
+  console.log('     -- written to avoid. Re-running a seeder is the normal way to add a source,');
+  console.log('     -- so it has to be safe to do.');
+  console.log('     --');
+  console.log('     -- Matched on lower(title) because that is what the manifest guarantees is');
+  console.log('     -- unique. A URL match would miss the same work reached by two hosts, which');
+  console.log('     -- has already happened once here: Common Sense arrived from Wikisource and');
+  console.log('     -- Gutenberg and was published twice.');
+  console.log('     missing as (');
+  console.log('       select t.* from target t');
+  console.log('       where not exists (');
+  console.log('         select 1 from public.works w where lower(w.title) = lower(t.title)');
+  console.log('       )');
+  console.log('       and not exists (');
+  console.log('         select 1 from public.generation_jobs g');
+  console.log("         where lower(g.target->>'title') = lower(t.title)");
+  console.log("           and g.status in ('queued', 'running')");
+  console.log('       )');
+  console.log('     ),');
   console.log('     queued as (');
   console.log(
     '       insert into public.generation_jobs (requester_id, target, status, visibility)',
   );
   console.log('       select null,');
   console.log('              jsonb_build_object(');
-  console.log("                'title', target.title,");
-  console.log("                'kind', target.kind,");
-  console.log("                'url', target.url,");
+  console.log("                'title', missing.title,");
+  console.log("                'kind', missing.kind,");
+  console.log("                'url', missing.url,");
   console.log("                'rights_status', 'public_domain'");
   console.log('              ),');
   console.log("              'queued', 'public'");
-  console.log('       from target');
+  console.log('       from missing');
   console.log('       returning id');
   console.log('     ),');
   console.log('     -- LATERAL, not count(pgmq.send(...)). `send` returns SETOF bigint, and');

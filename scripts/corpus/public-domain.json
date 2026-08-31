@@ -418,6 +418,240 @@
       "author": "Aristotle",
       "kind": "book",
       "url": "https://classics.mit.edu/Aristotle/physics.1.i.html"
+    },
+    {
+      "title": "Prior Analytics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/prior.1.i.html"
+    },
+    {
+      "title": "Posterior Analytics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/posterior.1.i.html"
+    },
+    {
+      "title": "Topics, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/topics.1.i.html"
+    },
+    {
+      "title": "On Sophistical Refutations",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/sophist_refut.1.1.html"
+    },
+    {
+      "title": "Pericles",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/pericles.html"
+    },
+    {
+      "title": "Cicero",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/cicero.html"
+    },
+    {
+      "title": "Demosthenes",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/demosthe.html"
+    },
+    {
+      "title": "Theseus",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/theseus.html"
+    },
+    {
+      "title": "Coriolanus",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/coriolan.html"
+    },
+    {
+      "title": "Cato the Younger",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/cato_you.html"
+    },
+    {
+      "title": "Antony",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/antony.html"
+    },
+    {
+      "title": "Pyrrhus",
+      "author": "Plutarch",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Plutarch/pyrrhus.html"
+    },
+    {
+      "title": "On Memory and Reminiscence",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/memory.html"
+    },
+    {
+      "title": "On Dreams",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/dreams.html"
+    },
+    {
+      "title": "On Sleep and Sleeplessness",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/sleep.html"
+    },
+    {
+      "title": "On Prophesying by Dreams",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/prophesying.html"
+    },
+    {
+      "title": "On the Heavens, Book II",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/heavens.2.ii.html"
+    },
+    {
+      "title": "Meteorology, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/meteorology.1.i.html"
+    },
+    {
+      "title": "On Generation and Corruption, Book I",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/gener_corr.1.i.html"
+    },
+    {
+      "title": "On the Motion of Animals",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/motion_animals.html"
+    },
+    {
+      "title": "On the Gait of Animals",
+      "author": "Aristotle",
+      "kind": "book",
+      "url": "https://classics.mit.edu/Aristotle/gait_anim.html"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture II",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_II"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture III",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_III"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture IV",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_IV"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture V",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_V"
+    },
+    {
+      "title": "The Chemical History of a Candle: Lecture VI",
+      "author": "Michael Faraday",
+      "kind": "lecture",
+      "url": "https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_VI"
+    },
+    {
+      "title": "The Critic as Artist",
+      "author": "Oscar Wilde",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Intentions/The_Critic_as_Artist"
+    },
+    {
+      "title": "The Poet",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_Second_Series/The_Poet"
+    },
+    {
+      "title": "Art",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Art"
+    },
+    {
+      "title": "Experience",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_Second_Series/Experience"
+    },
+    {
+      "title": "Love",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Love"
+    },
+    {
+      "title": "Friendship",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Friendship"
+    },
+    {
+      "title": "Heroism",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Heroism"
+    },
+    {
+      "title": "Prudence",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Prudence"
+    },
+    {
+      "title": "Intellect",
+      "author": "Ralph Waldo Emerson",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Essays:_First_Series/Intellect"
+    },
+    {
+      "title": "Of Death",
+      "author": "Francis Bacon",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Death"
+    },
+    {
+      "title": "Manifesto of the Communist Party",
+      "author": "Karl Marx and Friedrich Engels",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/Manifesto_of_the_Communist_Party"
+    },
+    {
+      "title": "The Subjection of Women: Chapter II",
+      "author": "John Stuart Mill",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Subjection_of_Women/Chapter_2"
+    },
+    {
+      "title": "The Souls of Black Folk: Of the Meaning of Progress",
+      "author": "W. E. B. Du Bois",
+      "kind": "essay",
+      "url": "https://en.wikisource.org/wiki/The_Souls_of_Black_Folk_(2nd_ed)/Chapter_4"
     }
   ]
 }
