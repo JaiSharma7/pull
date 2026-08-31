@@ -530,13 +530,18 @@ export function Feed({
         </p>
       )}
 
-      {feed.skippedKnownCount !== null && feed.skippedKnownCount > 0 && (
-        <p className="meta" data-testid="delta-banner">
-          Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
-          already know —{' '}
-          <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
-        </p>
-      )}
+      {/* Guarded on both, not just the count: the banner interpolates
+          minutesSaved, and React renders null as empty — so decoupling them
+          would silently print "about  min saved". */}
+      {feed.skippedKnownCount !== null &&
+        feed.skippedKnownCount > 0 &&
+        feed.minutesSaved !== null && (
+          <p className="meta" data-testid="delta-banner">
+            Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
+            already know —{' '}
+            <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
+          </p>
+        )}
 
       {items.map((item) =>
         item.type === 'interrupt' ? (

@@ -156,7 +156,8 @@ Three things that building it changed:
   match. The negation work amplified this rather than inheriting it, which is why it is
   recorded here rather than filed as a pre-existing gap.
 
-The constants now live in `delta_covered_distance()` and `known_retrievability_floor()`,
+The constants now live in `delta_covered_distance()`, `known_retrievability_floor()`
+and `known_comparison_cap()`,
 so a re-tune is a one-line migration rather than an edit across superseded files. `0.1474`
 sitting 0.007 from the cut still says the threshold deserves a real distribution rather
 than one tuned by hand — but that measurement wants real embeddings, which is what this

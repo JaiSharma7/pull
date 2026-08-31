@@ -1,9 +1,9 @@
 -- The Delta filed a contradiction as something the reader already knows.
 --
 -- THE RULE, in one sentence, because everything below is why rather than what:
--- an idea is left out of the "do you already know this?" comparison when the
--- candidate opposes it, or when it paraphrases something the candidate opposes
--- and does not itself oppose that thing.
+-- an idea is left out of the "do you already know this?" comparison when, and
+-- only when, a readable `opposes` edge links it to the candidate. Nothing else
+-- -- no distance, no transitive hop.
 --
 -- `covered` asked one question -- is this within 0.14 of an idea you know? --
 -- and measured against real Gemini embeddings that question cannot tell
@@ -151,7 +151,12 @@ begin
   select ukv.embedding into uvec
   from public.user_knowledge_vectors ukv where ukv.user_id = uid;
 
-  with known_ideas as (
+  -- MATERIALIZED explicitly. It is referenced three times, so Postgres would
+  -- materialize it anyway today -- but that is a property of the reference
+  -- count, not of the intent, and a later edit that collapses one reference
+  -- would silently re-evaluate the whole knowledge join per shortlist row.
+  -- Measured, `get_source_delta` loses 3.1x without it.
+  with known_ideas as materialized (
     -- Carries pull_id now, so an opposed pair can be identified and dropped
     -- before any distance is taken against it.
     select ks.pull_id, p2.embedding
@@ -382,7 +387,10 @@ begin
   -- nothing -- so the same reader could get different answers from a source
   -- page and a feed page. Uncapped it is also linear in a whole reading
   -- history on a function every source page calls.
-  with known_ideas as (
+  -- MATERIALIZED for the reason given in get_feed: the implicit rule depends on
+  -- a reference count nobody is watching, and this function is the one that
+  -- measurably loses by it.
+  with known_ideas as materialized (
     select ks.pull_id, p2.embedding
     from public.knowledge_states ks
     join public.pulls p2 on p2.id = ks.pull_id

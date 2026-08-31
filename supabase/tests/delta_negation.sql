@@ -53,6 +53,7 @@ declare
   reader_blank   uuid := extensions.gen_random_uuid();  -- knows nothing
   reader_lineage uuid := extensions.gen_random_uuid();  -- knows the Epictetus pull
   reader_both    uuid := extensions.gen_random_uuid();  -- knows Mill AND its opposite
+  reader_oneside uuid := extensions.gen_random_uuid();  -- knows only the opposed idea
   mill_id     uuid;   -- 'Silencing an opinion...'      (On Liberty)
   thoreau_id  uuid;   -- 'Living deliberately...'       (Walden) -- opposes Mill
   epi_id      uuid;   -- 'You are disturbed by...'      (Enchiridion)
@@ -75,9 +76,13 @@ begin
   -- because of the rollback at the end -- and `db:test` honours $DATABASE_URL,
   -- so "which database" is not a constant. Refuse anything that is not the
   -- freshly seeded local corpus rather than trusting the transaction alone.
-  if (select count(*) from public.pulls) <> 21 then
+  -- Identity and scale, not an exact count: the seed corpus grows, and a test
+  -- that turns CI red for that reads like a Delta regression to whoever hits
+  -- it. What actually matters is that this is a seeded development corpus and
+  -- not somebody's data.
+  if (select count(*) from public.pulls) > 500 then
     raise exception
-      'refusing to run: expected the 21-pull seed corpus, found %. This test '
+      'refusing to run: found % pulls, which is not a seed corpus. This test '
       'writes before it rolls back and must not be pointed at real data.',
       (select count(*) from public.pulls);
   end if;
@@ -119,7 +124,7 @@ begin
   -- Mimic three signups. Going through auth.users rather than inserting
   -- profiles directly is deliberate: handle_new_user is what creates the
   -- preference row get_feed scores against.
-  foreach signup_id in array array[reader_knows, reader_blank, reader_lineage, reader_both] loop
+  foreach signup_id in array array[reader_knows, reader_blank, reader_lineage, reader_both, reader_oneside] loop
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                             email_confirmed_at, created_at, updated_at,
                             raw_app_meta_data, raw_user_meta_data)
@@ -268,9 +273,10 @@ begin
   if present then
     raise exception
       'the known limitation no longer holds: a contradiction survived a reader '
-      'who knows an unannotated restatement of the opposed idea. If exclusion '
-      'was deliberately widened, invert this assertion -- and make sure the '
-      'widening cannot drop ideas the candidate agrees with.';
+      'who knows an unannotated restatement of the opposed idea. If the edges '
+      'became dense enough to cover restatements, invert this assertion. If '
+      'something started widening the exclusion by distance instead, revert it '
+      '-- section 7 explains why that cannot work.';
   end if;
 
   -- ----------------------------------- 5. control: the edge is what does it
@@ -330,18 +336,23 @@ begin
       'to `opposes` edges only, not to ancestor/descendant lineage.';
   end if;
 
-  -- --------------- 7. knowing BOTH sides does not make the debate vanish
-  -- The propagation in section 3 widens the exclusion set by distance, and
-  -- distance is the one measurement this file exists because we cannot trust.
-  -- A contradiction of K1 sits inside K1's threshold exactly as a paraphrase
-  -- does, so an ungated propagation also drops the known idea that OPPOSES K1
-  -- -- and that idea may be the very thing the candidate restates.
+  -- ------- 7. the exclusion removes only what the candidate DISAGREES with
+  -- The regression guard against re-adding the widening this design removed.
   --
-  -- Reader knows Mill and Thoreau, which oppose each other. The candidate
-  -- opposes Thoreau, so Thoreau is dropped from its comparison; ungated, Mill
-  -- goes with it for being "close to Thoreau", and the candidate is served as
-  -- maximally novel to a reader who already holds it. The exclusion may only
-  -- remove what a candidate contradicts, never what it agrees with.
+  -- The reader holds Mill and Thoreau, which oppose each other. The candidate
+  -- opposes Thoreau, so Thoreau leaves its comparison -- and Mill must NOT,
+  -- because the candidate says nothing about Mill. Since the candidate restates
+  -- Mill, keeping Mill is what covers it.
+  --
+  -- Any scheme that widens the exclusion beyond the annotated edge fails here:
+  -- Mill sits inside the threshold of Thoreau (they are opposed, and opposed
+  -- claims are near each other), so a distance-based widening drops Mill too,
+  -- leaves nothing to compare against, and serves the reader an idea they
+  -- already hold as maximally novel. Gating that widening on an `opposes` edge
+  -- does not rescue it either -- the widening exists because edges are sparse,
+  -- and such a gate reads a missing edge as "not opposed". If this assertion
+  -- fails, the exclusion has started removing something the candidate agrees
+  -- with; do not fix it by adding a gate.
   perform set_config('role', 'postgres', true);
   -- Section 5's control deleted the seeded Mill/Thoreau opposition to prove the
   -- exclusion depends on it. Put it back: this section is about what happens
@@ -370,13 +381,76 @@ begin
 
   if present then
     raise exception
-      'a reader who knows BOTH sides of a debate was served a restatement of '
-      'one side as new. Dropping the opposed idea is right; dropping what it '
-      'disagrees with is not. The propagation must be gated by the `opposes` '
-      'relation, or it re-imports the negation blindness this fix removes.';
+      'the exclusion removed an idea the candidate AGREES with. A reader '
+      'holding both sides of a debate was served a restatement of one side as '
+      'new. Only what a candidate is annotated as opposing may leave its '
+      'comparison -- never what it agrees with, and never by distance.';
   end if;
 
-  -- ------------------- 8. another author's private material cannot reach in
+  -- ---------------------------- 8. a one-sided edge still works, either way
+  -- Opposition is stored directionally and the seed writes both rows, so every
+  -- assertion above passes whichever direction the code reads -- a mutant that
+  -- deleted either union branch survived the whole suite. The migration claims
+  -- a one-sided edge works anyway; this is what holds it to that.
+  --
+  -- The reader must know ONLY the opposed idea. Give them anything else at the
+  -- same distance and it covers the candidate on its own, so the exclusion
+  -- makes no observable difference and the assertion proves nothing -- which is
+  -- how the first two versions of this section quietly failed to bite.
+  perform set_config('role', 'postgres', true);
+  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
+  values (reader_oneside, thoreau_id, 100, now());
+  delete from public.pull_relations
+  where kind = 'opposes'
+    and from_pull_id = mill_echo_id and to_pull_id = thoreau_id;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_oneside, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+
+  -- Only (thoreau -> mill_echo) is left, and the candidate is its TO side, so
+  -- the second union branch is the only one that can see it. Without that
+  -- branch the candidate is covered by the very idea it contradicts.
+  select exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r ->> 'id')::uuid = mill_echo_id
+  ) into present;
+
+  if not present then
+    raise exception
+      'an `opposes` edge stored only as (known -> candidate) was not honoured: '
+      'the contradiction was covered by the idea it contradicts, so the union '
+      'branch reading that direction is dead.';
+  end if;
+
+  -- The mirror image, for the other branch.
+  perform set_config('role', 'postgres', true);
+  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
+  values (mill_echo_id, thoreau_id, 'opposes', 0.75) on conflict do nothing;
+  delete from public.pull_relations
+  where kind = 'opposes'
+    and from_pull_id = thoreau_id and to_pull_id = mill_echo_id;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_oneside, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+
+  select exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r ->> 'id')::uuid = mill_echo_id
+  ) into present;
+
+  if not present then
+    raise exception
+      'an `opposes` edge stored only as (candidate -> known) was not honoured, '
+      'so the union branch reading that direction is dead.';
+  end if;
+
+  -- ------------------- 9. another author's private material cannot reach in
   -- `opposed_pairs` reads `pull_relations`, and nothing in the function bodies
   -- re-checks who may see an edge -- that is `pull_relations_read_readable`'s
   -- job alone. This asserts the policy does it.
@@ -442,7 +516,8 @@ begin
 
   raise notice 'DELTA IS NEGATION-AWARE: contradiction shown, scored on merit, '
                'restatement still covered, source delta agrees, '
-               'both-sides reader keeps their coverage, private material stays out';
+               'both-sides reader keeps their coverage, one-sided edges work both '
+               'ways, private material stays out';
 end $$;
 
 rollback;
