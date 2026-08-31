@@ -257,6 +257,38 @@ describe('The Archive viewport laws', () => {
     );
   });
 
+  it('never leaves a width with no navigation on it', () => {
+    /*
+     * The masthead nav hides because the rail takes over, so the width where one goes
+     * must be the width where the other arrives. They are one decision written in two
+     * places, and they drifted the moment the rail moved from 60rem to 63rem to
+     * protect the measure — leaving 960px to 1008px with the nav hidden and the rail
+     * not yet shown, and no way to change section at all.
+     *
+     * Neither rule is wrong read on its own, which is why this is pinned as a
+     * relationship rather than as two numbers.
+     */
+    const all = cssFiles.map(code).join('\n');
+    const hidesNavAt = [
+      ...all.matchAll(
+        /@media \(min-width: ([\d.]+)rem\)\s*\{[^{}]*\.shell__masthead-nav\s*\{[^}]*display:\s*none/g,
+      ),
+    ].map((m) => Number(m[1]));
+    expect(hidesNavAt.length, 'no rule hides the masthead navigation').toBe(1);
+
+    const showsRailAt = [
+      ...all.matchAll(
+        /@media \(min-width: ([\d.]+)rem\)\s*\{[\s\S]*?\.shell__rail\s*\{[^}]*display:\s*block/g,
+      ),
+    ].map((m) => Number(m[1]));
+    expect(showsRailAt.length, 'no rule shows the navigation rail').toBe(1);
+
+    expect(
+      hidesNavAt[0],
+      `the masthead nav hides at ${hidesNavAt[0]}rem but the rail only appears at ${showsRailAt[0]}rem, leaving a band with no navigation`,
+    ).toBe(showsRailAt[0]);
+  });
+
   it('scales the base type scale fluidly rather than in fixed steps', () => {
     /*
      * Fixed rem steps rendered the same 39px headline on a 1504px laptop and a 375px
