@@ -71,9 +71,24 @@ export interface FeedStats {
 export function Feed({
   userId,
   onStats,
+  refreshKey = 0,
 }: {
   userId: string | null;
   onStats?: (stats: FeedStats) => void;
+  /**
+   * Bumped by the shell when something outside this component changed what the
+   * feed should contain — today, a reader saving their preferences.
+   *
+   * The seed deliberately survives a preference change: it is what keeps the
+   * interrupt plan and the jitter stable across a sitting, and re-rolling it to
+   * force a refetch would reshuffle the whole session as a side effect of
+   * changing one topic. So this is a separate signal rather than a new seed.
+   *
+   * Without it the screen is the failure it was built to fix: a reader weights
+   * a topic up, returns to a feed ranked by their old preferences, and is shown
+   * a control that did nothing.
+   */
+  refreshKey?: number;
 }) {
   const [session, setSession] = useState(loadSession);
   const [feed, setFeed] = useState<FeedResponse | null>(null);
@@ -188,7 +203,7 @@ export function Feed({
     // list while the reader is partway down it — and cards already seen are by
     // then recorded as impressions, so they would not even come back.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.seed, reloads]);
+  }, [session.seed, reloads, refreshKey]);
 
   useEffect(() => {
     if (!userId) return;

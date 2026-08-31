@@ -1,0 +1,104 @@
+/*
+ * The preferences screen.
+ *
+ * Layout only. Every colour, radius and rule comes from a token, and the selected
+ * state is the design system's own `.btn[aria-pressed='true']` rather than anything
+ * defined here — a second way to say "chosen" is a second thing to keep in step.
+ *
+ * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
+ */
+
+.prefs__group {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+
+.prefs__hint {
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+/*
+ * A fieldset for each parent topic, because that is what it is: a group of related
+ * controls with a label. The border is dropped and replaced with a single hairline
+ * above, which is the rule this design system already uses to separate sections.
+ */
+.prefs__set {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 0;
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.prefs__legend {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0;
+}
+
+/*
+ * Label and controls sit on one line when there is room and stack when there is not.
+ * `flex-wrap` rather than a media query: the breakpoint that matters is where the
+ * three stance buttons stop fitting, which depends on their text and not on the
+ * viewport.
+ */
+.prefs__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.prefs__topic {
+  font-family: var(--font-body);
+}
+
+.prefs__stances,
+.prefs__media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.prefs__stance {
+  /* Keeps the three stances the same width so the row does not shift as it is
+     clicked through — a control that moves under the cursor invites a mis-click. */
+  min-width: 11ch;
+  text-align: left;
+}
+
+/*
+ * The marker is the non-colour half of the selected state.
+ *
+ * A colour-only "chosen" is invisible to anyone who cannot separate the accent from
+ * the muted text, and this design system has exactly one accent to spend. The glyph
+ * is `aria-hidden` because `aria-pressed` already carries the same fact properly.
+ */
+.prefs__marker {
+  font-family: var(--font-mono);
+  color: inherit;
+}
+
+.prefs__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.prefs__count {
+  margin-left: auto;
+}
+
+.prefs__error {
+  color: var(--accent);
+  margin-top: var(--space-3);
+}
