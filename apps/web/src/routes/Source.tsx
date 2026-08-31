@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { anchoredPullId } from '../lib/routes.js';
+import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
+import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
@@ -34,6 +36,39 @@ const RELATION_LABEL: Record<string, string> = {
   related: 'Related',
 };
 
+/**
+ * Where the current selection sits inside one element, as character offsets.
+ *
+ * The only part of highlighting that must touch the DOM, kept to one function so
+ * everything else stays testable in `environment: 'node'`. It measures against
+ * `textContent` rather than counting nodes, because the body is rendered as
+ * several text runs once anything in it is already marked — so node indices
+ * change as highlights accumulate and offsets do not.
+ *
+ * Selection is keyboard-operable natively (shift with the arrow keys), so this
+ * needs no separate keyboard path; the control that acts on it is an ordinary
+ * focusable button rather than a floating popover.
+ */
+function selectionOffsetsIn(
+  container: HTMLElement,
+): { start: number; end: number; text: string } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!container.contains(range.commonAncestorContainer)) return null;
+
+  const text = range.toString();
+  if (!text.trim()) return null;
+
+  const before = range.cloneRange();
+  before.selectNodeContents(container);
+  before.setEnd(range.startContainer, range.startOffset);
+  const start = before.toString().length;
+
+  return { start, end: start + text.length, text };
+}
+
 /** Minutes, from the estimate the pipeline stored per Pull. */
 function readingMinutes(seconds: number | null): number | null {
   if (seconds === null || seconds <= 0) return null;
@@ -43,6 +78,7 @@ function readingMinutes(seconds: number | null): number | null {
 export function Source({
   workId,
   summaryId,
+  userId,
   onNavigate,
 }: {
   workId: string;
@@ -55,6 +91,12 @@ export function Source({
    * that was shared, with every query having succeeded.
    */
   summaryId?: string;
+  /**
+   * Null for a signed-out visitor, who can read everything here and mark
+   * nothing. A highlight is a row keyed to a user; there is no anonymous
+   * version of it to offer.
+   */
+  userId: string | null;
   onNavigate: (to: string) => void;
 }) {
   const [detail, setDetail] = useState<SourceDetail | null>(null);
@@ -69,6 +111,8 @@ export function Source({
    */
   const [related, setRelated] = useState<RelatedPull[]>([]);
   const [relatedTo, setRelatedTo] = useState<string | null>(null);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
    * from `fetchSource` is a work that does not exist; an error is an error. Review
@@ -140,6 +184,20 @@ export function Source({
     if (!pullId) return;
     document.getElementById(`p-${pullId}`)?.scrollIntoView({ block: 'start' });
   }, [detail]);
+
+  const reloadHighlights = useCallback(() => {
+    if (!userId || !detail || detail.pulls.length === 0) return;
+    fetchHighlights(
+      userId,
+      detail.pulls.map((p) => p.id),
+    )
+      .then(setHighlights)
+      // Supplementary: the source reads perfectly well without a reader's marks,
+      // and failing to load them must not take the page down.
+      .catch((e: unknown) => console.error('Could not load highlights', e));
+  }, [userId, detail]);
+
+  useEffect(reloadHighlights, [reloadHighlights]);
 
   /*
    * Ideas close to the one the reader actually came for.
@@ -273,7 +331,35 @@ export function Source({
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
                 <h3 className="source__pull-headline">{p.headline}</h3>
-                <p className="source__pull-body">{p.body}</p>
+                {/*
+                  Re-anchored on every render rather than trusting the stored
+                  offsets: a highlight whose text has moved follows its words,
+                  and one whose text is gone is dropped rather than drawn over
+                  whatever now occupies those characters.
+                */}
+                <p
+                  className="source__pull-body"
+                  ref={(el) => {
+                    if (el) bodyRefs.current.set(p.id, el);
+                    else bodyRefs.current.delete(p.id);
+                  }}
+                >
+                  {splitByRanges(
+                    p.body,
+                    highlights
+                      .filter((h) => h.pullId === p.id && h.field === 'body')
+                      .map((h) => anchor(p.body, h))
+                      .filter((r): r is { start: number; end: number } => r !== null),
+                  ).map((seg, i) =>
+                    seg.marked ? (
+                      <mark key={i} className="source__mark">
+                        {seg.text}
+                      </mark>
+                    ) : (
+                      <span key={i}>{seg.text}</span>
+                    ),
+                  )}
+                </p>
                 {p.explanation ? <p className="source__pull-more">{p.explanation}</p> : null}
                 {p.whyItMatters ? (
                   <p className="source__pull-why">
@@ -281,6 +367,62 @@ export function Source({
                   </p>
                 ) : null}
                 {minutes ? <p className="meta">{minutes} min</p> : null}
+
+                {userId && (
+                  <p className="source__pull-actions">
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      onClick={() => {
+                        const el = bodyRefs.current.get(p.id);
+                        if (!el) return;
+                        const range = selectionOffsetsIn(el);
+                        if (!range) {
+                          window.alert('Select some words in this idea first.');
+                          return;
+                        }
+                        const id = globalThis.crypto.randomUUID();
+                        // Optimistic, then sent. A highlight that takes a round
+                        // trip to appear feels broken at the exact moment the
+                        // reader is still looking at what they selected.
+                        setHighlights((prev) => [
+                          ...prev,
+                          { id, pullId: p.id, field: 'body', ...range },
+                        ]);
+                        window.getSelection()?.removeAllRanges();
+                        createHighlight(userId, {
+                          id,
+                          pullId: p.id,
+                          field: 'body',
+                          ...range,
+                        }).catch((e: unknown) => {
+                          console.error('Could not save the highlight', e);
+                          reloadHighlights();
+                        });
+                      }}
+                    >
+                      Highlight the selection
+                    </button>
+                    {highlights.some((h) => h.pullId === p.id) && (
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => {
+                          const mine = highlights.filter((h) => h.pullId === p.id);
+                          const last = mine[mine.length - 1];
+                          if (!last) return;
+                          setHighlights((prev) => prev.filter((h) => h.id !== last.id));
+                          deleteHighlight(last.id).catch((e: unknown) => {
+                            console.error('Could not remove the highlight', e);
+                            reloadHighlights();
+                          });
+                        }}
+                      >
+                        Remove the last one
+                      </button>
+                    )}
+                  </p>
+                )}
               </li>
             );
           })}

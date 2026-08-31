@@ -453,6 +453,7 @@ export function App() {
                 key={`${sourceId}:${summaryParam ?? ''}`}
                 workId={sourceId}
                 summaryId={summaryParam ?? undefined}
+                userId={session?.user.id ?? null}
                 onNavigate={navigate}
               />
             )}

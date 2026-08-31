@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PullCard } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
+import { toMarkdown } from '../lib/highlights.js';
+import { fetchExportData } from '../lib/highlights-api.js';
 import { speak } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import {
@@ -44,6 +46,37 @@ export function Library({ userId }: { userId: string }) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [stashId, setStashId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /*
+   * Everything the reader has marked or written, as a file they keep.
+   *
+   * Readwise's business is getting highlights back out into Obsidian, Notion and
+   * the rest. Rather than build an integration per destination, this writes
+   * plain Markdown: it opens in all of them, needs an account nowhere, and
+   * cannot rot when somebody's API changes. It is also the only posture
+   * consistent with the pitch — a product whose claim is that nothing worth
+   * having sits behind a wall should not put the reader's own words behind one.
+   */
+  async function exportHighlights() {
+    setBusy(true);
+    try {
+      const sources = await fetchExportData(userId);
+      const markdown = toMarkdown(sources, new Date());
+      const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `what-a-pull-highlights-${new Date().toISOString().slice(0, 10)}.md`;
+      a.click();
+      // Revoked on a later tick rather than immediately: the browser has not
+      // necessarily started reading the blob by the time click() returns.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      console.error('Could not export highlights', e);
+      window.alert('Could not build the export just now.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -251,6 +284,14 @@ export function Library({ userId }: { userId: string }) {
             disabled={busy}
           >
             New collection{activeStash ? ` inside ${activeStash.name}` : ''}
+          </button>
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => void exportHighlights()}
+            disabled={busy}
+          >
+            Export highlights
           </button>
         </div>
       </div>

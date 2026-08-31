@@ -160,3 +160,26 @@
   text-transform: none;
   letter-spacing: 0;
 }
+
+/*
+ * A highlight.
+ *
+ * An underline and a faint ground, not a fill. `<mark>`'s default is a yellow
+ * block, which is both a second colour law 1 does not permit and the exact
+ * highlighter-pen look this design is the opposite of. The rule underneath is
+ * what carries it, so the mark survives a monochrome screen and a reader who
+ * cannot separate the accent from the text — design law 5.
+ */
+.source__mark {
+  background: var(--surface-raised);
+  color: inherit;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 1px;
+}
+
+.source__pull-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+}
