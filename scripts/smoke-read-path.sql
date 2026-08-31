@@ -7,6 +7,13 @@
 -- likely to be wrong, and it is invisible to an owner-role query.
 --
 -- Read-only in effect: everything happens inside a transaction that rolls back.
+--
+-- ON_ERROR_STOP is set here as well as on the command line: without it psql
+-- exits 0 even when an assertion below raises, so anyone running this file
+-- directly gets a silent green from a script whose whole purpose is to fail
+-- loudly.
+\set ON_ERROR_STOP on
+
 begin;
 
 do $$

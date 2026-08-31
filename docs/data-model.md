@@ -61,6 +61,24 @@ their whole history.
 `related`, `opposes`, `elaborates`, `ancestor` and `descendant`. Counterpull
 reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`.
 
+The read path reads `opposes` too, and not as a feature — as a correction.
+Embeddings barely encode negation, so a claim and its contradiction sit closer
+together than two paraphrases of the same claim do. `get_feed` and
+`get_source_delta` therefore drop opposed pairs from the distance comparison
+before deciding what the reader already knows; without that, the Delta hides
+every disagreement. This makes the edges load-bearing rather than decorative: a
+missing `opposes` edge is a contradiction silently suppressed, which is why
+relation extraction is a prerequisite for backfilling real embeddings over
+generated content.
+
+The exclusion is edge-exact and deliberately so. Widening it by distance — to
+catch the reader who knows a claim through several phrasings while only one
+carries an edge — is unsound, because distance cannot tell a restatement from a
+contradiction either: the widening drops ideas the candidate _agrees_ with and
+serves them as novel. Nor can it be gated on the absence of an `opposes` edge,
+since that absence is the very thing the widening compensates for. Density has
+to come from the edges themselves.
+
 **Interleave tunables live in a table.** `interleave_config` is a single-row
 table with a `check (id)` singleton constraint, so the question rate can be
 tuned from real usage without a deploy. A check constraint enforces that the

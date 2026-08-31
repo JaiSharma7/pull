@@ -215,12 +215,12 @@ export function App() {
             <p className="meta">The Delta</p>
             <div className="shell__stat">
               <span>Already knew</span>
-              <span className="shell__stat-value">{stats?.skippedKnown ?? 0}</span>
+              <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
             </div>
             <div className="shell__stat">
               <span>Time saved</span>
               <span className="shell__stat-value shell__stat-value--accent">
-                {stats ? `${stats.minutesSaved} min` : '—'}
+                {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
               </span>
             </div>
           </div>

@@ -83,6 +83,14 @@ jobs:
       - name: Seed corpus applies cleanly
         run: pnpm exec supabase db reset
 
+      # Behaviour, not shape. These run as a real reader through RLS against the
+      # seeded corpus, so they need the reset above -- db:lint runs against the
+      # --no-seed one. The smoke script existed from round 1 but nothing ever
+      # ran it, which is how a read-path regression would have reached main
+      # without anyone noticing.
+      - name: Read path behaves under RLS
+        run: pnpm run db:test
+
       # Regenerate in place and let git decide. Diffing against a temp file made
       # this compare the CLI's raw output with a committed file that carries a
       # header, which could never match.

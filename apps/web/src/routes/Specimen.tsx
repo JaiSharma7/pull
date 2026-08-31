@@ -78,7 +78,11 @@ export function Specimen() {
         <Meter value={0.68} label="Specimen recall strength" />
       </div>
 
+      {/* All three states. Only the flattering one used to be here, and both
+          copy bugs this component has shipped lived in the other two. */}
       <Enough ideasRead={7} recalled={2} minutesSaved={6.2} onContinue={() => undefined} />
+      <Enough ideasRead={3} recalled={1} minutesSaved={0} />
+      <Enough ideasRead={4} recalled={0} minutesSaved={null} />
     </main>
   );
 }

@@ -64,8 +64,8 @@ export interface FeedStats {
   read: number;
   saved: number;
   recalled: number;
-  skippedKnown: number;
-  minutesSaved: number;
+  skippedKnown: number | null;
+  minutesSaved: number | null;
 }
 
 export function Feed({
@@ -114,8 +114,10 @@ export function Feed({
       read: readCount,
       saved: savedThisSession.size,
       recalled,
-      skippedKnown: feed?.skippedKnownCount ?? 0,
-      minutesSaved: feed?.minutesSaved ?? 0,
+      // ?? null, not ?? 0: the rail must show "--" for "we do not know"
+      // rather than a zero it cannot stand behind.
+      skippedKnown: feed?.skippedKnownCount ?? null,
+      minutesSaved: feed?.minutesSaved ?? null,
     });
   }, [onStats, readCount, savedThisSession, recalled, feed]);
 
@@ -164,13 +166,12 @@ export function Feed({
         if (cancelled) return;
 
         if (cached.length > 0) {
+          // null, not 0: the Delta never ran, and "nothing skipped" is a
+          // claim about the session we have no basis for making.
           setFeed({
             rows: cached,
-            // Zero here is not strictly honest — the Delta never ran, which is not
-            // the same as it having skipped nothing — but making these nullable is
-            // in flight on another branch and duplicating it would only conflict.
-            skippedKnownCount: 0,
-            minutesSaved: 0,
+            skippedKnownCount: null,
+            minutesSaved: null,
             interleaveSlots: [],
             page: 0,
           });
@@ -529,13 +530,18 @@ export function Feed({
         </p>
       )}
 
-      {feed.skippedKnownCount > 0 && (
-        <p className="meta" data-testid="delta-banner">
-          Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
-          already know —{' '}
-          <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
-        </p>
-      )}
+      {/* Guarded on both, not just the count: the banner interpolates
+          minutesSaved, and React renders null as empty — so decoupling them
+          would silently print "about  min saved". */}
+      {feed.skippedKnownCount !== null &&
+        feed.skippedKnownCount > 0 &&
+        feed.minutesSaved !== null && (
+          <p className="meta" data-testid="delta-banner">
+            Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
+            already know —{' '}
+            <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
+          </p>
+        )}
 
       {items.map((item) =>
         item.type === 'interrupt' ? (

@@ -95,6 +95,7 @@ pnpm db:start       # local Supabase stack
 pnpm db:reset       # replay every migration from zero, then seed
 pnpm db:types       # regenerate packages/db/src/database.types.ts — never hand-edit
 pnpm db:lint        # the schema invariants CI check 4 runs
+pnpm db:test        # read-path behaviour, as a real reader under RLS
 ```
 
 ## Conventions
@@ -110,5 +111,5 @@ pnpm db:lint        # the schema invariants CI check 4 runs
 
 ## Definition of done
 
-Format, lint, typecheck and tests pass; `pnpm db:lint` is clean; Supabase advisors report
+Format, lint, typecheck and tests pass; `pnpm db:lint` and `pnpm db:test` are clean; Supabase advisors report
 no security findings; the diff obeys the seven laws. Then the review gate in `AGENTS.md`.

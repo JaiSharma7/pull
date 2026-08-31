@@ -23,9 +23,16 @@ export interface InterleaveSlot {
 
 export interface FeedResponse {
   rows: FeedRow[];
-  /** How many ideas the Delta filtered because the reader already holds them. */
-  skippedKnownCount: number;
-  minutesSaved: number;
+  /**
+   * How many ideas the Delta filtered because the reader already holds them.
+   * null when the Delta never ran (offline) -- distinct from a measured zero.
+   */
+  skippedKnownCount: number | null;
+  /**
+   * Minutes saved by not re-teaching what the reader knows.
+   * null when the Delta never ran (offline) -- distinct from a measured zero.
+   */
+  minutesSaved: number | null;
   interleaveSlots: InterleaveSlot[];
   page: number;
 }
