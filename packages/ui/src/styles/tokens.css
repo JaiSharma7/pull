@@ -73,6 +73,16 @@
   --radius-sm: 2px;
 
   --measure: 34rem; /* ~66 characters: the comfortable reading column */
+
+  /*
+   * A second, wider column for reference documents — the policies and the terms.
+   * Not a relaxation of law 7: the reading column is pinned because a longer line
+   * makes a *card* worse, while a document of tables and cross-references is worse
+   * at 34rem than at 46. Fluid rather than a second fixed step, so it opens with
+   * the window instead of jumping at a breakpoint, and still capped so no page in
+   * this product ever runs full-bleed.
+   */
+  --measure-wide: clamp(var(--measure), var(--measure) + 14vw, 46rem);
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
   --transition: 160ms cubic-bezier(0.2, 0, 0.2, 1);
 }

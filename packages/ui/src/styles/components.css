@@ -594,3 +594,167 @@
   padding-inline: 0;
   font-size: inherit;
 }
+
+/* Legal documents ------------------------------------------------------
+ *
+ * A policy is a reference document, not a Pull, and the two want different
+ * columns — but only in one respect, and being precise about which matters.
+ *
+ * Running text keeps the reading measure. Law 7 pins it because a long line
+ * makes prose worse, and that is no less true of a privacy policy than of a
+ * card; `base.css` already caps every paragraph, and lists and quotes are
+ * capped here so the whole text column shares one left-to-right rhythm rather
+ * than three ragged ones.
+ *
+ * What genuinely needs the extra width is a table. Three columns of processors
+ * at 34rem is a column of fragments, so tables break out to --measure-wide —
+ * the ordinary editorial move of letting a figure exceed its text block, not a
+ * relaxation of the law. Fluid rather than a second fixed step, so it opens
+ * with the window instead of jumping, and still capped: nothing runs
+ * full-bleed.
+ */
+.legal {
+  max-width: var(--measure-wide);
+  margin-inline: auto;
+}
+
+.prose > * + * {
+  margin-block-start: var(--space-4);
+}
+
+.prose__list,
+.prose__quote {
+  max-width: var(--measure);
+}
+
+.prose__heading {
+  font-family: var(--font-display);
+  margin-block-start: var(--space-7);
+  text-wrap: balance;
+}
+
+/* The title has nothing above it to be spaced from. */
+.prose > .prose__heading:first-child {
+  margin-block-start: 0;
+}
+
+.prose p {
+  color: var(--text-soft);
+}
+
+.prose__list {
+  padding-inline-start: var(--space-5);
+  color: var(--text-soft);
+}
+
+.prose__list li + li {
+  margin-block-start: var(--space-2);
+}
+
+/* Marked by a rule and an indent rather than a tinted panel — the accent is
+   spoken for, and a second surface colour is a second palette. */
+.prose__quote {
+  border-inline-start: 2px solid var(--rule-strong);
+  padding-inline-start: var(--space-4);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+/* The wrapper scrolls so the page never does. `tabindex` is on it in the
+   markup: a region that scrolls must be reachable by keyboard. */
+.prose__scroll {
+  overflow-x: auto;
+}
+
+.prose__table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--step--1);
+}
+
+.prose__table th,
+.prose__table td {
+  border-block-end: 1px solid var(--rule);
+  padding: var(--space-3) var(--space-4) var(--space-3) 0;
+  text-align: start;
+  vertical-align: top;
+}
+
+.prose__table th {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  border-block-end-color: var(--rule-strong);
+  white-space: nowrap;
+}
+
+.prose__table td {
+  color: var(--text-soft);
+}
+
+.legal__foot {
+  margin-block-start: var(--space-5);
+  padding-block-end: var(--space-7);
+}
+
+/* The colophon — one of law 7's visible edges: the page ends in something. */
+.colophon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-block-start: 1px solid var(--rule);
+}
+
+.colophon__links {
+  display: flex;
+  gap: var(--space-4);
+}
+
+/* Navigation, so the system's metadata treatment: uppercase mono, tracked,
+   muted — the same face as the masthead controls it sits opposite. */
+.colophon__links a {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.colophon__links a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* A sentence, not a label, so body face: the same reason the consent line on
+   the title page is not `.meta`. Uppercase mono here would shout a promise
+   that works better said plainly. */
+.colophon__note {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/*
+ * The consent line under the sign-in form.
+ *
+ * Not `.meta`: that face is uppercase tracked mono for labels, and a sentence
+ * containing two links set that way is a sentence nobody reads — which is the
+ * one thing this line must not be. Body face, one step down, muted.
+ */
+.titlepage__legal {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  line-height: 1.6;
+}
