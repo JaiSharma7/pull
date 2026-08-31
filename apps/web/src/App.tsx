@@ -25,6 +25,13 @@ export function App() {
   const [tab, setTab] = useState<Tab>('feed');
   const [stats, setStats] = useState<FeedStats | null>(null);
   /*
+   * Bumped when a reader saves their preferences, so the feed refetches under the
+   * new weights. The feed is kept mounted (see below), so nothing else would make
+   * it reconsider — and a preferences screen the feed ignores is precisely the
+   * "control that changes nothing" this product cannot afford.
+   */
+  const [prefsSaved, setPrefsSaved] = useState(0);
+  /*
    * The only routed thing in the app.
    *
    * Reading is tab state rather than URLs, deliberately — a Pull is not a page.
@@ -185,12 +192,18 @@ export function App() {
               screen reader or by tabbing.
             */}
               <div hidden={tab !== 'feed'}>
-                <Feed userId={session.user.id} onStats={setStats} />
+                <Feed userId={session.user.id} onStats={setStats} refreshKey={prefsSaved} />
               </div>
               {tab === 'review' && <Review />}
               {tab === 'library' && <Library userId={session.user.id} />}
               {tab === 'preferences' && (
-                <Preferences userId={session.user.id} onDone={() => setTab('feed')} />
+                <Preferences
+                  userId={session.user.id}
+                  onDone={() => {
+                    setPrefsSaved((n) => n + 1);
+                    setTab('feed');
+                  }}
+                />
               )}
             </div>
           </main>

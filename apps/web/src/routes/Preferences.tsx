@@ -83,10 +83,17 @@ export function Preferences({
     setPrefs((p) => {
       if (!p) return p;
       const has = p.mediaKinds.includes(kind);
-      // Never let the last one go: an empty media list matches nothing in
-      // `get_feed`'s `w.kind = any(media)` filter, so "select none" reads to a reader
-      // as the app breaking rather than as the choice they made.
-      if (has && p.mediaKinds.length === 1) return p;
+      /*
+       * Never let the last *visible* one go.
+       *
+       * Counting the stored list was wrong: it holds every enum member the default
+       * grants, while the picker only renders the kinds the corpus actually contains.
+       * So a reader could switch off all five they could see, leave four they could
+       * not, and land on a `w.kind = any(media)` filter matching nothing — an empty
+       * feed with no error and no visible cause.
+       */
+      const visibleOn = mediaOptions.filter((k) => p.mediaKinds.includes(k));
+      if (has && visibleOn.length === 1) return p;
       return {
         ...p,
         mediaKinds: has ? p.mediaKinds.filter((k) => k !== kind) : [...p.mediaKinds, kind],
@@ -108,11 +115,22 @@ export function Preferences({
   }
 
   if (error && !prefs) {
+    /*
+     * A dead end here is worse in onboarding than in settings, because there is no
+     * shell behind it: no nav, no sign-out, and reloading reproduces it. So the
+     * first-run copy offers the way past rather than only the diagnosis — the same
+     * fail-open reasoning as `OnboardingGate`, applied to the screen it renders.
+     */
     return (
       <section className="measure">
         <h1 className="prose__heading">Preferences</h1>
         <p>Could not load your preferences.</p>
         <p className="meta">{error}</p>
+        <div className="prefs__actions">
+          <button type="button" className="btn btn--primary" onClick={onDone}>
+            {mode === 'onboarding' ? 'Continue without choosing' : 'Back'}
+          </button>
+        </div>
       </section>
     );
   }
@@ -126,7 +144,10 @@ export function Preferences({
   }
 
   const parents = [...new Set(topics.map((t) => t.parentSlug ?? t.slug))];
-  const chosen = Object.values(prefs.stances).filter((s) => s === 'more').length;
+  // Counted over the topics on screen. Stances can survive for topics the picker no
+  // longer offers — a topic whose last published work was retired — and reporting
+  // those would state a number the reader cannot see or change.
+  const chosen = topics.filter((t) => prefs.stances[t.slug] === 'more').length;
 
   return (
     <section className="prefs measure">
@@ -137,13 +158,19 @@ export function Preferences({
       <p>
         {mode === 'onboarding'
           ? 'Pick a few. The feed weights them up — you can change this any time, and skipping is fine.'
-          : 'These steer the feed. Nothing here is a filter bubble: everything stays reachable, it only changes what arrives first.'}
+          : 'These steer the feed. "More of this" changes what arrives first; "Not for me" removes a topic from the feed altogether, which is the one setting here that hides something rather than reordering it.'}
       </p>
 
       <h2 className="meta prefs__group">Topics</h2>
       {parents.map((parentSlug) => {
         const children = topics.filter((t) => (t.parentSlug ?? t.slug) === parentSlug);
-        const parentLabel = topics.find((t) => t.slug === parentSlug)?.label ?? parentSlug;
+        // Resolved by the API from the unfiltered topic set: a parent may have no
+        // works of its own while its children do, and falling back to the slug printed
+        // a heading reading `psychology` rather than "Psychology".
+        const parentLabel =
+          children.find((t) => t.parentLabel)?.parentLabel ??
+          topics.find((t) => t.slug === parentSlug)?.label ??
+          parentSlug;
         return (
           <fieldset key={parentSlug} className="prefs__set">
             <legend className="prefs__legend">{parentLabel}</legend>

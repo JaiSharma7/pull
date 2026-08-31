@@ -16,11 +16,16 @@ import { supabase } from './supabase.js';
  * The row itself already exists: `handle_new_user` creates one at sign-up.
  */
 
+/** PostgREST's `max_rows` (supabase/config.toml). Every list read here pages by it. */
+const PAGE = 100;
+
 /** A topic as the picker offers it, with its parent for grouping. */
 export interface TopicOption {
   slug: string;
   label: string;
   parentSlug: string | null;
+  /** The parent's display label, resolved even when the parent has no works itself. */
+  parentLabel: string | null;
 }
 
 export interface Preferences {
@@ -31,35 +36,108 @@ export interface Preferences {
   onboardedAt: string | null;
 }
 
+/** Every topic row, paged. There are ~30 today; `max_rows` still applies. */
+async function allTopics(): Promise<
+  { id: string; slug: string; label: string; parent_id: string | null }[]
+> {
+  const out: { id: string; slug: string; label: string; parent_id: string | null }[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('topics')
+      .select('id, slug, label, parent_id')
+      // Ordered so the pages partition the set: without it PostgREST may return rows
+      // in any order and a range walk can repeat or skip.
+      .order('slug', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as typeof out;
+    out.push(...rows);
+    if (rows.length < PAGE) return out;
+  }
+}
+
+/**
+ * Topic ids with at least one **published** work behind them.
+ *
+ * Published is the part that matters. `work_topics` alone counts drafts and private
+ * summaries, so a topic backed only by those passes the filter and still resolves to
+ * an empty feed — the exact failure the filter exists to prevent. Intersecting with
+ * published summaries is what makes "has works" mean what the picker claims.
+ */
+async function topicIdsWithPublishedWorks(): Promise<Set<string>> {
+  /*
+   * Two plain queries rather than one nested embed.
+   *
+   * PostgREST can express this as `work_topics -> works!inner -> summaries!inner`
+   * with a filter on the embedded status, and that would be one round trip instead
+   * of two. It is also syntax that fails as a 400 at runtime rather than at compile
+   * time, and nothing in this repo can exercise it before deploy: the agent
+   * container has no route to the REST API, and the generated types do not check
+   * embedded filter paths. A picker that fails to load is a worse outcome than one
+   * extra request over a few hundred rows, so this uses shapes already proven
+   * elsewhere in `lib/api.ts`.
+   */
+  const publishedWorkIds = new Set<string>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('summaries')
+      .select('work_id')
+      .eq('status', 'published')
+      .order('work_id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as { work_id: string | null }[];
+    for (const r of rows) if (r.work_id) publishedWorkIds.add(r.work_id);
+    if (rows.length < PAGE) break;
+  }
+
+  const ids = new Set<string>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('work_topics')
+      .select('topic_id, work_id')
+      .order('topic_id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as { topic_id: string; work_id: string }[];
+    for (const r of rows) if (publishedWorkIds.has(r.work_id)) ids.add(r.topic_id);
+    if (rows.length < PAGE) return ids;
+  }
+}
+
 /**
  * Topics a reader can choose between.
  *
- * Read from the database rather than a hardcoded list, so a taxonomy the corpus
- * grows into is offered without a frontend change.
+ * Read from the database rather than a hardcoded list, so a taxonomy the corpus grows
+ * into is offered without a frontend change.
  *
- * `hasWorks` filters to topics with at least one work behind them. A picker that
- * offers a choice resolving to an empty feed is worse than one that does not offer
- * it, and the taxonomy deliberately runs ahead of the corpus — several topics exist
- * today with nothing filed under them yet.
+ * `onlyWithWorks` filters to topics something published is actually filed under. A
+ * picker that offers a choice resolving to an empty feed is worse than one that does
+ * not offer it, and the taxonomy deliberately runs ahead of the corpus.
+ *
+ * Parent labels resolve from the *unfiltered* set on purpose: a parent can be empty
+ * while its children are not, and a heading reading `psychology` instead of
+ * "Psychology" is the visible symptom of filtering before grouping.
  */
-export async function fetchTopics(hasWorks = true): Promise<TopicOption[]> {
-  const { data, error } = await supabase
-    .from('topics')
-    .select('slug, label, parent_id, parent:parent_id(slug), work_topics(topic_id)')
-    .order('slug');
-  if (error) throw error;
+export async function fetchTopics(onlyWithWorks = true): Promise<TopicOption[]> {
+  const [topics, withWorks] = await Promise.all([
+    allTopics(),
+    onlyWithWorks ? topicIdsWithPublishedWorks() : Promise.resolve(null),
+  ]);
 
-  const rows = (data ?? []) as unknown as {
-    slug: string;
-    label: string;
-    parent_id: string | null;
-    parent: { slug: string } | null;
-    work_topics: { topic_id: string }[] | null;
-  }[];
+  const byId = new Map(topics.map((t) => [t.id, t]));
 
-  return rows
-    .filter((r) => !hasWorks || (r.work_topics?.length ?? 0) > 0)
-    .map((r) => ({ slug: r.slug, label: r.label, parentSlug: r.parent?.slug ?? null }));
+  return topics
+    .filter((t) => !withWorks || withWorks.has(t.id))
+    .map((t) => {
+      const parent = t.parent_id ? byId.get(t.parent_id) : undefined;
+      return {
+        slug: t.slug,
+        label: t.label,
+        parentSlug: parent?.slug ?? null,
+        parentLabel: parent?.label ?? null,
+      };
+    });
 }
 
 /** A reader's stored preferences, or null if the row is somehow missing. */
@@ -95,10 +173,6 @@ export async function fetchPreferences(userId: string): Promise<Preferences | nu
  * reader who opens settings and saves has stated their preferences as surely as one
  * who came through onboarding, and asking again afterwards would be the app failing
  * to notice it had been answered.
- *
- * Only "more" and "less" are written. A "default" topic appears in neither column,
- * because `topic_affinity` treats a missing key as no preference — writing a zero
- * would instead say "actively uninterested", which is what `excluded_topics` is for.
  */
 export async function savePreferences(
   userId: string,
@@ -106,7 +180,16 @@ export async function savePreferences(
 ): Promise<void> {
   const { topicWeights, excluded } = toStoredColumns(prefs.stances);
 
-  const { error } = await supabase
+  /*
+   * `.select()` so a save that matched nothing is an error rather than a shrug.
+   *
+   * An UPDATE affecting zero rows is a success as far as PostgREST is concerned, so
+   * without this a reader whose `preference_profiles` row is missing — or invisible
+   * to them under RLS — would watch the screen say "Saved" having changed nothing.
+   * `handle_new_user` should make that impossible; this is what proves it rather than
+   * assuming it.
+   */
+  const { data, error } = await supabase
     .from('preference_profiles')
     .update({
       topic_weights: topicWeights,
@@ -115,23 +198,36 @@ export async function savePreferences(
       interrupt_rate: prefs.interruptRate,
       onboarded_at: new Date().toISOString(),
     })
-    .eq('user_id', userId);
+    .eq('user_id', userId)
+    .select('user_id');
   if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('No preferences row to update. Sign out and back in, then try again.');
+  }
 }
 
 /**
  * Media kinds the corpus actually contains, so the picker offers nothing empty.
  *
- * Narrowed against `WORK_KINDS` rather than trusted as strings. `media_kinds` is a
- * `work_kind[]` column, and this repo has now been bitten three times by a value that
- * TypeScript accepted, PostgREST forwarded, and Postgres refused at the end. Sorting
- * by the enum's own order keeps the picker stable as the corpus grows, instead of
- * re-ordering itself the day a new medium appears.
+ * Paged: `max_rows` is 100, and an unpaged read would silently stop finding kinds once
+ * the corpus passes it — losing exactly the newer media this control exists to admit.
+ *
+ * Narrowed against `WORK_KINDS` rather than trusted as strings, and returned in the
+ * enum's own order so the picker does not re-order itself the day a medium appears.
  */
 export async function fetchAvailableMediaKinds(): Promise<WorkKind[]> {
-  const { data, error } = await supabase.from('works').select('kind');
-  if (error) throw error;
-  const present = new Set((data ?? []).map((r) => (r as { kind: string }).kind));
+  const present = new Set<string>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('works')
+      .select('id, kind')
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as { id: string; kind: string }[];
+    for (const r of rows) present.add(r.kind);
+    if (rows.length < PAGE) break;
+  }
   return WORK_KINDS.filter((k) => present.has(k));
 }
 
