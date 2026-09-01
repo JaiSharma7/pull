@@ -194,6 +194,13 @@ export function App() {
    */
   const [prefsSaved, setPrefsSaved] = useState(0);
   /*
+   * Whether a guest has asked to leave, and is being asked to mean it.
+   *
+   * Lives here rather than in the panel because the panel is inline JSX in this
+   * component; if it ever becomes its own route it should take this with it.
+   */
+  const [guestLeaving, setGuestLeaving] = useState(false);
+  /*
    * The only routed thing in the app.
    *
    * Reading is tab state rather than URLs, deliberately — a Pull is not a page.
@@ -678,27 +685,33 @@ export function App() {
             The masthead itself stays visible in focus mode: a full-screen reading mode
             with no visible way out is the pattern this product exists not to be.
           */}
-        <button
-          type="button"
-          className="btn btn--plain"
-          style={{ marginLeft: 'auto' }}
-          aria-pressed={focus}
-          title="Larger type, no rails. The line length stays the same."
-          onClick={() => {
-            const next = !focus;
-            setFocus(next);
-            storeFocus(next);
-            // Inside the click, because `requestFullscreen` is rejected outside a
-            // user gesture. Awaiting it would also delay the CSS half behind a
-            // permission decision the CSS half does not depend on.
-            void (next ? enterFullscreen(document) : exitFullscreen(document));
-          }}
-        >
-          {focus ? 'Exit focus' : 'Focus'}
-        </button>
+        {/*
+          Wrapped, so the trailing controls stay together and stay right. The auto margin
+          moved off this button and onto the group: an auto margin resolves per flex line,
+          so with three trailing children it pushed only the ones sharing its line and let
+          the last wrap alone to the left under the others.
+        */}
+        <span className="shell__actions">
+          <button
+            type="button"
+            className="btn btn--plain"
+            aria-pressed={focus}
+            title="Larger type, no rails. The line length stays the same."
+            onClick={() => {
+              const next = !focus;
+              setFocus(next);
+              storeFocus(next);
+              // Inside the click, because `requestFullscreen` is rejected outside a
+              // user gesture. Awaiting it would also delay the CSS half behind a
+              // permission decision the CSS half does not depend on.
+              void (next ? enterFullscreen(document) : exitFullscreen(document));
+            }}
+          >
+            {focus ? 'Exit focus' : 'Focus'}
+          </button>
 
-        {visitor ? (
-          /*
+          {visitor ? (
+            /*
               A door, not a wall. A visitor reached this screen through a shared
               link or the catalogue; the offer to keep what they find is the
               reason to sign in, and it belongs where they already are rather
@@ -708,17 +721,17 @@ export function App() {
               it: `#p-<pullId>` is the idea that was shared, and a sign-in that
               returns to the source without it returns to the wrong place.
             */
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() =>
-              navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
-            }
-          >
-            Sign in to keep these
-          </button>
-        ) : guest ? (
-          /*
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() =>
+                navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
+              }
+            >
+              Sign in to keep these
+            </button>
+          ) : guest ? (
+            /*
             A marker and a way out, and neither of them is `signOut` here.
 
             The first draft put "Sign in" in the pixel where every account holder's
@@ -745,21 +758,35 @@ export function App() {
             second, deliberate press. /account is not a public route, so `signOut()`
             there does land on the sign-in screen -- the one place it always worked.
           */
-          <span className="shell__guest">
-            <span className="meta">Reading as a guest</span>
-            <button type="button" className="btn btn--plain" onClick={() => navigate('/account')}>
-              Sign in
+            <span className="shell__guest">
+              <span className="meta">Reading as a guest</span>
+              {/*
+              The control disappears on the page it leads to. `navigate` pushes
+              unconditionally, so pressing it from /account changed nothing on screen and
+              grew the Back stack by one — a button that looks live, does nothing visible,
+              and costs the reader a press to undo. The marker stays, because the fact it
+              states is still true.
+            */}
+              {!accountOpen && (
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => navigate('/account')}
+                >
+                  Sign in
+                </button>
+              )}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => void supabase.auth.signOut()}
+            >
+              Sign out
             </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() => void supabase.auth.signOut()}
-          >
-            Sign out
-          </button>
-        )}
+          )}
+        </span>
       </header>
 
       <div className="shell__body">
@@ -863,7 +890,13 @@ export function App() {
             {accountOpen && guest && (
               <section className="stack measure">
                 <p className="meta">Account</p>
-                <h1 className="prose__heading">You are reading as a guest.</h1>
+                {/*
+                  A plain `h1`, matching Account.tsx. `.prose__heading` carries a 3rem
+                  top margin and expects to be the first child of a `.prose`; used here
+                  it wins over the stack's 1rem and floats the eyebrow away from its own
+                  heading, so the two versions of this route open differently.
+                */}
+                <h1>You are reading as a guest.</h1>
                 <p>
                   There is no account to manage here yet — every control on this screen acts on an
                   email address, and a guest session has none. That is also what makes the next part
@@ -877,19 +910,55 @@ export function App() {
                   consequence. All-caps destroys word shape, and this is the sentence a reader
                   has to actually read rather than glance at.
                 */}
-                <p>
+                <p id="guest-consequence">
                   Signing in starts a <strong>fresh account</strong>. This guest session ends when
                   you do, and it cannot be reopened — there is no address to send a code to — so
                   what you have read and stashed as a guest stays behind.
                 </p>
-                <div>
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={() => void supabase.auth.signOut()}
-                  >
-                    End this guest session and sign in
-                  </button>
+                {/*
+                  Two presses, which is the shape every irreversible action on the real
+                  Account screen already takes: "make them do something that could not be a
+                  misclick". This one has less recoverability than any of them — no address,
+                  so no export and no way back — and a reader can arrive here from a
+                  bookmark, primed to hit the primary button because they came to sign in.
+                  Oxblood is not what makes it safe; the second press is.
+                */}
+                <div className="stack">
+                  {guestLeaving ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        aria-describedby="guest-consequence"
+                        onClick={() => {
+                          // Navigate first: `signOut()` alone leaves the address at
+                          // /account, which keeps the tab title reading "Account" over the
+                          // sign-in screen and drops the next guest straight back onto this
+                          // panel instead of the feed.
+                          navigate('/');
+                          void supabase.auth.signOut();
+                        }}
+                      >
+                        Yes — end it and sign in
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => setGuestLeaving(false)}
+                      >
+                        Keep reading as a guest
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      aria-describedby="guest-consequence"
+                      onClick={() => setGuestLeaving(true)}
+                    >
+                      End this guest session and sign in
+                    </button>
+                  )}
                 </div>
               </section>
             )}
