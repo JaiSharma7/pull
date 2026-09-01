@@ -14,7 +14,7 @@
   --ink: #14120e;
   --ink-soft: #2c2823;
   --warm: #6b6459;
-  --warm-faint: #9a9287;
+  --warm-faint: #736d64;
   --oxblood: #8c2f26;
   --oxblood-soft: #a8433a;
   --rule: rgb(20 18 14 / 12%);
@@ -101,7 +101,7 @@
     --text: #f4f1ea;
     --text-soft: #e3ded3;
     --text-muted: #a49b8e;
-    --text-faint: #776f64;
+    --text-faint: #8d8376;
     --accent: #c96a5f;
     --accent-hover: #dc8074;
     --rule: rgb(244 241 234 / 14%);
@@ -137,7 +137,7 @@
   --text: #f4f1ea;
   --text-soft: #e3ded3;
   --text-muted: #a49b8e;
-  --text-faint: #776f64;
+  --text-faint: #8d8376;
   --accent: #c96a5f;
   --accent-hover: #dc8074;
   --rule: rgb(244 241 234 / 14%);
@@ -147,6 +147,15 @@
 /* Accessibility is a launch requirement here, not a later pass. */
 :root[data-contrast='high'] {
   --text-muted: var(--text);
+  /*
+   * Faint is remapped here too, and that is the amended law arriving rather than
+   * a tidy-up. It used to be exempt from the 4.5:1 floor as "ornament", and the
+   * exemption was self-justifying: because it was ornament it did not need to
+   * clear the floor, and because it did not clear the floor high contrast had
+   * nothing to rescue. A reader who asked for more contrast got exactly the same
+   * 2.72:1 from every rule that had adopted it.
+   */
+  --text-faint: var(--text);
   --rule: var(--text);
   --rule-strong: var(--text);
 }

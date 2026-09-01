@@ -66,9 +66,16 @@ rather than reasoning about it.
    a focus ring, where it is an accessibility affordance.
 3. One accent colour. If something needs emphasis and oxblood is taken, use weight,
    size, or space.
-4. `border-radius` ≤ 4px on cards. Candy rounding is precisely the look we avoid.
+4. `border-radius` ≤ 3px on blocks, ≤ 2px on controls. Candy rounding is precisely the
+   look we avoid, and one number for both is too loose: at the size a button is drawn,
+   the same radius reads far rounder than it does on a card. `--radius` and
+   `--radius-sm` carry the two; a rule should use one rather than a literal.
 5. Colour is never the only signal.
-6. No hardcoded hex outside `tokens.css`.
+6. No hardcoded colour outside `tokens.css` — in any notation, and in component source
+   as well as stylesheets. An inline `style={{ color: '#…' }}` is worse than a
+   stylesheet literal rather than equivalent: the theme blocks cannot override it, so
+   the panel keeps its light-mode colours in the dark theme and ignores the
+   high-contrast setting completely.
 7. **The session has visible edges.** See below — this is the law that separates the
    product from a feed, so it constrains layout as hard as the others constrain colour.
 
@@ -178,9 +185,15 @@ Enforced rather than intended: `jsx-a11y` rules are lint **errors** in
 
 - Full keyboard navigation with a visible, non-colour-only focus state.
 - Screen-reader labels on every control; the feed is a real list with real headings.
-- `prefers-reduced-motion` respected — the card flip becomes a cross-fade.
+- `prefers-reduced-motion` respected — the depth reveal and the dial lose their motion.
 - Large-text and high-contrast modes as first-class settings.
-- Contrast ≥ 4.5:1 body, ≥ 3:1 large text and UI boundaries.
+- Contrast ≥ 4.5:1 for **every** text role against its own ground, faint included, and
+  ≥ 3:1 for large text and UI boundaries. There is no ornament exemption: `--text-faint`
+  held one for a while at 2.72:1, and because it was exempt from the floor the
+  high-contrast setting had nothing to rescue — so the readers most affected got the
+  same unreadable grey whatever they turned on.
+- Every text role below ~7:1 is remapped under `[data-contrast='high']`, so turning the
+  setting on changes something for every rule that could need it.
 
 `eslint-plugin-jsx-a11y` runs as errors in CI. `/design-check` audits a diff against
 this document.
