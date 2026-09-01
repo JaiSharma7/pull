@@ -101,5 +101,34 @@ genuinely self-contained. `CLAUDE.md` holds the seven laws that govern changes;
 
 ## Licence
 
-MIT. The code is open; the hosted service's generated content, community submissions
-and user libraries are separate and are not part of this repository.
+**[GNU AGPL v3](./LICENSE)** (`AGPL-3.0-only`). Copyright © 2026 Jai Sharma and the
+What a Pull contributors — see [`NOTICE`](./NOTICE).
+
+The code is open and stays open. You may read it, run it, modify it and share it. The
+one condition that matters: if you run a modified version and let other people use it
+over a network, you must offer _those users_ the complete source of what you are running,
+under the same licence. That is an offer to the people using your instance — not a duty
+to publish to the world, and running a modified copy privately for yourself triggers
+nothing. It is the "Affero" part, and it is the whole reason this licence rather than
+the GPL, which a hosted fork can sidestep entirely.
+
+**What the relicense does not do.** It does not reach backwards. Every commit made
+before it remains MIT, and because those commits are still public, anyone can fetch one
+today and take MIT rights in it — not just people who already had a copy. A licence
+granted cannot be withdrawn, and publishing it keeps granting it.
+
+So the AGPL governs this version and everything after it. In practice that means the
+protection arrives with new work rather than covering what is already out, which is the
+normal and unavoidable shape of a relicense.
+
+Contributions are additionally covered by the [Contributor Licence
+Agreement](./CLA.md), which lets the project offer paid services alongside the free
+ones without relicensing anyone's work by surprise. It is short, and it explains itself.
+
+The hosted service's generated content, community submissions and user libraries are
+separate, are governed by [the Terms](./docs/terms.md), and are not part of this
+repository.
+
+**The five stay free regardless.** Audio, offline, unlimited history, unlimited stashing
+and curated Daily Pulls are free forever — that is law 3 in `CLAUDE.md`, and no licence
+change touches it.
