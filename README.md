@@ -112,11 +112,14 @@ to publish to the world, and running a modified copy privately for yourself trig
 nothing. It is the "Affero" part, and it is the whole reason this licence rather than
 the GPL, which a hosted fork can sidestep entirely.
 
-**What the relicense does not do.** Every version published before it stays available
-under MIT to anyone who already had it — a licence already granted cannot be withdrawn.
-Someone who forked at the MIT commit keeps those rights to that code forever. What the
-AGPL governs is this version and everything after it, so the practical effect arrives
-with the next release rather than retroactively.
+**What the relicense does not do.** It does not reach backwards. Every commit made
+before it remains MIT, and because those commits are still public, anyone can fetch one
+today and take MIT rights in it — not just people who already had a copy. A licence
+granted cannot be withdrawn, and publishing it keeps granting it.
+
+So the AGPL governs this version and everything after it. In practice that means the
+protection arrives with new work rather than covering what is already out, which is the
+normal and unavoidable shape of a relicense.
 
 Contributions are additionally covered by the [Contributor Licence
 Agreement](./CLA.md), which lets the project offer paid services alongside the free

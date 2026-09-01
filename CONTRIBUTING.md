@@ -107,10 +107,16 @@ Commits made before the policy existed are exempt — the check skips anything r
 from the commit that introduced it. Rewriting published history to backfill sign-offs
 would be worse than the gap it closes.
 
-Commits authored by a bot are also skipped. A bot has no legal personality, so there is
-nothing for it to certify; the certification that matters on a Dependabot PR happens when
-a human reviews and merges it. Requiring a sign-off no bot can give would leave every
-dependency update permanently red, which teaches reviewers to ignore a failing DCO.
+A bot's commits are skipped, but only on a bot's own pull request — the check requires
+both that GitHub reports the PR author as a bot and that the commit's author email is a
+bot address. A bot has no legal personality, so there is nothing for it to certify, and
+requiring a sign-off no bot can give would leave every dependency update permanently red,
+which teaches reviewers to ignore a failing DCO.
+
+Both conditions, because only one of them is trustworthy: you choose your own commit
+author email, so that alone would let anyone opt out of the DCO. It follows that if you
+push your own commit onto a Dependabot branch — to fix a bump, say — that commit is
+yours and still needs signing.
 
 ### Sign the CLA (once)
 
@@ -122,8 +128,8 @@ to send this. The CLA records a **licence grant**, once: the project may relicen
 contribution, including into a paid service offered alongside the free ones. You keep
 your copyright, and you keep every right to your own work.
 
-It is a short document and it states its trade-offs plainly, including the two things it
-lets the project do that the AGPL alone would not. Read it before you sign it. If you
+It is a short document and it states its trade-offs plainly, including what it lets the
+project do that the AGPL alone would not. Read it before you sign it. If you
 disagree with it, say so in the issue rather than the pull request — the terms are a
 reasonable thing to argue about, and that argument does not belong in a code review.
 

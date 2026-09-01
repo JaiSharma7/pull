@@ -32,12 +32,20 @@ a completely reasonable position and no one will think less of you for it.
 ## What this does not cover
 
 - **Content is not code.** Summaries, submitted works, corpus entries, translations and
-  anything else that is a _Pull_ rather than a _program_ are governed by a separate
-  agreement, not this one. See `docs/content-policy.md` and law 4 in `CLAUDE.md`.
+  anything else that is a _Pull_ rather than a _program_ are outside this agreement.
+  **That agreement does not exist yet**, and until it does the project cannot take a
+  licence grant over contributed content — so content contributions are not being
+  accepted into this repository. `docs/content-policy.md` covers what may be committed
+  at all (law 4 in `CLAUDE.md`: analysis, never reproduction); it is not a licence.
 - **Your other work.** This agreement reaches only what you deliberately submit to this
   repository.
 
 ## Agreement
+
+**This is version 1.0 of this agreement.** You sign a version, not a moving target: if
+these terms change materially, the version number changes, and what you already signed
+continues to govern your existing contributions until you sign the new one. Signatures in
+`CONTRIBUTORS.md` record the version alongside the name.
 
 You accept these terms by **signing** — adding your name to `CONTRIBUTORS.md`, as
 "How to sign" below describes. Signing covers Your present and future Contributions to
@@ -84,8 +92,12 @@ this agreement terminate as of the date such litigation is filed.
 **4. Relicensing.**
 You agree that the project's maintainer may license Your Contribution under terms of its
 choosing, including licences that are not the AGPL and including proprietary terms, in
-addition to — not instead of — the AGPL release of the project. This is the only clause
-in this document that the AGPL alone would not already give the project.
+addition to — not instead of — the AGPL release of the project.
+
+This is the clause the project could not get from the AGPL at all, and the reason this
+document exists. It is not the only one that reaches further: section 2 includes a right
+to sublicense, which AGPL-3.0 section 2 expressly withholds, and section 3 is a patent
+grant the AGPL would only give in narrower terms.
 
 **5. You are entitled to grant this.**
 You represent that You are legally entitled to grant the above licences. If Your employer

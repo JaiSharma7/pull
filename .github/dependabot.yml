@@ -21,11 +21,17 @@ updates:
       # typescript-eslint#10940; TypeScript's own guidance is to keep the TS 6 API
       # side by side, which is a larger change than a version bump should make.
       #
-      # Scoped deliberately to the major: 6.x minors and patches still arrive, and
-      # this expires on its own the moment typescript-eslint widens the range and
-      # someone deletes this entry.
+      # Held by version range rather than by bump kind, because `<6.1.0` does not fall
+      # on a major boundary: TypeScript 6.1 would be a *minor*, would sail past an
+      # `update-types: semver-major` hold, and would land green — the hard throw is
+      # `versionMajor >= 7`, and the unsupported-version warning below that only prints
+      # on a TTY, which CI is not. Silently outside the supported range is worse than
+      # loudly broken.
+      #
+      # 6.0.x patches still arrive. Delete this entry when typescript-eslint widens its
+      # range; nothing else needs changing.
       - dependency-name: typescript
-        update-types: ['version-update:semver-major']
+        versions: ['>=6.1.0']
   - package-ecosystem: github-actions
     directory: /
     schedule:
