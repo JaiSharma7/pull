@@ -34,6 +34,31 @@ not an inverted candy palette, and the accent does not change.
 All three are OFL-licensed, which an open-source project requires. Fraunces' optical
 sizing axis is the reason it is here: it holds up at both 42px headline and 14px chip.
 
+## The mark
+
+A magician's top hat: bone on ink in the icon files, the reader's ink with an oxblood
+band in the masthead. The product is named for the thing pulled out of it, so the hat is
+the half you can draw — and it is drawn flat, with no gradient and no shadow, like
+everything else here.
+
+It stays small. The sentence is the brand, so beside the wordmark the hat sits at
+roughly the word's cap height and no more; a big logo is what a product does when it has
+nothing to say.
+
+Three proportions carry the silhouette at 16px, which is where a favicon is actually
+read: the lit crown (what the band leaves showing) is 1.35:1 tall, the brim is over
+three times the crown's width, and the brim is a **swept crescent** rather than a bar —
+one ellipse subtracted from the same ellipse lifted above it, which raises its tips
+clear of the crown. Drawn as a flat rectangle it reads as a plinth, not a hat.
+
+It is written twice and neither copy is decorative. `scripts/gen-icons.mjs` generates
+`favicon.svg` and the PWA icons — this repo has no rasteriser, so the PNGs are encoded
+from a pixel buffer — and `packages/ui/src/components/Mark.tsx` draws the same hat in
+the top bar. `Mark.test.ts` compares the component against the _generated_ favicon, so
+neither a divergent tweak nor a stale icon in `public/` gets through. Re-run
+`node scripts/gen-icons.mjs` after any change to either, and look at the result at 16px
+rather than reasoning about it.
+
 ## Laws
 
 1. No gradients on any surface. Flat ground plus paper grain.
