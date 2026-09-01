@@ -4,6 +4,7 @@ import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { fetchExportData } from '../lib/highlights-api.js';
+import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import {
@@ -346,6 +347,17 @@ export function Library({ userId }: { userId: string }) {
                     sourceTrail={group.title}
                     saved
                     onListen={() => speak(`${item.headline}. ${item.body}`)}
+                    onShare={() =>
+                      void shareOrCopy(
+                        shareTarget({
+                          origin: window.location.origin,
+                          pullId: item.id,
+                          headline: item.headline,
+                          workTitle: group.title,
+                        }),
+                      )
+                    }
+                    shareLabel={shareLabel(shareCapability(navigator))}
                   />
 
                   <div className="library__actions">

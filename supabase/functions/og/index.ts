@@ -12,6 +12,12 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 // Overridable by an APP_ORIGIN secret; the default is the deployed origin so this
 // works without one. It is a URL, not a credential, so it belongs in the source
 // rather than in the secret store.
+//
+// SET THE SECRET IN PRODUCTION. Every link this function emits carries this
+// origin into somebody else's inbox, so while the default is a preview host,
+// every share advertises the preview rather than the product. It is the one
+// piece of configuration here whose absence is invisible until a stranger
+// clicks it.
 const APP_ORIGIN =
   Deno.env.get('APP_ORIGIN') ?? 'https://pull-jai-sharmas-projects-d3062905.vercel.app';
 
@@ -44,6 +50,20 @@ Deno.serve(async (req) => {
   const site = escape(work?.title ?? 'What a Pull');
   const url = `${APP_ORIGIN}/pull/${encodeURIComponent(id)}`;
 
+  /*
+   * `summary`, not `summary_large_image`.
+   *
+   * The card declared a large image and supplied none, which is a promise
+   * unfurlers cannot keep: they fall back to a bare card anyway, and the
+   * declaration only makes the omission look like a bug rather than a gap.
+   *
+   * A real image belongs here eventually, and it should be a deterministic
+   * typographic card rendered ONCE PER SUMMARY at publish time — not per
+   * request. Generating it per unfurl would put work on the read path for a page
+   * a crawler fetches, and an image model would put a provider there, which law
+   * 2 forbids outright. So it waits for the pipeline step that can write one
+   * into Storage.
+   */
   return new Response(
     `<!doctype html>
 <html lang="en">
@@ -56,7 +76,7 @@ Deno.serve(async (req) => {
 <meta property="og:description" content="${description}">
 <meta property="og:site_name" content="${site}">
 <meta property="og:url" content="${url}">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta http-equiv="refresh" content="0; url=${url}">
 </head>
 <body><a href="${url}">${title}</a></body>

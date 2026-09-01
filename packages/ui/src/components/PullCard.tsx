@@ -37,6 +37,18 @@ export interface PullCardProps {
    */
   listening?: boolean;
   onAsk?: () => void;
+  /**
+   * Hand this idea to somebody else.
+   *
+   * Optional for the same reason `onOpenSource` is: the design specimen and any
+   * card without a resolvable `/pull/:id` should not offer a control that goes
+   * nowhere. The label is passed in rather than decided here, because what the
+   * button will actually do — open a share sheet or copy a link — depends on the
+   * browser, and a control that says "Share" while silently copying is a small
+   * lie the component has no way to detect on its own.
+   */
+  onShare?: () => void;
+  shareLabel?: string;
   /** Rendered under the flip content — counterpoint, conviction controls, etc. */
   children?: ReactNode;
 }
@@ -61,6 +73,8 @@ export function PullCard({
   onListen,
   listening = false,
   onAsk,
+  onShare,
+  shareLabel = 'Share',
   onOpenSource,
   children,
 }: PullCardProps) {
@@ -128,6 +142,16 @@ export function PullCard({
             {onAsk && (
               <button type="button" className="btn" onClick={onAsk}>
                 Ask
+              </button>
+            )}
+            {onShare && (
+              <button
+                type="button"
+                className="btn"
+                onClick={onShare}
+                aria-label={`${shareLabel}: ${headline}`}
+              >
+                {shareLabel}
               </button>
             )}
             {onListen && (

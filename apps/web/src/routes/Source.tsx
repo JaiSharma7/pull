@@ -5,6 +5,7 @@ import { anchoredPullId } from '../lib/routes.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
+import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
@@ -367,6 +368,31 @@ export function Source({
                   </p>
                 ) : null}
                 {minutes ? <p className="meta">{minutes} min</p> : null}
+
+                <p className="source__pull-actions">
+                  {/*
+                    Share is offered to everyone, including a signed-out visitor:
+                    the link they would send opens on the idea now, and handing
+                    one along needs no account. Highlighting does — a highlight is
+                    a row keyed to a user, and there is no anonymous version of it.
+                  */}
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() =>
+                      void shareOrCopy(
+                        shareTarget({
+                          origin: window.location.origin,
+                          pullId: p.id,
+                          headline: p.headline,
+                          workTitle: detail.summaryTitle ?? work.title,
+                        }),
+                      )
+                    }
+                  >
+                    {shareLabel(shareCapability(navigator))}
+                  </button>
+                </p>
 
                 {userId && (
                   <p className="source__pull-actions">

@@ -15,6 +15,7 @@ import {
 import { createDwellTracker } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
+import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
 import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
@@ -34,6 +35,7 @@ const RETRY_MAX_MS = 5 * 60_000;
  * feel broken (law 3).
  */
 const CAN_SPEAK = speechSupported();
+const SHARE_LABEL = shareLabel(shareCapability(navigator));
 
 /**
  * What the session rail shows.
@@ -732,6 +734,17 @@ export function Feed({
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
             listening={speakingId === item.row.id}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
+            onShare={() =>
+              void shareOrCopy(
+                shareTarget({
+                  origin: window.location.origin,
+                  pullId: item.row.id,
+                  headline: item.row.headline,
+                  workTitle: item.row.work.title,
+                }),
+              )
+            }
+            shareLabel={SHARE_LABEL}
           />
         ),
       )}
@@ -770,6 +783,8 @@ function PullCardInView({
   onOpenSource,
   onListen,
   listening,
+  onShare,
+  shareLabel: shareControlLabel,
 }: {
   row: FeedRow;
   saved: boolean;
@@ -781,6 +796,9 @@ function PullCardInView({
   /** Absent where the browser cannot speak, so no dead control is rendered. */
   onListen?: () => void;
   listening: boolean;
+  onShare: () => void;
+  /** Renamed on the way in so it does not shadow the `shareLabel` helper. */
+  shareLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -831,6 +849,8 @@ function PullCardInView({
         onListen={onListen}
         listening={listening}
         onOpenSource={onOpenSource}
+        onShare={onShare}
+        shareLabel={shareControlLabel}
       />
     </div>
   );
