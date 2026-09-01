@@ -86,10 +86,13 @@ and reviewers should reject it on that basis alone.
 
 Routing is `history.pushState` and a `popstate` listener in `apps/web/src/App.tsx`, over
 path helpers in `apps/web/src/lib/routes.ts` that are pure and unit-tested. Reading is tab
-state on purpose — a Pull is not a page — so only the things that need an address you can
-send someone have one: a source, a Pull, a topic, search, and the legal documents. Data is
-fetched by `supabase-js` in the component that needs it; the offline copy lives in
-IndexedDB via `lib/offline.ts`, not in a query cache.
+state on purpose — a Pull is not a page — so a real address belongs only to what someone
+could send: `/explore`, `/search`, `/appearance`, `/source/:id`, `/pull/:id`, `/topic/:slug`,
+`/privacy` and `/terms`. `DESTINATIONS` in `App.tsx` is the authority for the first three;
+the sections beside them stay tab state because each is keyed to a reader, which is also why
+a signed-out visitor is shown destinations and not sections. Data is fetched by `supabase-js`
+in the component that needs it; the offline copy lives in IndexedDB via `lib/offline.ts`, not
+in a query cache.
 
 Hosted project `pull`, ref `zjvfwhjwaytyogdxeddo`, region `ca-central-1`.
 

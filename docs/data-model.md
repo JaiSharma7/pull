@@ -1,12 +1,14 @@
 # Data model
 
-39 tables in `public`, created across the 70 timestamped migrations in
-`supabase/migrations/` (`YYYYMMDDHHMMSS_name.sql`, applied in filename order — the
-range moves with every push, so count the files rather than trusting a number here).
-Every one has RLS
-enabled with at least one policy, every foreign key has a supporting index, and
-every `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the
-whole thing from zero and asserts all of that.
+39 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+(`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
+at least one policy, every foreign key has a supporting index, and every
+`SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
+from zero and asserts all of that.
+
+The Shape below is the list, not an illustration of it. If it and the count disagree, the
+Shape is the one to trust and the count is the one to fix — the previous number survived
+being wrong precisely because the diagram had drifted with it and the two still agreed.
 
 ## Shape
 
