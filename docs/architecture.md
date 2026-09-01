@@ -157,6 +157,19 @@ deletes anonymous accounts after 30 days, and that retention promise is load-bea
 write to the personal tables at all (`20260901190000`). Unscheduled, `auth.users` only
 grows, and the policy says something the database is not doing.
 
+**The frontend deploys itself and the database does not.** Vercel redeploys `apps/web`
+from git on every push to `main`; migrations reach the hosted project only when somebody
+runs `supabase db push` (step 2 of `scripts/go-live.sh`). So a pull request that adds a
+column and selects it — an ordinary, correct pull request — ships the query to every
+reader on merge and the column whenever the next person remembers.
+
+That is not a hypothetical. On 2026-09-01 the hosted project was seven migrations behind:
+`works.source_url` arrived in `20260901160000`, `apps/web/src/lib/source-api.ts` selected
+it, and every source page a reader opened from a card answered `42703: column
+works.source_url does not exist`. Nothing was broken except the gap between the two. The
+source page now recognises that class of failure and names the command, because the person
+who can fix it is never the person looking at the page.
+
 **Anonymous sign-ins must also be on in the hosted project** — Authentication → Sign In /
 Providers. `supabase/config.toml` configures the local stack and nothing else, so a
 deploy without that switch shows every visitor a guest button that reports it cannot

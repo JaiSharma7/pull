@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rpcError, TRANSPORT_ERROR } from './rpc-error.js';
+import { isSchemaBehind, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
 import { isOfflineFailure } from './offline.js';
 
 /**
@@ -113,5 +113,64 @@ describe('a request that never reached the server', () => {
     // misfiled, and the reader would be told to check a connection that is fine.
     const mentions = { message: 'function raised: TypeError somewhere', code: '' };
     expect(rpcError(mentions).name).toBe('PostgrestError');
+  });
+});
+
+describe('isSchemaBehind', () => {
+  it('recognises the SQLSTATE for a column that does not exist', () => {
+    // The exact shape the hosted project returned on 2026-09-01, seven migrations
+    // behind a frontend that had already shipped the query.
+    expect(
+      isSchemaBehind({
+        code: '42703',
+        message: 'column works.source_url does not exist',
+      }),
+    ).toBe(true);
+  });
+
+  it('recognises PostgREST catching it a layer earlier, where there is no SQLSTATE', () => {
+    expect(
+      isSchemaBehind({
+        code: 'PGRST204',
+        message: "Could not find the 'source_url' column of 'works' in the schema cache",
+      }),
+    ).toBe(true);
+  });
+
+  it('survives the round trip through rpcError, which is how callers actually see it', () => {
+    /*
+     * The catch sites hold an `Error`, not the wire object — `rpcError` folds the
+     * SQLSTATE into `name` and there is nowhere else for it to have gone. A check
+     * that only understood the raw shape would be dead code at every call site.
+     */
+    expect(isSchemaBehind(rpcError({ code: '42703', message: 'column x does not exist' }))).toBe(
+      true,
+    );
+    expect(isSchemaBehind(rpcError({ code: 'PGRST204', message: 'schema cache' }))).toBe(true);
+  });
+
+  it('leaves every other failure alone', () => {
+    /*
+     * The guard against over-matching, and it matters more here than usual: this
+     * message tells the reader nothing is wrong with their request and sends the
+     * operator to run a migration. Saying it about an ordinary permission failure
+     * would send them somewhere there is nothing to fix.
+     */
+    for (const e of [
+      { code: '42501', message: 'permission denied for table works' },
+      { code: '23505', message: 'duplicate key value violates unique constraint' },
+      { code: 'PGRST116', message: 'JSON object requested, multiple rows returned' },
+      { code: '', message: 'TypeError: Failed to fetch' },
+      { message: 'no code at all' },
+    ]) {
+      expect(isSchemaBehind(e), e.message).toBe(false);
+      expect(isSchemaBehind(rpcError(e)), e.message).toBe(false);
+    }
+  });
+
+  it('is false for anything that is not an error shape', () => {
+    expect(isSchemaBehind(null)).toBe(false);
+    expect(isSchemaBehind(undefined)).toBe(false);
+    expect(isSchemaBehind(new Error('plain'))).toBe(false);
   });
 });

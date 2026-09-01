@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { anchoredPullId } from '../lib/routes.js';
+import { isSchemaBehind } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
@@ -168,6 +169,16 @@ export function Source({
    */
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * Whether the failure is a deployment behind its own code, rather than a fault.
+   *
+   * Kept apart from `error` because it changes who the sentence is for. Every other
+   * failure here is something the reader is entitled to hear about and can respond to
+   * by trying again; this one is a database that has not been migrated, which no
+   * reader can do anything about and which the person running the deployment can fix
+   * in one command — if anybody tells them.
+   */
+  const [schemaBehind, setSchemaBehind] = useState(false);
   const [offline, setOffline] = useState(false);
   /*
    * What the last share did, and which idea it was for.
@@ -203,6 +214,7 @@ export function Source({
       .catch((e: unknown) => {
         if (!live) return;
         setOffline(isOfflineFailure(e));
+        setSchemaBehind(isSchemaBehind(e));
         setError(e instanceof Error ? e.message : 'Could not load this source.');
       });
 
@@ -374,8 +386,23 @@ export function Source({
         <p>
           {offline
             ? 'You appear to be offline. This source needs a connection.'
-            : 'Something went wrong reaching the library.'}
+            : schemaBehind
+              ? 'This deployment’s database is older than the app running against it, so a ' +
+                'column this page reads does not exist yet. Reading works; source pages do ' +
+                'not, until the pending migrations are applied.'
+              : 'Something went wrong reaching the library.'}
         </p>
+        {/*
+          The operator's instruction, in the page rather than only in the console.
+
+          Nobody who can fix this is watching a reader's devtools, and the reader
+          cannot fix it at all — so the one actionable sentence goes where whoever
+          opens the broken page will see it. It names the command instead of the
+          symptom because the symptom is already above it.
+        */}
+        {schemaBehind && !offline && (
+          <p className="meta">Whoever runs this deployment: `supabase db push`.</p>
+        )}
         <p className="meta">{error}</p>
         <BackControl userId={userId} onNavigate={onNavigate} />
       </section>

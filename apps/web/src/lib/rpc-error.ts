@@ -66,3 +66,35 @@ export function rpcError(error: unknown): Error {
   wrapped.name = e.code ? `PostgrestError ${e.code}` : 'PostgrestError';
   return wrapped;
 }
+
+/**
+ * Is this deployment's database older than the code talking to it?
+ *
+ * Two things ship this product and only one of them is automatic. Vercel redeploys
+ * `apps/web` on every push to `main`; migrations reach the hosted project only when
+ * somebody runs `supabase db push`. So a pull request that adds a column and selects
+ * it — which is an ordinary, correct pull request — puts a query for that column in
+ * front of every reader the moment it merges, and the column arrives whenever the
+ * next person remembers.
+ *
+ * That is not hypothetical and it is why this exists. On 2026-09-01 the hosted project
+ * was seven migrations behind, `works.source_url` did not exist there, and every source
+ * page a reader opened from a card answered "Something went wrong reaching the library"
+ * — with `column works.source_url does not exist` printed underneath in the small grey
+ * line nobody reads as an instruction.
+ *
+ * The reader cannot act on either sentence. Whoever runs the deployment can act on this
+ * one immediately, and it is the difference between an afternoon of bisecting the
+ * frontend and one command.
+ *
+ * `42703` is Postgres refusing a column that is not there. `PGRST204` is PostgREST's
+ * own version, raised from its cached schema before the query is sent — the same fact
+ * caught one layer earlier, and it arrives with no SQLSTATE at all.
+ */
+export function isSchemaBehind(error: unknown): boolean {
+  if (error instanceof Error) {
+    return /^PostgrestError (42703|PGRST204)$/.test(error.name);
+  }
+  const e = (error ?? {}) as RpcErrorShape;
+  return e.code === '42703' || e.code === 'PGRST204';
+}

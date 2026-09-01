@@ -2,7 +2,7 @@
 #
 # Everything between "the pipeline exists in git" and "the pipeline runs in production".
 #
-#   login ──→ deploy worker ──→ set REQUIRE_REAL_PROVIDERS ──→ schedule cron ──→ enqueue
+#   login ──→ push migrations ──→ deploy worker ──→ REQUIRE_REAL_PROVIDERS ──→ cron ──→ enqueue
 #                    ▲
 #                    └── the step nothing else does. Vercel redeploys from git on
 #                        every push; Edge Functions do not. The worker in production
@@ -34,7 +34,7 @@ command -v node >/dev/null 2>&1 || {
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
-step "1/4  Authenticate"
+step "1/6  Authenticate"
 # Persists to ~/.supabase/access-token, so this is a one-time cost.
 if npx --yes supabase projects list >/dev/null 2>&1; then
   echo "already logged in"
@@ -43,7 +43,31 @@ else
   npx --yes supabase login
 fi
 
-step "2/4  Deploy the worker"
+step "2/6  Push the migrations"
+# THE STEP THAT WAS MISSING, and the failure it produced is worth writing down.
+#
+# Vercel redeploys apps/web from git on every push to main. The database does not
+# move by itself — migrations reach the hosted project only through this command. So
+# the frontend is always current and the schema is however current somebody last
+# remembered to make it, and the gap between them is invisible until a reader opens
+# the page that needs the newer column.
+#
+# On 2026-09-01 that gap was seven migrations. `works.source_url` shipped in
+# 20260901160000, `apps/web/src/lib/source-api.ts` selects it, and the hosted project
+# had never been given the column — so every source page opened from a card returned
+# `42703: column works.source_url does not exist` and told the reader "Something went
+# wrong reaching the library". The app was correct, the database was correct, and the
+# two had never been introduced.
+#
+# It goes before the worker deploy on purpose: an Edge Function that reads a column
+# its database does not have fails the same way, one layer further from anybody who
+# can see it.
+#
+# Idempotent — already-applied migrations are skipped — and it prints what it is about
+# to apply, which is also the fastest way to see how far behind a project has drifted.
+npx --yes supabase db push --project-ref "$PROJECT_REF"
+
+step "3/6  Deploy the worker"
 # --no-verify-jwt because the worker authenticates the dispatcher itself against a
 # Vault token; the platform cannot do it, since pg_net is not a signed-in user.
 # Dropping this would make every dispatcher tick 401 and the queue would never drain.
@@ -51,14 +75,14 @@ npx --yes supabase functions deploy worker \
   --project-ref "$PROJECT_REF" \
   --no-verify-jwt
 
-step "3/4  Require real providers"
+step "4/6  Require real providers"
 # Without this, a rotated or quota-exhausted key silently falls back to stub summaries:
 # zero cost, nothing in cost_ledger, no error anywhere, and readers get placeholder
 # prose. With it, the worker refuses to start rather than pretend. The key itself
 # stays in Vault — this flag only forbids the fallback.
 npx --yes supabase secrets set REQUIRE_REAL_PROVIDERS=1 --project-ref "$PROJECT_REF"
 
-step "4/5  Schedule the background jobs"
+step "5/6  Schedule the background jobs"
 cat <<'SQL'
 
   Run this in the SQL editor. Every one of these is idempotent — cron.schedule upserts
@@ -85,7 +109,7 @@ cat <<'SQL'
 
 SQL
 
-step "5/5  Enqueue one real job"
+step "6/6  Enqueue one real job"
 cat <<'SQL'
 
   Run this in the SQL editor (or let Claude run it — it has database access):
