@@ -10,7 +10,7 @@
   },
   "devDependencies": {
     "@wap/config": "workspace:*",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "@supabase/supabase-js": "^2.112.4"
   }

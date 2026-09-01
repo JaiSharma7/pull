@@ -26,15 +26,15 @@
     "db:test": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f scripts/smoke-read-path.sql -f supabase/tests/delta_negation.sql -f supabase/tests/search.sql -f supabase/tests/catalogue.sql -f supabase/tests/identity_privacy.sql -f supabase/tests/anon_write_bounds.sql -f supabase/tests/account_security.sql"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
-    "eslint": "^9.39.5",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.11.0",
     "prettier": "^3.9.6",
     "supabase": "2.116.0",
     "turbo": "^2.10.12",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.11"
   }
