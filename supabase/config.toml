@@ -60,6 +60,12 @@ enable_signup = true
 # The cost side is bounded in 20260901190000: a guest may not enqueue generation (law 2
 # -- anonymous sessions are unlimited, so per-user generation quota would be no quota at
 # all), may not author a summary, and may not file a report. See that migration.
+# A running stack does NOT pick this up. `supabase start` against containers that are
+# already up reports them and returns; it does not re-read this file. So on a machine
+# where the stack was already running, the guest button fails with
+# `anonymous_provider_disabled` and the app correctly reports that guest sessions are
+# switched off — which looks exactly like a bug in the button. `supabase stop && supabase
+# start` is the fix. Verified on 2026-09-01 by hitting precisely this.
 enable_anonymous_sign_ins = true
 
 # A one-time code is the whole credential here, so its lifetime is the window in which

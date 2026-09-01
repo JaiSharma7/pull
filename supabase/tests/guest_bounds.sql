@@ -43,6 +43,7 @@ end $fn$;
 do $$
 declare
   guest        uuid := extensions.gen_random_uuid();
+  regular      uuid := extensions.gen_random_uuid();
   reader       uuid := extensions.gen_random_uuid();
   some_work    uuid;
   refused      boolean;
@@ -54,6 +55,7 @@ declare
   i            int;
   guest_left   int;
   reader_left  int;
+  regular_left int;
 begin
   -- Both accounts are created through the real trigger rather than by inserting into
   -- `profiles` directly: `handle_new_user` is what gives a guest the preference row the
@@ -64,14 +66,37 @@ begin
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           created_at, updated_at,
                           raw_app_meta_data, raw_user_meta_data, is_anonymous)
-  -- `updated_at` is aged too, deliberately: the sweep keys on the LATEST of created,
-  -- last-signed-in and updated, so that a guest still reading on day 31 is not deleted
-  -- mid-session. A row aged only by `created_at` would pass a sweep that keys on
-  -- creation and silently stop testing anything the day the predicate got that right.
+  -- Every timestamp aged, and no `auth.sessions` row: this guest opened the app once,
+  -- three months ago, and never came back. That is what the sweep is for.
   values (guest, '00000000-0000-0000-0000-000000000000',
           'authenticated', 'authenticated', null, '',
           now() - interval '90 days', now() - interval '90 days',
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  -- A second guest, exactly as old, who is still here: signed in 90 days ago and
+  -- refreshed their token two hours ago. Somebody who found the product, kept the tab,
+  -- and comes back to it.
+  --
+  -- This fixture is what makes the sweep assertion mean anything. Without it the sweep
+  -- passes whether it keys on creation or on disuse — and keying on creation deletes
+  -- this reader's stashes and knowledge states out from under a live session, with no
+  -- address to recover through. `last_sign_in_at` deliberately stays null: GoTrue sets
+  -- it once and does not bump it on refresh, so a sweep that trusted it would delete
+  -- this row too.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (regular, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '90 days', now() - interval '90 days',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  -- `refreshed_at` is `timestamp` without a time zone while its neighbours have one, so
+  -- it is written as UTC to match what GoTrue stores and what the sweep reads.
+  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
+  values (extensions.gen_random_uuid(), regular,
+          now() - interval '90 days', now(),
+          (now() at time zone 'utc') - interval '2 hours');
 
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           email_confirmed_at, created_at, updated_at,
@@ -248,8 +273,9 @@ begin
 
   perform public.sweep_guest_accounts(interval '30 days');
 
-  select count(*) into guest_left  from auth.users u where u.id = guest;
-  select count(*) into reader_left from auth.users u where u.id = reader;
+  select count(*) into guest_left   from auth.users u where u.id = guest;
+  select count(*) into reader_left  from auth.users u where u.id = reader;
+  select count(*) into regular_left from auth.users u where u.id = regular;
 
   if guest_left <> 0 then
     raise exception
@@ -258,8 +284,15 @@ begin
   end if;
   if reader_left <> 1 then
     raise exception
-      'the sweep deleted a reader who signed in with an address. It must key on '
-      'is_anonymous and nothing else.';
+      'the sweep deleted a reader who signed in with an address. A guest is an account '
+      'with no address, no phone and no linked identity -- not merely a flag.';
+  end if;
+  if regular_left <> 1 then
+    raise exception
+      'the sweep deleted a guest who refreshed their session two hours ago. It is keyed '
+      'on disuse, not on age: docs/privacy.md promises "has not been used for 30 days", '
+      'and deleting somebody mid-session takes their stashes and knowledge states with '
+      'it, with no address to recover through.';
   end if;
 end $$;
 

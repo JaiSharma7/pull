@@ -287,10 +287,27 @@ begin
   -- real reader's account matches a predicate that deletes it. An account with an
   -- address, a phone or a linked identity is not a guest whatever the flag says.
   --
-  -- Age is measured from the last sign-in rather than from creation. The comment above
-  -- promises somebody can close the tab, think about it and come back; keyed on
-  -- `created_at` alone, a guest reading daily for a month is deleted mid-session on day
-  -- 31, which is the opposite of what the promise says.
+  -- Age is measured from DISUSE, not from creation, because that is what this feature
+  -- promises in three places: `docs/privacy.md` says "has not been used for 30 days",
+  -- `docs/terms.md` says "30 days of disuse", and the comment above says somebody can
+  -- close the tab, think about it and come back. Keyed on creation, a guest who reads
+  -- every day is deleted mid-session on day 31 -- stashes, notes and knowledge states
+  -- cascading away while their browser still holds a token for a user row that no longer
+  -- exists, with no address to recover through. That is the worst outcome this file can
+  -- produce, and it would have shipped looking like it worked.
+  --
+  -- `auth.sessions` is the signal; the user columns are not. GoTrue sets
+  -- `last_sign_in_at` once, at sign-in, and does NOT bump it on a token refresh -- so for
+  -- a guest, who signs in exactly once and then refreshes for ever, it is a synonym for
+  -- `created_at`. `auth.sessions.refreshed_at` is the column that moves. It is declared
+  -- WITHOUT a time zone while everything around it has one (20260901140000 hit the same
+  -- trap), so it is anchored to UTC here rather than reinterpreted in whatever TimeZone
+  -- the caller happens to be in.
+  --
+  -- The user columns stay as a floor, for the case `auth.sessions` cannot answer: a guest
+  -- whose session has expired and been cleaned up has no row there at all, and is
+  -- sweepable on age alone.
+  --
   -- Collected once into an array rather than a temporary table: `search_path = ''` is
   -- pinned above, and an unqualified temp relation does not resolve reliably under it.
   select array_agg(u.id)
@@ -304,6 +321,13 @@ begin
          and not exists (select 1 from auth.identities i where i.user_id = u.id)
          and greatest(u.created_at, coalesce(u.last_sign_in_at, u.created_at),
                       coalesce(u.updated_at, u.created_at)) < now() - p_older_than
+         and not exists (
+           select 1
+             from auth.sessions s
+            where s.user_id = u.id
+              and coalesce(s.refreshed_at at time zone 'utc', s.updated_at, s.created_at)
+                    >= now() - p_older_than
+         )
        limit batch
     ) u;
 
@@ -337,7 +361,14 @@ comment on function public.sweep_guest_accounts(interval) is
   'them. Reads auth.users.is_anonymous rather than the JWT claim because it runs from '
   'pg_cron with no session. See 20260901190000.';
 
-revoke all on function public.sweep_guest_accounts(interval) from public, anon, authenticated;
+-- `service_role` is named explicitly, and it is not belt and braces. Supabase grants
+-- EXECUTE on every new function in `public` to it by default -- the mechanic
+-- 20260830200114 spells out -- so a revoke listing only `public, anon, authenticated`
+-- leaves the secret key able to call this and empty the guest population in one
+-- statement. That role is omnipotent anyway, so this is blast radius rather than a hole.
+-- What makes it worth a line is that the grant below reads "postgres only", and without
+-- this it would not have been true.
+revoke all on function public.sweep_guest_accounts(interval) from public, anon, authenticated, service_role;
 grant execute on function public.sweep_guest_accounts(interval) to postgres;
 
 -- Scheduling is a function an operator calls, not something the migration does -- the
@@ -369,7 +400,7 @@ comment on function public.enable_guest_sweep(text) is
   'never depends on pg_cron running, and idempotent because cron.schedule upserts by '
   'job name.';
 
-revoke all on function public.enable_guest_sweep(text) from public, anon, authenticated;
+revoke all on function public.enable_guest_sweep(text) from public, anon, authenticated, service_role;
 grant execute on function public.enable_guest_sweep(text) to postgres;
 
 -- 5. What anyone may write, now that an identity is free. ---------------------------
