@@ -65,9 +65,10 @@ pnpm dev             # http://127.0.0.1:5173
 ```
 
 The demo corpus is drawn only from public-domain sources, so a fresh clone runs with
-**no provider API keys**. What `db:reset` gives you is **6 works and 21 Pulls** — enough
-to watch every mechanic work, including a deliberately planted near-duplicate so the
-Delta visibly fires. It is not enough to feel like a product, and it is not meant to be.
+**no model-provider API key**. What `db:reset` gives you is **6 works and 21 Pulls** —
+enough to watch every mechanic work, including a deliberately planted near-duplicate so
+the Delta visibly fires. It is not enough to feel like a product, and it is not meant to
+be.
 
 The 101 sources in `scripts/corpus/public-domain.json` are titles and URLs; turning them
 into content runs the generation pipeline, which needs a model API key and an operator.
