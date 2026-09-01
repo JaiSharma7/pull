@@ -136,12 +136,14 @@ inaccurate.
 
 ## How to sign
 
-Add your name to `CONTRIBUTORS.md` in the same pull request as your first contribution,
-and keep the `Signed-off-by:` line on every commit (see `CONTRIBUTING.md` — the DCO
-records provenance per commit; this agreement records the licence grant once).
+Add your name to `CONTRIBUTORS.md` in the same pull request as your first contribution.
 
-That line is your signature, and it means: I have read this document and I agree to it
-for my present and future contributions to this repository.
+**The `CONTRIBUTORS.md` entry is your signature to this agreement** — not the
+`Signed-off-by:` trailer, which is a separate thing you also keep on every commit (see
+`CONTRIBUTING.md`: the DCO records provenance per commit, this agreement records the
+licence grant once). Adding that entry means: I have read this document at the version
+named in my line, and I agree to it for my present and future contributions to this
+repository.
 
 No CI job enforces this — a reviewer checks it before merging a first contribution. It is
 deliberately a human step: a licence grant nobody read is not worth having, and a bot

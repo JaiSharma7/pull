@@ -118,6 +118,17 @@ author email, so that alone would let anyone opt out of the DCO. It follows that
 push your own commit onto a Dependabot branch — to fix a bump, say — that commit is
 yours and still needs signing.
 
+It also follows that a bot's commit cherry-picked into a pull request _you_ opened is
+checked, and cannot be signed off on the bot's behalf. Take ownership of it instead:
+
+```bash
+git commit --amend --reset-author -s     # or: git cherry-pick -s ...
+```
+
+That is the DCO working rather than obstructing. Carrying someone else's change into
+your own pull request is precisely the case the certificate is written for — you are
+stating you have the right to submit it, which is a claim only you can make.
+
 ### Sign the CLA (once)
 
 Alongside the per-commit DCO, first-time contributors sign the [Contributor Licence

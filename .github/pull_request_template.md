@@ -27,9 +27,12 @@
 - [ ] `pnpm check` passes
 - [ ] `pnpm db:lint` and `pnpm db:test` pass (if `supabase/` changed)
 - [ ] Every commit is signed off (`git commit -s`) — see CONTRIBUTING.md
-- [ ] **First contribution?** I have read `CLA.md` in the repository root and added
-      myself to `CONTRIBUTORS.md` in this PR. (No CI job checks this — it is on the
-      reviewer to confirm before merging.)
+      **Contributor licence — tick exactly one.** Nothing in CI reads these; a reviewer
+      checks them before merging, which is why leaving both blank is not a neutral state.
+
+- [ ] This is my first contribution. I have read `CLA.md` in the repository root, I
+      agree to it, and I have added myself to `CONTRIBUTORS.md` in this PR.
+- [ ] I have contributed before and am already listed in `CONTRIBUTORS.md`.
 
 ## AI assistance
 
