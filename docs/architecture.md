@@ -5,7 +5,7 @@
 ```
 ┌──────────────────────────────────────────────┐
 │  Browser / (later) Capacitor                 │
-│  React 19 · Vite · TanStack Router+Query     │
+│  React 19 · Vite · pushState routing         │
 │                                              │
 │  IndexedDB          Cache API                │
 │  ├── saved Pulls    ├── UI bundle            │

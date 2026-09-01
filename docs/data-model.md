@@ -1,9 +1,14 @@
 # Data model
 
-38 tables in `public`, applied as migrations `0001`–`0013`. Every one has RLS
-enabled with at least one policy, every foreign key has a supporting index, and
-every `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the
-whole thing from zero and asserts all of that.
+39 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+(`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
+at least one policy, every foreign key has a supporting index, and every
+`SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
+from zero and asserts all of that.
+
+The Shape below is the list, not an illustration of it. If it and the count disagree, the
+Shape is the one to trust and the count is the one to fix — the previous number survived
+being wrong precisely because the diagram had drifted with it and the two still agreed.
 
 ## Shape
 
@@ -31,6 +36,7 @@ Work                                              ← the thing itself
 generation_jobs ─── job_steps ─── cost_ledger
 reports ─── moderation_decisions · rights_requests
 daily_pulls · interleave_config · rate_limits
+blocked_email_domains                             ← refused at signup
 ```
 
 ## Decisions worth knowing
