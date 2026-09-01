@@ -719,30 +719,38 @@ export function App() {
           </button>
         ) : guest ? (
           /*
-            A marker and a door, in that order.
+            A marker and a way out, and neither of them is `signOut` here.
 
-            The marker is not decoration: a guest session looks exactly like an account
-            from the inside — same sections, same feed, same tally — and the one thing
-            that is different about it is the one thing nothing on screen would
-            otherwise say. It is set in the muted meta style rather than the accent,
-            because it is a statement of fact and not a warning.
+            The first draft put "Sign in" in the pixel where every account holder's
+            "Sign out" sits, wired straight to `signOut()`, with the consequence stated
+            only in a `title`. Three things were wrong with that, and they compound.
 
-            "Sign in", not "Sign out", because that is what the button is for. It does
-            end the guest session — there is nothing else it could do, a guest cannot
-            hold two sessions at once — and the title says so, since work done as a
-            guest does not come with them.
+            It is destructive and irreversible: a guest has no address and no password,
+            so the token in this browser IS the credential, and ending the session
+            deletes an evening of reading with no way to get it back. A `title` needs a
+            hover, so a keyboard reader tabbing to it never sees the warning, and a
+            screen reader treats it as a description of a button that already has a name
+            and mostly does not announce it. The disclosure that does exist in text
+            lived on /account -- which this same commit withholds from a guest's
+            navigation, so it was written for an audience that could not reach it.
+
+            And it frequently did not even sign anyone in. `signOut()` alone only
+            reaches the sign-in screen from an address that is not a public route; from
+            /explore, /search, /appearance or a shared source -- all of which a guest
+            can be on -- the session ended and the shell simply re-rendered as a
+            visitor, so the reader lost everything and gained nothing.
+
+            So this navigates to /account instead, which for a guest is the panel below:
+            the consequence in plain visible text, and the destructive step behind a
+            second, deliberate press. /account is not a public route, so `signOut()`
+            there does land on the sign-in screen -- the one place it always worked.
           */
-          <>
-            <span className="meta">Guest</span>
-            <button
-              type="button"
-              className="btn btn--plain"
-              title="Ends this guest session and returns to the sign-in screen. Anything you did as a guest stays with the guest session."
-              onClick={() => void supabase.auth.signOut()}
-            >
+          <span className="shell__guest">
+            <span className="meta">Reading as a guest</span>
+            <button type="button" className="btn btn--plain" onClick={() => navigate('/account')}>
               Sign in
             </button>
-          </>
+          </span>
         ) : (
           <button
             type="button"
@@ -854,14 +862,25 @@ export function App() {
             */}
             {accountOpen && guest && (
               <section className="stack measure">
-                <h1 className="prose__heading">Account</h1>
+                <p className="meta">Account</p>
+                <h1 className="prose__heading">You are reading as a guest.</h1>
                 <p>
-                  You are looking around as a guest, so there is no account to settle here yet — the
-                  controls on this screen all act on an email address.
+                  There is no account to manage here yet — every control on this screen acts on an
+                  email address, and a guest session has none. That is also what makes the next part
+                  worth reading before you press it.
                 </p>
-                <p className="meta">
-                  Signing in takes an address and a six-digit code. It starts a fresh account: what
-                  you have read as a guest stays with the guest session.
+                {/*
+                  Plain body text, deliberately not `.meta`.
+
+                  `.meta` is uppercase mono at --step--1: a chip face, right for "For You" and
+                  "The Delta" and wrong for the one paragraph on this screen that carries a
+                  consequence. All-caps destroys word shape, and this is the sentence a reader
+                  has to actually read rather than glance at.
+                */}
+                <p>
+                  Signing in starts a <strong>fresh account</strong>. This guest session ends when
+                  you do, and it cannot be reopened — there is no address to send a code to — so
+                  what you have read and stashed as a guest stays behind.
                 </p>
                 <div>
                   <button
@@ -869,7 +888,7 @@ export function App() {
                     className="btn btn--primary"
                     onClick={() => void supabase.auth.signOut()}
                   >
-                    Sign in with an email
+                    End this guest session and sign in
                   </button>
                 </div>
               </section>

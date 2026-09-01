@@ -502,6 +502,22 @@
  * gives `.shell__nav-item[aria-current]`, so the two navs agree and neither
  * depends on a reader distinguishing oxblood from ink.
  */
+/*
+ * The guest marker and its control, as one flex item.
+ *
+ * `.shell__masthead` is `flex-wrap: wrap`, and an auto margin resolves per flex *line* —
+ * so three trailing children instead of two adds widths where the last one wraps alone
+ * to the next row and sits left-aligned under a right-aligned pair. Grouping them also
+ * says what they are: the marker qualifies the button, and at the masthead's 24px gap
+ * both of them were exactly equidistant from "Focus", which made three peers out of one
+ * statement and one control.
+ */
+.shell__guest {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
 .shell__masthead-item[aria-current='page'] {
   color: var(--accent);
   font-weight: 500;

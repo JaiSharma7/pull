@@ -15,6 +15,10 @@
 --   * a guest cannot enqueue generation, author a summary, or file a report
 --   * a reader with an address can still do all three -- so the refusals above are
 --     about being a guest and not about something else that broke
+--   * the bounds that apply to everyone are still in force: the free allowance is
+--     immediate, the delay past it grows, and the daily ceiling refuses. `create or
+--     replace` on a fixed signature makes those easy to revert by accident, and every
+--     other assertion here would still pass if they were gone
 --   * the sweep deletes a stale guest and leaves the reader alone
 --
 -- Run as the roles that actually reach these paths (`authenticated`, with and without
@@ -45,6 +49,9 @@ declare
   touched      int;
   seen         int;
   queued       jsonb;
+  delayed      jsonb;
+  first_delay  int;
+  i            int;
   guest_left   int;
   reader_left  int;
 begin
@@ -57,9 +64,13 @@ begin
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           created_at, updated_at,
                           raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  -- `updated_at` is aged too, deliberately: the sweep keys on the LATEST of created,
+  -- last-signed-in and updated, so that a guest still reading on day 31 is not deleted
+  -- mid-session. A row aged only by `created_at` would pass a sweep that keys on
+  -- creation and silently stop testing anything the day the predicate got that right.
   values (guest, '00000000-0000-0000-0000-000000000000',
           'authenticated', 'authenticated', null, '',
-          now() - interval '90 days', now(),
+          now() - interval '90 days', now() - interval '90 days',
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
@@ -169,13 +180,65 @@ begin
     raise exception 'a signed-in reader could not enqueue generation (got %).', queued;
   end if;
 
+  -- ------------------------------------- 3. the bounds that apply to everyone
+  --
+  -- Asserted here because their absence is invisible. `enqueue_generation_job` is
+  -- replaced by `create or replace` on a fixed signature, so a migration that rebases on
+  -- the wrong predecessor silently drops whatever the newest one added and every other
+  -- assertion in this file still passes. That is not hypothetical: the first draft of
+  -- 20260901190000 rebased on 20260829170701 instead of 20260829171514 and reverted the
+  -- hard ceiling and the stagger -- leaving any account with a mailbox able to enqueue
+  -- unbounded paid generation, under a migration whose subject is bounding spend.
+  --
+  -- So the shape of the bound is asserted, not just that the door opens. Job 2 is inside
+  -- the free allowance and must be immediate; job 5 is past it and must be delayed by
+  -- more than job 4 was, which is what makes the delay a throughput limit rather than a
+  -- constant; and the ceiling must refuse.
+  queued := public.enqueue_generation_job('{"kind":"work","title":"Second"}'::jsonb);
+  if (queued ->> 'delaySeconds')::int <> 0 then
+    raise exception
+      'the second job of the day was delayed by %s; the first three are the free '
+      'allowance.', queued ->> 'delaySeconds';
+  end if;
+  if (queued ->> 'remainingToday') is null then
+    raise exception
+      'enqueue no longer reports remainingToday, which means the daily ceiling it '
+      'counts against is gone. See 20260829171514.';
+  end if;
+
+  -- Up to the ceiling. Jobs 3..50 -- two are already in from the calls above.
+  for i in 3..50 loop
+    delayed := public.enqueue_generation_job('{"kind":"work","title":"Filler"}'::jsonb);
+    if i = 4 then
+      first_delay := (delayed ->> 'delaySeconds')::int;
+    elsif i = 5 then
+      if (delayed ->> 'delaySeconds')::int <= first_delay then
+        raise exception
+          'job 5 was delayed %s and job 4 was delayed %s. A fixed delay is not a '
+          'throughput bound -- it moves spend in time rather than capping it.',
+          delayed ->> 'delaySeconds', first_delay;
+      end if;
+    end if;
+  end loop;
+
+  refused := false;
+  begin
+    perform public.enqueue_generation_job('{"kind":"work","title":"One too many"}'::jsonb);
+  exception when check_violation then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'the 51st job of the day was accepted; the hard ceiling is gone.';
+  end if;
+
   insert into public.summaries (work_id, author_id, title, status, visibility)
   values (some_work, reader, 'A reader summary', 'draft', 'private');
 
   insert into public.reports (reporter_id, target_type, target_id, reason)
   values (reader, 'summary', some_work, 'spam');
 
-  -- ------------------------------------------------------ 3. the sweep
+  -- ------------------------------------------------------ 4. the sweep
   --
   -- Back to the owner role: the sweep runs from pg_cron with no JWT at all, which is
   -- why it reads `auth.users.is_anonymous` rather than the claim. Both accounts were

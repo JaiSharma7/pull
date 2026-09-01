@@ -56,7 +56,8 @@ address:
 - **It cannot be recovered.** Clear the browser's storage, or open the product on another
   device, and the session is gone with no way back in. There is nothing to send a code to.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
-  need an account we can attribute the request to.
+  need an account we can attribute the request to. (The first two are not yet exposed in
+  the app for anyone; the limit is in the database, so it holds whenever they are.)
 - **We delete it for you.** A guest session that has not been used for 30 days is removed
   outright, along with everything keyed to it. You do not have to ask.
 

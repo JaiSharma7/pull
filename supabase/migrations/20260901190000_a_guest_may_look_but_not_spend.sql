@@ -14,16 +14,16 @@
 --
 -- For three doors it is wrong, and one of them is a law.
 --
---   GENERATION (law 2). `enqueue_generation_job` is granted to `authenticated` and its
---   quota is three fast jobs per requester per day -- with over-quota jobs *delayed
---   rather than refused*, deliberately: "the quota protects provider spend; it does not
---   sell anything" (20260829170701). That reasoning holds exactly while a requester is
---   a person with a mailbox. A guest session is free and unlimited, so per-requester
---   quota against guests is not a weak limit, it is arithmetic with no upper bound: one
---   canonical generation costs ~$0.056, and the cost of N of them is bounded only by
---   how many times a script presses a button. So the door is shut rather than
---   re-quota'd. A guest who wants a work summarised signs in; that is a mailbox, which
---   is the thing the quota was always really counting.
+--   GENERATION (law 2). `enqueue_generation_job` is granted to `authenticated`, and
+--   every bound in it is per requester: three fast jobs a day, a staggered delay past
+--   that, and a hard ceiling of fifty (20260829171514). Every one of those counts rows
+--   belonging to one identity, which is a real bound exactly while an identity costs
+--   something to obtain -- a mailbox, and a code that has to arrive in it. A guest
+--   session costs nothing and can be thrown away, so fifty per requester is fifty times
+--   however many requesters somebody cares to mint, which is not a bound at all. One
+--   canonical generation costs ~$0.056. So the door is shut rather than re-quota'd: a
+--   guest who wants a work summarised signs in, and a mailbox is the thing the quota
+--   was always really counting.
 --
 --   AUTHORSHIP. `summaries_author_insert` lets a signed-in reader own a summary row.
 --   Author-owned rows are readable by their author (`summary_is_readable`) and are the
@@ -78,17 +78,40 @@ grant execute on function public.is_guest() to anon, authenticated;
 
 -- 2. Generation is not free, so it is not for guests. -------------------------------
 --
--- Supersedes 20260829170701, which stays the authority on everything else here: the
--- limits are constants rather than parameters because a caller who can pass them can
--- raise them, and the advisory lock is what stops two concurrent calls both reading the
--- same pre-insert count. Both are preserved verbatim. The only change is the refusal
--- above them.
+-- Supersedes 20260829171514, which is the CURRENT definition and not 20260829170701.
+-- The distinction is the whole of this comment, because the first draft of this file
+-- got it wrong: it rebased on 170701, and `create or replace` on the same signature
+-- silently discarded everything 171514 added -- the hard daily ceiling, the staggered
+-- delay, and `remainingToday`. That is not a cosmetic regression. 171514 exists because
+-- Codex round 5 found that "a fixed delay is not a throughput bound": every job past the
+-- third got the same +300s, so a burst of ten thousand simply became eligible five
+-- minutes later and the provider spend was unchanged. Reintroducing that, in the
+-- migration whose stated purpose is bounding generation spend, would have been a law 2
+-- break shipped under a law 2 banner.
 --
--- Refused rather than delayed, which is the one place this departs from the comment it
--- inherits. Delay is the right answer to "this person is asking for a lot" because the
--- work is still theirs and they are still identifiable. It is the wrong answer to "this
--- caller is free to recreate itself", where a delayed job is simply a job that costs the
--- same and arrives later.
+-- So 171514's body is preserved verbatim below and only the guest refusal is added:
+--
+--   jobs 1-3      no delay        the free daily allowance
+--   jobs 4-49     staggered       each 5 minutes further out than the last
+--   50+           refused         a ceiling no human reaches, which is what stops a
+--                                 script
+--   guests        refused         see below
+--
+-- Refused rather than delayed or ceilinged, which is the one place a guest differs.
+-- Both of those bound a caller who is fixed. Neither bounds a caller who can throw
+-- itself away and come back: a per-requester ceiling of 50 against an identity that
+-- costs nothing to mint is a ceiling of 50 times however many identities somebody wants.
+--
+-- READ FROM THE TABLE, NOT THE CLAIM. `is_guest()` reads `is_anonymous` out of the JWT,
+-- which is right for a policy -- a policy must not join, and it is evaluated on every
+-- row. This function is `security definer` and runs once per call, so it can afford to
+-- ask `auth.users` directly, and the direction of failure is why it should. A claim is a
+-- copy of a fact, minted up to `jwt_expiry` ago; anything that ever produces a guest
+-- whose token lacks the claim -- a custom access-token hook, a third-party integration,
+-- a client holding a token across a conversion -- makes them a non-guest, and the
+-- fail-open direction here is the one that spends money. Section 4 makes the same
+-- argument for the sweep. The two are the same fact read from the two places it exists,
+-- and the money door reads the authoritative one.
 --
 -- `28000` (invalid_authorization_specification), the same code the account functions in
 -- 20260901140000 raise, so a client can tell "you may not" apart from "that failed".
@@ -99,8 +122,11 @@ security definer
 set search_path = ''
 as $$
 declare
+  -- Server-owned. Not parameters: this function is reachable by any signed-in
+  -- caller, so anything tunable here is tunable by the person being limited.
   daily_fast_limit   constant int := 3;
-  slow_delay_seconds constant int := 300;
+  daily_hard_ceiling constant int := 50;
+  stagger_seconds    constant int := 300;
 
   uid       uuid := (select auth.uid());
   used      int;
@@ -112,15 +138,14 @@ begin
     raise exception 'enqueue_generation_job requires an authenticated user';
   end if;
 
-  if public.is_guest() then
+  if exists (select 1 from auth.users u where u.id = uid and u.is_anonymous) then
     raise exception
       'Generating a summary needs an account. Sign in with an email address and try again.'
       using errcode = '28000';
   end if;
 
   -- Serialise per requester, so two concurrent calls cannot both read the same
-  -- pre-insert count and both decide they are under the limit. Transaction
-  -- scoped, and only ever contended by the same user's own bursts.
+  -- pre-insert count and both decide they are under the limit.
   perform pg_advisory_xact_lock(pg_catalog.hashtextextended(uid::text, 0));
 
   select count(*) into used
@@ -128,18 +153,26 @@ begin
   where requester_id = uid
     and created_at >= date_trunc('day', (now() at time zone 'utc'));
 
+  if used >= daily_hard_ceiling then
+    raise exception 'daily generation ceiling reached (% jobs); try again tomorrow',
+      daily_hard_ceiling
+      using errcode = 'check_violation';
+  end if;
+
   over := used >= daily_fast_limit;
 
-  -- Over quota is not a refusal: the work still happens, just later. The quota
-  -- protects provider spend; it does not sell anything.
-  delay_for := case when over then slow_delay_seconds else 0 end;
+  -- Staggered, not fixed: each job past the allowance is scheduled a further
+  -- interval out, so the queue drains at a bounded rate instead of all at once.
+  delay_for := case
+                 when over then (used - daily_fast_limit + 1) * stagger_seconds
+                 else 0
+               end;
 
   insert into public.generation_jobs (requester_id, target, status)
   values (uid, p_target, 'queued')
   returning id into job_id;
 
-  -- Same transaction as the insert, so there is no half-created state and no
-  -- cleanup path to get wrong.
+  -- Same transaction as the insert, so there is no half-created state.
   perform pgmq.send('generation',
                     jsonb_build_object('jobId', job_id, 'step', 'resolve_identity'),
                     delay_for);
@@ -147,16 +180,17 @@ begin
   return jsonb_build_object(
     'jobId', job_id,
     'queue', case when over then 'normal' else 'fast' end,
-    'delaySeconds', delay_for
+    'delaySeconds', delay_for,
+    'remainingToday', daily_hard_ceiling - used - 1
   );
 end;
 $$;
 
 comment on function public.enqueue_generation_job is
-  'Creates a generation job and queues its first step atomically. Quota is server-owned '
-  'and serialised per requester; over-quota jobs are delayed, never refused. Guests are '
-  'refused outright -- an anonymous session is free to recreate, so a per-requester '
-  'quota does not bound spend. See 20260901190000.';
+  'Creates a generation job and queues its first step atomically. Quota is server-owned, '
+  'serialised per requester, and staggered so throughput past the free allowance is '
+  'genuinely bounded. Guests are refused outright -- an anonymous session is free to '
+  'recreate, so no per-requester bound holds against one. See 20260901190000.';
 
 revoke all on function public.enqueue_generation_job(jsonb) from public, anon, authenticated;
 grant execute on function public.enqueue_generation_job(jsonb) to authenticated;
@@ -228,18 +262,70 @@ security definer
 set search_path = ''
 as $$
 declare
+  -- Bounded per run, so one nightly transaction can never be arbitrarily large -- and so
+  -- a backlog drains over several nights instead of locking `auth.users` for one long
+  -- one. At 30 days of guests this is far above any real volume.
+  batch constant int := 5000;
+
+  stale   uuid[];
   removed int;
 begin
-  delete from public.generation_jobs g
-   where g.requester_id in (
-     select u.id from auth.users u
-      where u.is_anonymous
-        and u.created_at < now() - p_older_than
-   );
+  -- A floor on the argument, because this is an irreversible bulk delete of accounts
+  -- with no soft-delete and no dry run. `sweep_guest_accounts(interval '-100 years')`
+  -- would take out every guest session in the product including ones minted a second
+  -- ago. Only `postgres` can call it, so this is a footgun rather than a hole -- and a
+  -- footgun on a delete of `auth.users` is worth one line.
+  if p_older_than < interval '1 day' then
+    raise exception 'sweep_guest_accounts refuses an age below one day (got %)', p_older_than
+      using errcode = 'check_violation';
+  end if;
 
-  delete from auth.users u
-   where u.is_anonymous
-     and u.created_at < now() - p_older_than;
+  -- Four conditions where one would do, because the one is a third-party behaviour this
+  -- repository neither pins nor tests. `is_anonymous` is the fact, and GoTrue is what
+  -- flips it to false when a guest converts to a permanent account -- so if that ever
+  -- stops happening, or happens after the address is attached rather than with it, a
+  -- real reader's account matches a predicate that deletes it. An account with an
+  -- address, a phone or a linked identity is not a guest whatever the flag says.
+  --
+  -- Age is measured from the last sign-in rather than from creation. The comment above
+  -- promises somebody can close the tab, think about it and come back; keyed on
+  -- `created_at` alone, a guest reading daily for a month is deleted mid-session on day
+  -- 31, which is the opposite of what the promise says.
+  -- Collected once into an array rather than a temporary table: `search_path = ''` is
+  -- pinned above, and an unqualified temp relation does not resolve reliably under it.
+  select array_agg(u.id)
+    into stale
+    from (
+      select u.id
+        from auth.users u
+       where u.is_anonymous
+         and u.email is null
+         and u.phone is null
+         and not exists (select 1 from auth.identities i where i.user_id = u.id)
+         and greatest(u.created_at, coalesce(u.last_sign_in_at, u.created_at),
+                      coalesce(u.updated_at, u.created_at)) < now() - p_older_than
+       limit batch
+    ) u;
+
+  if stale is null then
+    return 0;
+  end if;
+
+  -- The two `on delete set null` foreign keys that would otherwise leave a reader's own
+  -- material in the database with the name filed off -- the same pair, for the same
+  -- reason, that `delete_my_account` deletes explicitly (20260901140000). A guest can
+  -- create neither today (sections 2 and 3 refuse them), so this is a guard against a
+  -- future where that changes; applying it to one of the two and not the other is the
+  -- asymmetry that later reads as though it were deliberate.
+  --
+  -- `reports` and `moderation_decisions` are correctly left to anonymise: they are
+  -- records of something that happened and are useless to attribute afterwards.
+  delete from public.generation_jobs g where g.requester_id = any(stale);
+  delete from public.summaries s
+   where s.author_id = any(stale)
+     and s.visibility <> 'public';
+
+  delete from auth.users u where u.id = any(stale);
 
   get diagnostics removed = row_count;
   return removed;
@@ -285,3 +371,60 @@ comment on function public.enable_guest_sweep(text) is
 
 revoke all on function public.enable_guest_sweep(text) from public, anon, authenticated;
 grant execute on function public.enable_guest_sweep(text) to postgres;
+
+-- 5. What anyone may write, now that an identity is free. ---------------------------
+--
+-- The doors above are the ones that cost money or somebody's attention. This is the one
+-- that costs disk, and it is the half of anonymous sign-in that is easy to miss because
+-- nothing about it is guest-specific.
+--
+-- `20260901130000` bounded the DMCA intake and made the argument in full: an unbounded
+-- write from a caller who costs nothing to create "is not a data breach... It is a
+-- storage bill, and on the free tier a storage bill is an outage." That reasoning
+-- applied to `anon` on one table, because `rights_requests` was then the only write in
+-- the schema reachable without an account. It is not any more. Every self-keyed insert
+-- policy in `20260829124730` is now reachable by a caller that costs nothing to create,
+-- and not one of the columns behind them has a length check:
+--
+--   notes.body, stashes.name, stashes.description, saved_items.note,
+--   highlights.text, convictions.rationale, explanations.text
+--
+-- The sweep in section 4 is a 30-day answer to a problem that can fill a disk in an
+-- afternoon, so it is not the answer here.
+--
+-- Bounded for everyone rather than for guests, and that is deliberate on two counts. A
+-- cap does not depend on `is_guest()` being right, so it holds even if the claim is ever
+-- wrong; and the same hole is open to anyone holding one compromised mailbox, which was
+-- already true before this branch and is not a guest problem at all. Guests are simply
+-- what made it worth fixing now.
+--
+-- The numbers are sized to be invisible to a person and fatal to a script. 20000
+-- characters is roughly eight pages of prose in a note nobody will write; a stash name
+-- that does not fit in 200 is not a name. `docs/product.md` describes none of these as
+-- long-form fields.
+--
+-- No existing row can violate these: `notes`, `stashes`, `saved_items`, `highlights`,
+-- `convictions` and `explanations` are per-reader tables with no seed data (the corpus
+-- migrations write works, editions, summaries and pulls), so the constraints validate
+-- against an empty set on a from-zero replay.
+
+alter table public.notes
+  add constraint notes_body_length check (length(body) between 1 and 20000);
+
+alter table public.stashes
+  add constraint stashes_name_length check (length(name) between 1 and 200),
+  add constraint stashes_description_length
+    check (description is null or length(description) <= 2000);
+
+alter table public.saved_items
+  add constraint saved_items_note_length check (note is null or length(note) <= 20000);
+
+alter table public.highlights
+  add constraint highlights_text_length check (length(text) between 1 and 20000);
+
+alter table public.convictions
+  add constraint convictions_rationale_length
+    check (rationale is null or length(rationale) <= 20000);
+
+alter table public.explanations
+  add constraint explanations_text_length check (length(text) between 1 and 20000);
