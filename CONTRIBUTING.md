@@ -107,6 +107,11 @@ Commits made before the policy existed are exempt — the check skips anything r
 from the commit that introduced it. Rewriting published history to backfill sign-offs
 would be worse than the gap it closes.
 
+Commits authored by a bot are also skipped. A bot has no legal personality, so there is
+nothing for it to certify; the certification that matters on a Dependabot PR happens when
+a human reviews and merges it. Requiring a sign-off no bot can give would leave every
+dependency update permanently red, which teaches reviewers to ignore a failing DCO.
+
 There is no CLA. Inbound is the same licence as outbound.
 
 ### If you used an AI assistant, say so

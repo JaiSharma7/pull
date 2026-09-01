@@ -208,6 +208,25 @@ jobs:
             if git merge-base --is-ancestor "$sha" "$DCO_SINCE" 2>/dev/null; then
               continue
             fi
+            # A bot cannot certify origin. The DCO is a *person* stating they wrote
+            # the change or have the right to submit it; a bot has no legal
+            # personality, so there is nothing for it to assert and nobody to hold
+            # to it. Dependabot edits a version constant in a manifest, and the
+            # certification that actually matters happens when a human reviews and
+            # merges the result.
+            #
+            # Without this, every dependency update is red forever — which does not
+            # add rigour, it teaches reviewers to scroll past a failing DCO. A check
+            # that is always red for a whole class of pull requests is worse than
+            # the gap it closes. This is a provenance record, not an access control:
+            # anyone willing to forge an author name to dodge it could equally paste
+            # a `Signed-off-by` line they are not entitled to.
+            case "$(git show -s --format='%ae' "$sha")" in
+              *'[bot]@users.noreply.github.com')
+                echo "skipped, bot commit: $(git show -s --format='%h %s' "$sha")"
+                continue
+                ;;
+            esac
             checked=$((checked + 1))
             author="$(git show -s --format='%an <%ae>' "$sha")"
             if ! git show -s --format=%B "$sha" | grep -qiF "Signed-off-by: $author"; then
