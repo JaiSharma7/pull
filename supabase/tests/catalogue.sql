@@ -43,6 +43,8 @@ declare
   top  jsonb;
   before_sources int;
   before_total   int;
+  bad_slug       text;
+  bad_detail     text;
 begin
   foreach signup_id in array array[reader, author_id] loop
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
@@ -91,7 +93,8 @@ begin
     raise exception 'a child topic with no readable sources was offered.';
   end if;
 
-  -- --------------------------------- 3. a parent is never smaller than a child
+  -- ------------ 3. a parent is never smaller than a child, nor larger than
+  --                the library it is a part of
   if exists (
     select 1 from jsonb_array_elements(cat -> 'parents') p,
                   jsonb_array_elements(p -> 'children') c
@@ -103,21 +106,83 @@ begin
       'catalogue just promised.';
   end if;
 
+  -- The other half of that arithmetic, and the half nothing here was checking.
+  -- The comparison above is satisfied by ANY amount of over-counting -- it can
+  -- only notice a parent that counts too FEW -- and over-counting is the failure
+  -- this file's header names first. Drop the `distinct` from `topic_counts` and
+  -- `philosophy` reports 51 sources and 195 ideas, because a work tagged to both
+  -- it and one of its five children is counted once per tag: 51 rows for 27
+  -- works. The library is 42 sources and 156 ideas. Nothing may exceed the whole.
+  --
+  -- Honest about its reach, because it is a bound and not an equality: it fires
+  -- today only because philosophy's inflation happens to overshoot the entire
+  -- library. `society` inflates from 19 to 35 of 42 and walks straight past it.
+  -- Section 4 is the check that does not depend on that coincidence.
+  if exists (
+    select 1 from (
+      select p as topic from jsonb_array_elements(cat -> 'parents') p
+      union all
+      select c from jsonb_array_elements(cat -> 'parents') pp,
+                    jsonb_array_elements(pp -> 'children') c
+    ) t
+    where (t.topic ->> 'sources')::int > (cat -> 'totals' ->> 'sources')::int
+       or (t.topic ->> 'ideas')::int   > (cat -> 'totals' ->> 'ideas')::int
+  ) then
+    raise exception
+      'a topic claims more sources or ideas than the entire library holds, so '
+      'the taxonomy is counting something twice. A work tagged to a parent and '
+      'to one of its children is one work.';
+  end if;
+
   -- ------------------------- 4. the two functions agree about the same topic
+  --
+  -- This asked only about `ethics`, and `ethics` cannot fail. It is a CHILD, and
+  -- `topic_scope`'s self-join -- `c.id = t.id or c.parent_id = t.id` -- matches
+  -- exactly one row for a topic with nothing beneath it. There is no duplicate
+  -- for a missing `distinct` to produce, so the two functions agreed about it
+  -- under every implementation, including the one that reported 51 sources for a
+  -- `philosophy` holding 27. The one topic this section named was the one shape
+  -- of topic the bug it was written for cannot reach.
+  --
+  -- Every topic the catalogue lists is compared now, parents included, since the
+  -- parents are the only rows that can move. The two functions dedupe in
+  -- different places -- `get_catalogue` with the `distinct` inside
+  -- `topic_counts`, `get_topic` with `select distinct wt.work_id` in `scope` --
+  -- so losing either one makes them disagree by exactly the number of works
+  -- tagged at both levels, whatever size the library is. All six parents diverge
+  -- when that `distinct` goes; the bound in section 3 catches one of them.
+  --
+  -- The limit is 500, comfortably past the largest topic, so this compares two
+  -- untruncated totals and cannot fail for the separate reason section 5 tests.
+  select t.topic ->> 'slug',
+         format('the catalogue says %s sources and %s ideas, opening it gives %s and %s',
+                t.topic ->> 'sources', t.topic ->> 'ideas',
+                coalesce(g.page -> 'counts' ->> 'sources', 'no page at all'),
+                coalesce(g.page -> 'counts' ->> 'ideas',   'none'))
+    into bad_slug, bad_detail
+  from (
+    select p as topic from jsonb_array_elements(cat -> 'parents') p
+    union all
+    select c from jsonb_array_elements(cat -> 'parents') pp,
+                  jsonb_array_elements(pp -> 'children') c
+  ) t
+  cross join lateral public.get_topic(t.topic ->> 'slug', 500) as g(page)
+  where g.page is null
+     or (g.page -> 'counts' ->> 'sources')::int <> (t.topic ->> 'sources')::int
+     or (g.page -> 'counts' ->> 'ideas')::int   <> (t.topic ->> 'ideas')::int
+  order by t.topic ->> 'slug'
+  limit 1;
+
+  if bad_slug is not null then
+    raise exception
+      'the catalogue and the topic page disagree about %: %. A count that '
+      'contradicts itself across two screens is worse than no count at all.',
+      bad_slug, bad_detail;
+  end if;
+
   top := public.get_topic('ethics', 200);
   if top is null then
     raise exception 'get_topic returned nothing for a topic the catalogue lists.';
-  end if;
-  if (top -> 'counts' ->> 'sources')::int <> (
-       select (c ->> 'sources')::int
-       from jsonb_array_elements(cat -> 'parents') p,
-            jsonb_array_elements(p -> 'children') c
-       where c ->> 'slug' = 'ethics')
-  then
-    raise exception
-      'the catalogue and the topic page disagree about how many sources Ethics '
-      'has. A count that contradicts itself across two screens is worse than no '
-      'count at all.';
   end if;
 
   -- ------------------------------ 5. the limit bounds the list, not the count
@@ -201,9 +266,10 @@ begin
       'number the catalogue page leads with.';
   end if;
 
-  raise notice 'CATALOGUE OK: counts agree across both screens, a parent counts '
-               'its children, the limit bounds the list but not the total, and '
-               'private work stays out of the taxonomy';
+  raise notice 'CATALOGUE OK: every listed topic reports the same counts on both '
+               'screens and none of them claims more than the library holds, a '
+               'parent counts its children, the limit bounds the list but not the '
+               'total, and private work stays out of the taxonomy';
 end $$;
 
 rollback;
