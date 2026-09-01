@@ -51,6 +51,7 @@ declare
   guest        uuid := extensions.gen_random_uuid();
   regular      uuid := extensions.gen_random_uuid();
   lapsed       uuid := extensions.gen_random_uuid();
+  fresh        uuid := extensions.gen_random_uuid();
   reader       uuid := extensions.gen_random_uuid();
   some_work    uuid;
   refused      boolean;
@@ -64,6 +65,8 @@ declare
   reader_left  int;
   regular_left int;
   lapsed_left  int;
+  fresh_left   int;
+  cron_args    text;
 begin
   -- Both accounts are created through the real trigger rather than by inserting into
   -- `profiles` directly: `handle_new_user` is what gives a guest the preference row the
@@ -108,13 +111,16 @@ begin
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
   -- Every column on this row is aged EXCEPT `refreshed_at`, and that is the whole
-  -- design of the fixture. The sweep reads
-  -- `coalesce(refreshed_at at time zone 'utc', updated_at, created_at)`, so a session
-  -- row with a fresh `updated_at` is spared by the second arm and the first is never
-  -- consulted — which means this assertion would pass against a sweep that had
-  -- `refreshed_at` deleted from it outright, and the commit that added it exists
-  -- precisely because `refreshed_at` is the only column that moves on a refresh.
-  -- Isolating it is what makes this a test rather than a decoration.
+  -- design of the fixture. The sweep takes the GREATEST of
+  -- `refreshed_at at time zone 'utc'`, `updated_at` and `created_at` (20260901230000),
+  -- so with the other two aged ninety days, only `refreshed_at` can spare this row.
+  -- Delete that term from the function and the maximum falls back to ninety days, this
+  -- guest is swept, and the assertion below fails. Isolating it is what makes this a
+  -- test rather than a decoration.
+  --
+  -- It read `coalesce` until 20260901230000, which returns the first non-null rather than
+  -- the newest — so a set-but-stale `refreshed_at` outranked a fresher `updated_at`, in
+  -- the one arm whose job is to notice recent use. `greatest` cannot pick the stale one.
   insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
   values (extensions.gen_random_uuid(), regular,
           now() - interval '90 days', now() - interval '90 days',
@@ -144,6 +150,24 @@ begin
   values (extensions.gen_random_uuid(), lapsed,
           now() - interval '90 days', now() - interval '90 days',
           (now() at time zone 'utc') - interval '25 hours');
+
+  -- A fourth guest, created five minutes ago, with NO `auth.sessions` row.
+  --
+  -- This is the fixture for the OUTER arm, and without it that arm is decoration. The
+  -- 90-day `guest` above satisfies both arms at once -- it is old AND sessionless -- while
+  -- `regular` and `lapsed` both have session rows, so deleting the
+  -- `greatest(created_at, last_sign_in_at, updated_at) < now() - p_older_than` condition
+  -- outright leaves every other assertion in this file green. The function that results
+  -- sweeps a guest created a minute ago whose session row happens to be absent, which is
+  -- reachable: `revoke_other_sessions`, an expired session already cleaned up, or a
+  -- sign-in that wrote the user row and then failed.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (fresh, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '5 minutes', now() - interval '5 minutes',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
   select w.id into some_work from public.works w limit 1;
@@ -402,6 +426,7 @@ begin
   select count(*) into reader_left  from auth.users u where u.id = reader;
   select count(*) into regular_left from auth.users u where u.id = regular;
   select count(*) into lapsed_left  from auth.users u where u.id = lapsed;
+  select count(*) into fresh_left   from auth.users u where u.id = fresh;
 
   if guest_left <> 0 then
     raise exception
@@ -420,11 +445,43 @@ begin
       'and deleting somebody mid-session takes their stashes and knowledge states with '
       'no address to recover through.';
   end if;
+  if fresh_left <> 1 then
+    raise exception
+      'the sweep deleted a guest created five minutes ago that has no session row. Age is '
+      'measured from disuse, and a missing session is not disuse -- a session can be '
+      'revoked or expire while the account is minutes old.';
+  end if;
   if lapsed_left <> 0 then
     raise exception
       'the sweep spared a guest whose last token refresh was 25 hours ago. The default '
       'is one day (20260901220000), and the sign-in screen, docs/privacy.md and '
       'docs/terms.md all print that number -- a longer one makes those three untrue.';
+  end if;
+  -- ------------------------------------------------ 5. the schedule
+  --
+  -- Read out of the catalogue rather than by scheduling anything. The migration keeps
+  -- `cron.schedule` out of itself so a from-zero replay never depends on pg_cron running
+  -- as a background worker, and that argument does not extend to reading a default.
+  --
+  -- Asserted because it is half the change and was the unguarded half: `sweep_guest_
+  -- accounts` is driven directly by everything above, so reverting `enable_guest_sweep`
+  -- to the old nightly `'41 4 * * *'` passed every assertion in this file. A nightly job
+  -- and a one-day lifetime do not compose -- a guest who stops reading just after the
+  -- sweep runs survives 47h41m -- while the sign-in screen, docs/privacy.md and
+  -- docs/terms.md all print "a day". The schedule is what makes that sentence true.
+  select pg_get_function_arguments(p.oid) into cron_args
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'enable_guest_sweep';
+
+  if cron_args is null then
+    raise exception 'enable_guest_sweep is missing, so the sweep can never be scheduled.';
+  end if;
+  if cron_args not like '%41 * * * *%' then
+    raise exception
+      'enable_guest_sweep no longer defaults to an hourly schedule (got %). A daily sweep '
+      'cannot honour the one-day lifetime that this file, the sign-in screen, '
+      'docs/privacy.md and docs/terms.md all state.', cron_args;
   end if;
 end $$;
 
