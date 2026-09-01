@@ -178,8 +178,11 @@ jobs:
   # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
   #
   # `Signed-off-by:` is the contributor asserting they have the right to submit the
-  # code under the project's licence. It is also the reason CONTRIBUTING.md can ask
-  # for a named human behind every line without needing a CLA to administer.
+  # code under the project's licence — a provenance record, per commit.
+  #
+  # It is not the whole story: CLA.md records the licence grant, once, and is signed by
+  # adding a name to CONTRIBUTORS.md. Nothing here checks that, deliberately — see the
+  # note in CLA.md — so a reviewer confirms it on a first contribution.
   dco:
     name: dco
     if: github.event_name == 'pull_request'
@@ -191,6 +194,11 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          # Who opened the pull request, per GitHub — not a git author field, which the
+          # committer chooses freely. The bot exemption below is gated on this so that
+          # setting `user.email` to something ending `[bot]@users.noreply.github.com`
+          # cannot skip the check on a human's pull request.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           # The commit that introduced this check. Anything that is an ancestor of it
           # predates the policy and is exempt.
           #
@@ -208,6 +216,42 @@ jobs:
             if git merge-base --is-ancestor "$sha" "$DCO_SINCE" 2>/dev/null; then
               continue
             fi
+            # A bot cannot certify origin. The DCO is a *person* stating they wrote
+            # the change or have the right to submit it; a bot has no legal
+            # personality, so there is nothing for it to assert and nobody to hold
+            # to it. Dependabot edits a version constant in a manifest, and the
+            # certification that actually matters happens when a human reviews and
+            # merges the result.
+            #
+            # Without this, every dependency update is red forever — which does not
+            # add rigour, it teaches reviewers to scroll past a failing DCO. A check
+            # that is always red for a whole class of pull requests is worse than
+            # the gap it closes.
+            #
+            # Two conditions, not one. `PR_AUTHOR` comes from GitHub and cannot be set
+            # by the committer; the author email can. The email must also be *this*
+            # bot's noreply address, derived from the login, so a commit on a
+            # Dependabot branch has to claim to be Dependabot rather than merely to be
+            # some bot.
+            #
+            # Be honest about the limit: a human who pushes to a bot's branch and sets
+            # `user.email` to `…+dependabot[bot]@users.noreply.github.com` is still
+            # skipped. Nothing checkable from a git author field closes that, because
+            # the field is chosen by whoever writes the commit. The DCO is a provenance
+            # record, not an access control — someone willing to impersonate a bot to
+            # dodge it could as easily paste a `Signed-off-by` line they are not
+            # entitled to, which no check catches either. What this narrowing buys is
+            # that the mistake has to be deliberate rather than incidental.
+            case "$PR_AUTHOR" in
+              *'[bot]')
+                case "$(git show -s --format='%ae' "$sha")" in
+                  *"+$PR_AUTHOR@users.noreply.github.com"|"$PR_AUTHOR@users.noreply.github.com")
+                    echo "skipped, bot commit: $(git show -s --format='%h %s' "$sha")"
+                    continue
+                    ;;
+                esac
+                ;;
+            esac
             checked=$((checked + 1))
             author="$(git show -s --format='%an <%ae>' "$sha")"
             if ! git show -s --format=%B "$sha" | grep -qiF "Signed-off-by: $author"; then

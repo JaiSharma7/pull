@@ -101,13 +101,48 @@ git rebase --signoff main   # adds it to commits you already made
 
 This is the [Developer Certificate of Origin](https://developercertificate.org/): you
 are stating that you wrote the change, or have the right to submit it, under this
-project's MIT licence. CI enforces it on every commit in a PR.
+project's [AGPL-3.0 licence](./LICENSE). CI enforces it on every commit in a PR.
 
 Commits made before the policy existed are exempt — the check skips anything reachable
 from the commit that introduced it. Rewriting published history to backfill sign-offs
 would be worse than the gap it closes.
 
-There is no CLA. Inbound is the same licence as outbound.
+A bot's commits are skipped, but only on a bot's own pull request — the check requires
+both that GitHub reports the PR author as a bot and that the commit's author email is a
+bot address. A bot has no legal personality, so there is nothing for it to certify, and
+requiring a sign-off no bot can give would leave every dependency update permanently red,
+which teaches reviewers to ignore a failing DCO.
+
+Both conditions, because only one of them is trustworthy: you choose your own commit
+author email, so that alone would let anyone opt out of the DCO. It follows that if you
+push your own commit onto a Dependabot branch — to fix a bump, say — that commit is
+yours and still needs signing.
+
+It also follows that a bot's commit cherry-picked into a pull request _you_ opened is
+checked, and cannot be signed off on the bot's behalf. Take ownership of it instead:
+
+```bash
+git commit --amend --reset-author -s     # or: git cherry-pick -s ...
+```
+
+That is the DCO working rather than obstructing. Carrying someone else's change into
+your own pull request is precisely the case the certificate is written for — you are
+stating you have the right to submit it, which is a claim only you can make.
+
+### Sign the CLA (once)
+
+Alongside the per-commit DCO, first-time contributors sign the [Contributor Licence
+Agreement](./CLA.md) by adding their name to `CONTRIBUTORS.md` in the same pull request.
+
+The two are not redundant. The DCO records **provenance**, per commit: you had the right
+to send this. The CLA records a **licence grant**, once: the project may relicense your
+contribution, including into a paid service offered alongside the free ones. You keep
+your copyright, and you keep every right to your own work.
+
+It is a short document and it states its trade-offs plainly, including what it lets the
+project do that the AGPL alone would not. Read it before you sign it. If you
+disagree with it, say so in the issue rather than the pull request — the terms are a
+reasonable thing to argue about, and that argument does not belong in a code review.
 
 ### If you used an AI assistant, say so
 
