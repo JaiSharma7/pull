@@ -47,6 +47,9 @@ declare
   private_work_id    uuid;
   private_summary_id uuid;
   private_pull_id    uuid;
+  buried_work_id     uuid;
+  buried_summary_id  uuid;
+  buried_pull_id     uuid;
   -- A token that cannot occur in the public-domain corpus, so a hit on it is
   -- proof of a leak rather than a coincidence.
   secret_token text := 'zqxjvwk';
@@ -97,13 +100,132 @@ begin
           author_id, now())
   returning id into strict private_summary_id;
 
+  -- THE CENTROID ITSELF, not Mill's vector.
+  --
+  -- This fixture used to carry `mill_id`'s embedding, on the stated theory that
+  -- a search for 'opinion' would put the centroid "right on top of it". It does
+  -- the opposite. The centroid is the MEAN of the five top-ranked hits, and a
+  -- mean of five vectors is not near any one of them: measured, Mill's own pull
+  -- sat 0.678 away and ranked 127th of the candidates, against a nearest of
+  -- 0.195. It could never reach `near`'s limit of 24, let alone the six of
+  -- `alsoClose` -- so the assertion below passed for every implementation,
+  -- including one with the visibility predicate deleted outright.
+  --
+  -- Giving it the centroid makes the distance exactly zero, which is strictly
+  -- less than every real pull's, so this row is unambiguously first the moment
+  -- the predicate stops excluding it. The expression mirrors `search_catalogue`
+  -- rather than hardcoding an id, so it stays correct as the corpus grows -- and
+  -- it is deliberately written out rather than factored into a helper, because a
+  -- fixture that shares code with the thing it tests can be wrong in the same
+  -- direction twice.
   insert into public.pulls (summary_id, ordinal, headline, body, embedding,
                             estimated_read_seconds)
   select private_summary_id, 1,
          'A private objection ' || secret_token,
          'Visible only to its author ' || secret_token,
-         (select embedding from public.pulls where id = mill_id), 30
+         (select extensions.avg(t.embedding)::extensions.vector(1536)
+          from (
+            select p.embedding
+            from public.pulls p
+            join public.summaries s on s.id = p.summary_id
+            join public.works     w on w.id = s.work_id
+            where s.status = 'published'
+              and s.visibility = 'public'
+              and p.embedding is not null
+              and (
+                p.search_tsv @@ websearch_to_tsquery('pg_catalog.english', 'opinion')
+                or p.headline OPERATOR(extensions.%) 'opinion'
+              )
+            order by (  0.55 * ts_rank_cd(p.search_tsv,
+                          websearch_to_tsquery('pg_catalog.english', 'opinion'), 32)
+                      + 0.20 * coalesce(extensions.similarity(p.headline, 'opinion'), 0.0)
+                      + 0.15 * w.quality_score
+                      + 0.10 * w.trust_score) desc,
+                     p.id
+            limit 5
+          ) t),
+         30
   returning id into strict private_pull_id;
+
+  -- A LEXICAL MATCH THAT LOSES THE RANKING CUT.
+  --
+  -- Section 8 pins 20260901020000's fix: `near` must exclude all of `ranked`,
+  -- every lexical match, and not merely the page of them in `top_ideas`. On the
+  -- seeded corpus that section could not fail. Reverting the predicate left the
+  -- file green, because the twenty-four rows `near` returns for 'opinion' hold
+  -- no keyword hit at any limit -- all twelve of the real ones sit far enough
+  -- from the centroid to lose to something the words never matched, so the
+  -- assertion was comparing two sets the corpus keeps disjoint by accident.
+  --
+  -- This row is the one case the old predicate lets through, and it is three
+  -- things at once:
+  --
+  --   * A REAL LEXICAL HIT. 'opinion' occurs exactly once, in the BODY, so
+  --     `ts_rank_cd` sees a single weight-B position (0.2857) and the headline
+  --     carries no trigram of the query at all (similarity 0.0).
+  --   * RANKED LAST OF THE THIRTEEN, at 0.1821 against a floor of 0.2821 among
+  --     the seeded hits, so `search_catalogue('opinion', 1, 1)` cannot put it in
+  --     `top_ideas`. The work scores 0.1 rather than the 0.5 default precisely
+  --     so that is a gap rather than a tie -- at the default it would land on
+  --     0.2821 exactly, level with two real hits, and which of them `order by
+  --     rank desc, id` put first would be a fact about generated uuids.
+  --   * SITTING ON THE CENTROID of that same call. With `p_limit_ideas = 1`,
+  --     `top_ideas` is a single row and the mean of five collapses to it, so the
+  --     distance here is exactly zero -- against 0.439 for the nearest real
+  --     candidate. The mirror below is the one above with `limit 1` for
+  --     `p_limit_ideas`, written out for the same reason.
+  --
+  -- Published and public, because a private summary never reaches `ranked` and
+  -- the whole point is a row that IS in `ranked` and would still be offered as
+  -- something the words had missed. It is inserted after the private fixture and
+  -- ranks thirteenth of thirteen, so it stays out of the five the 20/10 centroid
+  -- averages and leaves that fixture's distance untouched.
+  insert into public.works (kind, title, slug, rights_status,
+                            quality_score, trust_score)
+  values ('essay', 'The Cost of an Unprinted Dissent', 'unprinted-dissent-test',
+          'public_domain', 0.1, 0.1)
+  returning id into strict buried_work_id;
+
+  insert into public.summaries (work_id, title, status, visibility, published_at)
+  values (buried_work_id, 'The Cost of an Unprinted Dissent', 'published',
+          'public', now())
+  returning id into strict buried_summary_id;
+
+  insert into public.pulls (summary_id, ordinal, headline, body, embedding,
+                            estimated_read_seconds)
+  select buried_summary_id, 1,
+         'What goes untested when a dissent is never printed',
+         'A dissent that never reaches print costs the majority more than it '
+         'costs the dissenter, because the thing left untested is not the '
+         'objection but the settled opinion it was aimed at.',
+         (select extensions.avg(t.embedding)::extensions.vector(1536)
+          from (
+            select ti.embedding
+            from (
+              select p.embedding, p.id,
+                     (  0.55 * ts_rank_cd(p.search_tsv,
+                          websearch_to_tsquery('pg_catalog.english', 'opinion'), 32)
+                      + 0.20 * coalesce(extensions.similarity(p.headline, 'opinion'), 0.0)
+                      + 0.15 * w.quality_score
+                      + 0.10 * w.trust_score) as rank
+              from public.pulls p
+              join public.summaries s on s.id = p.summary_id
+              join public.works     w on w.id = s.work_id
+              where s.status = 'published'
+                and s.visibility = 'public'
+                and (
+                  p.search_tsv @@ websearch_to_tsquery('pg_catalog.english', 'opinion')
+                  or p.headline OPERATOR(extensions.%) 'opinion'
+                )
+              order by rank desc, p.id
+              limit 1
+            ) ti
+            where ti.embedding is not null
+            order by ti.rank desc, ti.id
+            limit 5
+          ) t),
+         30
+  returning id into strict buried_pull_id;
 
   -- ---------------------------------------------------- 1. search finds things
   perform set_config('role', 'authenticated', true);
@@ -187,9 +309,14 @@ begin
   --
   -- Searching the secret token proved nothing about the expansion: no lexical
   -- hit means no centroid, `near` is empty for ANY implementation, and deleting
-  -- its visibility predicate left this green. The private pull deliberately
-  -- carries Mill's embedding, so a search for 'opinion' puts the centroid right
-  -- on top of it -- which is the only query that can tell the difference.
+  -- its visibility predicate left this green. Carrying Mill's embedding did not
+  -- fix that -- see the fixture above for why it made the row 127th rather than
+  -- first. The private pull now carries the centroid exactly, so its distance is
+  -- zero and it sorts ahead of every real candidate.
+  --
+  -- Which is what gives this assertion teeth: it was verified by deleting
+  -- `s.visibility = 'public'` from `near` and watching it FAIL, rather than by
+  -- assuming it would.
   res := public.search_catalogue('opinion', 20, 10);
   if exists (
     select 1 from jsonb_array_elements(res -> 'alsoClose') a
@@ -303,10 +430,21 @@ begin
   -- ------------------------- 8. the expansion holds no keyword match at all
   --
   -- "Close to these, in other words" is a claim about the rows in it. `near`
-  -- excluded only the page of lexical hits, so the first match below the cut
-  -- was eligible -- and was then shown as something the words had missed, under
-  -- a line that had just said it was withheld. Asking for one idea and then for
+  -- excluded only the page of lexical hits, so a match below the cut was
+  -- eligible -- and was then shown as something the words had missed, under a
+  -- line that had just said it was withheld. Asking for one idea and then for
   -- fifty makes the whole lexical set visible to the comparison.
+  --
+  -- The pair of calls is not what gives this teeth, and it is worth being blunt
+  -- about that: the seeded corpus never puts a keyword hit near the centroid, so
+  -- for a while this passed against the old predicate as readily as against the
+  -- new one, and the sentence above described a bug the file was not testing.
+  -- `buried_pull_id` is what separates them -- last of the thirteen hits for
+  -- 'opinion', therefore outside `top_ideas` at `p_limit_ideas = 1`, and sitting
+  -- on the centroid at distance zero. Under `not exists (... top_ideas ...)` it
+  -- is the FIRST row of `alsoClose` and this raises; under the shipped
+  -- `not exists (... ranked ...)` it is gone and the nearest survivor is 0.439
+  -- away. Both directions were run before this comment was written.
   res       := public.search_catalogue('opinion', 1, 1);
   res_again := public.search_catalogue('opinion', 50, 50);
   if exists (
@@ -317,6 +455,15 @@ begin
   ) then
     raise exception
       'the vector expansion returned an idea the words already matched.';
+  end if;
+
+  -- And the fixture really is reaching the expansion, rather than being kept out
+  -- by something incidental. A `near` that returned nothing at all would satisfy
+  -- the assertion above without proving anything, which is the exact failure
+  -- this whole section exists to stop repeating.
+  if jsonb_array_length(res -> 'alsoClose') = 0 then
+    raise exception
+      'the vector expansion came back empty, so the check above holds vacuously.';
   end if;
 
   raise notice 'SEARCH OK: finds seeded ideas, annotates what the reader knows '
