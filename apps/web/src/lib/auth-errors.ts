@@ -48,3 +48,31 @@ export function isAnonymousSignInDisabled(error: AuthErrorLike): boolean {
   if (error.code === 'anonymous_provider_disabled') return true;
   return /anonymous (sign[- ]?ins?|provider)[^.]*disabled/i.test(error.message);
 }
+
+/**
+ * Whether this project is asking for a CAPTCHA token the app does not send.
+ *
+ * The one failure here that closes EVERY route at once, which is why it is worth its own
+ * function rather than falling through to `error.message`. Supabase's CAPTCHA protection
+ * covers "sign-in, sign-up, and password reset", so switching it on rejects the guest
+ * button and the email code with the same 400 — and this app renders no CAPTCHA widget,
+ * so nothing it can do will satisfy it. `error.message` in that state reads "captcha
+ * protection: request disallowed (no captcha_token found)", which tells a reader nothing
+ * and an operator not much more.
+ *
+ * It is a trap the platform walks you into rather than an exotic misconfiguration: the
+ * anonymous sign-ins documentation recommends enabling CAPTCHA in the same breath as the
+ * switch this app needs, so the natural way to turn guest sessions on is also the way to
+ * break sign-in entirely. Observed on this project on 2026-09-01 — the auth logs go
+ * straight from `anonymous_provider_disabled` to `captcha_failed` across one config
+ * reload, with no working sign-in in between.
+ *
+ * `captcha_failed` is the code GoTrue actually returned, read out of those logs rather
+ * than out of documentation. The message fallback is loose for the same reason as the
+ * others: a false positive names a real setting, and a false negative restores an error
+ * nobody can act on.
+ */
+export function isCaptchaRequired(error: AuthErrorLike): boolean {
+  if (error.code === 'captcha_failed') return true;
+  return /captcha/i.test(error.message);
+}

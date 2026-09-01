@@ -165,6 +165,31 @@ compose: a guest who stops reading just after the sweep runs survives nearly two
 hold us to. An operator passing their own cron expression is choosing the accuracy of that
 sentence, not just a time.
 
+**Two auth settings live only in the dashboard, and one of them breaks everything.**
+`supabase/config.toml` configures the local stack and nothing else, so `[auth]
+enable_anonymous_sign_ins` has no effect on the hosted project — the guest button fails
+there with `anonymous_provider_disabled` until somebody flips the same switch under
+Authentication → Sign In / Providers.
+
+The trap is what the dashboard recommends alongside it. Supabase's anonymous sign-ins
+documentation advises enabling CAPTCHA protection in the same breath, and that setting is
+on a different page (Project Settings → Authentication → Bot and Abuse Protection). This
+app renders no CAPTCHA widget and sends no `captchaToken`, and Supabase's CAPTCHA covers
+sign-in, sign-up and password reset alike — so switching it on does not merely fail to
+help, it rejects **every** authentication request with `captcha_failed`, the email route
+included. On 2026-09-01 that is exactly what happened: the auth logs cross one config
+reload and go straight from `anonymous_provider_disabled` to `captcha_failed`, with no
+working sign-in in between. `lib/auth-errors.ts` names the setting in the console for
+whoever is running the deployment, because the reader-facing error cannot.
+
+What guards guest abuse here instead of a CAPTCHA: an IP rate limit of 30 anonymous
+sign-ins an hour, the money door shut in the database (`enqueue_generation_job` refuses a
+guest outright — a per-requester ceiling means nothing against an identity that is free to
+mint), length caps on every guest-writable column, and the hourly sweep with a one-day
+lifetime. Supabase's own documentation says automatic cleanup of anonymous users is not
+available and suggests deleting them manually after thirty days; `20260901220000` is
+tighter than that by a factor of thirty.
+
 **The frontend deploys itself and the database does not.** Vercel redeploys `apps/web`
 from git on every push to `main`; migrations reach the hosted project only when somebody
 runs `supabase db push` (step 2 of `scripts/go-live.sh`). So a pull request that adds a

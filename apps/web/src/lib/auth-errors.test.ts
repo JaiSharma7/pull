@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAnonymousSignInDisabled, isEmailRateLimited } from './auth-errors.js';
+import { isAnonymousSignInDisabled, isCaptchaRequired, isEmailRateLimited } from './auth-errors.js';
 
 describe('isEmailRateLimited', () => {
   it('recognises the error code, which is the stable contract', () => {
@@ -67,5 +67,46 @@ describe('isAnonymousSignInDisabled', () => {
     ]) {
       expect(isAnonymousSignInDisabled({ message }), message).toBe(false);
     }
+  });
+});
+
+describe('isCaptchaRequired', () => {
+  it('recognises the code GoTrue returns', () => {
+    // Read out of this project's own auth logs on 2026-09-01, not out of the docs.
+    expect(
+      isCaptchaRequired({
+        code: 'captcha_failed',
+        message: 'captcha protection: request disallowed (no captcha_token found)',
+      }),
+    ).toBe(true);
+  });
+
+  it('falls back to the message when no code is sent', () => {
+    expect(
+      isCaptchaRequired({ message: 'captcha protection: request disallowed (not-using-dummy)' }),
+    ).toBe(true);
+    expect(isCaptchaRequired({ message: 'captcha verification process failed' })).toBe(true);
+  });
+
+  it('leaves every other failure alone', () => {
+    for (const message of [
+      'Token has expired or is invalid',
+      'Anonymous sign-ins are disabled',
+      'email rate limit exceeded',
+      'Database error creating anonymous user',
+    ]) {
+      expect(isCaptchaRequired({ message }), message).toBe(false);
+    }
+  });
+
+  it('does not collide with the other two classifiers', () => {
+    // All three run against the same error in Auth.tsx, so an error that matched two of
+    // them would make the branch order load-bearing and the message a coin flip.
+    const captcha = {
+      code: 'captcha_failed',
+      message: 'captcha protection: request disallowed (no captcha_token found)',
+    };
+    expect(isEmailRateLimited(captcha)).toBe(false);
+    expect(isAnonymousSignInDisabled(captcha)).toBe(false);
   });
 });
