@@ -197,21 +197,16 @@ export function App() {
   /*
    * Whether a guest has asked to leave, and is being asked to mean it.
    *
-   * Holds the ADDRESS the confirmation was opened at rather than a boolean, so that
-   * navigating away puts it back in its box. This component never unmounts, so a boolean
-   * is sticky: a guest who presses "End this guest session", thinks better of it, goes to
-   * Explore and comes back later meets the panel already asking "Yes — end it and sign
-   * in" as its primary button, with no memory of having asked for it. A two-press
-   * confirmation whose first press can be days old and on another screen is a one-press
-   * confirmation.
-   *
-   * Derived rather than reset in an effect, because an effect that calls `setState` in
-   * its body is a cascading render (and the lint rule that says so is right): the
-   * question "is this confirmation still live?" has an answer in the render that needs
-   * it, so it does not need to be stored twice and kept in step.
+   * A plain boolean, cleared on navigation by the adjustment beside `confirmationPath`
+   * below — read that one for why it is shaped the way it is. This component never
+   * unmounts, so left to itself the flag is sticky: a guest who presses "End this guest
+   * session", thinks better of it, goes to Explore and comes back meets the panel already
+   * asking "Yes — end it and sign in" as its primary button, with no memory of having
+   * asked for it. A two-press confirmation whose first press can be days old and on
+   * another screen is a one-press confirmation.
    *
    * Lives here rather than in the panel because the panel is inline JSX in this
-   * component; if it ever becomes its own route it should take this with it.
+   * component; if it ever becomes its own route it should take this and its reset with it.
    */
   const [guestLeaving, setGuestLeaving] = useState(false);
   /*
@@ -261,11 +256,31 @@ export function App() {
    */
   const [path, setPath] = useState(readLocation);
   /*
-   * The address the guest confirmation was last reconciled against. Declared here, beside
-   * `path` and above the early returns further down, because a hook below one of those
-   * runs in some renders and not others.
+   * The address the guest confirmation was last reconciled against, and the reconciliation
+   * itself. Both live here, beside `path`, and the placement is the whole point.
+   *
+   * Any navigation puts the confirmation back in its box — including coming back. This is
+   * React's documented "adjust state during render when something changes" pattern, which
+   * is the right shape because the two wrong ones are already ruled out: a sticky boolean
+   * was the original bug, and an effect whose body calls `setState` is a cascading render
+   * that this repo's lint rejects. Keyed on the path CHANGING rather than on its value, so
+   * a return trip is a different visit and starts from the safe state.
+   *
+   * It sits ABOVE the early returns for the specimen and legal routes rather than beside
+   * the panel it serves, and that is not tidiness — it is the third time this exact
+   * defect has been fixed. Below them, a render that returns early never reaches the
+   * comparison, so `confirmationPath` never advances: open the confirmation on /account,
+   * follow the Privacy link in the colophon (which renders below the guest panel, so both
+   * are on screen together), press Back, and `/account === /account` means no reset. The
+   * destructive button is primary again on a first press that was never made. A hook
+   * below an early return is a lint error and gets caught; a plain `if` below one is
+   * silent, which is why this comment is longer than the code.
    */
   const [confirmationPath, setConfirmationPath] = useState(path);
+  if (confirmationPath !== path) {
+    setConfirmationPath(path);
+    setGuestLeaving(false);
+  }
 
   /*
    * Ask on every session change, and again after a challenge is satisfied.
@@ -555,26 +570,6 @@ export function App() {
   const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
 
   const accountOpen = isPath(path, '/account');
-
-  /*
-   * Any navigation puts the confirmation back in its box — including coming back.
-   *
-   * React's documented "adjust state when something changes during render" pattern, which
-   * is the right shape here for a reason the two wrong shapes make clear. An effect that
-   * calls `setState` in its body is a cascading render (and the lint rule that says so is
-   * right). Comparing a stored path against the current one — which this was until Codex
-   * caught it on #48 — hides the confirmation while the guest is elsewhere and brings it
-   * straight back when they return to /account, because `/account === /account`. That is
-   * the same defect it was written to fix, only harder to see: a first press days old and
-   * on another screen is not a first press.
-   *
-   * Keyed on the path CHANGING rather than on its value, so a return trip is a different
-   * visit and starts from the safe state.
-   */
-  if (confirmationPath !== path) {
-    setConfirmationPath(path);
-    setGuestLeaving(false);
-  }
 
   const topicSlug = routeParam(path, '/topic');
   /*
@@ -1003,10 +998,10 @@ export function App() {
                   who has not yet made anything worth keeping.
                 */}
                 <p>
-                  This session also ends on its own. Closing the browser ends it here, the way a
-                  private window does, and the account behind it is deleted within a day, along with
-                  everything keyed to it. Signing in with an email address is what makes any of it
-                  stay.
+                  This session also ends on its own. Closing this tab ends it here, the way a
+                  private window does, and the account behind it is deleted a day after you last use
+                  it, along with everything keyed to it. Signing in with an email address is what
+                  makes any of it stay.
                 </p>
                 {/*
                   Two presses, which is the shape every irreversible action on the real
@@ -1017,7 +1012,7 @@ export function App() {
                   Oxblood is not what makes it safe; the second press is.
                 */}
                 {/*
-                  `.actions`, not `.stack`, and the difference is visible rather than
+                  `.shell__confirm`, not `.stack`, and the difference is visible rather than
                   pedantic. `.stack` separates children with `margin-block-start` alone,
                   which does nothing useful between two `<button>`s: they are
                   `inline-block`, so they flow onto one line and the margin lands above
@@ -1025,7 +1020,23 @@ export function App() {
                   butted against "KEEP READING AS A GUEST" with a text node's worth of
                   space between them, destructive option first.
                 */}
-                <div className="actions">
+                {/*
+                  Announced, because focus alone does not say what happened.
+                  Pressing the trigger swaps it for two different buttons and moves focus
+                  to the safe one, so a screen reader says "Keep reading as a guest,
+                  button" and nothing else -- no indication that a confirmation opened, or
+                  that the destructive option is now one press away and sits BEFORE this
+                  button in the DOM. A live region that is always present and changes its
+                  text is what gets announced; rendering the region itself conditionally
+                  is the version that stays silent.
+                */}
+                <p className="sr-only" role="status">
+                  {guestLeaving
+                    ? 'Confirm ending this guest session. This cannot be undone. Two choices ' +
+                      'follow: end it and sign in, or keep reading as a guest.'
+                    : ''}
+                </p>
+                <div className="shell__confirm">
                   {guestLeaving ? (
                     <>
                       <button

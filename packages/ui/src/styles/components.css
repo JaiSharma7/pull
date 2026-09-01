@@ -191,7 +191,7 @@
   margin-block-start: var(--stack-gap, var(--space-4));
 }
 
-/* A column of controls, where `.stack` alone is not enough.
+/* The guest confirmation's controls, where `.stack` alone is not enough.
  *
  * `.stack` separates its children with `margin-block-start` and nothing else. That is
  * right for the block-level children it was written for and silently wrong for buttons:
@@ -204,7 +204,7 @@
  * is a different component and every other `.btn` in the app is sized by its label.
  * `align-items: flex-start` is what keeps that true inside this one.
  */
-.actions {
+.shell__confirm {
   display: flex;
   flex-direction: column;
   align-items: flex-start;

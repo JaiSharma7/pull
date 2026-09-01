@@ -131,7 +131,23 @@ export function createSplitAuthStorage(
          * screen makes. A guest whose browser refuses `sessionStorage` keeps the session
          * in memory for as long as the page lives, and no longer.
          */
-        if (!guest) write(clear, key, value);
+        if (!guest) {
+          write(clear, key, value);
+          return;
+        }
+        /*
+         * A guest gets no fallback, but an OLDER guest token in `localStorage` must still
+         * go. That is the upgrade path: a token written there before this module shipped.
+         * Returning without clearing it left the comment above telling a lie — the session
+         * did not live "in memory for as long as the page lives", it went on being served
+         * from `localStorage` by `getItem` on every load, surviving the browser restart
+         * this module exists to end. Only a guest token is cleared here; a reader's is the
+         * one thing this path must never touch.
+         */
+        const stranded = guard(() => clear.getItem(key), null);
+        if (stranded !== null && tokenIsGuest(stranded)) {
+          guard(() => clear.removeItem(key), undefined);
+        }
         return;
       }
 

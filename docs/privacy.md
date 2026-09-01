@@ -53,11 +53,19 @@ read and what you stash are stored the same way, under an identifier that exists
 your browser. Three things are different, and all three are consequences of there being no
 address:
 
-- **It ends with the browser.** A guest session is held in `sessionStorage`, which is how a
-  private window behaves: close the browser and it is gone. A new tab does not get it either.
-  This is deliberate — a guest account is an identity nobody can prove they own, and on a
-  shared or public computer "stay signed in" would mean handing the next person one
-  reader's stashes, notes and history with no sign-in wall in the way.
+- **It ends with the tab.** A guest session is held in `sessionStorage`, which is how a
+  private window behaves: close the tab and it is gone. This is deliberate — a guest account
+  is an identity nobody can prove they own, and on a shared or public computer "stay signed
+  in" would mean handing the next person one reader's stashes, notes and history with no
+  sign-in wall in the way.
+
+  Two caveats, because "ends with the tab" is the useful summary and not the whole truth. A
+  tab you open **from a link on the page** inherits a copy of the session, the way
+  duplicating a private window does; a tab you open independently does not. And a browser
+  set to reopen your last tabs on start-up may bring it back with them. Neither changes the
+  case this exists for — the next person to open the browser on a shared machine does not
+  land in your session — but both mean it is the tab, not the browser, that bounds it.
+
 - **It cannot be recovered.** Clear the browser's storage, or open the product on another
   device, and the session is gone with no way back in. There is nothing to send a code to.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those

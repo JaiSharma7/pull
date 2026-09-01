@@ -123,6 +123,37 @@ describe('createSplitAuthStorage', () => {
     expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(readerToken);
   });
 
+  it('prefers the session copy when both are guest tokens', () => {
+    // The tie-break reorders exactly one combination -- a guest shadowing a reader -- and
+    // without this case, dropping `&& !tokenIsGuest(fromLocal)` from it changes nothing
+    // any test can see.
+    const session = fake();
+    const local = fake();
+    const older = JSON.stringify({ access_token: 'older', user: { id: 'u', is_anonymous: true } });
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, older);
+
+    expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(guestToken);
+  });
+
+  it('evicts a stranded guest token from localStorage when sessionStorage refuses', () => {
+    // Otherwise the upgrade-path token goes on being served from localStorage on every
+    // load, surviving exactly the browser restart this module exists to end.
+    const local = fake();
+    local.map.set(KEY, guestToken);
+    const session: KeyValueStore = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('storage disabled');
+      },
+      removeItem: () => undefined,
+    };
+
+    createSplitAuthStorage(session, local).setItem(KEY, guestToken);
+
+    expect(local.map.has(KEY)).toBe(false);
+  });
+
   it('prefers the session copy when neither is a stale guest shadowing a reader', () => {
     // The tie-break is narrow on purpose: it reorders exactly one combination.
     const session = fake();

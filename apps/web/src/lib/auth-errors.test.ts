@@ -73,12 +73,10 @@ describe('isAnonymousSignInDisabled', () => {
 describe('isCaptchaRequired', () => {
   it('recognises the code GoTrue returns', () => {
     // Read out of this project's own auth logs on 2026-09-01, not out of the docs.
-    expect(
-      isCaptchaRequired({
-        code: 'captcha_failed',
-        message: 'captcha protection: request disallowed (no captcha_token found)',
-      }),
-    ).toBe(true);
+    // The message deliberately does NOT contain "captcha", so this exercises the code
+    // branch rather than the regex fallback. With GoTrue's real message the two overlap,
+    // and deleting the `error.code` check left every test green.
+    expect(isCaptchaRequired({ code: 'captcha_failed', message: 'request disallowed' })).toBe(true);
   });
 
   it('falls back to the message when no code is sent', () => {
