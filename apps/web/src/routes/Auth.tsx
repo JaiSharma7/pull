@@ -679,7 +679,7 @@ export function Auth({
           <p className="titlepage__promise">
             No email needed. A guest session is only reachable from this browser: it cannot be
             recovered on another device, it does not carry over when you sign in, and it is deleted
-            after 30 days unused.
+            a day after you last use it.
           </p>
         </div>
 

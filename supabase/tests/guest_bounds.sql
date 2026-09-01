@@ -22,6 +22,10 @@
 --     replace` on a fixed signature makes those easy to revert by accident, and every
 --     other assertion here would still pass if they were gone
 --   * the sweep deletes a stale guest and leaves the reader alone
+--   * the sweep's DEFAULT is one day, and one day is measured from disuse -- a guest
+--     who refreshed two hours ago survives it and one who refreshed twenty-five hours
+--     ago does not. Asserted against the default rather than an explicit interval,
+--     because the default is the only value pg_cron ever passes
 --
 -- Run as the roles that actually reach these paths (`authenticated`, with and without
 -- the `is_anonymous` claim), because RLS is invisible to an owner-role query and this
@@ -46,6 +50,7 @@ do $$
 declare
   guest        uuid := extensions.gen_random_uuid();
   regular      uuid := extensions.gen_random_uuid();
+  lapsed       uuid := extensions.gen_random_uuid();
   reader       uuid := extensions.gen_random_uuid();
   some_work    uuid;
   refused      boolean;
@@ -58,6 +63,7 @@ declare
   guest_left   int;
   reader_left  int;
   regular_left int;
+  lapsed_left  int;
 begin
   -- Both accounts are created through the real trigger rather than by inserting into
   -- `profiles` directly: `handle_new_user` is what gives a guest the preference row the
@@ -113,6 +119,31 @@ begin
   values (extensions.gen_random_uuid(), regular,
           now() - interval '90 days', now() - interval '90 days',
           (now() at time zone 'utc') - interval '2 hours');
+
+  -- A third guest, identical to `regular` in every way except that their last token
+  -- refresh was twenty-five hours ago rather than two.
+  --
+  -- This fixture is what pins the number. `guest` above has been idle for ninety days,
+  -- so it is deleted by a sweep defaulting to one day, thirty days or ninety -- which
+  -- means the pair of them proves the sweep distinguishes use from disuse and says
+  -- nothing at all about where the line is. 20260901220000 moved that line from thirty
+  -- days to one, and the sign-in screen, docs/privacy.md and docs/terms.md now all print
+  -- "a day"; without this row, putting it back to thirty is a green build.
+  --
+  -- Twenty-five hours rather than twenty-four and a minute, so the assertion does not
+  -- start failing on a slow test run that crosses the boundary while it executes.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (lapsed, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '90 days', now() - interval '90 days',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
+  values (extensions.gen_random_uuid(), lapsed,
+          now() - interval '90 days', now() - interval '90 days',
+          (now() at time zone 'utc') - interval '25 hours');
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
   select w.id into some_work from public.works w limit 1;
@@ -348,11 +379,29 @@ begin
   perform set_config('role', 'postgres', true);
   perform set_config('request.jwt.claims', '', true);
 
-  perform public.sweep_guest_accounts(interval '30 days');
+  -- Called with NO argument, which is the assertion. pg_cron runs
+  -- `select public.sweep_guest_accounts();` (see `enable_guest_sweep`), so the default is
+  -- the only value that ever reaches this function in production; passing an explicit
+  -- interval here would test an interval nothing uses and leave the default free to
+  -- drift back to thirty days unnoticed.
+  perform public.sweep_guest_accounts();
+
+  -- The floor guard, which stopped being theoretical when the default landed on it.
+  -- Below one day this refuses rather than deleting everyone who signed in this minute.
+  begin
+    perform public.sweep_guest_accounts(interval '1 hour');
+    raise exception
+      'sweep_guest_accounts accepted an age below one day. The floor is what stands '
+      'between a mistyped interval and every guest session in the product, and the '
+      'default now sits directly on it.';
+  exception
+    when check_violation then null;
+  end;
 
   select count(*) into guest_left   from auth.users u where u.id = guest;
   select count(*) into reader_left  from auth.users u where u.id = reader;
   select count(*) into regular_left from auth.users u where u.id = regular;
+  select count(*) into lapsed_left  from auth.users u where u.id = lapsed;
 
   if guest_left <> 0 then
     raise exception
@@ -367,9 +416,15 @@ begin
   if regular_left <> 1 then
     raise exception
       'the sweep deleted a guest who refreshed their session two hours ago. It is keyed '
-      'on disuse, not on age: docs/privacy.md promises "has not been used for 30 days", '
+      'on disuse, not on age: docs/privacy.md promises "has not been used for a day", '
       'and deleting somebody mid-session takes their stashes and knowledge states with '
       'no address to recover through.';
+  end if;
+  if lapsed_left <> 0 then
+    raise exception
+      'the sweep spared a guest whose last token refresh was 25 hours ago. The default '
+      'is one day (20260901220000), and the sign-in screen, docs/privacy.md and '
+      'docs/terms.md all print that number -- a longer one makes those three untrue.';
   end if;
 end $$;
 

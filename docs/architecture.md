@@ -152,10 +152,18 @@ that they have to be listed somewhere, which is here.
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
 
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
-deletes anonymous accounts after 30 days, and that retention promise is load-bearing:
-`docs/privacy.md` states it to readers, and it is half the argument for letting a guest
-write to the personal tables at all (`20260901190000`). Unscheduled, `auth.users` only
-grows, and the policy says something the database is not doing.
+deletes anonymous accounts after a day of disuse, and that retention promise is
+load-bearing: `docs/privacy.md` states it to readers, the sign-in screen prints it before
+anybody presses the button, and it is half the argument for letting a guest write to the
+personal tables at all (`20260901190000`). Unscheduled, `auth.users` only grows, and all
+three of those say something the database is not doing.
+
+Its schedule is part of the promise rather than an operator's taste. `enable_guest_sweep`
+defaults to hourly (`20260901220000`) because a nightly job and a one-day lifetime do not
+compose: a guest who stops reading just after the sweep runs survives nearly two days, and
+"a day" is then wrong by a factor of two in the one document a reader is most likely to
+hold us to. An operator passing their own cron expression is choosing the accuracy of that
+sentence, not just a time.
 
 **The frontend deploys itself and the database does not.** Vercel redeploys `apps/web`
 from git on every push to `main`; migrations reach the hosted project only when somebody

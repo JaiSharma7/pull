@@ -58,8 +58,11 @@ address:
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
   need an account we can attribute the request to. (The first two are not yet exposed in
   the app for anyone; the limit is in the database, so it holds whenever they are.)
-- **We delete it for you.** A guest session that has not been used for 30 days is removed
-  outright, along with everything keyed to it. You do not have to ask.
+- **We delete it for you.** A guest session that has not been used for a day is removed
+  outright, along with everything keyed to it. You do not have to ask. A day is short on
+  purpose: a guest account is an identity nobody can prove they own, holding a reader's
+  stashes, notes and history, so the shorter it exists the less there is to lose. Come
+  back the next evening and it is still there; come back on Monday and it is not.
 
 Signing in afterwards starts a fresh account. A guest session is not carried over — there is
 no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
@@ -225,7 +228,7 @@ Three things survive, none of them attached to you:
   what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
 
-**A guest session is deleted for you.** Unused for 30 days, it is removed outright —
+**A guest session is deleted for you.** Unused for a day, it is removed outright —
 account row, preferences, history, everything keyed to it — by a scheduled sweep
 (`sweep_guest_accounts`). This is the one place where the "while your account exists,
 your data exists" rule above does not hold, and deliberately: a guest session has no
