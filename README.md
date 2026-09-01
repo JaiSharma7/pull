@@ -101,13 +101,16 @@ genuinely self-contained. `CLAUDE.md` holds the seven laws that govern changes;
 
 ## Licence
 
-**[GNU AGPL v3](./LICENSE)** (`AGPL-3.0-only`). Copyright © 2026 Jai Sharma.
+**[GNU AGPL v3](./LICENSE)** (`AGPL-3.0-only`). Copyright © 2026 Jai Sharma and the
+What a Pull contributors — see [`NOTICE`](./NOTICE).
 
 The code is open and stays open. You may read it, run it, modify it and share it. The
 one condition that matters: if you run a modified version and let other people use it
-over a network, you have to publish your changes under the same licence. Hosting a fork
-privately is not a way around the copyleft — that is the "Affero" part, and it is the
-whole reason this licence rather than the GPL.
+over a network, you must offer _those users_ the complete source of what you are running,
+under the same licence. That is an offer to the people using your instance — not a duty
+to publish to the world, and running a modified copy privately for yourself triggers
+nothing. It is the "Affero" part, and it is the whole reason this licence rather than
+the GPL, which a hosted fork can sidestep entirely.
 
 Contributions are additionally covered by the [Contributor Licence
 Agreement](./CLA.md), which lets the project offer paid services alongside the free

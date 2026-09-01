@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Effective 30 August 2026.** Every revision of this document is a commit in this
+**Effective 1 September 2026.** Every revision of this document is a commit in this
 repository.
 
 These terms are a contract between you and the operator of **What a Pull** ("we", "us")
@@ -10,11 +10,11 @@ them. If you do not, do not use the service.
 **Three different things live in this repository, and only one of them is governed here.**
 Confusing them is the easiest mistake to make now that the source is public, so:
 
-|                                                                                               | Governed by                                                                                                                                                 |
-| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                          |
-| **The code** — everything in this repository                                                  | The [GNU AGPL v3](../LICENSE). Do what it permits, including running your own instance — but a modified instance you let others use must publish its source |
-| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones      |
+|                                                                                               | Governed by                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                                                 |
+| **The code** — everything in this repository                                                  | The [GNU AGPL v3](../LICENSE). Do what it permits, including running your own instance — but if you modify it and let others use it over a network, you must offer them its source |
+| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones                             |
 
 Running your own copy does not make you our user and does not make us your processor. If
 you offer it to other people, the Privacy Policy in this repository describes _our_

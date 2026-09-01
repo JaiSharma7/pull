@@ -39,9 +39,14 @@ a completely reasonable position and no one will think less of you for it.
 
 ## Agreement
 
-By submitting a contribution to this repository, You accept and agree to the following
-terms for Your present and future Contributions. Except for the licences granted here,
-You reserve all right, title and interest in and to Your Contributions.
+You accept these terms by **signing** — adding your name to `CONTRIBUTORS.md`, as
+"How to sign" below describes. Signing covers Your present and future Contributions to
+this repository. Submitting a pull request is not itself acceptance: if you have not
+signed, you are not bound by this document, and the contribution is not merged until you
+either sign or say you would rather not.
+
+Except for the licences granted here, You reserve all right, title and interest in and
+to Your Contributions.
 
 **1. Definitions.**
 "You" means the copyright owner, or the legal entity authorised by the copyright owner,
@@ -114,5 +119,9 @@ Add your name to `CONTRIBUTORS.md` in the same pull request as your first contri
 and keep the `Signed-off-by:` line on every commit (see `CONTRIBUTING.md` — the DCO
 records provenance per commit; this agreement records the licence grant once).
 
-Signing means: I have read this document and I agree to it for my present and future
-contributions to this repository.
+That line is your signature, and it means: I have read this document and I agree to it
+for my present and future contributions to this repository.
+
+No CI job enforces this — a reviewer checks it before merging a first contribution. It is
+deliberately a human step: a licence grant nobody read is not worth having, and a bot
+ticking it off would make it exactly that.
