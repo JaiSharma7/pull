@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "An open-source knowledge feed that turns the feed into a personal knowledge system.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22"

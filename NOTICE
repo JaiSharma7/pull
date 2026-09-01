@@ -1,0 +1,42 @@
+What a Pull
+Copyright (C) 2026 Jai Sharma and the What a Pull contributors
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3, as published by the Free
+Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+---
+
+Why this file exists
+--------------------
+
+LICENSE is the verbatim text of the AGPL, and the only copyright line inside it belongs
+to the Free Software Foundation, for the licence document itself. It says nothing about
+who owns this software. Before the relicense, the MIT LICENSE carried that notice; the
+swap would otherwise have dropped the repository's only assertion of authorship.
+
+AGPL section 5(a) requires a modified version to carry prominent notices of its
+modification, and section 14 makes "version 3 only" versus "version 3 or later" a
+statement the copyright holder has to actually make somewhere. This file is where both
+live. The project is AGPL-3.0-**only**: no proxy is designated under section 14 to
+approve later versions on the copyright holder's behalf.
+
+If you fork this and modify it, add your own line below rather than replacing the one
+above. Copyright accumulates; it does not transfer by editing a file.
+
+Contributors keep copyright in what they write. `CLA.md` records the licence they grant
+the project over it; `CONTRIBUTORS.md` records who has signed.
+
+Not covered by this notice
+--------------------------
+
+The hosted service's generated content, community submissions and user libraries are
+not part of this repository and are not licensed under the AGPL. See `docs/terms.md`
+and `docs/content-policy.md`.
