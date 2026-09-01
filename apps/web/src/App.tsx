@@ -22,7 +22,8 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
-import { isPath, queryParam, routeParam } from './lib/routes.js';
+import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
+import { takeDestination } from './lib/pending-destination.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
@@ -189,7 +190,21 @@ export function App() {
     const arrive = (s: Session | null) => {
       setSession(s);
       if (!s) return;
-      const to = safeNext(queryParam(readLocation(), 'next'));
+      /*
+       * The parameter first, then the device.
+       *
+       * `?next=` is present on the in-tab path — the reader typed a code into
+       * the document that still carries it. It is absent on the one-click path,
+       * because `magic_link.html` hardcodes its own address rather than routing
+       * through `.ConfirmationURL`, so `emailRedirectTo` reaches nothing. The
+       * fallback is what the device remembered when the email was sent.
+       *
+       * `takeDestination` spends it either way, including when the parameter
+       * won — otherwise an unused value would sit there and redirect a later
+       * sign-in that asked for somewhere else.
+       */
+      const remembered = takeDestination();
+      const to = safeNext(queryParam(readLocation(), 'next')) ?? safeNext(remembered);
       if (!to) return;
       history.replaceState(null, '', to);
       setPath(to);
@@ -560,7 +575,7 @@ export function App() {
               // Keyed on the slug so moving between topics is a fresh
               // component rather than one that has to remember to reset its
               // limit — the same reason `Source` is keyed on its work id.
-              <Topic key={topicSlug} slug={decodeURIComponent(topicSlug)} onNavigate={navigate} />
+              <Topic key={topicSlug} slug={decodeSegment(topicSlug)} onNavigate={navigate} />
             )}
             {searchOpen && (
               <Search

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchoredPullId, isPath, queryParam, routeParam } from './routes.js';
+import { anchoredPullId, decodeSegment, isPath, queryParam, routeParam } from './routes.js';
 
 const UUID = '0e825ac9-6df4-495a-8028-1868c7d35e95';
 const PULL = '43005e69-e1c6-4fdd-bf34-dee342db375e';
@@ -108,5 +108,45 @@ describe('isPath', () => {
     expect(isPath('/', '/')).toBe(true);
     expect(isPath('/?q=x', '/')).toBe(true);
     expect(isPath('//', '/')).toBe(true);
+  });
+});
+
+describe('decodeSegment', () => {
+  it('decodes an ordinary percent-encoded slug', () => {
+    expect(decodeSegment('caf%C3%A9')).toBe('café');
+    expect(decodeSegment('arts-and-letters')).toBe('arts-and-letters');
+  });
+
+  it('returns a malformed segment raw instead of throwing', () => {
+    /*
+     * The crash this exists for. `decodeURIComponent` throws URIError on an
+     * incomplete escape, and it was being called on the topic slug during
+     * render with no error boundary above it — so `/topic/%`, a URL anyone can
+     * type or link, blanked the whole application.
+     *
+     * Each of these throws when passed to `decodeURIComponent` directly; the
+     * assertion below is what makes that a slug rather than a stack trace.
+     */
+    for (const bad of ['%', '%zz', '%E0%A4%A', '100%', 'a%b']) {
+      expect(() => decodeURIComponent(bad), `${bad} should throw undecoded`).toThrow(URIError);
+      expect(decodeSegment(bad), `${bad} should survive`).toBe(bad);
+    }
+  });
+
+  it('returns raw rather than null, so the reader gets "no such topic"', () => {
+    /*
+     * A deliberate choice about which wrong answer to give. Null would mean
+     * "this is not a topic route at all", dropping the reader somewhere
+     * unrelated with no explanation. The raw string is simply a slug no topic
+     * has, so `get_topic` matches nothing and Topic renders the not-found state
+     * it already has — which is the honest answer to `/topic/%`.
+     */
+    expect(decodeSegment('%')).not.toBeNull();
+    expect(decodeSegment('%')).toBe('%');
+  });
+
+  it('is not fooled by a segment that merely contains a percent', () => {
+    expect(decodeSegment('%25')).toBe('%');
+    expect(decodeSegment('50%25-off')).toBe('50%-off');
   });
 });

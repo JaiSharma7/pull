@@ -3,6 +3,7 @@ import { CodeInput } from '../components/CodeInput.js';
 import { isEmailRateLimited } from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
+import { rememberDestination } from '../lib/pending-destination.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -209,6 +210,9 @@ export function Auth({
     // reading "Sending…" forever, disabled, with no message and no way forward but a
     // reload that also discards the address they just typed.
     try {
+      // Before the request, not after: if it fails the reader stays put and the
+      // stored value is spent or replaced by the next attempt either way.
+      rememberDestination(next);
       const { error } = await supabase.auth.signInWithOtp({
         email,
         // Only used if the email carries a link rather than a code. Harmless otherwise.
@@ -410,6 +414,9 @@ export function Auth({
     setError(null);
     setCode('');
     try {
+      // Before the request, not after: if it fails the reader stays put and the
+      // stored value is spent or replaced by the next attempt either way.
+      rememberDestination(next);
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: { emailRedirectTo },
