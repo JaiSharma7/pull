@@ -213,7 +213,7 @@ export function App() {
    * Lives here rather than in the panel because the panel is inline JSX in this
    * component; if it ever becomes its own route it should take this with it.
    */
-  const [guestLeavingAt, setGuestLeavingAt] = useState<string | null>(null);
+  const [guestLeaving, setGuestLeaving] = useState(false);
   /*
    * Where keyboard focus goes when that flag flips, and why this is a ref rather than an
    * effect keyed on `guestLeaving`.
@@ -260,6 +260,12 @@ export function App() {
    * so /privacy resolves on a cold load and offline as well as from a link.
    */
   const [path, setPath] = useState(readLocation);
+  /*
+   * The address the guest confirmation was last reconciled against. Declared here, beside
+   * `path` and above the early returns further down, because a hook below one of those
+   * runs in some renders and not others.
+   */
+  const [confirmationPath, setConfirmationPath] = useState(path);
 
   /*
    * Ask on every session change, and again after a challenge is satisfied.
@@ -551,9 +557,24 @@ export function App() {
   const accountOpen = isPath(path, '/account');
 
   /*
-   * Live only at the address it was opened at. See `guestLeavingAt`.
+   * Any navigation puts the confirmation back in its box — including coming back.
+   *
+   * React's documented "adjust state when something changes during render" pattern, which
+   * is the right shape here for a reason the two wrong shapes make clear. An effect that
+   * calls `setState` in its body is a cascading render (and the lint rule that says so is
+   * right). Comparing a stored path against the current one — which this was until Codex
+   * caught it on #48 — hides the confirmation while the guest is elsewhere and brings it
+   * straight back when they return to /account, because `/account === /account`. That is
+   * the same defect it was written to fix, only harder to see: a first press days old and
+   * on another screen is not a first press.
+   *
+   * Keyed on the path CHANGING rather than on its value, so a return trip is a different
+   * visit and starts from the safe state.
    */
-  const guestLeaving = guestLeavingAt !== null && guestLeavingAt === path;
+  if (confirmationPath !== path) {
+    setConfirmationPath(path);
+    setGuestLeaving(false);
+  }
 
   const topicSlug = routeParam(path, '/topic');
   /*
@@ -1030,7 +1051,7 @@ export function App() {
                           // Focus returns to the control that opened the confirmation,
                           // which is where a keyboard reader was before they asked.
                           guestWantsFocus.current = 'end';
-                          setGuestLeavingAt(null);
+                          setGuestLeaving(false);
                         }}
                       >
                         Keep reading as a guest
@@ -1044,7 +1065,7 @@ export function App() {
                       aria-describedby="guest-consequence"
                       onClick={() => {
                         guestWantsFocus.current = 'keep';
-                        setGuestLeavingAt(path);
+                        setGuestLeaving(true);
                       }}
                     >
                       End this guest session and sign in
