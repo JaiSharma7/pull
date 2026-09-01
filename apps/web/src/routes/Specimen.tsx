@@ -16,7 +16,8 @@ const sample: FeedRow = {
   ordinal: 1,
   headline: 'You are disturbed by your judgement, not by the event.',
   body: 'Events arrive without commentary. The distress comes from the verdict you attach to them, which is why two people meet the same news very differently.',
-  explanation: null,
+  explanation:
+    "The move is a separation, and it only works if it is made in that order. First the event, stripped of everything you have added to it: a train is late. Then the judgement, named as yours: that this is a disaster, that it says something about your luck, that it must not be borne. Epictetus's claim is not that the second half is unimportant — it is that the second half is the only half you have any purchase on, and that mistaking one for the other is what turns an inconvenience into a grievance you carry all day.",
   example: 'The delayed train is a fact. "This always happens to me" is the part doing the damage.',
   whyItMatters:
     'It is the direct ancestor of cognitive behavioural therapy, which industrialised exactly this move.',
@@ -45,12 +46,16 @@ export function Specimen() {
         <span style={{ color: 'var(--accent)' }}>about 6.2 min saved</span>
       </p>
 
+      {/* All three depth stops on purpose: the dial is the one control whose layout
+          only fails at its widest, and a screenshot of a two-stop card would not
+          show it. */}
       <PullCard
         source={{ title: sample.work.title, creator: 'Epictetus', kind: 'Book' }}
         headline={sample.headline}
         body={sample.body}
         whyItMatters={sample.whyItMatters}
         example={sample.example}
+        explanation={sample.explanation}
         sourceTrail="ch. 5"
         saved={false}
         onSave={() => undefined}

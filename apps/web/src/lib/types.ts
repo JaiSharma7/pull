@@ -64,6 +64,9 @@ export interface LibraryItem {
   headline: string;
   body: string;
   whyItMatters: string | null;
+  /** The deeper stops on the Depth Dial, so a saved card reads like a fed one. */
+  explanation: string | null;
+  example: string | null;
   savedAt: string;
   work: { id: string; title: string; kind: string | null };
   /**

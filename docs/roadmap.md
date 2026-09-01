@@ -232,9 +232,15 @@ to grow the corpus without rights exposure.
 
 ## Round 3 — personal intelligence
 
-Feed Builder with natural-language feed creation. Semantic search UI. The Depth Dial
-across all media types. Pull Graph visualisation. Counterpull surfacing at scale.
-Ask this Pull. Personalised resurfacing.
+Feed Builder with natural-language feed creation. Semantic search UI. Pull Graph
+visualisation. Counterpull surfacing at scale. Ask this Pull. Personalised resurfacing.
+
+The Depth Dial itself has landed early, on the card — it replaced the two-sided flip,
+which sized its back face from its front and so scrolled internally whenever the deeper
+text ran longer than the claim. What remains of the Round 3 item is the rest of the
+sentence it was written as: the dial _across all media types_, which needs `sections`
+rendered per medium (a paper's Method/Findings/Limitations against a film's
+Themes/Craft/Context) rather than the four columns on `pulls` it reads today.
 
 ## Round 4 — community
 

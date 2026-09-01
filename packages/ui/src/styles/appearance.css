@@ -79,9 +79,9 @@
  *
  * A hairline ring when it is not chosen; the accent, filled, when it is. That is
  * the `▪` / `·` marker the preferences screen uses, in the shape a radio has to
- * be. 50% is a circle rather than a rounded corner, so law 4's ≤4px is not what
- * it is measured against — a squared-off radio would be a novel control, and a
- * novel control is a worse outcome than a round one.
+ * be. 50% is a circle rather than a rounded corner, so the radius law's ≤2px on
+ * controls is not what it is measured against — a squared-off radio would be a
+ * novel control, and a novel control is a worse outcome than a round one.
  */
 .appearance__radio {
   appearance: none;
