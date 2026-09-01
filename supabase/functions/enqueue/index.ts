@@ -36,8 +36,18 @@ Deno.serve(async (req) => {
 
   if (error) {
     const unauthenticated = error.message.includes('requires an authenticated user');
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: unauthenticated ? 401 : 400,
+    /*
+     * A guest is signed in and still may not do this, which is a 403 and not a 400.
+     *
+     * `enqueue_generation_job` raises SQLSTATE 28000 for a guest specifically so a
+     * client can tell "you may not" apart from "that failed" (20260901190000). Reading
+     * the message and returning 400 threw that distinction away at the one hop that was
+     * meant to carry it: the caller cannot tell a refusal it should explain from a
+     * request it should retry differently.
+     */
+    const forbidden = error.code === '28000';
+    return new Response(JSON.stringify({ error: error.message, code: error.code }), {
+      status: unauthenticated ? 401 : forbidden ? 403 : 400,
       headers: { 'content-type': 'application/json' },
     });
   }

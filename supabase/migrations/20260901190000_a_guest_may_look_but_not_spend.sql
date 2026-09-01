@@ -290,24 +290,23 @@ begin
   -- Age is measured from DISUSE, not from creation, because that is what this feature
   -- promises in three places: `docs/privacy.md` says "has not been used for 30 days",
   -- `docs/terms.md` says "30 days of disuse", and the comment above says somebody can
-  -- close the tab, think about it and come back. Keyed on creation, a guest who reads
-  -- every day is deleted mid-session on day 31 -- stashes, notes and knowledge states
+  -- close the tab, think about it and come back. Keyed on `created_at`, a guest reading
+  -- every day is deleted mid-session on day 31 — stashes, notes and knowledge states
   -- cascading away while their browser still holds a token for a user row that no longer
   -- exists, with no address to recover through. That is the worst outcome this file can
-  -- produce, and it would have shipped looking like it worked.
+  -- produce and it would have shipped as "working".
   --
-  -- `auth.sessions` is the signal; the user columns are not. GoTrue sets
-  -- `last_sign_in_at` once, at sign-in, and does NOT bump it on a token refresh -- so for
+  -- `auth.sessions` is the signal, and the user columns are not. GoTrue sets
+  -- `last_sign_in_at` once, at sign-in, and does NOT bump it on a token refresh — so for
   -- a guest, who signs in exactly once and then refreshes for ever, it is a synonym for
   -- `created_at`. `auth.sessions.refreshed_at` is the column that moves. It is declared
-  -- WITHOUT a time zone while everything around it has one (20260901140000 hit the same
-  -- trap), so it is anchored to UTC here rather than reinterpreted in whatever TimeZone
-  -- the caller happens to be in.
+  -- WITHOUT a time zone while everything around it has one (20260901140000 found the
+  -- same trap), so it is anchored to UTC here rather than reinterpreted in whatever
+  -- TimeZone the caller happens to have.
   --
-  -- The user columns stay as a floor, for the case `auth.sessions` cannot answer: a guest
+  -- The user columns stay as a floor for the case `auth.sessions` cannot answer: a guest
   -- whose session has expired and been cleaned up has no row there at all, and is
   -- sweepable on age alone.
-  --
   -- Collected once into an array rather than a temporary table: `search_path = ''` is
   -- pinned above, and an unqualified temp relation does not resolve reliably under it.
   select array_agg(u.id)
@@ -361,13 +360,13 @@ comment on function public.sweep_guest_accounts(interval) is
   'them. Reads auth.users.is_anonymous rather than the JWT claim because it runs from '
   'pg_cron with no session. See 20260901190000.';
 
--- `service_role` is named explicitly, and it is not belt and braces. Supabase grants
--- EXECUTE on every new function in `public` to it by default -- the mechanic
--- 20260830200114 spells out -- so a revoke listing only `public, anon, authenticated`
--- leaves the secret key able to call this and empty the guest population in one
--- statement. That role is omnipotent anyway, so this is blast radius rather than a hole.
--- What makes it worth a line is that the grant below reads "postgres only", and without
--- this it would not have been true.
+-- `service_role` is named explicitly, and that is not belt and braces. Supabase's
+-- default privileges grant EXECUTE on every new function in `public` to it — the
+-- mechanic 20260830200114 spells out — so a revoke that lists only `public, anon,
+-- authenticated` leaves the secret key able to call `sweep_guest_accounts(interval '1
+-- day')` and empty the guest population in one statement. That role is omnipotent
+-- anyway, so this is blast radius rather than a hole; what makes it worth a line is that
+-- the grant below reads "postgres only" and would not have been.
 revoke all on function public.sweep_guest_accounts(interval) from public, anon, authenticated, service_role;
 grant execute on function public.sweep_guest_accounts(interval) to postgres;
 

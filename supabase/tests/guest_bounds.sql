@@ -66,37 +66,14 @@ begin
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           created_at, updated_at,
                           raw_app_meta_data, raw_user_meta_data, is_anonymous)
-  -- Every timestamp aged, and no `auth.sessions` row: this guest opened the app once,
-  -- three months ago, and never came back. That is what the sweep is for.
+  -- `updated_at` is aged too, deliberately: the sweep keys on the LATEST of created,
+  -- last-signed-in and updated, so that a guest still reading on day 31 is not deleted
+  -- mid-session. A row aged only by `created_at` would pass a sweep that keys on
+  -- creation and silently stop testing anything the day the predicate got that right.
   values (guest, '00000000-0000-0000-0000-000000000000',
           'authenticated', 'authenticated', null, '',
           now() - interval '90 days', now() - interval '90 days',
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
-
-  -- A second guest, exactly as old, who is still here: signed in 90 days ago and
-  -- refreshed their token two hours ago. Somebody who found the product, kept the tab,
-  -- and comes back to it.
-  --
-  -- This fixture is what makes the sweep assertion mean anything. Without it the sweep
-  -- passes whether it keys on creation or on disuse — and keying on creation deletes
-  -- this reader's stashes and knowledge states out from under a live session, with no
-  -- address to recover through. `last_sign_in_at` deliberately stays null: GoTrue sets
-  -- it once and does not bump it on refresh, so a sweep that trusted it would delete
-  -- this row too.
-  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
-                          created_at, updated_at,
-                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
-  values (regular, '00000000-0000-0000-0000-000000000000',
-          'authenticated', 'authenticated', null, '',
-          now() - interval '90 days', now() - interval '90 days',
-          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
-
-  -- `refreshed_at` is `timestamp` without a time zone while its neighbours have one, so
-  -- it is written as UTC to match what GoTrue stores and what the sweep reads.
-  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
-  values (extensions.gen_random_uuid(), regular,
-          now() - interval '90 days', now(),
-          (now() at time zone 'utc') - interval '2 hours');
 
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           email_confirmed_at, created_at, updated_at,
@@ -106,6 +83,26 @@ begin
           'guest-bounds' || left(reader::text, 8) || '@example.test', '',
           now(), now() - interval '90 days', now(),
           '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, false);
+
+  -- A second guest, the same age, who is still here. Signed in 90 days ago like the
+  -- first one and has refreshed their token this morning — a person who found the
+  -- product, kept the tab, and comes back to it.
+  --
+  -- This is the fixture that makes section 4 mean anything. Without it the sweep passes
+  -- whether it keys on creation or on disuse, and keying on creation deletes this
+  -- reader's stashes and knowledge states out from under a live session.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (regular, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '90 days', now() - interval '90 days',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
+  values (extensions.gen_random_uuid(), regular,
+          now() - interval '90 days', now(),
+          (now() at time zone 'utc') - interval '2 hours');
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
   select w.id into some_work from public.works w limit 1;
@@ -292,7 +289,7 @@ begin
       'the sweep deleted a guest who refreshed their session two hours ago. It is keyed '
       'on disuse, not on age: docs/privacy.md promises "has not been used for 30 days", '
       'and deleting somebody mid-session takes their stashes and knowledge states with '
-      'it, with no address to recover through.';
+      'no address to recover through.';
   end if;
 end $$;
 

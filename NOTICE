@@ -31,8 +31,9 @@ approve later versions on the copyright holder's behalf.
 If you fork this and modify it, add your own line below rather than replacing the one
 above. Copyright accumulates; it does not transfer by editing a file.
 
-Contributors keep copyright in what they write. `CLA.md` records the licence they grant
-the project over it; `CONTRIBUTORS.md` records who has signed.
+Contributors keep copyright in what they write, and license it to everyone under the
+AGPL by contributing — there is no contributor licence agreement and no copyright
+assignment. `CONTRIBUTORS.md` credits the people who built this.
 
 Not covered by this notice
 --------------------------

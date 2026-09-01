@@ -2,7 +2,7 @@
 #
 # Everything between "the pipeline exists in git" and "the pipeline runs in production".
 #
-#   login ──→ deploy worker ──→ set REQUIRE_REAL_PROVIDERS ──→ enqueue one job
+#   login ──→ deploy worker ──→ set REQUIRE_REAL_PROVIDERS ──→ schedule cron ──→ enqueue
 #                    ▲
 #                    └── the step nothing else does. Vercel redeploys from git on
 #                        every push; Edge Functions do not. The worker in production
@@ -58,7 +58,34 @@ step "3/4  Require real providers"
 # stays in Vault — this flag only forbids the fallback.
 npx --yes supabase secrets set REQUIRE_REAL_PROVIDERS=1 --project-ref "$PROJECT_REF"
 
-step "4/4  Enqueue one real job"
+step "4/5  Schedule the background jobs"
+cat <<'SQL'
+
+  Run this in the SQL editor. Every one of these is idempotent — cron.schedule upserts
+  by job name — so re-running the script re-runs them harmlessly.
+
+    select public.enable_generation_dispatcher_with_token();  -- or the plain variant
+    select public.enable_knowledge_vector_refresh();
+    select public.enable_log_retention();
+    select public.enable_guest_sweep();
+
+  None of these is applied by a migration, and that is deliberate: CI check 4 replays
+  every migration from zero, and a migration that calls cron.schedule makes that replay
+  depend on pg_cron running as a background worker inside a test container. The cost is
+  that they are a deploy step, which is why they are written down here.
+
+  The last one is the newest and it fails quietly. Without it, guest accounts accumulate
+  for ever — and docs/privacy.md tells readers, as a fact, that a guest session unused
+  for 30 days is deleted. That sentence is only true once this has been run.
+
+  Guest sessions also need Authentication → Sign In / Providers → "Allow anonymous
+  sign-ins" turned on in the dashboard. supabase/config.toml configures the local stack
+  and nothing else, so without it the guest button on the title page reports that it is
+  switched off.
+
+SQL
+
+step "5/5  Enqueue one real job"
 cat <<'SQL'
 
   Run this in the SQL editor (or let Claude run it — it has database access):
