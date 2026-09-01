@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import { Mark } from '@wap/ui';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
@@ -690,7 +691,10 @@ export function App() {
       </a>
 
       <header className="shell__masthead">
-        <span className="shell__wordmark">What a Pull</span>
+        <span className="shell__brand">
+          <Mark className="shell__mark" />
+          <span className="shell__wordmark">What a Pull</span>
+        </span>
 
         {/*
           The sections live in the masthead below 60rem and in the left rail

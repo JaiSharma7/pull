@@ -294,6 +294,38 @@
   border-bottom: 1px solid var(--rule);
 }
 
+/*
+ * The mark and the wordmark are one item in the masthead, so the nav and the trailing
+ * controls space themselves from the lockup rather than from the hat.
+ *
+ * `align-items: baseline` twice over, and deliberately: an SVG has no baseline of its
+ * own, so in a baseline-aligned flex line it offers its bottom edge — which sets the
+ * hat down on the wordmark's baseline, where a mark next to a word belongs. It also
+ * leaves this box's own baseline the wordmark's, so the masthead lines up exactly as it
+ * did before the hat arrived.
+ */
+.shell__brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/*
+ * Sized off the wordmark rather than in px, so it tracks the type scale and the
+ * reader's text-size setting instead of shrinking beside them. The hat is drawn to its
+ * own silhouette with no padding, and at 1.15em it lands at roughly the cap height of
+ * the word beside it: present, not competing. docs/design.md — the sentence is the
+ * brand; a big logo is what a product does when it has nothing to say.
+ */
+.shell__mark {
+  flex: none;
+  font-size: var(--step-1);
+  height: 1.15em;
+  /* The silhouette is a little over 1.5:1, and the viewBox is cropped to it. */
+  width: auto;
+  color: var(--text);
+}
+
 .shell__wordmark {
   font-family: var(--font-display);
   font-size: var(--step-1);

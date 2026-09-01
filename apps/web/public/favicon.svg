@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="What a Pull">
   <rect width="512" height="512" fill="#14120e"/>
-  <rect x="171.51999999999998" y="87.03999999999999" width="168.96" height="276.48" fill="#f4f1ea"/>
-  <rect x="43.52000000000001" y="363.52" width="424.96" height="64" fill="#f4f1ea"/>
-  <rect x="171.51999999999998" y="323.584" width="168.96" height="39.936" fill="#8c2f26"/>
+  <rect x="179.2" y="120.06" width="153.6" height="283.08" fill="#f4f1ea"/>
+  <ellipse cx="256" cy="120.06" rx="76.8" ry="24.58" fill="#f4f1ea"/>
+  <rect x="179.2" y="302.85" width="153.6" height="46.08" fill="#8c2f26"/>
+  <path d="M 37.87 293.12 A 235.52 89.6 0 1 0 474.13 293.12 A 235.52 89.6 0 0 1 37.87 293.12 Z" fill="#f4f1ea"/>
 </svg>
