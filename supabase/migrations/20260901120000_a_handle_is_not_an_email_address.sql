@@ -98,9 +98,15 @@ $$;
 -- rewrote now matches the pattern it excludes. Safe because nothing reads `handle` --
 -- not the app, not an RPC, not a policy. If that ever stops being true, this is the
 -- migration that says a handle was never stable and was never meant to be.
+--
+-- `extensions.gen_random_uuid()` is qualified for consistency rather than necessity:
+-- Postgres 13 moved it into `pg_catalog`, so a bare call resolves whatever the
+-- search_path is. Every table default in this schema points at `extensions.`, and
+-- matching them costs nothing. The place qualification is genuinely load-bearing is a
+-- function with `set search_path = ''`, where nothing but `pg_catalog` is implicit.
 
 update public.profiles
-   set handle = 'reader_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16),
+   set handle = 'reader_' || substr(replace(extensions.gen_random_uuid()::text, '-', ''), 1, 16),
        updated_at = now()
  where handle !~ '^reader_[0-9a-f]{16}$'
    and handle !~ '^reader_[0-9a-f]{23}$';

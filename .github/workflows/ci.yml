@@ -159,11 +159,24 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          # The commit that introduced this check. Anything that is an ancestor of it
+          # predates the policy and is exempt.
+          #
+          # Without this, the first pull request fails on 128 commits written before the
+          # DCO existed — which is nobody's fault and not fixable without rewriting
+          # published history. Law 6's instinct about not editing what others have
+          # already applied is the same instinct here.
+          DCO_SINCE: 73c17b9
         run: |
           set -euo pipefail
           missing=0
+          checked=0
           while read -r sha; do
             [ -z "$sha" ] && continue
+            if git merge-base --is-ancestor "$sha" "$DCO_SINCE" 2>/dev/null; then
+              continue
+            fi
+            checked=$((checked + 1))
             author="$(git show -s --format='%an <%ae>' "$sha")"
             if ! git show -s --format=%B "$sha" | grep -qiF "Signed-off-by: $author"; then
               echo "::error::$(git show -s --format='%h %s' "$sha") is missing 'Signed-off-by: $author'"
@@ -175,4 +188,4 @@ jobs:
             echo "See CONTRIBUTING.md — Developer Certificate of Origin."
             exit 1
           fi
-          echo "All commits signed off."
+          echo "Signed off: $checked commit(s) checked."

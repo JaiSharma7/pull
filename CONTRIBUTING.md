@@ -103,6 +103,10 @@ This is the [Developer Certificate of Origin](https://developercertificate.org/)
 are stating that you wrote the change, or have the right to submit it, under this
 project's MIT licence. CI enforces it on every commit in a PR.
 
+Commits made before the policy existed are exempt — the check skips anything reachable
+from the commit that introduced it. Rewriting published history to backfill sign-offs
+would be worse than the gap it closes.
+
 There is no CLA. Inbound is the same licence as outbound.
 
 ### If you used an AI assistant, say so
