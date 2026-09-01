@@ -168,31 +168,47 @@ keyed to it: profile, preferences, stashes, saves, notes, highlights, history, i
 knowledge states, vectors, convictions and explanations. That is a foreign-key cascade in
 the schema, not a scheduled cleanup job.
 
-Three things survive, all of them severed from you:
+You do this yourself, from **Account → Delete this account**. It is not a request you
+send us and wait on: the deletion happens when you confirm it. Because it cannot be
+undone, it asks for a sign-in within the last ten minutes first — a token minted weeks
+ago on a device you no longer have should not be able to spend the account.
 
-- **Generation records, including any document you submitted.** `generation_jobs.requester_id`
-  is set to null, so nobody is attached to the job — but the job itself remains, and where you
-  supplied text rather than pointed at a public source, that text remains with it. The
-  submission is stored in `generation_jobs.target`, and the pipeline keeps what it acquired
-  and segmented in `job_steps.output`. **Nulling the requester does not erase the document**,
-  so deleting your account does not today remove text you submitted for generation.
-  `cost_ledger` never held a user id.
+**Documents you submitted for generation are deleted too.** This page used to say they
+were not, and that was accurate: `generation_jobs.requester_id` is `on delete set null`,
+so a foreign-key cascade alone left the job — and any text you pasted in, and whatever
+the pipeline fetched into `job_steps.output` — sitting in the database with your name
+taken off it. That is not deletion. `delete_my_account` now removes those rows outright
+before the account goes.
 
-  We would rather this were not true, and it is a schema fix rather than a wording one: the
-  source-bearing fields should be erased when the account that produced them is. Until that
-  ships, ask us and we will delete them by hand — and if you want a submitted document gone
-  with certainty, ask before deleting the account, while we can still tell which jobs were
-  yours.
+Three things survive, none of them attached to you:
 
-- **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays, so
-  deleting an account cannot erase a moderation trail.
+- **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
+  so deleting an account cannot erase a moderation trail.
+- **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
+  token count and a cost. It never held a user id, and it is how this project can state
+  what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
 
 Anything published under a future community feature is covered in the Terms.
 
 ## Your rights
 
-Whoever and wherever you are, you can ask us to **access, correct, delete, export, restrict
+Four of these you do yourself, without asking and without waiting, from
+**Account**:
+
+| Control                     | What it does                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Download everything**     | Every row stored against your account, as one JSON file. Paged, so a large library is not silently truncated at a hundred rows. |
+| **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                       |
+| **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                      |
+| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                     |
+
+A note on ending a session, because the honest version is less impressive than the
+usual claim: it stops that device getting a _new_ token. A token it already holds keeps
+working until it expires, within the hour. That is how stateless tokens work, and no
+amount of server-side deleting changes it.
+
+Beyond those, whoever and wherever you are, you can ask us to **access, correct, delete, export, restrict
 or object to** the processing of your data, and you can withdraw consent where consent is
 what we relied on. Email the address below; we answer within 30 days.
 

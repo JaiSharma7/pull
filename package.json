@@ -23,7 +23,7 @@
     "db:push": "supabase db push",
     "db:types": "node scripts/gen-types.mjs",
     "db:lint": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f supabase/tests/lint.sql",
-    "db:test": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f scripts/smoke-read-path.sql -f supabase/tests/delta_negation.sql -f supabase/tests/search.sql -f supabase/tests/catalogue.sql -f supabase/tests/identity_privacy.sql -f supabase/tests/anon_write_bounds.sql"
+    "db:test": "psql \"${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/postgres}\" -v ON_ERROR_STOP=1 -f scripts/smoke-read-path.sql -f supabase/tests/delta_negation.sql -f supabase/tests/search.sql -f supabase/tests/catalogue.sql -f supabase/tests/identity_privacy.sql -f supabase/tests/anon_write_bounds.sql -f supabase/tests/account_security.sql"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

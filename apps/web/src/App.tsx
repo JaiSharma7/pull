@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import { Account } from './routes/Account.js';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
@@ -68,7 +69,7 @@ function readLocation(): string {
   return window.location.pathname + window.location.search;
 }
 
-const DESTINATIONS: { path: string; label: string }[] = [
+const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
   /*
@@ -81,6 +82,18 @@ const DESTINATIONS: { path: string; label: string }[] = [
    * the same shape Explore and Search already have, so it goes where they are.
    */
   { path: '/appearance', label: 'Appearance' },
+  /*
+   * The one destination a visitor must NOT see, which is why the list now carries a
+   * flag rather than being split in two.
+   *
+   * Everything else here is reachable without an account -- that is the argument
+   * Appearance makes just above. Account is the opposite: every control on it acts on
+   * a reader, so for a visitor it would be a link to a sign-in wall wearing the name
+   * of a page. Keeping it in `DESTINATIONS` with a flag preserves the property the
+   * comment above depends on and CLAUDE.md states -- this array is the authority for
+   * what has an address -- which splitting it into two arrays would quietly end.
+   */
+  { path: '/account', label: 'Account', signedIn: true },
 ];
 
 /**
@@ -330,6 +343,15 @@ export function App() {
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
+  /*
+   * A real address rather than a seventh section, for the same reason the legal
+   * documents have one: it is a place a reader is sent to. "Delete your account" in a
+   * privacy policy, a support reply, or their own bookmarks has to resolve to
+   * something, and a tab that only exists after six clicks inside a shell cannot be
+   * linked to. Signed-in only -- unlike Appearance, every control on it acts on a
+   * reader, so there is nothing here for a visitor to see.
+   */
+  const accountOpen = isPath(path, '/account');
   const topicSlug = routeParam(path, '/topic');
   const routeOpen =
     sourceId !== null ||
@@ -337,6 +359,7 @@ export function App() {
     searchOpen ||
     exploreOpen ||
     appearanceOpen ||
+    accountOpen ||
     topicSlug !== null;
 
   /*
@@ -418,7 +441,7 @@ export function App() {
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-          {DESTINATIONS.map((d) => (
+          {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
             <button
               key={d.path}
               type="button"
@@ -505,7 +528,7 @@ export function App() {
                   {s.label}
                 </button>
               ))}
-            {DESTINATIONS.map((d) => (
+            {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
               <button
                 key={d.path}
                 type="button"
@@ -571,6 +594,9 @@ export function App() {
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
             {appearanceOpen && <Appearance />}
+            {accountOpen && session && (
+              <Account userId={session.user.id} email={session.user.email ?? null} />
+            )}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh
               // component rather than one that has to remember to reset its
