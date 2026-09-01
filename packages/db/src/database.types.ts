@@ -878,6 +878,27 @@ export type Database = {
           },
         ]
       }
+      mfa_recovery_codes: {
+        Row: {
+          code_hash: string
+          created_at: string
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          code_hash: string
+          created_at?: string
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          code_hash?: string
+          created_at?: string
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       moderation_decisions: {
         Row: {
           action: string
@@ -1691,6 +1712,7 @@ export type Database = {
           rights_status: Database["public"]["Enums"]["rights_status"]
           search_tsv: unknown
           slug: string
+          source_url: string | null
           subtitle: string | null
           title: string
           trust_score: number
@@ -1708,6 +1730,7 @@ export type Database = {
           rights_status?: Database["public"]["Enums"]["rights_status"]
           search_tsv?: unknown
           slug: string
+          source_url?: string | null
           subtitle?: string | null
           title: string
           trust_score?: number
@@ -1725,6 +1748,7 @@ export type Database = {
           rights_status?: Database["public"]["Enums"]["rights_status"]
           search_tsv?: unknown
           slug?: string
+          source_url?: string | null
           subtitle?: string | null
           title?: string
           trust_score?: number
@@ -1746,6 +1770,10 @@ export type Database = {
         Args: { p_msg_id: number }
         Returns: boolean
       }
+      attribute_work: {
+        Args: { p_author: string; p_work_id: string }
+        Returns: undefined
+      }
       claim_generation_messages: {
         Args: { p_count?: number; p_visibility_seconds?: number }
         Returns: {
@@ -1754,6 +1782,7 @@ export type Database = {
           read_ct: number
         }[]
       }
+      delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
       disable_knowledge_vector_refresh: { Args: never; Returns: string }
@@ -1777,6 +1806,7 @@ export type Database = {
       }
       enable_log_retention: { Args: { p_cron?: string }; Returns: number }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
+      generate_mfa_recovery_codes: { Args: never; Returns: string[] }
       generation_secret: { Args: { p_name: string }; Returns: string }
       get_catalogue: { Args: never; Returns: Json }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
@@ -1820,6 +1850,19 @@ export type Database = {
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
+      my_sessions: {
+        Args: never
+        Returns: {
+          aal: string
+          created_at: string
+          id: string
+          ip: string
+          is_current: boolean
+          not_after: string
+          refreshed_at: string
+          user_agent: string
+        }[]
+      }
       plan_interleave: {
         Args: {
           p_cards_before?: number
@@ -1892,6 +1935,7 @@ export type Database = {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined
       }
+      redeem_mfa_recovery_code: { Args: { p_code: string }; Returns: boolean }
       refresh_knowledge_vector: {
         Args: { p_user_id?: string }
         Returns: undefined
@@ -1908,6 +1952,8 @@ export type Database = {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
       }
+      revoke_other_sessions: { Args: never; Returns: number }
+      revoke_session: { Args: { p_session_id: string }; Returns: boolean }
       search_catalogue: {
         Args: {
           p_kinds?: Database["public"]["Enums"]["work_kind"][]
@@ -1921,6 +1967,7 @@ export type Database = {
         Args: { page: number; salt?: string; seed: number; slot: number }
         Returns: number
       }
+      session_age_seconds: { Args: never; Returns: number }
       set_conviction: {
         Args: {
           p_confidence?: number
