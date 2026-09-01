@@ -101,5 +101,22 @@ genuinely self-contained. `CLAUDE.md` holds the seven laws that govern changes;
 
 ## Licence
 
-MIT. The code is open; the hosted service's generated content, community submissions
-and user libraries are separate and are not part of this repository.
+**[GNU AGPL v3](./LICENSE)** (`AGPL-3.0-only`). Copyright © 2026 Jai Sharma.
+
+The code is open and stays open. You may read it, run it, modify it and share it. The
+one condition that matters: if you run a modified version and let other people use it
+over a network, you have to publish your changes under the same licence. Hosting a fork
+privately is not a way around the copyleft — that is the "Affero" part, and it is the
+whole reason this licence rather than the GPL.
+
+Contributions are additionally covered by the [Contributor Licence
+Agreement](./CLA.md), which lets the project offer paid services alongside the free
+ones without relicensing anyone's work by surprise. It is short, and it explains itself.
+
+The hosted service's generated content, community submissions and user libraries are
+separate, are governed by [the Terms](./docs/terms.md), and are not part of this
+repository.
+
+**The five stay free regardless.** Audio, offline, unlimited history, unlimited stashing
+and curated Daily Pulls are free forever — that is law 3 in `CLAUDE.md`, and no licence
+change touches it.

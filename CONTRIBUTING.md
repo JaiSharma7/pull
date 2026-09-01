@@ -101,7 +101,7 @@ git rebase --signoff main   # adds it to commits you already made
 
 This is the [Developer Certificate of Origin](https://developercertificate.org/): you
 are stating that you wrote the change, or have the right to submit it, under this
-project's MIT licence. CI enforces it on every commit in a PR.
+project's [AGPL-3.0 licence](./LICENSE). CI enforces it on every commit in a PR.
 
 Commits made before the policy existed are exempt — the check skips anything reachable
 from the commit that introduced it. Rewriting published history to backfill sign-offs
@@ -112,7 +112,20 @@ nothing for it to certify; the certification that matters on a Dependabot PR hap
 a human reviews and merges it. Requiring a sign-off no bot can give would leave every
 dependency update permanently red, which teaches reviewers to ignore a failing DCO.
 
-There is no CLA. Inbound is the same licence as outbound.
+### Sign the CLA (once)
+
+Alongside the per-commit DCO, first-time contributors sign the [Contributor Licence
+Agreement](./CLA.md) by adding their name to `CONTRIBUTORS.md` in the same pull request.
+
+The two are not redundant. The DCO records **provenance**, per commit: you had the right
+to send this. The CLA records a **licence grant**, once: the project may relicense your
+contribution, including into a paid service offered alongside the free ones. You keep
+your copyright, and you keep every right to your own work.
+
+It is a short document and it states its trade-offs plainly, including the two things it
+lets the project do that the AGPL alone would not. Read it before you sign it. If you
+disagree with it, say so in the issue rather than the pull request — the terms are a
+reasonable thing to argue about, and that argument does not belong in a code review.
 
 ### If you used an AI assistant, say so
 

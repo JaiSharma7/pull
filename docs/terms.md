@@ -10,11 +10,11 @@ them. If you do not, do not use the service.
 **Three different things live in this repository, and only one of them is governed here.**
 Confusing them is the easiest mistake to make now that the source is public, so:
 
-|                                                                                               | Governed by                                                                                                                                            |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                     |
-| **The code** — everything in this repository                                                  | The [MIT licence](../LICENSE). Do what it permits, including running your own instance                                                                 |
-| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones |
+|                                                                                               | Governed by                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                          |
+| **The code** — everything in this repository                                                  | The [GNU AGPL v3](../LICENSE). Do what it permits, including running your own instance — but a modified instance you let others use must publish its source |
+| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones      |
 
 Running your own copy does not make you our user and does not make us your processor. If
 you offer it to other people, the Privacy Policy in this repository describes _our_
@@ -67,7 +67,7 @@ all — will only ever apply to expensive generation, never to the learning feat
 ### Ours and our licensors'
 
 The design system, the software and the service itself are owned by us or our licensors —
-the software under the MIT licence in this repository. You may read, save, quote with
+the software under the GNU AGPL v3 in this repository. You may read, save, quote with
 attribution, and share links. We ask that you not scrape the corpus in bulk, redistribute
 it as a competing dataset or product, or train a model on it.
 
@@ -162,14 +162,16 @@ you unless you publish it, and it is subject to the same rights rules as everyth
 
 ## 7. Contributing to the code
 
-Contributions to this repository are governed by the [MIT licence](../LICENSE), not by
-these Terms. Inbound is outbound: what you send is licensed to everyone on exactly the
-terms the project is already licensed on.
+Contributions to this repository are governed by the [GNU AGPL v3](../LICENSE) and the
+[Contributor Licence Agreement](../CLA.md), not by these Terms. What you send is
+released to everyone under the AGPL, exactly as the rest of the project is.
 
-There is **no contributor licence agreement**. Instead, every commit carries a
-`Signed-off-by:` line — the [Developer Certificate of
-Origin](https://developercertificate.org/) — which is you stating that you wrote the
-change or have the right to submit it. CI checks for it. `CONTRIBUTING.md` has the
+Two documents, because they do different jobs. Every commit carries a `Signed-off-by:`
+line — the [Developer Certificate of
+Origin](https://developercertificate.org/) — which is you stating, per commit, that you
+wrote the change or have the right to submit it; CI checks for it. The **CLA** is signed
+once, and grants us a licence broad enough to relicense your contribution, including
+into a paid service. You keep your copyright either way. `CONTRIBUTING.md` has the
 details, including what is expected if you used an AI assistant.
 
 Contributing code does not create an account relationship, and does not make you a user
