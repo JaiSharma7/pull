@@ -122,7 +122,7 @@ Three, and only three:
 
 | Processor                      | What it handles                                        | Where                   |
 | ------------------------------ | ------------------------------------------------------ | ----------------------- |
-| **Supabase** (and AWS beneath) | Database, authentication, storage, server functions    | `ca-central-1`, Canada  |
+| **Supabase** (and AWS beneath) | Database, authentication, server functions             | `ca-central-1`, Canada  |
 | **Vercel**                     | Serving the web app and its static assets              | Global edge network     |
 | **Google** (Gemini API)        | Generating summaries — including a document you submit | Google's infrastructure |
 
@@ -131,6 +131,18 @@ sees your address and the code.
 
 That is the complete list. There is no analytics vendor, no session-replay tool, no crash
 reporter, no tag manager, and no advertising SDK in the app today.
+
+**There was a fourth, and we had not counted it.** Until recently the stylesheet loaded
+three typefaces from `fonts.googleapis.com`, which meant your IP address and browser
+reached Google on the first paint of every page — including this one, before you had
+read a word of it. That was a request nobody had decided to make, sitting against the
+sentence about cross-site tracking below. The fonts are now served from our own origin,
+so the request no longer happens. It is recorded here rather than quietly fixed because
+a privacy policy that has only ever been right is not evidence of anything.
+
+**If a second model provider is ever switched on**, this table changes before it does.
+The code supports one (`SUMMARY_FALLBACK_PROVIDER`), it is not enabled, and enabling it
+without amending this page would make the sentence above false.
 
 ## Where your data lives, and transfers
 
@@ -229,8 +241,24 @@ to our decision.
 
 ## Security
 
-- **Row-level security is on every table in the database**, with policies written in the
-  migration that creates it. CI fails the build if a table lacks one.
+- **Row-level security is on every table in the database, and every one carries a
+  policy.** CI replays every migration from zero on a real Postgres and fails the build
+  if a table has RLS disabled, has no policy, has a `SECURITY DEFINER` function with an
+  unpinned `search_path`, or has two permissive policies overlapping on reads.
+
+  This used to say the policies are "written in the migration that creates" the table.
+  That is the project's stated intent and it is not what the schema does — tables land
+  in one migration and their policies in the next, and migrations here are append-only
+  so it cannot be retrofitted. What CI asserts is the **end state**, which is what
+  protects you: no environment that finishes migrating has an unprotected table. The
+  stronger sentence was a claim about process, and it was wrong.
+
+- **This whole thing is public.** The source is on GitHub, including the schema, every
+  policy, and the URL and publishable key of the production project. That is deliberate:
+  the security of your data rests on row-level security and on the credentials the
+  repository does **not** contain, not on any of it being unreadable. If it rested on
+  secrecy, publishing would break it — and you would have no way to check any of the
+  claims on this page. See `SECURITY.md` for how to report something.
 - The browser bundle carries exactly one credential: the Supabase **publishable** key, which
   is designed to be public and which RLS — not secrecy — is what protects. Service keys and
   provider keys exist only server-side.

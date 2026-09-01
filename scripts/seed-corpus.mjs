@@ -23,7 +23,7 @@
  * rows rather than anybody's.
  *
  *   ┌── manifest ──┐   --check    ┌── fetch each URL ──┐
- *   │  38 sources  │ ──────────→  │ status · bytes     │ → report, non-zero on failure
+ *   │ 101 sources  │ ──────────→  │ status · bytes     │ → report, non-zero on failure
  *   └──────────────┘              └────────────────────┘
  *          │         --sql
  *          └──────────────────→   INSERT generation_jobs + pgmq.send  → stdout

@@ -1,5 +1,13 @@
 # What a Pull — masterplan
 
+> **A note now that this is public.** What follows names competitors and says
+> unflattering things about them. It is design and market judgement, offered as opinion
+> and hedged where it is not checkable — not a claim about anyone's business, and not an
+> invitation to pile on. It is here because law 1 in `CLAUDE.md` is literally "never look
+> like Deepstash", and a rule of that shape is unusable without the reasoning behind it.
+> Where a factual claim about another product appeared in these documents undated and
+> unsourced, it has been removed rather than kept.
+
 ## The opportunity
 
 Deepstash is a personalised microlearning feed: short visual idea cards drawn from books

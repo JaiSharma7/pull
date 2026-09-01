@@ -19,25 +19,36 @@ What a Pull is built for a different loop:
 
 **Discover → Pull → Understand → Save → Recall → Go deeper**
 
-Every idea is anchored to a real source you can open. Every idea can be argued with.
-And the app keeps a model of what you already know, so it stops re-teaching it.
+Every idea is anchored to a real source you can open — a byline and a link to the
+original, on every source page. Every idea can be argued with. And the app keeps a
+model of what you already know, so it stops re-teaching it.
 
 ## What makes it different
 
-|                        |                                                                                                                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **The Delta**          | The app knows what you already know, and refuses to spend your time on it. Open a book: _"You already know 14 of these 18. Here are the 4 that are new."_ It reports **time saved**, not time spent. |
-| **Interleaved Recall** | Questions arrive _inside_ the feed at unpredictable moments — bounded, seeded, and dismissible. A Review tab is a chore people skip; a question at the right moment gets answered.                   |
-| **Conviction Ledger**  | Mark what you _believe_, not just what you saved. Months later: _"You agreed with this in March. Here's the strongest case against it."_                                                             |
-| **Idea Lineage**       | Ideas have ancestors. Trace one backwards across sources and centuries — Stoicism → Ellis → CBT → modern habit design.                                                                               |
-| **Say It Back**        | Explain an idea in your own words. The model grades the _gap_, not the prose, and keeps your explanation on the card.                                                                                |
-| **Half-Life**          | No streak guilt. Ideas decay; the Library shows what is solid and what is fading. Sessions end on **Enough**.                                                                                        |
+Built, and working today:
+
+|                        |                                                                                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **The Delta**          | The app knows what you already know, and refuses to spend your time on it. Open a source: _"You already know 14 of these 18. Here are the 4 that are new."_ It reports **time saved**, not time spent. |
+| **Interleaved Recall** | Questions arrive _inside_ the feed at unpredictable moments — bounded, seeded, and dismissible. A Review tab is a chore people skip; a question at the right moment gets answered.                     |
+| **Half-Life**          | No streak guilt. Ideas decay; Review shows what is fading. Sessions end on **Enough**.                                                                                                                 |
+| **Say It Back**        | Explain an idea in your own words, then compare it with the card and grade yourself. _Self-graded_ — the model-graded version is designed and not built (`explanations.gap_score` is never written).   |
+
+Designed, with the data being collected and no screen yet. Named here because a
+half-built feature is easier to trust when it says so:
+
+|                       |                                                                                                                                                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Conviction Ledger** | You can mark what you _believe_, not just what you saved, and `convictions` records it. Nothing reads it back yet — _"you agreed with this in March, here is the case against it"_ is round 3.                                                              |
+| **Idea Lineage**      | `pull_relations` carries ancestor, descendant and opposing edges, and a source page shows one hop of them. Tracing a chain across centuries needs the relation-extraction step, which is unwritten — so today only the hand-seeded works have edges at all. |
 
 ## Stack
 
-React 19 · Vite 8 · Zod · PWA — over Supabase (Postgres 17, pgvector, pgmq, Auth,
-Storage, Edge Functions). No LLM ever runs in the read path: ranking, search and the
-Delta are SQL and vector maths, which is what makes the free tier affordable.
+React 19 · Vite 8 · PWA — over Supabase (Postgres 17, pgvector, pgmq, Auth, Edge
+Functions). No LLM ever runs in the read path: ranking, search and the Delta are SQL and
+vector maths, which is what makes the free tier affordable. Measured, not asserted: 101
+generated summaries have cost $1.50 in total, about $0.015 each, and every call writes to
+`cost_ledger`.
 
 There is no router and no data-fetching library. The handful of real URLs are matched
 by pure helpers in `apps/web/src/lib/routes.ts` and driven by `history.pushState` in
@@ -49,11 +60,18 @@ for offline reading is written to IndexedDB.
 ```bash
 pnpm install
 pnpm db:start        # local Supabase stack (needs Docker)
-pnpm db:reset        # apply migrations + seed the public-domain corpus
+pnpm db:reset        # apply migrations, including the seeded demo corpus
 pnpm dev             # http://127.0.0.1:5173
 ```
 
-The seed corpus is public-domain only, so the app is usable with **no API keys**.
+Everything committed here is public domain, so a fresh clone runs with **no API keys**.
+What `db:reset` gives you is **6 works and 21 Pulls** — enough to watch every mechanic
+work, including a deliberately planted near-duplicate so the Delta visibly fires. It is
+not enough to feel like a product, and it is not meant to be.
+
+The 101 sources in `scripts/corpus/public-domain.json` are titles and URLs; turning them
+into content runs the generation pipeline, which needs a model API key and an operator.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Using the hosted service
 
@@ -74,8 +92,12 @@ describe ours, not yours.
 
 ## Contributing
 
-Read `CLAUDE.md` for the seven laws that govern changes, `AGENTS.md` for the review
-process, and `CONTRIBUTING.md` to get started. Docs live in [`docs/`](./docs).
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) — setup, the contribution policy
+(DCO sign-off, and what is expected if you used an AI assistant), and how a change gets
+reviewed. [`docs/contributing-map.md`](./docs/contributing-map.md) lists work that is
+genuinely self-contained. `CLAUDE.md` holds the seven laws that govern changes;
+`AGENTS.md` describes the maintainer-side review gate. Security reports go to
+[`SECURITY.md`](./SECURITY.md), never to a public issue. Docs live in [`docs/`](./docs).
 
 ## Licence
 

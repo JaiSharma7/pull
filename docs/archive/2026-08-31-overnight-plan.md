@@ -1,3 +1,21 @@
+> ## Historical. Superseded. Do not follow this document.
+>
+> **Archived 1 September 2026.** This was the operating manual for a single unattended
+> run on the night of 2026-08-31, and it is kept because the reasoning in it is a real
+> record of how that night was decided — not because any of it is still current.
+>
+> Most of it is now wrong. Search shipped; stashes, highlights, notes, history and
+> Explore shipped; the counts are stale; the deployment id and the migration-ledger
+> drift it describes are from that night. It also authorises self-merge and instructs
+> sessions never to ask a person, which was a decision scoped to one night with the
+> repository private and is **not** how this project works: `AGENTS.md` holds the review
+> gate and `CONTRIBUTING.md` holds the contribution policy, and both supersede
+> everything below.
+>
+> Read `docs/roadmap.md` for what is actually true.
+
+---
+
 # The night of 2026-08-31 — unattended MVP run
 
 > **Operating manual for an unattended run.** Every session reads this file in full before

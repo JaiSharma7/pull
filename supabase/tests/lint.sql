@@ -131,4 +131,32 @@ BEGIN
   END IF;
 END $$;
 
+-- 6. No two indexes with identical definitions on the same table. A duplicate costs
+--    double on every write and buys nothing on any read: the planner uses one and the
+--    other is dead weight. `artworks` carried a pair for three rounds, reported by the
+--    performance advisor and named in the roadmap, because nothing in CI could see it.
+--
+--    Compared on the definition with the index name removed, so two indexes differing
+--    only in what they are called are recognised as the same index.
+DO $$
+DECLARE
+  offenders text;
+BEGIN
+  SELECT string_agg(names, '; ')
+    INTO offenders
+  FROM (
+    SELECT string_agg(i.indexname, ' = ' ORDER BY i.indexname) AS names
+    FROM pg_indexes i
+    WHERE i.schemaname = 'public'
+    GROUP BY i.tablename,
+             regexp_replace(i.indexdef, ' INDEX [^ ]+ ON ', ' INDEX ON ')
+    HAVING count(*) > 1
+  ) dupes;
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Indexes with identical definitions: %. Drop all but one.', offenders;
+  END IF;
+END $$;
+
 SELECT 'schema invariants: ok' AS result;

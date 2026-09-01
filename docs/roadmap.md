@@ -6,8 +6,8 @@ it.
 
 ## Round 1 — the spine ✅
 
-Monorepo with four CI checks, the agentic setup, 28 migrations across 38 tables with RLS
-everywhere, the read path (ranking · Delta · interleave), a public-domain seed, The
+Monorepo with the CI checks, the agentic setup, the first 28 migrations across 38 tables
+with RLS everywhere, the read path (ranking · Delta · interleave), a public-domain seed, The
 Archive design system, the generation step-machine skeleton, and a working app: auth →
 feed → interleaved questions → save → review → Enough.
 
@@ -287,15 +287,32 @@ not have to rediscover them.
   counting-scope decisions rather than bugs in the maths, and both predate the negation
   work; recorded because the function comment that used to assert "describes this page"
   was corrected rather than carried forward.
-- **Two hosted advisories are open and neither is code.** Leaked password protection is
-  disabled in Auth, and `artworks` carries two identical indexes
-  (`artworks_summary_idx`, `artworks_summary_readable_idx`) — a WARN each, both predating
-  any of round 2's work. The first is a dashboard toggle; the second wants a migration
-  that drops one index. Named here because the definition of done says advisors report no
-  security findings, and an undocumented WARN is indistinguishable from one nobody
-  noticed. The `enqueue_generation_job` advisory remains the one the project accepts by
-  design. Everything else the performance advisor reports is `unused_index` on a database
-  with no traffic yet, which is what an unused index looks like before launch.
+- **The duplicate `artworks` index is dropped; leaked-password protection is still a
+  dashboard toggle.** `artworks_summary_idx` and `artworks_summary_readable_idx` were
+  byte-identical — same table, same column, neither partial — and cost double on every
+  write for nothing. `20260901170000` drops the later one, and `lint.sql` check 6 now
+  fails CI on any pair of indexes with identical definitions, so the class is closed
+  rather than the instance. It had been reported by the performance advisor and named
+  here since round 1 precisely because nothing automated could see it.
+
+  Leaked-password protection remains off and cannot be fixed from this repository; it is
+  one switch in Authentication → Policies. The `enqueue_generation_job` advisory remains
+  the one the project accepts by design, and `SECURITY.md` says so publicly so nobody
+  spends a weekend rediscovering it.
+
+- **`hnsw.ef_search` is set, and the reason is worth reading before changing it.**
+  `search_catalogue` over-fetches `count(ranked) + 120` neighbours and `related_pulls`
+  asks for 200, both reasoned about carefully in 20260901080000 — which never mentions
+  that pgvector's candidate list defaults to **40**, and that an index scan therefore
+  cannot return 200 rows however many are asked for. It returns about 40, with no error.
+
+  It has not bitten, for an uncomfortable reason: at 370 pulls the planner ignores the
+  HNSW index and scans, which is exact. So the arithmetic is correct today _because the
+  optimisation it was written for is not in use_, and would have started quietly losing
+  results on the day the corpus grew enough to use it. Set to 200 on the database in
+  `20260901170000`, with a warning rather than a failure if the migration role may not
+  ALTER DATABASE.
+
 - **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
   and takes it from `node:crypto`. That is fine for its actual job — testing the
   placement rules over thousands of sessions without a database — but the prefetch use

@@ -52,6 +52,15 @@ prevent. Ported:
 Rejected: cards, split-screen layouts with artwork, social-provider rows (we have one
 method), glass and gradient treatments, and every shadow.
 
+**On the licence, since the repository is public.** What was taken is interaction
+behaviour — that six boxes beat one field, that an empty state reads mark, title, line,
+action — which is an idea rather than an expression, and ideas are not what copyright
+covers. No markup, no classes and no stylesheet were copied; `CodeInput.tsx` and the
+empty states in this app were written against these descriptions, not against their
+source. That is a deliberate line and this paragraph exists so a reader can check it
+rather than take the heading at face value. Credit where it is due: the segmented-input
+pattern is theirs, and it is better than what was here before.
+
 ## 1 · Sign in — the title page
 
 The current screen is a 544px column pinned to `left: 0` on a 1440px window, with 900px
@@ -208,7 +217,20 @@ so they are set like a result rather than a receipt.
 
 - **Artwork on cards.** `disabledImageProvider` returns null by design; artwork is the
   first thing cut under cost pressure.
-- **A dark mode.** Ink on paper is the identity. Inverting it is a different product.
-- **Onboarding.** The feed explains itself, and a tour is what a product builds when the
-  first screen does not.
-- **The Library, Review and Counterpull screens** — their data is still moving.
+- **Artwork on cards**, above, is still true. The three below are not, and are kept with
+  the correction rather than deleted, because what changed somebody's mind is usually
+  more useful than the conclusion:
+
+- ~~**A dark mode.** Ink on paper is the identity. Inverting it is a different product.~~
+  Dark mode ships. `docs/design.md` had already resolved this — "dark mode is
+  **ink-ground**", not an inversion — and the resolution is the reason: the same paper
+  logic run the other way is the identity holding, not the identity leaving. It is one of
+  three settings on `/appearance`, with an inline script in `index.html` applying the
+  choice before first paint so nothing flashes.
+- ~~**Onboarding.** The feed explains itself.~~ `OnboardingGate` ships. The feed does
+  explain itself; what it cannot do is rank for a reader it knows nothing about, and the
+  gate exists to collect the topic weights rather than to give a tour.
+- ~~**The Library, Review and Counterpull screens** — their data is still moving.~~
+  Library and Review ship. Counterpull does not: `pull_relations` carries the edges and a
+  source page shows one hop, but nothing writes an edge for generated content, so at
+  scale there is nothing to surface. That one is still true and now has a reason.

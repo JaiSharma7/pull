@@ -14,9 +14,6 @@
     "lint": "eslint src",
     "test": "vitest run"
   },
-  "dependencies": {
-    "zod": "^4.5.2"
-  },
   "devDependencies": {
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
