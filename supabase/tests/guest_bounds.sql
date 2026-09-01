@@ -13,6 +13,8 @@
 --   * a guest can finish onboarding and read their own preferences -- if this breaks,
 --     the guest button leads to a dead end and the feature is pointless
 --   * a guest cannot enqueue generation, author a summary, or file a report
+--   * a guest can keep a private note, stash and feed recipe, and cannot make any of
+--     them public -- by inserting one public or by flipping one they already own
 --   * a reader with an address can still do all three -- so the refusals above are
 --     about being a guest and not about something else that broke
 --   * the bounds that apply to everyone are still in force: the free allowance is
@@ -182,6 +184,67 @@ begin
     raise exception 'a guest filed a report.';
   end if;
 
+  -- Keeping, yes. Publishing, no.
+  --
+  -- `notes_read`, `stashes_read` and `feed_recipes_read` let a row out to `anon` when its
+  -- owner marks it public, and `anon` means anyone holding the publishable key that ships
+  -- in the bundle on purpose. The private half has to keep working or the guest session
+  -- is a demo with the product removed, so both directions are asserted here.
+  insert into public.notes (user_id, body, visibility)
+  values (guest, 'A private note a guest may keep.', 'private');
+
+  refused := false;
+  begin
+    insert into public.notes (user_id, body, visibility)
+    values (guest, 'A note the whole world can read.', 'public');
+    raise exception 'a guest published a world-readable note.';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a guest published a note.';
+  end if;
+
+  -- The two-statement version of the same thing, which an insert-only clause would miss:
+  -- write it private, then flip it. This is why the update policies carry the clause too.
+  refused := false;
+  begin
+    update public.notes set visibility = 'public' where user_id = guest;
+    raise exception 'a guest published a note by updating one they already owned.';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a guest published a note by updating it.';
+  end if;
+
+  insert into public.stashes (user_id, name, visibility)
+  values (guest, 'Kept for later', 'private');
+
+  refused := false;
+  begin
+    insert into public.stashes (user_id, name, visibility)
+    values (guest, 'Published stash', 'public');
+    raise exception 'a guest published a world-readable stash.';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a guest published a stash.';
+  end if;
+
+  refused := false;
+  begin
+    insert into public.feed_recipes (user_id, name, is_public)
+    values (guest, 'Published recipe', true);
+    raise exception 'a guest published a world-readable feed recipe.';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a guest published a feed recipe.';
+  end if;
+
   -- --------------------------------------- 2. as a reader with an address
   --
   -- Same role, same policies, no `is_anonymous`. If any of these fail, the clauses
@@ -259,6 +322,15 @@ begin
 
   insert into public.reports (reporter_id, target_type, target_id, reason)
   values (reader, 'summary', some_work, 'spam');
+
+  insert into public.notes (user_id, body, visibility)
+  values (reader, 'A note a reader may publish.', 'public');
+
+  insert into public.stashes (user_id, name, visibility)
+  values (reader, 'A published stash', 'public');
+
+  insert into public.feed_recipes (user_id, name, is_public)
+  values (reader, 'A published recipe', true);
 
   -- ------------------------------------------------------ 4. the sweep
   --

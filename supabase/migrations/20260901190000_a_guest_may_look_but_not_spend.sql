@@ -138,7 +138,17 @@ begin
     raise exception 'enqueue_generation_job requires an authenticated user';
   end if;
 
-  if exists (select 1 from auth.users u where u.id = uid and u.is_anonymous) then
+  -- Asserted positively, so an absent row refuses rather than proceeds. `exists(... and
+  -- is_anonymous)` is false when the row is missing or the column is null, and false
+  -- means "not a guest, carry on" -- which is the fail-open direction the comment above
+  -- says this function must not take. A caller with no row is reachable: an account
+  -- deleted by `delete_my_account`, or swept by section 4, still holds an unexpired
+  -- access token for up to `jwt_expiry`. Today the foreign key on
+  -- `generation_jobs.requester_id` stops that caller a statement later, so this is the
+  -- difference between "refused" and "refused by accident".
+  if not exists (
+    select 1 from auth.users u where u.id = uid and u.is_anonymous is not true
+  ) then
     raise exception
       'Generating a summary needs an account. Sign in with an email address and try again.'
       using errcode = '28000';
@@ -420,7 +430,23 @@ grant execute on function public.enable_guest_sweep(text) to postgres;
 --   highlights.text, convictions.rationale, explanations.text
 --
 -- The sweep in section 4 is a 30-day answer to a problem that can fill a disk in an
--- afternoon, so it is not the answer here.
+-- afternoon, so it is not the answer here either.
+--
+-- BE PRECISE ABOUT WHAT THIS BUYS, because 20260901130000 is explicit that it is half a
+-- defence: "a length cap without a rate cap still fills the disk one small row at a time,
+-- and a rate cap without a length cap lets sixty rows an hour be sixty megabytes." That
+-- migration could not apply the other half -- `rate_limits` is keyed on a `user_id` its
+-- callers do not have. Here every caller has one, so the machinery does fit, and it is
+-- still not written: a per-user insert ceiling means a trigger on six tables, and the
+-- honest thing is to ship the half that is tested and say which half it is rather than
+-- add untested triggers to a branch at the end of its review.
+--
+-- So: this bounds how large a single row can be. It does not bound how many rows one
+-- caller may insert, and neither does anything else in the schema. What stands between
+-- that and a filled disk today is `[auth.rate_limit] anonymous_users` (sessions per hour
+-- per address, not inserts per session), which is a speed bump and not a wall. Recorded
+-- as a known gap rather than described as closed -- a law stated more strongly than it is
+-- enforced is one contributors get rejected for while main breaks it.
 --
 -- Bounded for everyone rather than for guests, and that is deliberate on two counts. A
 -- cap does not depend on `is_guest()` being right, so it holds even if the claim is ever
@@ -458,3 +484,90 @@ alter table public.convictions
 
 alter table public.explanations
   add constraint explanations_text_length check (length(text) between 1 and 20000);
+
+-- 6. A guest may keep things. A guest may not publish them. ------------------------
+--
+-- Section 3 closed authorship and reports and stopped one table short in the direction
+-- that matters. Three of the personal tables are not purely personal: their read
+-- policies let a row out to the whole world when its owner says so.
+--
+--   notes_read          visibility = 'public' or auth.uid() = user_id
+--   stashes_read        visibility = 'public' or auth.uid() = user_id
+--   feed_recipes_read   is_public or auth.uid() = user_id
+--
+-- All three are `to public`, so "the whole world" means `anon` — which means anyone
+-- holding the publishable key committed in `apps/web/.env.production`, on purpose,
+-- because law 7 is right that it is not a secret. A guest could therefore publish a
+-- 20000-character note readable by everyone, from an account that cost nothing, cannot
+-- be contacted, and takes its content down thirty days later.
+--
+-- That is section 3's own argument about authorship — "an unattributable account with
+-- write access to that table is a poisoning surface with nobody behind it" — and it is
+-- stronger here, not weaker: an author-owned summary is readable by its author, while a
+-- public note is readable by everyone. Law 4 is in play too, because the row can hold
+-- pasted source text and the takedown path leads to nobody.
+--
+-- Keeping is untouched. A guest can still write notes, build stashes and save a feed
+-- recipe, because that is the product working — every one of those is a row keyed to
+-- them and visible to nobody else. What they cannot do is make one public.
+--
+-- THE UPDATE HALF IS LOAD-BEARING, which is where section 3's reasoning does not carry
+-- over. There, a guest can never own a summary row, so a guest clause on the update
+-- policy would restrict an empty set. Here a guest owns their notes: an insert-only
+-- clause is defeated in two statements — insert it private, then flip `visibility` to
+-- 'public'. Both halves, or neither is worth writing.
+
+drop policy if exists notes_insert_own on public.notes;
+create policy notes_insert_own on public.notes
+  for insert
+  with check (
+    (select auth.uid()) = user_id
+    and (visibility <> 'public' or not (select public.is_guest()))
+  );
+
+drop policy if exists notes_update_own on public.notes;
+create policy notes_update_own on public.notes
+  for update
+  using ((select auth.uid()) = user_id)
+  with check (
+    (select auth.uid()) = user_id
+    and (visibility <> 'public' or not (select public.is_guest()))
+  );
+
+comment on policy notes_insert_own on public.notes is
+  'A reader may write their own note. A guest may write one and may not publish it: '
+  'notes_read lets a public note out to anon. See 20260901190000.';
+
+drop policy if exists stashes_insert_own on public.stashes;
+create policy stashes_insert_own on public.stashes
+  for insert
+  with check (
+    (select auth.uid()) = user_id
+    and (visibility <> 'public' or not (select public.is_guest()))
+  );
+
+drop policy if exists stashes_update_own on public.stashes;
+create policy stashes_update_own on public.stashes
+  for update
+  using ((select auth.uid()) = user_id)
+  with check (
+    (select auth.uid()) = user_id
+    and (visibility <> 'public' or not (select public.is_guest()))
+  );
+
+drop policy if exists feed_recipes_insert_own on public.feed_recipes;
+create policy feed_recipes_insert_own on public.feed_recipes
+  for insert
+  with check (
+    (select auth.uid()) = user_id
+    and (not is_public or not (select public.is_guest()))
+  );
+
+drop policy if exists feed_recipes_update_own on public.feed_recipes;
+create policy feed_recipes_update_own on public.feed_recipes
+  for update
+  using ((select auth.uid()) = user_id)
+  with check (
+    (select auth.uid()) = user_id
+    and (not is_public or not (select public.is_guest()))
+  );

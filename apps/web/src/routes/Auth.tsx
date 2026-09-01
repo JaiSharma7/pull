@@ -223,6 +223,7 @@ export function Auth({
 
     setBusy(true);
     setError(null);
+    setGuestError(null);
     // try/finally, not try/catch-then-reset: supabase-js converts its own AuthErrors
     // into `{ error }` but rethrows anything else — a DNS failure, an offline device,
     // a wedged Web Lock. Resetting `busy` after a bare await therefore left the button
@@ -275,6 +276,7 @@ export function Auth({
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setGuestError(null);
     // `type: 'email'` covers both a new and a returning reader; Supabase resolves which
     // it is. On success the client stores the session and App.tsx's auth listener swaps
     // this screen out, so there is nothing to do with the result here.
@@ -377,6 +379,7 @@ export function Auth({
 
     setBusy(true);
     setError(null);
+    setGuestError(null);
     try {
       // Each branch reports its own `error`; supabase-js only throws for transport.
       const { error } =
@@ -436,7 +439,17 @@ export function Auth({
   async function continueAsGuest() {
     setBusy(true);
     setOpeningGuest(true);
+    /*
+     * Both slots, in both directions.
+     *
+     * Every action on this screen clears every message, because two of them on screen at
+     * once contradict each other. The live case is not hypothetical: on a project where
+     * anonymous sign-ins are off, a reader presses this, is told "use the email route
+     * above", does exactly that, hits the SMTP rate limit — and would otherwise be
+     * looking at one alert saying use the email route and another saying it is closed.
+     */
     setGuestError(null);
+    setError(null);
     try {
       // Same try/finally reasoning as `requestCode`: supabase-js rethrows anything that
       // is not an AuthError, and a bare await would leave the button disabled for ever.
@@ -478,6 +491,7 @@ export function Auth({
     setSent(false);
     setCode('');
     setError(null);
+    setGuestError(null);
   }
 
   /**
@@ -492,6 +506,7 @@ export function Auth({
   async function resend() {
     setBusy(true);
     setError(null);
+    setGuestError(null);
     setCode('');
     try {
       // Before the request, not after: if it fails the reader stays put and the
@@ -635,7 +650,10 @@ export function Auth({
           unrelated control below — the sentence then reads as a statement about the
           page rather than as the terms of the button above it.
         */}
-        <div className="stack titlepage__alts">
+        <div
+          className="stack titlepage__alts"
+          style={{ '--stack-gap': 'var(--space-2)' } as React.CSSProperties}
+        >
           <button
             type="button"
             className="btn btn--plain"
@@ -649,11 +667,20 @@ export function Auth({
               {guestError}
             </p>
           )}
-          <span className="titlepage__promise">
-            No email needed. A guest session lives in this browser only: it cannot be recovered on
-            another device, it does not carry over when you sign in, and it is deleted after 30 days
-            unused.
-          </span>
+          {/*
+            A `p`, not a `span`, and the reason is worth a line because it looked fine in
+            the diff. `.stack > * + *` separates children with `margin-block-start`, and a
+            vertical margin does nothing at all on a non-replaced inline element — so as a
+            span this sentence had no gap above it and shared a line with the button,
+            rendering as "LOOK AROUND AS A GUESTNo email needed. A guest session…" on the
+            first screen a stranger sees. It only looked right in the one state where
+            `guestError` is set, because that block splits the inline run.
+          */}
+          <p className="titlepage__promise">
+            No email needed. A guest session is only reachable from this browser: it cannot be
+            recovered on another device, it does not carry over when you sign in, and it is deleted
+            after 30 days unused.
+          </p>
         </div>
 
         {/*
@@ -718,7 +745,7 @@ export function Auth({
           to it rather than after.
         */}
         <p className="titlepage__legal">
-          Signing in accepts our{' '}
+          Signing in — or looking around as a guest — accepts our{' '}
           <a href="/terms" onClick={go('/terms')}>
             Terms
           </a>{' '}
@@ -726,7 +753,7 @@ export function Auth({
           <a href="/privacy" onClick={go('/privacy')}>
             Privacy Policy
           </a>
-          . We ask for an email address and nothing else — or, as a guest, nothing at all.
+          . We ask for an email address and nothing else; as a guest, nothing at all.
         </p>
 
         {/* Last, because it is the strongest sentence on the screen and it answers the
@@ -751,7 +778,12 @@ export function Auth({
             other mints a guest session that carries a feed and an onboarding picker.
             The label now says which is which.
           */}
-          <button type="button" className="btn btn--plain" onClick={() => onNavigate('/explore')}>
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => onNavigate('/explore')}
+            disabled={busy}
+          >
             Or just browse, signed out
           </button>
         </p>
