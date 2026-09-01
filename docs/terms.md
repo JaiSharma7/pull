@@ -149,7 +149,7 @@ terminate the accounts of repeat infringers.
 6. A statement, **under penalty of perjury**, that your notice is accurate and that you are
    the owner or authorised to act for them
 
-**Designated agent:** jaisharmahere@gmail.com
+**Designated agent:** copyright@whatapull.com
 
 **Counter-notice.** If your material was removed and you believe that was a mistake or a
 misidentification, you may send a counter-notice with your signature, identification of the
@@ -229,8 +229,12 @@ things end there, and we would rather resolve a problem than litigate it.
 
 ## 14. Contact
 
-**jaisharmahere@gmail.com** — legal notices, copyright complaints, security reports.
+| Address                     | For                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| **legal@whatapull.com**     | Legal notices and anything about these Terms                                 |
+| **copyright@whatapull.com** | Copyright complaints and counter-notices — the designated agent in section 7 |
+| **privacy@whatapull.com**   | Data requests and anything in the [Privacy Policy](./privacy.md)             |
+| **security@whatapull.com**  | Vulnerability reports — see [`SECURITY.md`](../SECURITY.md)                  |
 
-_Role addresses on whatapull.com (legal@, copyright@, privacy@) will replace this once the
-domain's mail is set up, including the designated agent address in section 7. Until then, the
-address above is the one that is actually read._
+Role addresses rather than a personal mailbox, because this repository is public and an
+address written here is indexed permanently.

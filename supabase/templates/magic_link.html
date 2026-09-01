@@ -123,10 +123,21 @@
         The cost of writing the address here is that a new deployment domain has to be
         changed in two places. That is a real cost, and it buys a sign-in that cannot be
         broken by a setting nobody remembers exists.
+
+        What it does NOT buy is immunity from being wrong, which is what happened: the
+        address hardcoded here was a Vercel preview host, so every sign-in email sent a
+        reader to a preview build of the app rather than to the product. A literal that
+        cannot be broken by a setting can still be broken by a deploy, and this one was
+        for the life of the file.
+
+        So the domain is written once, here, and used in both places below. That keeps
+        the property the comment above is defending — the link does not depend on
+        Site URL being configured correctly — while making "change it in two places"
+        into "change it in one".
       -->
       <p style="margin: 0 0 32px">
         <a
-          href="https://pull-puce.vercel.app/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink"
+          href="https://whatapull.com/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink"
           style="
             font-family: system-ui, sans-serif;
             font-size: 16px;
@@ -146,7 +157,7 @@
 
       <p style="font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.6; margin: 0">
         Still stuck? Enter the code above at
-        <a href="https://pull-puce.vercel.app" style="color: #8c2f26">pull-puce.vercel.app</a>
+        <a href="https://whatapull.com" style="color: #8c2f26">whatapull.com</a>
         in the browser you started from.
       </p>
 

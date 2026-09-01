@@ -310,18 +310,42 @@ not have to rediscover them.
   the reader did. Round 2 should classify permanent failures — a 404 or a 403 is not a
   500 — and drop only those. Found while reviewing my own retry path, not by either
   reviewer.
-- **`acquire` is still open to DNS rebinding.** The host blocklist rejects private
-  and link-local literals in both IPv4 and IPv6, and re-checks every redirect hop, so
-  a public URL that 302s to `169.254.169.254` is refused. What it cannot see is
-  `evil.example.com` with an A record of `10.0.0.1`: the check is on the literal, and
-  resolution happens inside `fetch`. Closing it needs the address resolved before
-  connecting and the socket pinned to it, which Deno's `fetch` does not expose —
-  realistically a small resolve-then-connect helper, or an egress proxy. It matters
-  because the worker holds a service-role key and writes what it fetched into
-  `job_steps.output`, which the requester can read, and because
-  `enqueue_generation_job` is reachable by any signed-in reader. Found by Codex
-  reviewing the IPv4-only version of the blocklist; the IPv6 half is fixed, this half
-  is not.
+- **`acquire` was open to DNS rebinding. Closed, by inverting the check.** The host
+  blocklist rejects private and link-local literals in both IPv4 and IPv6 and re-checks
+  every redirect hop, so a public URL that 302s to `169.254.169.254` was refused. What
+  it could not see was `evil.example.com` with an A record of `10.0.0.1`: the check is
+  on the literal, and resolution happens inside `fetch`. It mattered because the worker
+  holds a service-role key and writes what it fetched into `job_steps.output`, which the
+  requester can read, and because `enqueue_generation_job` is reachable by any signed-in
+  reader.
+
+  The fix that was planned here — resolve the address, then pin the socket to it — is
+  still not expressible in Deno's `fetch`, and waiting for it was the wrong move. An
+  allowlist closes the same hole from the other side and needs no new capability:
+  `evil.example.com` never reaches DNS at all, whatever it would have resolved to.
+  `DEFAULT_SOURCE_HOSTS` in `_shared/source.ts` is the three hosts the entire 101-source
+  manifest uses, overridable by `SOURCE_HOST_ALLOWLIST`, and a `*` value is refused
+  rather than honoured. Matching is exact rather than by suffix, and the blocklist stays
+  behind it so a carelessly widened allowlist still cannot reach loopback.
+
+  What this gives up is the ability to summarise an arbitrary URL. No shipped screen
+  offers that — nothing in `apps/web` invokes `enqueue` at all — so the capability lost
+  is one only an operator had, and an operator can name a host. Worth revisiting when
+  the Pull Studio makes reader-supplied URLs a real feature; at that point the
+  allowlist becomes a per-request rights and egress decision rather than a constant.
+
+- **`profiles` was a directory of everyone's email local-parts. Fixed.** `handle_new_user`
+  derived the handle from `split_part(new.email, '@', 1)` and `profiles_read_all` was
+  `for select using (true)`, so any caller holding the publishable key — which is
+  committed, correctly — could page the table and read the local part of every
+  registered address. It never mattered while the project had one account and a private
+  repository; publishing changes both. `20260901120000` makes reads self-only on
+  `profiles` and `follows`, generates handles randomly, and rewrites the rows that
+  already carried an address. Neither table is read by a single line of `apps/web` —
+  they are round 4 tables that were sitting open in a round 2 database — so nothing was
+  given up. `docs/privacy.md` described the handle as optional and opt-in; that sentence
+  was wrong on both counts and has been corrected rather than kept.
+
 - **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
   says "in the migration that creates it", and the schema does not do that: tables land
   in `20260829124548_learning.sql` and its siblings, policies in

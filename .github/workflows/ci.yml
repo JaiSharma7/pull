@@ -14,8 +14,19 @@ env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.33.0'
 
+# No job here references `secrets.*`, and none should. `pull_request` runs with a
+# read-only token and, on a fork, no access to repository secrets at all — so a
+# workflow that needed one would either fail for every outside contributor or have
+# to be `pull_request_target`, which runs the *base* workflow against untrusted head
+# code with secrets in scope. That is the shape most supply-chain incidents take.
+#
+# Everything below runs on public inputs: pnpm installs from the lockfile, and
+# `supabase start` boots a local stack whose keys are the published defaults. If a
+# check ever genuinely needs a credential, it belongs in a separate workflow gated
+# on `push` to a branch, not in this one.
+
 jobs:
-  # Check 1 of 4 — style drift, dead code, and JSX accessibility rules.
+  # Check 1 of 6 — style drift, dead code, and JSX accessibility rules.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -29,7 +40,19 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
 
-  # Check 2 of 4 — schema/code drift is the likeliest breakage in this repo,
+      # `eslint.config.js` ignores supabase/functions ("Deno runtime, separate lint
+      # pass") and the package's own lint script was `echo "linted by Deno, not
+      # eslint"`. Nothing ever ran Deno. That left the worker — which holds the
+      # service-role key, performs the outbound fetch, and is the SSRF surface — as
+      # the one part of the tree with no lint at all, while this job's own comment
+      # claimed to cover dead code. The separate pass now exists.
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: v2.x }
+      - name: Lint Edge Functions (Deno)
+        run: deno lint
+        working-directory: supabase/functions
+
+  # Check 2 of 6 — schema/code drift is the likeliest breakage in this repo,
   # so typecheck runs against the committed generated Supabase types.
   typecheck:
     name: typecheck
@@ -44,7 +67,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
-  # Check 3 of 4 — the signature mechanics must not change behaviour silently.
+  # Check 3 of 6 — the signature mechanics must not change behaviour silently.
   test:
     name: test
     runs-on: ubuntu-latest
@@ -57,7 +80,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
-  # Check 4 of 4 — replay every migration from zero on a real Supabase stack,
+  # Check 4 of 6 — replay every migration from zero on a real Supabase stack,
   # then assert the invariants that a missing policy would violate. An RLS gap
   # is a data breach, and it is trivial to introduce by adding a table.
   db:
@@ -80,14 +103,15 @@ jobs:
       - name: Assert RLS, policies, and FK indexes
         run: pnpm run db:lint
 
-      - name: Seed corpus applies cleanly
-        run: pnpm exec supabase db reset
-
       # Behaviour, not shape. These run as a real reader through RLS against the
-      # seeded corpus, so they need the reset above -- db:lint runs against the
-      # --no-seed one. The smoke script existed from round 1 but nothing ever
-      # ran it, which is how a read-path regression would have reached main
-      # without anyone noticing.
+      # seeded corpus. The smoke script existed from round 1 but nothing ever ran
+      # it, which is how a read-path regression would have reached main without
+      # anyone noticing.
+      #
+      # There used to be a second `supabase db reset` here, labelled "seed corpus
+      # applies cleanly". It proved nothing: there is no supabase/seed.sql and no
+      # [db.seed] in config.toml, so `--no-seed` and the default do exactly the same
+      # work. The seed lives in migrations, which the replay above already covers.
       - name: Read path behaves under RLS
         run: pnpm run db:test
 
@@ -99,3 +123,56 @@ jobs:
           pnpm db:types
           git diff --exit-code -- packages/db/src/database.types.ts \
             || { echo "::error::Generated DB types are stale. Run 'pnpm db:types' and commit the result."; exit 1; }
+
+  # Check 5 of 6 — a committed credential, in the tree or anywhere in history.
+  #
+  # This repository commits two keys on purpose (law 7: a VITE_* variable is in the
+  # bundle every visitor downloads, so the publishable key is public by construction).
+  # That is precisely the condition under which a real secret goes unnoticed — a
+  # reviewer who has learned that .env.production is fine stops reading it. The two
+  # intentional values are allowlisted by exact string in .gitleaks.toml; everything
+  # else that looks like a credential fails here.
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # Full history: a key removed in a later commit is still in every clone.
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
+  #
+  # `Signed-off-by:` is the contributor asserting they have the right to submit the
+  # code under the project's licence. It is also the reason CONTRIBUTING.md can ask
+  # for a named human behind every line without needing a CLA to administer.
+  dco:
+    name: dco
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - name: Every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format=%B "$sha" | grep -qiF "Signed-off-by: $author"; then
+              echo "::error::$(git show -s --format='%h %s' "$sha") is missing 'Signed-off-by: $author'"
+              missing=1
+            fi
+          done < <(git rev-list --no-merges "$BASE".."$HEAD")
+          if [ "$missing" -ne 0 ]; then
+            echo "Add sign-off with: git commit -s   (or: git rebase --signoff $BASE)"
+            echo "See CONTRIBUTING.md — Developer Certificate of Origin."
+            exit 1
+          fi
+          echo "All commits signed off."

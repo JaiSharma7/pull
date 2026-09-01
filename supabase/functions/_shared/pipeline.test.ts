@@ -12,9 +12,11 @@ import {
 import {
   assertFetchableUrl,
   contentHash,
+  DEFAULT_SOURCE_HOSTS,
   extractText,
   MAX_SOURCE_CHARS,
   segment,
+  sourceHostsFrom,
 } from './source.ts';
 import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
 
@@ -161,14 +163,21 @@ describe('assertFetchableUrl', () => {
     expect(() => assertFetchableUrl(url)).toThrow(/private or link-local/);
   });
 
-  // A blocklist that refuses everything with a colon in it would be a different bug
-  // wearing the same fix, so the allow side is asserted with the same weight.
-  it.each(['http://[2606:4700:4700::1111]/', 'http://[2001:4860:4860::8888]/'])(
-    'still allows the public IPv6 address %s',
-    (url) => {
-      expect(() => assertFetchableUrl(url)).not.toThrow();
-    },
-  );
+  /*
+   * A blocklist that refuses everything with a colon in it would be a different bug
+   * wearing the same fix, so the allow side is asserted with the same weight.
+   *
+   * These pass the host explicitly. Since 20260901 the allowlist is checked too, and
+   * a public IPv6 literal is not on it — so calling with the default would prove the
+   * allowlist works rather than proving, as intended here, that the IPv6 blocklist
+   * does not over-block. The two checks are asserted separately on purpose.
+   */
+  it.each([
+    ['http://[2606:4700:4700::1111]/', '[2606:4700:4700::1111]'],
+    ['http://[2001:4860:4860::8888]/', '[2001:4860:4860::8888]'],
+  ])('still allows the public IPv6 address %s', (url, host) => {
+    expect(() => assertFetchableUrl(url, [host])).not.toThrow();
+  });
 
   it.each(['file:///etc/passwd', 'data:text/html,hi', 'gopher://example.com/'])(
     'refuses the %s scheme',
@@ -177,14 +186,85 @@ describe('assertFetchableUrl', () => {
     },
   );
 
-  it('allows an ordinary public URL', () => {
-    expect(assertFetchableUrl('https://example.com/essay').hostname).toBe('example.com');
+  it('allows an ordinary public URL that is on the allowlist', () => {
+    expect(assertFetchableUrl('https://example.com/essay', ['example.com']).hostname).toBe(
+      'example.com',
+    );
   });
 
   // Public IPv6 must still work; a blocklist that refuses everything with a
   // colon in it would be a different bug wearing the same fix.
   it('allows a public IPv6 address', () => {
-    expect(() => assertFetchableUrl('http://[2606:4700:4700::1111]/')).not.toThrow();
+    expect(() =>
+      assertFetchableUrl('http://[2606:4700:4700::1111]/', ['[2606:4700:4700::1111]']),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * The allowlist, which is what actually closes DNS rebinding.
+ *
+ * The blocklist above can only recognise a private address that is spelled out.
+ * `evil.example.com` with an A record of `10.0.0.1` passes every pattern in it,
+ * because resolution happens inside `fetch`. An allowlist never asks DNS at all,
+ * which is why it is the first check rather than an extra one.
+ */
+describe('the source host allowlist', () => {
+  it('refuses a public host that is not on the list', () => {
+    expect(() => assertFetchableUrl('https://evil.example.com/x')).toThrow(
+      /not in the source host allowlist/,
+    );
+  });
+
+  it.each(DEFAULT_SOURCE_HOSTS)('allows the corpus host %s by default', (host) => {
+    expect(assertFetchableUrl(`https://${host}/page`).hostname).toBe(host);
+  });
+
+  it('matches the host exactly, not by suffix', () => {
+    // The two shapes a careless suffix rule would wave through.
+    expect(() => assertFetchableUrl('https://evilclassics.mit.edu/x')).toThrow(
+      /not in the source host allowlist/,
+    );
+    expect(() => assertFetchableUrl('https://anything.en.wikisource.org/x')).toThrow(
+      /not in the source host allowlist/,
+    );
+  });
+
+  it('is case-insensitive about the host', () => {
+    expect(assertFetchableUrl('https://EN.WIKISOURCE.ORG/page').hostname).toBe('en.wikisource.org');
+  });
+
+  it('reads a configured list, trimming and lowercasing', () => {
+    expect(sourceHostsFrom(() => ' Example.COM , other.org ')).toEqual([
+      'example.com',
+      'other.org',
+    ]);
+  });
+
+  it('falls back to the corpus hosts when unset or empty', () => {
+    expect(sourceHostsFrom(() => undefined)).toEqual(DEFAULT_SOURCE_HOSTS);
+    expect(sourceHostsFrom(() => '  ,  ')).toEqual(DEFAULT_SOURCE_HOSTS);
+  });
+
+  /*
+   * A wildcard is refused rather than honoured.
+   *
+   * Accepting it would restore exactly the hole the allowlist exists to close, and
+   * an environment variable is the wrong place to make that choice quietly — the
+   * worker holds a service-role key and writes what it fetched somewhere the
+   * requester can read it back.
+   */
+  it('refuses a wildcard allowlist', () => {
+    expect(() => sourceHostsFrom(() => '*')).toThrow(/refused/);
+    expect(() => sourceHostsFrom(() => 'en.wikisource.org,*')).toThrow(/refused/);
+  });
+
+  /* The blocklist stays behind the allowlist, so a self-hoster who names a private
+   * host still does not reach it. Two checks that fail independently. */
+  it('still refuses a private host even when it is allowlisted', () => {
+    expect(() => assertFetchableUrl('http://127.0.0.1:54321/', ['127.0.0.1'])).toThrow(
+      /private or link-local/,
+    );
   });
 });
 

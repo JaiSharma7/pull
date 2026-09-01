@@ -240,7 +240,13 @@ write about ourselves.
 
 ## Contact
 
-**jaisharmahere@gmail.com** — privacy questions, requests and complaints.
+**privacy@whatapull.com** — privacy questions, requests and complaints, and anything under
+"Your rights" above.
 
-_Role addresses on whatapull.com (privacy@, copyright@, legal@) will replace this once the
-domain's mail is set up. Until they do, the address above is the one that is actually read._
+**security@whatapull.com** — vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for
+what to expect and how quickly.
+
+Both are monitored by the operator named in the [Terms](./terms.md). They are role addresses
+rather than a personal mailbox on purpose: a privacy contact that is one person's inbox is a
+contact that stops working the moment that person is unreachable, and this repository is
+public, which makes anything written here permanently indexed.
