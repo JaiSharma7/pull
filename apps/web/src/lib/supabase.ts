@@ -1,4 +1,5 @@
 import { createBrowserClient, type Db } from '@wap/db';
+import { browserAuthStorage } from './guest-storage.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -46,7 +47,17 @@ if (
   );
 }
 
-export const supabase: Db = createBrowserClient(url, key);
+/*
+ * A guest's token goes to `sessionStorage` and everybody else's to `localStorage`, so a
+ * guest session ends with the browser the way an incognito window does. The reasoning,
+ * and what it costs, are in `guest-storage.ts`.
+ *
+ * `browserAuthStorage()` reaches for the accessors lazily rather than taking them as
+ * arguments here. That is not style: in a browser with site data blocked, naming
+ * `globalThis.localStorage` throws, and this line runs at module scope before anything
+ * has rendered.
+ */
+export const supabase: Db = createBrowserClient(url, key, browserAuthStorage());
 
 /**
  * Who is signed in right now, tracked at module scope rather than in component

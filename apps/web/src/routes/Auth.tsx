@@ -677,9 +677,9 @@ export function Auth({
             `guestError` is set, because that block splits the inline run.
           */}
           <p className="titlepage__promise">
-            No email needed. A guest session is only reachable from this browser: it cannot be
-            recovered on another device, it does not carry over when you sign in, and it is deleted
-            a day after you last use it.
+            No email needed. A guest session works like a private window: it ends when you close the
+            browser, it cannot be recovered on another device or in a new tab, it does not carry
+            over when you sign in, and what is left of it is deleted within a day.
           </p>
         </div>
 

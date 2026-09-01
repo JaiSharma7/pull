@@ -55,8 +55,8 @@ covered by these Terms exactly as an account is, with two differences that follo
 there being no address: we cannot restore it to you if it is lost, and it is deleted
 automatically after a day of disuse. A day is measured from when you last used it, not
 from when it was created, so a guest session does not end underneath somebody who is
-still reading. Requesting a generation, publishing a summary and filing a report all need
-an account.
+still reading. It also ends when you close the browser, the way a private window does.
+Requesting a generation, publishing a summary and filing a report all need an account.
 
 You can delete your account at any time. We can suspend or terminate one for a clear breach
 of section 5, for conduct that puts other readers or the service at risk, or where the law

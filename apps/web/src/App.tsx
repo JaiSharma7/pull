@@ -978,9 +978,10 @@ export function App() {
                   who has not yet made anything worth keeping.
                 */}
                 <p>
-                  A guest session is also deleted a day after you last use it, along with everything
-                  keyed to it. Reading today and coming back tomorrow keeps it; leaving it for a
-                  weekend does not. Signing in with an email address is what makes any of it stay.
+                  This session also ends on its own. Closing the browser ends it here, the way a
+                  private window does, and the account behind it is deleted within a day, along with
+                  everything keyed to it. Signing in with an email address is what makes any of it
+                  stay.
                 </p>
                 {/*
                   Two presses, which is the shape every irreversible action on the real
