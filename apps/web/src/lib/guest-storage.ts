@@ -76,24 +76,80 @@ export function createSplitAuthStorage(
   session: KeyValueStore,
   local: KeyValueStore,
 ): KeyValueStore {
+  /** `true` only if the value actually landed. A store that refuses throws rather than no-ops. */
+  const write = (store: KeyValueStore, key: string, value: string): boolean =>
+    guard(() => {
+      store.setItem(key, value);
+      return true;
+    }, false);
+
   return {
     /*
-     * `sessionStorage` first, then `localStorage`.
+     * `sessionStorage` first, EXCEPT that an account with an address outranks a guest.
      *
-     * The fallback is not only for readers with an address. It is also the upgrade path:
-     * a guest whose token was written to `localStorage` before this module existed keeps
-     * their session, and the first `setItem` of the hour — supabase-js refreshes the
-     * token well inside `jwt_expiry` — moves it across and clears the old copy. Nobody is
-     * signed out by the deploy that adds this.
+     * The ordinary case is one store holding one token, and then this is just "wherever it
+     * is". The tie is the interesting part, and a plain `??` got it wrong: `sessionStorage`
+     * is per-tab while `localStorage` is shared, so a guest reading in tab A cannot see
+     * that tab B has since signed in with an email address. Tab A's own `sessionStorage`
+     * still holds the guest token; `localStorage` now holds the reader's. Preferring the
+     * session copy would sign the converted reader back into the throwaway account they
+     * just left — in the tab they are most likely to still have open.
+     *
+     * Resolved toward the account that can be recovered. A guest session is unreachable by
+     * design once it is gone, so mistakenly keeping the reader's costs a browser refresh
+     * and mistakenly keeping the guest's costs an account nobody can get back into.
+     *
+     * The fallback to `localStorage` is also the upgrade path: a guest whose token was
+     * written there before this module existed keeps their session, and the first
+     * `setItem` of the hour — supabase-js refreshes well inside `jwt_expiry` — moves it
+     * across. Nobody is signed out by the deploy that adds this.
      */
-    getItem: (key) =>
-      guard(() => session.getItem(key), null) ?? guard(() => local.getItem(key), null),
+    getItem: (key) => {
+      const fromSession = guard(() => session.getItem(key), null);
+      const fromLocal = guard(() => local.getItem(key), null);
+      if (fromSession === null) return fromLocal;
+      if (fromLocal === null) return fromSession;
+      return tokenIsGuest(fromSession) && !tokenIsGuest(fromLocal) ? fromLocal : fromSession;
+    },
 
     setItem: (key, value) => {
-      const [keep, clear] = tokenIsGuest(value) ? [session, local] : [local, session];
-      guard(() => keep.setItem(key, value), undefined);
-      // Unconditional, so a conversion never leaves the old copy where `getItem` would
-      // find it — and so this is idempotent rather than order-dependent.
+      const guest = tokenIsGuest(value);
+      const [keep, clear] = guest ? [session, local] : [local, session];
+
+      if (!write(keep, key, value)) {
+        /*
+         * The write did not land, so there is nothing yet to replace the old copy with.
+         * Clearing here — which the first version did unconditionally — turns a full quota
+         * into a silent sign-out: the call returns, supabase-js believes the session was
+         * persisted, and the next reload finds nothing anywhere.
+         *
+         * A reader falls back to the other store: a session that lasts until the tab closes
+         * is a poor second to a persisted one and a great deal better than none. A guest
+         * does NOT, and that asymmetry is the feature rather than an oversight —
+         * `localStorage` is the one place a guest token must never be, so the fallback that
+         * would rescue this session is the fallback that breaks the promise the sign-in
+         * screen makes. A guest whose browser refuses `sessionStorage` keeps the session
+         * in memory for as long as the page lives, and no longer.
+         */
+        if (!guest) write(clear, key, value);
+        return;
+      }
+
+      /*
+       * A guest write must never remove a reader's token, for the reason `getItem` gives:
+       * the tab doing the writing may be a stale guest session that has no way of knowing
+       * another tab converted. Removing here would undo the persistence of an account with
+       * an address — the one kind that is supposed to survive — on a timer, whenever that
+       * forgotten tab next refreshed.
+       *
+       * Every other combination still clears, which is what keeps exactly one copy: a
+       * reader write always clears the guest copy, and a guest write clears an older guest
+       * copy (the upgrade path above).
+       */
+      if (guest) {
+        const displaced = guard(() => clear.getItem(key), null);
+        if (displaced !== null && !tokenIsGuest(displaced)) return;
+      }
       guard(() => clear.removeItem(key), undefined);
     },
 

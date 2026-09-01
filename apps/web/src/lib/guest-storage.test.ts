@@ -107,13 +107,60 @@ describe('createSplitAuthStorage', () => {
     expect(local.map.has(KEY)).toBe(false);
   });
 
-  it('prefers the session copy when both are somehow set', () => {
+  it('prefers the reader token when a stale guest copy is also present', () => {
+    /*
+     * Codex P1 on #48, and it asserted the bug the other way round before this.
+     *
+     * `sessionStorage` is per-tab and `localStorage` is shared, so a guest reading in tab A
+     * cannot see that tab B signed in with an address. Preferring the session copy signs
+     * the converted reader back into the throwaway account they just left.
+     */
     const session = fake();
     const local = fake();
     session.map.set(KEY, guestToken);
     local.map.set(KEY, readerToken);
 
-    expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(guestToken);
+    expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(readerToken);
+  });
+
+  it('prefers the session copy when neither is a stale guest shadowing a reader', () => {
+    // The tie-break is narrow on purpose: it reorders exactly one combination.
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, readerToken);
+    local.map.set(KEY, legacyToken);
+
+    expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(readerToken);
+  });
+
+  it('does not let a stale guest tab destroy a converted reader session', () => {
+    /*
+     * The destructive half of the same finding. Tab B converted, so `localStorage` holds
+     * the reader token. Tab A is still a guest and its next token refresh writes through
+     * this adapter. Unconditionally clearing the other store -- which the first version
+     * did -- deleted the reader's persistence on a timer, whenever that forgotten tab
+     * happened to refresh.
+     */
+    const session = fake();
+    const local = fake();
+    local.map.set(KEY, readerToken);
+
+    createSplitAuthStorage(session, local).setItem(KEY, guestToken);
+
+    expect(session.map.get(KEY)).toBe(guestToken);
+    expect(local.map.get(KEY)).toBe(readerToken);
+  });
+
+  it('still clears an older guest copy on a guest write', () => {
+    // The upgrade path must keep working: only a NON-guest token is protected above.
+    const session = fake();
+    const local = fake();
+    local.map.set(KEY, guestToken);
+
+    createSplitAuthStorage(session, local).setItem(KEY, guestToken);
+
+    expect(session.map.get(KEY)).toBe(guestToken);
+    expect(local.map.has(KEY)).toBe(false);
   });
 
   it('signs out of both stores', () => {
@@ -179,5 +226,58 @@ describe('browserAuthStorage', () => {
       if (original.session) Object.defineProperty(globalThis, 'sessionStorage', original.session);
       else delete (globalThis as Partial<typeof globalThis>).sessionStorage;
     }
+  });
+});
+
+describe('createSplitAuthStorage when a store refuses a write', () => {
+  /** Reads and removes fine; only `setItem` throws, the way a full quota behaves. */
+  function fullQuota(): KeyValueStore & { map: Map<string, string> } {
+    const store = fake();
+    return {
+      ...store,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+    };
+  }
+
+  it('keeps the existing copy when the preferred store rejects the write', () => {
+    /*
+     * Codex P2 on #48. `guard` swallows the throw, so the first version returned as though
+     * it had persisted the token and then deleted the only good copy -- a full quota became
+     * a silent sign-out discovered on the next reload.
+     */
+    const session = fullQuota();
+    const local = fake();
+    local.map.set(KEY, readerToken);
+
+    createSplitAuthStorage(session, local).setItem(KEY, guestToken);
+
+    expect(local.map.get(KEY)).toBe(readerToken);
+  });
+
+  it('falls back to sessionStorage for a reader when localStorage refuses', () => {
+    const session = fake();
+    const local = fullQuota();
+
+    createSplitAuthStorage(session, local).setItem(KEY, readerToken);
+
+    // A session that ends with the tab beats no session at all.
+    expect(session.map.get(KEY)).toBe(readerToken);
+  });
+
+  it('does NOT fall back to localStorage for a guest when sessionStorage refuses', () => {
+    /*
+     * The asymmetry is the feature. `localStorage` is the one place a guest token must
+     * never be, so the fallback that would rescue this session is the fallback that breaks
+     * the promise the sign-in screen makes to the reader.
+     */
+    const session = fullQuota();
+    const local = fake();
+
+    createSplitAuthStorage(session, local).setItem(KEY, guestToken);
+
+    expect(local.map.has(KEY)).toBe(false);
+    expect(session.map.has(KEY)).toBe(false);
   });
 });
