@@ -1,19 +1,23 @@
 # Terms of Service
 
-**Effective 1 October 2026.** §14 promises material changes are announced before they
-take effect, and the licence row in the table below and the contributor terms in §7 are
-material — so this revision is dated forward rather than applying the day it was written.
-Until then the previous revision governs, and it is the commit immediately before this
-one in [this file's history](https://github.com/JaiSharma7/pull/commits/main/docs/terms.md);
-every revision is a commit, which is what makes "the version before this one" a thing you
-can actually read rather than a phrase.
+**Effective 1 September 2026.** Every revision of this document is a commit in
+[this file's history](https://github.com/JaiSharma7/pull/commits/main/docs/terms.md), so
+what changed and when is public record.
 
-**The in-app announcement §14 promises is not built yet.** Saying so here is better than
+**Why this revision takes effect immediately rather than on notice.** §14 promises
+material changes are announced before they take effect, and that is a real promise about
+your obligations as a user. This revision changes none of them. The licence row below is
+_descriptive_ — it reports which licence the repository carries, and the repository
+carries the AGPL from the moment that commit landed. Dating the description forward would
+not delay anything; it would only make this document describe the repository incorrectly
+for a month, which is the opposite of notice. §7's contributor terms are new obligations,
+but only for someone about to contribute, who meets them at that moment rather than
+retroactively.
+
+**The in-app announcement §14 describes is not built yet.** Saying so is better than
 letting the clause imply a mechanism that does not exist. Until it is, this file and its
-history are the notice.
-
-The code licence is not on that clock. It changed the day the relicense commit landed;
-these Terms describe the hosted service, and only that description waits.
+history are the notice — which is why the pointer to that history is the first thing
+above.
 
 These terms are a contract between you and the operator of **What a Pull** ("we", "us")
 covering the hosted service at whatapull.com and its apps. By using the service you accept

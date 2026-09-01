@@ -10,4 +10,4 @@ text you agreed to, so a later revision of the CLA does not silently rewrite it.
 - Your Name (@your-github-handle) — CLA v1.0
 ```
 
-- Jai Sharma (@JaiSharma7) — maintainer and copyright holder
+- Jai Sharma (@JaiSharma7) — CLA v1.0 — maintainer and copyright holder

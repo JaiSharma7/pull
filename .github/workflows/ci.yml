@@ -228,15 +228,24 @@ jobs:
             # that is always red for a whole class of pull requests is worse than
             # the gap it closes.
             #
-            # Two conditions, not one. `PR_AUTHOR` comes from GitHub and cannot be
-            # set by the committer; the author email can. Requiring both means a
-            # human cannot exempt their own commits by choosing a `[bot]@…` email,
-            # and a bot's pull request still cannot launder a human's unsigned commit
-            # that happens to be pushed onto its branch.
+            # Two conditions, not one. `PR_AUTHOR` comes from GitHub and cannot be set
+            # by the committer; the author email can. The email must also be *this*
+            # bot's noreply address, derived from the login, so a commit on a
+            # Dependabot branch has to claim to be Dependabot rather than merely to be
+            # some bot.
+            #
+            # Be honest about the limit: a human who pushes to a bot's branch and sets
+            # `user.email` to `…+dependabot[bot]@users.noreply.github.com` is still
+            # skipped. Nothing checkable from a git author field closes that, because
+            # the field is chosen by whoever writes the commit. The DCO is a provenance
+            # record, not an access control — someone willing to impersonate a bot to
+            # dodge it could as easily paste a `Signed-off-by` line they are not
+            # entitled to, which no check catches either. What this narrowing buys is
+            # that the mistake has to be deliberate rather than incidental.
             case "$PR_AUTHOR" in
               *'[bot]')
                 case "$(git show -s --format='%ae' "$sha")" in
-                  *'[bot]@users.noreply.github.com')
+                  *"+$PR_AUTHOR@users.noreply.github.com"|"$PR_AUTHOR@users.noreply.github.com")
                     echo "skipped, bot commit: $(git show -s --format='%h %s' "$sha")"
                     continue
                     ;;

@@ -31,12 +31,19 @@ a completely reasonable position and no one will think less of you for it.
 
 ## What this does not cover
 
-- **Content is not code.** Summaries, submitted works, corpus entries, translations and
-  anything else that is a _Pull_ rather than a _program_ are outside this agreement.
-  **That agreement does not exist yet**, and until it does the project cannot take a
-  licence grant over contributed content — so content contributions are not being
-  accepted into this repository. `docs/content-policy.md` covers what may be committed
-  at all (law 4 in `CLAUDE.md`: analysis, never reproduction); it is not a licence.
+- **Content is not code**, and this agreement does not reach it. Two cases, which
+  behave differently:
+  - **Public-domain corpus entries** — pointers to works whose rights have expired, as
+    `CONTRIBUTING.md` and `docs/contributing-map.md` describe. These need no licence
+    grant, because there is no right left to grant; the entry itself is a factual
+    record. They are welcome, and are the easiest useful contribution.
+  - **Original content** — your own summaries, commentary or translations. There is no
+    agreement covering these yet, so the project cannot take a grant over them and is
+    not accepting them into the repository until one exists.
+
+  `docs/content-policy.md` governs what may be committed at all (law 4 in `CLAUDE.md`:
+  analysis, never reproduction). It is a policy, not a licence.
+
 - **Your other work.** This agreement reaches only what you deliberately submit to this
   repository.
 
