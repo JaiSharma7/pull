@@ -1,18 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PullCard } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { fetchExportData } from '../lib/highlights-api.js';
-import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
+import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import {
+  MAX_DEPTH,
   type LibraryFilter,
   type Stash,
   type StashNode,
   applyFilter,
   buildStashTree,
+  canNestNew,
+  descendantIds,
+  emptyLibraryMessage,
   flattenTree,
   newStashId,
 } from '../lib/stashes.js';
@@ -47,6 +51,17 @@ export function Library({ userId }: { userId: string }) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [stashId, setStashId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Bumped to ask for the library again — see the load effect. */
+  const [attempt, setAttempt] = useState(0);
+  /*
+   * What the last share actually did, and which save it was for.
+   *
+   * `shareOrCopy` answers with one of three outcomes and every caller used to
+   * throw it away: a button reading "Copy link" copied and gave no sign, and a
+   * clipboard the browser refused did nothing at all — the same silence as
+   * success. Kept per save so the answer appears beside the button pressed.
+   */
+  const [shareStatus, setShareStatus] = useState<{ saveId: string; note: string } | null>(null);
 
   /*
    * Everything the reader has marked or written, as a file they keep.
@@ -79,13 +94,27 @@ export function Library({ userId }: { userId: string }) {
     }
   }
 
-  const load = useCallback(() => {
+  /*
+   * One place that loads, and one way to ask for it again.
+   *
+   * The three write handlers below all reload after a failed write, and they
+   * used to call the loader as a function — which discards the destructor it
+   * returns, so its `cancelled` flag protected nothing and a reload outliving
+   * the screen could still set state on it. Bumping `attempt` re-runs this
+   * effect instead, and React holds the cleanup for every run of it.
+   */
+  useEffect(() => {
     let cancelled = false;
     Promise.all([api.fetchLibrary(userId), stashApi.fetchStashes(userId)])
       .then(([rows, s]) => {
         if (cancelled) return;
         setItems(rows);
         setStashes(s);
+        // A load that worked ends the failure before it. Without this the error
+        // screen outlives its own cause: `error` was set in exactly one place
+        // and cleared in none, so one flaky request replaced a working library
+        // with a dead end until the reader thought to reload the page.
+        setError(null);
       })
       .catch((e: unknown) => {
         console.error('Library request failed', e);
@@ -94,9 +123,11 @@ export function Library({ userId }: { userId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, attempt]);
 
-  useEffect(load, [load]);
+  function reload() {
+    setAttempt((n) => n + 1);
+  }
 
   const tree = useMemo(() => buildStashTree(stashes), [stashes]);
   const flat = useMemo(() => flattenTree(tree), [tree]);
@@ -106,6 +137,36 @@ export function Library({ userId }: { userId: string }) {
     [items, filter, stashId],
   );
   const groups = useMemo(() => groupByWork(visible), [visible]);
+
+  const activeStash = useMemo(
+    () => (stashId === null ? null : (flat.find((n) => n.id === stashId) ?? null)),
+    [flat, stashId],
+  );
+
+  /*
+   * The collection a new one would actually be created inside.
+   *
+   * Null when the selected collection is already at the deepest level, because
+   * `buildStashTree` re-roots anything past `MAX_DEPTH` — so a row written with
+   * that parent renders at the top level on every load, permanently, and the
+   * reader is never told which of the two things they are looking at. The
+   * control names its destination instead, and `addStash` asks the same
+   * question again at the moment it writes.
+   */
+  const nestTarget = activeStash && canNestNew(tree, activeStash.id) ? activeStash : null;
+
+  /*
+   * Why the list is empty, in words that are true of this library.
+   *
+   * The screen used to assume one cause — a collection the reader picked — and
+   * said so to a reader with no collections at all, whose every save was
+   * archived. `emptyLibraryMessage` decides from the same rows the list is drawn
+   * from, so the sentence and the list cannot disagree.
+   */
+  const emptyMessage = useMemo(
+    () => emptyLibraryMessage(items ?? [], filter, stashId, activeStash?.name ?? null),
+    [items, filter, stashId, activeStash],
+  );
 
   /*
    * Applied to local state first, then sent.
@@ -132,8 +193,28 @@ export function Library({ userId }: { userId: string }) {
     );
     stashApi.updateSavedItem(item.saveId, patch).catch((e: unknown) => {
       console.error('Could not update the save', e);
-      load();
+      reload();
     });
+  }
+
+  /*
+   * The outcome of a share, said out loud.
+   *
+   * Cleared first rather than left standing: a second share that fails silently
+   * beneath the previous "Link copied." would be worse than no message at all.
+   */
+  async function share(item: LibraryItem, workTitle: string) {
+    setShareStatus(null);
+    const outcome = await shareOrCopy(
+      shareTarget({
+        origin: window.location.origin,
+        pullId: item.id,
+        headline: item.headline,
+        workTitle,
+      }),
+    );
+    const note = shareNote(outcome);
+    setShareStatus(note ? { saveId: item.saveId, note } : null);
   }
 
   async function addStash() {
@@ -147,7 +228,12 @@ export function Library({ userId }: { userId: string }) {
       id: newStashId(),
       name: name.trim(),
       description: null,
-      parentId: stashId,
+      // `nestTarget`, not `stashId`: a parent past the depth cap is a parent the
+      // tree ignores, and writing one produces a row whose stored `parent_id`
+      // disagrees with every render of it. The button has already said where
+      // this is going; this is that decision made once more against the same
+      // predicate, at the only moment that writes anything.
+      parentId: nestTarget?.id ?? null,
       position: stashes.length,
     };
     setStashes((prev) => [...prev, stash]);
@@ -155,7 +241,7 @@ export function Library({ userId }: { userId: string }) {
       await stashApi.createStash(userId, stash);
     } catch (e) {
       console.error('Could not create the collection', e);
-      load();
+      reload();
     } finally {
       setBusy(false);
     }
@@ -168,7 +254,8 @@ export function Library({ userId }: { userId: string }) {
      * consequences. So the children go and the saves stay, and the reader is
      * told which before they agree to it rather than after.
      */
-    const childCount = flattenTree(node.children).length;
+    const doomed = descendantIds(tree, node.id);
+    const childCount = doomed.size - 1;
     const warning = childCount
       ? `Delete “${node.name}” and ${childCount} collection${childCount === 1 ? '' : 's'} inside it? Nothing you have kept is deleted.`
       : `Delete “${node.name}”? Nothing you have kept is deleted.`;
@@ -177,12 +264,15 @@ export function Library({ userId }: { userId: string }) {
     setBusy(true);
     try {
       await stashApi.deleteStash(node.id);
-      if (stashId === node.id) setStashId(null);
+      // Every collection in `doomed` goes, not only the one named — so a
+      // selection pointing at any of them would survive the row it names and
+      // leave the screen filtering by a collection that no longer exists.
+      if (stashId !== null && doomed.has(stashId)) setStashId(null);
     } catch (e) {
       console.error('Could not delete the collection', e);
     } finally {
       setBusy(false);
-      load();
+      reload();
     }
   }
 
@@ -197,11 +287,32 @@ export function Library({ userId }: { userId: string }) {
     }
   }
 
+  /*
+   * A failure with a way out of it, like every other screen in the app.
+   *
+   * The reachable path here is recovery rather than a cold load: a failed patch
+   * asks for a reload, and if that reload also fails the reader lost a working
+   * library to two unlucky requests. Search, Explore and Topic all offer this
+   * button; the Library was the one that did not.
+   */
   if (error)
     return (
-      <p role="alert" className="measure">
-        Could not load your library just now.
-      </p>
+      <section className="stack measure" role="alert">
+        <p className="meta">Library</p>
+        <h1>Could not load your library.</h1>
+        <p>Something went wrong reaching the library. Nothing you have kept is affected.</p>
+        <p className="meta">{error}</p>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        >
+          Try again
+        </button>
+      </section>
     );
 
   if (!items) return <p className="meta">Loading…</p>;
@@ -217,8 +328,6 @@ export function Library({ userId }: { userId: string }) {
         </p>
       </div>
     );
-
-  const activeStash = stashId ? flat.find((n) => n.id === stashId) : null;
 
   return (
     <div className="stack">
@@ -284,8 +393,20 @@ export function Library({ userId }: { userId: string }) {
             onClick={() => void addStash()}
             disabled={busy}
           >
-            New collection{activeStash ? ` inside ${activeStash.name}` : ''}
+            New collection{nestTarget ? ` inside ${nestTarget.name}` : ''}
           </button>
+          {/*
+            Told, not silently corrected. The alternative was to disable this
+            button, which would mean a reader who has selected their deepest
+            collection cannot create any collection at all — so it stays live and
+            names where the new one will land.
+          */}
+          {activeStash && !nestTarget ? (
+            <span className="meta">
+              Collections go {MAX_DEPTH} deep. A new one inside “{activeStash.name}” would start at
+              the top instead.
+            </span>
+          ) : null}
           <button
             type="button"
             className="btn btn--plain"
@@ -297,15 +418,7 @@ export function Library({ userId }: { userId: string }) {
         </div>
       </div>
 
-      {visible.length === 0 && (
-        <p className="measure">
-          {filter === 'archived'
-            ? 'Nothing archived. Archiving keeps something without keeping it in front of you.'
-            : filter === 'read-later'
-              ? 'Nothing marked for later.'
-              : 'Nothing in this collection yet. Move a save into it from below.'}
-        </p>
-      )}
+      {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
 
       {groups.map((group) => {
         const open = openWork === group.key;
@@ -347,18 +460,15 @@ export function Library({ userId }: { userId: string }) {
                     sourceTrail={group.title}
                     saved
                     onListen={() => speak(`${item.headline}. ${item.body}`)}
-                    onShare={() =>
-                      void shareOrCopy(
-                        shareTarget({
-                          origin: window.location.origin,
-                          pullId: item.id,
-                          headline: item.headline,
-                          workTitle: group.title,
-                        }),
-                      )
-                    }
+                    onShare={() => void share(item, group.title)}
                     shareLabel={shareLabel(shareCapability(navigator))}
                   />
+
+                  {shareStatus?.saveId === item.saveId ? (
+                    <p className="meta" role="status">
+                      {shareStatus.note}
+                    </p>
+                  ) : null}
 
                   <div className="library__actions">
                     <label className="library__assign">

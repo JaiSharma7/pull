@@ -117,7 +117,21 @@ function readUrlToken(): { tokenHash: string; type: 'signup' | 'magiclink' } | n
   return { tokenHash, type: raw === 'signup' ? 'signup' : 'magiclink' };
 }
 
-export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
+export function Auth({
+  onNavigate,
+  next = null,
+}: {
+  onNavigate: (to: string) => void;
+  /**
+   * Where the reader was before they were asked for an address, if anywhere.
+   *
+   * A visitor who pressed "Sign in to keep these" on a shared idea came here to
+   * keep *that* idea. `App` reads it from the query string and spends it once a
+   * session exists; this screen's only job with it is to make sure the email
+   * comes back to the same place.
+   */
+  next?: string | null;
+}) {
   // Read during the first render, because reading consumes the query string.
   const [prefill] = useState(readPrefill);
   const [urlToken] = useState(readUrlToken);
@@ -141,6 +155,26 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
   const [showPaste, setShowPaste] = useState(false);
   /** So a complete code can submit the form without the reader reaching for the button. */
   const formRef = useRef<HTMLFormElement>(null);
+
+  /*
+   * Where the email should land, which is not always the front page.
+   *
+   * `window.location.origin` on its own discarded the destination: a reader who
+   * followed a shared link, pressed "Sign in to keep these" and completed the
+   * round trip arrived at the title page, having agreed to sign in *to keep that
+   * idea*. The destination goes back as `/?next=…` rather than as the address
+   * itself for two reasons — one redirect shape to allow-list rather than one
+   * per source, and the fragment survives: GoTrue appends its own
+   * `#access_token=…`, which would overwrite the `#p-<pullId>` anchor naming the
+   * idea. `App` spends it once the session exists.
+   *
+   * Only used if the email carries a link rather than a code, and if the hosted
+   * redirect allow-list accepts it. Where it does not, GoTrue falls back to the
+   * Site URL — which is where this used to land every reader anyway.
+   */
+  const emailRedirectTo = next
+    ? `${window.location.origin}/?next=${encodeURIComponent(next)}`
+    : window.location.origin;
 
   async function requestCode(e: React.FormEvent) {
     e.preventDefault();
@@ -178,7 +212,7 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         // Only used if the email carries a link rather than a code. Harmless otherwise.
-        options: { emailRedirectTo: window.location.origin },
+        options: { emailRedirectTo },
       });
       if (error) {
         /*
@@ -378,7 +412,7 @@ export function Auth({ onNavigate }: { onNavigate: (to: string) => void }) {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: window.location.origin },
+        options: { emailRedirectTo },
       });
       if (error && isEmailRateLimited(error)) {
         // Same reasoning as `requestCode`: this is the button that caused the problem.

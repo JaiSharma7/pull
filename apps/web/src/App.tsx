@@ -71,6 +71,20 @@ const DESTINATIONS: { path: string; label: string }[] = [
   { path: '/search', label: 'Search' },
 ];
 
+/**
+ * The address a visitor was reading when they chose to sign in.
+ *
+ * A path inside this app and nothing else. The value arrives from the address
+ * bar and is spent on a navigation, so an absolute or protocol-relative one
+ * would make the sign-in button an open redirect — and on the magic-link return
+ * it would hand somebody else's origin the fragment the session arrives in.
+ * `//host` and `/\host` are both other origins once a browser has parsed them.
+ */
+function safeNext(raw: string | null): string | null {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return null;
+  return raw;
+}
+
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   /*
@@ -150,6 +164,27 @@ export function App() {
 
   useEffect(() => {
     /*
+     * A session arriving is also the moment `?next=` is spent.
+     *
+     * Both ways in end here — a code typed into this tab and a magic link
+     * returning to a fresh document — so this is the one place that knows a
+     * reader has just become somebody with a feed. The address bar is read at
+     * that moment rather than closed over, because on the link path this
+     * document has never seen the earlier one.
+     *
+     * `replaceState`, not `push`: `/?next=…` only ever forwards, so Back must
+     * return to wherever the reader came from rather than to it.
+     */
+    const arrive = (s: Session | null) => {
+      setSession(s);
+      if (!s) return;
+      const to = safeNext(queryParam(readLocation(), 'next'));
+      if (!to) return;
+      history.replaceState(null, '', to);
+      setPath(to);
+    };
+
+    /*
      * `ready` must become true on every path, including the failing ones.
      *
      * supabase-js converts its own AuthErrors into `{ data, error }` but rethrows
@@ -164,7 +199,7 @@ export function App() {
      */
     supabase.auth
       .getSession()
-      .then(({ data }) => setSession(data.session))
+      .then(({ data }) => arrive(data.session))
       .catch((e: unknown) => {
         // Log only. `null` is already the initial state, so assigning it here could
         // never do anything *except* revoke a session `onAuthStateChange` had
@@ -175,7 +210,7 @@ export function App() {
       })
       .finally(() => setReady(true));
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => arrive(s));
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -217,6 +252,21 @@ export function App() {
     history.replaceState(null, '', to);
     setPath(to);
   }, []);
+
+  /*
+   * The idea a visitor was on when they agreed to sign in, kept through it.
+   *
+   * "Sign in to keep these" called `navigate('/')`, which is the one path that
+   * throws away what they were reading: `/` is not public, so the shell renders
+   * the sign-in screen and the shared `/source/:id?s=…#p-…` is gone from the
+   * address bar. Signing in then landed them on the title page — the share path
+   * discarding the shared idea at the exact moment the reader agreed to it.
+   *
+   * So the destination rides in the query string, through the sign-in screen and
+   * through the email round trip (see `emailRedirectTo` in `Auth`). This is the
+   * screen's copy of it; the session listener above is what spends it.
+   */
+  const next = safeNext(queryParam(path, 'next'));
 
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
@@ -287,7 +337,7 @@ export function App() {
         Loading…
       </p>
     );
-  if (!session && !publicRoute) return <Auth onNavigate={navigate} />;
+  if (!session && !publicRoute) return <Auth onNavigate={navigate} next={next} />;
 
   const shell = (
     <div className="shell">
@@ -370,8 +420,18 @@ export function App() {
               link or the catalogue; the offer to keep what they find is the
               reason to sign in, and it belongs where they already are rather
               than in front of the thing they came for.
+
+              Which is why the address travels with them. The fragment is part of
+              it: `#p-<pullId>` is the idea that was shared, and a sign-in that
+              returns to the source without it returns to the wrong place.
             */
-          <button type="button" className="btn btn--plain" onClick={() => navigate('/')}>
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() =>
+              navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
+            }
+          >
             Sign in to keep these
           </button>
         ) : (
@@ -458,7 +518,12 @@ export function App() {
               />
             )}
             {pullId !== null && (
-              <PullRedirect pullId={pullId} onReplace={replaceWith} onNavigate={navigate} />
+              <PullRedirect
+                pullId={pullId}
+                userId={session?.user.id ?? null}
+                onReplace={replaceWith}
+                onNavigate={navigate}
+              />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
             {topicSlug !== null && (

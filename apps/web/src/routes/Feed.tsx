@@ -15,7 +15,7 @@ import {
 import { createDwellTracker } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
-import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
+import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
 import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
@@ -97,6 +97,32 @@ export function Feed({
   const [loadingMore, setLoadingMore] = useState(false);
   /** The card being read aloud, if any. Null is silence. */
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+
+  /*
+   * What the share control actually did, which was previously unobservable.
+   *
+   * `shareOrCopy` has always returned an outcome and all three callers threw it
+   * away, so on the copy path the button said "Copy link", copied, and said
+   * nothing -- and a clipboard the browser refused looked identical to success.
+   * Scoped to one Pull rather than the screen because the feed shows several and
+   * a bare "Link copied." beside the wrong one is its own small lie.
+   */
+  const [shareStatus, setShareStatus] = useState<{ pullId: string; note: string } | null>(null);
+
+  async function share(row: FeedRow) {
+    setShareStatus(null);
+    const note = shareNote(
+      await shareOrCopy(
+        shareTarget({
+          origin: window.location.origin,
+          pullId: row.id,
+          headline: row.headline,
+          workTitle: row.work.title,
+        }),
+      ),
+    );
+    setShareStatus(note ? { pullId: row.id, note } : null);
+  }
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -734,16 +760,8 @@ export function Feed({
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
             listening={speakingId === item.row.id}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
-            onShare={() =>
-              void shareOrCopy(
-                shareTarget({
-                  origin: window.location.origin,
-                  pullId: item.row.id,
-                  headline: item.row.headline,
-                  workTitle: item.row.work.title,
-                }),
-              )
-            }
+            onShare={() => void share(item.row)}
+            shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}
           />
         ),
@@ -784,6 +802,7 @@ function PullCardInView({
   onListen,
   listening,
   onShare,
+  shareNote: shareOutcomeNote,
   shareLabel: shareControlLabel,
 }: {
   row: FeedRow;
@@ -797,6 +816,8 @@ function PullCardInView({
   onListen?: () => void;
   listening: boolean;
   onShare: () => void;
+  /** What the last share attempt did, or null when there is nothing to say. */
+  shareNote: string | null;
   /** Renamed on the way in so it does not shadow the `shareLabel` helper. */
   shareLabel: string;
 }) {
@@ -852,6 +873,13 @@ function PullCardInView({
         onShare={onShare}
         shareLabel={shareControlLabel}
       />
+      {/* Inside `feed__item`, not beside it: that div is the scroll-snap
+          target, and a sibling would break the card into two snap units. */}
+      {shareOutcomeNote && (
+        <p className="meta" role="status">
+          {shareOutcomeNote}
+        </p>
+      )}
     </div>
   );
 }

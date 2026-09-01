@@ -5,7 +5,7 @@ import { anchoredPullId } from '../lib/routes.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
-import { shareCapability, shareLabel, shareOrCopy, shareTarget } from '../lib/share.js';
+import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
@@ -76,6 +76,35 @@ function readingMinutes(seconds: number | null): number | null {
   return Math.max(1, Math.round(seconds / 60));
 }
 
+/**
+ * The way out of this page, which is not the same door for everyone.
+ *
+ * `/` is the feed only for a reader who has one: the shell treats every
+ * non-public path as gated, so `onNavigate('/')` from a signed-out visitor
+ * renders the sign-in screen. "Back to the feed" therefore named a destination
+ * that visitor does not have and delivered a wall — the exact thing guest
+ * reading exists to remove. The catalogue is public, it is where a visitor most
+ * likely arrived from, and it is what the sign-in screen itself offers them.
+ */
+function BackControl({
+  userId,
+  onNavigate,
+}: {
+  userId: string | null;
+  onNavigate: (to: string) => void;
+}) {
+  const signedOut = userId === null;
+  return (
+    <button
+      type="button"
+      className="btn btn--plain"
+      onClick={() => onNavigate(signedOut ? '/explore' : '/')}
+    >
+      {signedOut ? 'Browse the catalogue' : 'Back to the feed'}
+    </button>
+  );
+}
+
 export function Source({
   workId,
   summaryId,
@@ -123,6 +152,15 @@ export function Source({
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  /*
+   * What the last share did, and which idea it was for.
+   *
+   * `shareOrCopy` reports one of three outcomes and this page discarded it: the
+   * clipboard path copied a link with no confirmation, and a browser that
+   * refused the clipboard produced nothing at all — indistinguishable from a
+   * button that does not work. Per Pull, because the control is.
+   */
+  const [shareStatus, setShareStatus] = useState<{ pullId: string; note: string } | null>(null);
 
   /*
    * No reset on `workId` here: the shell renders this with `key={workId}`, so a new
@@ -186,17 +224,60 @@ export function Source({
     document.getElementById(`p-${pullId}`)?.scrollIntoView({ block: 'start' });
   }, [detail]);
 
+  /*
+   * Which load of the highlights is still the truth.
+   *
+   * `reloadHighlights` is called from three places — the effect below and both
+   * write failures — and it replaces the array wholesale. So a load that started
+   * before an optimistic insert resolves after it and takes that highlight back
+   * off the screen even though the insert succeeded, returning only on a
+   * remount: a mark vanishing while the reader is still looking at the words
+   * they marked. Every load takes a ticket, and every local change to the array
+   * takes one too, which is what makes the loads in flight stale.
+   *
+   * The counter is never reset, so a ticket issued before a remount cannot
+   * collide with one issued after it. Whether there is still a screen to answer
+   * is the separate flag: the `related` effect below needs only that and uses a
+   * plain `live`, but this cannot live inside one effect run — two of its three
+   * callers are event handlers.
+   */
+  const highlightLoad = useRef(0);
+  const highlightsLive = useRef(true);
+
+  /** Invalidate the loads in flight, and take the ticket for a new one. */
+  const claimHighlightLoad = useCallback(() => {
+    highlightLoad.current += 1;
+    return highlightLoad.current;
+  }, []);
+
+  const setHighlightsLive = useCallback((live: boolean) => {
+    highlightsLive.current = live;
+  }, []);
+
+  /*
+   * Set on both edges rather than only torn down: StrictMode mounts, unmounts
+   * and mounts again, so a one-way flag would leave the second mount unable to
+   * load anything at all — in development only, which is the worst place for it.
+   */
+  useEffect(() => {
+    setHighlightsLive(true);
+    return () => setHighlightsLive(false);
+  }, [setHighlightsLive]);
+
   const reloadHighlights = useCallback(() => {
     if (!userId || !detail || detail.pulls.length === 0) return;
+    const ticket = claimHighlightLoad();
     fetchHighlights(
       userId,
       detail.pulls.map((p) => p.id),
     )
-      .then(setHighlights)
+      .then((rows) => {
+        if (highlightsLive.current && ticket === highlightLoad.current) setHighlights(rows);
+      })
       // Supplementary: the source reads perfectly well without a reader's marks,
       // and failing to load them must not take the page down.
       .catch((e: unknown) => console.error('Could not load highlights', e));
-  }, [userId, detail]);
+  }, [userId, detail, claimHighlightLoad]);
 
   useEffect(reloadHighlights, [reloadHighlights]);
 
@@ -235,14 +316,33 @@ export function Source({
     };
   }, [detail]);
 
+  /*
+   * The share, and what it did.
+   *
+   * Cleared before the attempt so a previous "Link copied." cannot stand in
+   * front of a share that has just failed — the reader would take the older
+   * sentence as the answer to the newer press.
+   */
+  async function share(pullId: string, headline: string) {
+    setShareStatus(null);
+    const outcome = await shareOrCopy(
+      shareTarget({
+        origin: window.location.origin,
+        pullId,
+        headline,
+        workTitle: detail ? (detail.summaryTitle ?? detail.work.title) : null,
+      }),
+    );
+    const note = shareNote(outcome);
+    setShareStatus(note ? { pullId, note } : null);
+  }
+
   if (missing) {
     return (
       <section className="measure">
         <h1 className="prose__heading">Not found</h1>
         <p>There is no source here. It may have been retired since you last saw it.</p>
-        <button type="button" className="btn btn--plain" onClick={() => onNavigate('/')}>
-          Back to the feed
-        </button>
+        <BackControl userId={userId} onNavigate={onNavigate} />
       </section>
     );
   }
@@ -257,9 +357,7 @@ export function Source({
             : 'Something went wrong reaching the library.'}
         </p>
         <p className="meta">{error}</p>
-        <button type="button" className="btn btn--plain" onClick={() => onNavigate('/')}>
-          Back to the feed
-        </button>
+        <BackControl userId={userId} onNavigate={onNavigate} />
       </section>
     );
   }
@@ -379,19 +477,18 @@ export function Source({
                   <button
                     type="button"
                     className="btn btn--plain"
-                    onClick={() =>
-                      void shareOrCopy(
-                        shareTarget({
-                          origin: window.location.origin,
-                          pullId: p.id,
-                          headline: p.headline,
-                          workTitle: detail.summaryTitle ?? work.title,
-                        }),
-                      )
-                    }
+                    onClick={() => void share(p.id, p.headline)}
                   >
                     {shareLabel(shareCapability(navigator))}
                   </button>
+                  {shareStatus?.pullId === p.id ? (
+                    <>
+                      {' '}
+                      <span className="meta" role="status">
+                        {shareStatus.note}
+                      </span>
+                    </>
+                  ) : null}
                 </p>
 
                 {userId && (
@@ -410,7 +507,10 @@ export function Source({
                         const id = globalThis.crypto.randomUUID();
                         // Optimistic, then sent. A highlight that takes a round
                         // trip to appear feels broken at the exact moment the
-                        // reader is still looking at what they selected.
+                        // reader is still looking at what they selected — and
+                        // any load already in flight predates this mark, so it
+                        // is no longer allowed to answer for the array.
+                        claimHighlightLoad();
                         setHighlights((prev) => [
                           ...prev,
                           { id, pullId: p.id, field: 'body', ...range },
@@ -437,6 +537,9 @@ export function Source({
                           const mine = highlights.filter((h) => h.pullId === p.id);
                           const last = mine[mine.length - 1];
                           if (!last) return;
+                          // Same reasoning as the insert: a load in flight would
+                          // otherwise put this one back.
+                          claimHighlightLoad();
                           setHighlights((prev) => prev.filter((h) => h.id !== last.id));
                           deleteHighlight(last.id).catch((e: unknown) => {
                             console.error('Could not remove the highlight', e);
@@ -497,9 +600,7 @@ export function Source({
       )}
 
       <div className="source__foot">
-        <button type="button" className="btn btn--plain" onClick={() => onNavigate('/')}>
-          Back to the feed
-        </button>
+        <BackControl userId={userId} onNavigate={onNavigate} />
       </div>
     </article>
   );
@@ -517,10 +618,13 @@ export function Source({
  */
 export function PullRedirect({
   pullId,
+  userId,
   onReplace,
   onNavigate,
 }: {
   pullId: string;
+  /** Null for a visitor, for whom "back" is the catalogue rather than the feed. */
+  userId: string | null;
   onReplace: (to: string) => void;
   onNavigate: (to: string) => void;
 }) {
@@ -551,9 +655,7 @@ export function PullRedirect({
       <section className="measure">
         <h1 className="prose__heading">Not found</h1>
         <p>That Pull is no longer available.</p>
-        <button type="button" className="btn btn--plain" onClick={() => onNavigate('/')}>
-          Back to the feed
-        </button>
+        <BackControl userId={userId} onNavigate={onNavigate} />
       </section>
     );
   }

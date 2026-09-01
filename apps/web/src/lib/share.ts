@@ -118,3 +118,19 @@ export async function shareOrCopy(target: ShareTarget): Promise<ShareOutcome> {
 
   return 'failed';
 }
+
+/**
+ * What to say once it is done, or null when the browser already said it.
+ *
+ * The outcome above was returned and discarded by every caller, which made the
+ * two silent paths indistinguishable from each other and from nothing having
+ * happened: a button reading "Copy link" copied and gave no sign, and a refused
+ * clipboard — the permission a reader is most likely to have denied — did
+ * nothing at all. A share sheet is its own confirmation, so only the paths the
+ * reader cannot see get a sentence.
+ */
+export function shareNote(outcome: ShareOutcome): string | null {
+  if (outcome === 'copied') return 'Link copied.';
+  if (outcome === 'failed') return 'Could not copy the link. This browser did not allow it.';
+  return null;
+}

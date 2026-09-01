@@ -4,7 +4,9 @@ import {
   applyFilter,
   buildStashTree,
   canNest,
+  canNestNew,
   descendantIds,
+  emptyLibraryMessage,
   findNode,
   flattenTree,
   shapeStashes,
@@ -102,6 +104,46 @@ describe('canNest', () => {
     expect(canNest(tree, 'other', 'b')).toBe(true);
   });
 
+  it('refuses a move that fits the node but not the subtree hanging off it', () => {
+    // The move takes the children along. Measuring only where `sub` lands says
+    // yes, and then `buildStashTree` re-roots `leaf` — the flattening this cap
+    // exists to prevent, performed silently by the guard meant to prevent it.
+    const withSubtree = buildStashTree([
+      stash('root'),
+      stash('mid', 'root'),
+      stash('sub'),
+      stash('leaf', 'sub'),
+    ]);
+    expect(canNest(withSubtree, 'sub', 'mid')).toBe(false);
+    // The leaf alone still fits there, and the subtree still fits one level up.
+    expect(canNest(withSubtree, 'leaf', 'mid')).toBe(true);
+    expect(canNest(withSubtree, 'sub', 'root')).toBe(true);
+  });
+
+  it('answers for a stash that does not exist yet, which is how a create is checked', () => {
+    // A new collection has no children, so it is a leaf and only the parent's
+    // depth decides. `Library` asks this before it writes the row.
+    expect(canNest(tree, 'not-created-yet', 'b')).toBe(true);
+    expect(canNest(tree, 'not-created-yet', 'c')).toBe(false);
+  });
+});
+
+describe('canNestNew', () => {
+  const tree = buildStashTree([stash('a'), stash('b', 'a'), stash('c', 'b')]);
+
+  it('refuses a parent already at the deepest level', () => {
+    // The bug this is the guard for: creating inside `c` wrote a row with `c` as
+    // its parent that `buildStashTree` then rendered at the root, on every load,
+    // permanently, with nothing said to the reader.
+    expect(canNestNew(tree, 'c')).toBe(false);
+    expect(canNestNew(tree, 'b')).toBe(true);
+    expect(canNestNew(tree, 'a')).toBe(true);
+  });
+
+  it('always allows a collection at the top level', () => {
+    expect(canNestNew(tree, null)).toBe(true);
+  });
+
   it('always allows detaching to the root', () => {
     expect(canNest(tree, 'c', null)).toBe(true);
   });
@@ -159,6 +201,78 @@ describe('applyFilter', () => {
   it('narrows to one stash without losing the archive rule', () => {
     expect(applyFilter(items, 'all', 's1').map((i) => i.id)).toEqual(['in-stash']);
     expect(applyFilter(items, 'all', 'nope')).toEqual([]);
+  });
+
+  it('narrows the archived filter to the collection too, rather than ignoring it', () => {
+    // Filter and collection are independent controls and neither resets the
+    // other. With the archive test in front, choosing "Archived" inside a
+    // collection showed every archived save in the library while the collection
+    // button still reported itself pressed — a control with nothing behind it.
+    const scoped = [
+      item('gone-here', { archived: true, stashId: 's1' }),
+      item('gone-elsewhere', { archived: true, stashId: 's2' }),
+      item('gone-loose', { archived: true }),
+      item('here', { stashId: 's1' }),
+    ];
+    expect(applyFilter(scoped, 'archived', 's1').map((i) => i.id)).toEqual(['gone-here']);
+    expect(applyFilter(scoped, 'archived').map((i) => i.id)).toEqual([
+      'gone-here',
+      'gone-elsewhere',
+      'gone-loose',
+    ]);
+  });
+});
+
+describe('emptyLibraryMessage', () => {
+  const item = (
+    id: string,
+    over: Partial<{ archived: boolean; readLater: boolean; stashId: string | null }> = {},
+  ) => ({ id, archived: false, readLater: false, stashId: null, ...over });
+
+  it('says nothing while there is something to show', () => {
+    expect(emptyLibraryMessage([item('plain')], 'all')).toBeNull();
+  });
+
+  it('tells a reader whose whole library is archived where it went', () => {
+    // The reported lie: two saves, both archived, no collections at all, and a
+    // screen that said "Nothing in this collection yet. Move a save into it
+    // from below." — three claims, none of them true.
+    const message = emptyLibraryMessage(
+      [item('a', { archived: true }), item('b', { archived: true })],
+      'all',
+    );
+    expect(message).toContain('Archived');
+    expect(message).not.toContain('collection');
+  });
+
+  it('separates an empty collection from one whose saves are all archived', () => {
+    const items = [item('a', { archived: true, stashId: 's1' })];
+    expect(emptyLibraryMessage(items, 'all', 's1', 'Alpha')).toBe(
+      'Everything in “Alpha” is archived. It is under Archived, not gone.',
+    );
+    expect(emptyLibraryMessage(items, 'all', 's2', 'Beta')).toBe(
+      'Nothing in “Beta” yet. Move a save into it from below.',
+    );
+  });
+
+  it('scopes the archived and read-later sentences to the collection in view', () => {
+    const items = [item('a', { archived: true, stashId: 's2' }), item('b', { readLater: true })];
+    expect(emptyLibraryMessage(items, 'archived', 's1', 'Alpha')).toBe(
+      'Nothing in “Alpha” is archived.',
+    );
+    expect(emptyLibraryMessage(items, 'read-later', 's1', 'Alpha')).toBe(
+      'Nothing in “Alpha” is marked for later.',
+    );
+    // Library-wide there is something archived, so there is nothing to say —
+    // only the collection in view is empty of it.
+    expect(emptyLibraryMessage(items, 'archived')).toBeNull();
+    expect(emptyLibraryMessage([item('b')], 'archived')).toContain('Nothing archived.');
+  });
+
+  it('falls back to "this collection" when the name is not known', () => {
+    expect(emptyLibraryMessage([item('a')], 'all', 'gone')).toBe(
+      'Nothing in this collection yet. Move a save into it from below.',
+    );
   });
 });
 

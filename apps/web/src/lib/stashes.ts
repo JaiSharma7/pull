@@ -145,6 +145,13 @@ export function descendantIds(tree: readonly StashNode[], id: string): Set<strin
   return found;
 }
 
+/** How far a subtree reaches below its own root. Zero for a leaf. */
+function subtreeHeight(node: StashNode): number {
+  let height = 0;
+  for (const child of node.children) height = Math.max(height, subtreeHeight(child) + 1);
+  return height;
+}
+
 /**
  * May this stash be moved under that one?
  *
@@ -153,6 +160,17 @@ export function descendantIds(tree: readonly StashNode[], id: string): Set<strin
  * first place), or somewhere that would push it past `MAX_DEPTH`. Returning a
  * boolean rather than throwing, because this is asked to decide whether to show
  * a control, not to recover from one.
+ *
+ * The depth test measures the whole subtree, not the node named. A move takes
+ * everything beneath it along, so checking only the moved node's new depth
+ * answers yes to a move that then re-roots its own children — `buildStashTree`
+ * flattens whatever lands past the cap, silently, and the reader is told
+ * nothing. `canNest(tree, 'sub', 'mid')` with `mid` at depth 1 and `sub`
+ * holding a child is exactly that case.
+ *
+ * A `childId` the tree does not hold is a stash about to be created: it has no
+ * children, so a height of zero is the honest answer and the create path can
+ * ask this question before it writes a row.
  */
 export function canNest(
   tree: readonly StashNode[],
@@ -165,7 +183,20 @@ export function canNest(
 
   const parent = findNode(tree, parentId);
   if (!parent) return false;
-  return parent.depth + 1 < MAX_DEPTH;
+  const child = findNode(tree, childId);
+  return parent.depth + 1 + (child ? subtreeHeight(child) : 0) < MAX_DEPTH;
+}
+
+/**
+ * Has this stash room for a new one inside it?
+ *
+ * The create path's half of `canNest`. A collection that does not exist yet has
+ * no subtree to carry, so only the parent's depth decides — and asking it by
+ * name rather than as `canNest(tree, someIdNotInTheTree, parentId)` keeps the
+ * screen's question legible where it is asked.
+ */
+export function canNestNew(tree: readonly StashNode[], parentId: string | null): boolean {
+  return canNest(tree, '', parentId);
 }
 
 export function findNode(tree: readonly StashNode[], id: string): StashNode | null {
@@ -206,6 +237,13 @@ export interface Filterable {
  * That is the difference between archiving and deleting, and it has to hold in
  * the stash views too — otherwise "archived" means "hidden from one list", which
  * is not a promise anyone would rely on.
+ *
+ * The collection is applied first, and that order is the whole point: the two
+ * are independent controls in the Library and neither resets the other, so with
+ * the archive test in front, choosing "Archived" while a collection was selected
+ * returned every archived save in the library — from every collection — while
+ * the collection button still read `aria-pressed="true"`. A filter that ignores
+ * the other control the reader is looking at makes that control dead.
  */
 export function applyFilter<T extends Filterable>(
   items: readonly T[],
@@ -213,12 +251,61 @@ export function applyFilter<T extends Filterable>(
   stashId: string | null = null,
 ): T[] {
   return items.filter((i) => {
+    if (stashId !== null && i.stashId !== stashId) return false;
     if (filter === 'archived') return i.archived;
     if (i.archived) return false;
     if (filter === 'read-later' && !i.readLater) return false;
-    if (stashId !== null && i.stashId !== stashId) return false;
     return true;
   });
+}
+
+/**
+ * Why the list is empty — in the reader's words, or null when it is not.
+ *
+ * An empty list has several causes and the screen used to name only one of
+ * them: it said "Nothing in this collection yet" to a reader with no
+ * collections at all, whose every save was archived. Three claims in one
+ * sentence, all false, and no hint that Archived was where their library went.
+ *
+ * `all` is the case that hides things, because it drops archived saves — so an
+ * empty `all` means either there is nothing here or everything here is
+ * archived, and those are opposite instructions. The distinction is drawn from
+ * the same rows the list is drawn from, and emptiness is asked of `applyFilter`
+ * rather than restated, so the sentence and the list cannot disagree.
+ *
+ * Here rather than in the screen for the reason `catalogueSummary` is: a
+ * sentence that can be wrong about the reader's own library is worth a test.
+ */
+export function emptyLibraryMessage(
+  items: readonly Filterable[],
+  filter: LibraryFilter,
+  stashId: string | null = null,
+  stashName: string | null = null,
+): string | null {
+  if (applyFilter(items, filter, stashId).length > 0) return null;
+
+  // Named where there is a name to use: a collection the strip cannot show has
+  // still been chosen, and "this collection" is true either way.
+  const here = stashId === null ? null : stashName ? `“${stashName}”` : 'this collection';
+  const inScope = stashId === null ? items : items.filter((i) => i.stashId === stashId);
+
+  if (filter === 'archived') {
+    return here
+      ? `Nothing in ${here} is archived.`
+      : 'Nothing archived. Archiving keeps something without keeping it in front of you.';
+  }
+
+  if (filter === 'read-later') {
+    return here ? `Nothing in ${here} is marked for later.` : 'Nothing marked for later.';
+  }
+
+  if (inScope.length > 0) {
+    return here
+      ? `Everything in ${here} is archived. It is under Archived, not gone.`
+      : 'Everything you have kept is archived. It is under Archived, not gone.';
+  }
+
+  return here ? `Nothing in ${here} yet. Move a save into it from below.` : 'Nothing kept yet.';
 }
 
 /** A client-minted id, so creating a stash is replayable after a lost response. */
