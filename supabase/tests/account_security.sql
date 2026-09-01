@@ -105,9 +105,17 @@ begin
   if killed then
     raise exception 'alice revoked bob''s session.';
   end if;
+
+  -- Reading auth.sessions needs the owner: `authenticated` holds USAGE on schema
+  -- `auth` and EXECUTE on auth.uid()/auth.jwt(), and no table privileges at all. That
+  -- is the point -- it is why `my_sessions` is `security definer` -- and it means the
+  -- *verification* of a definer function cannot be done through the definer function
+  -- being verified. Assert as the owner, then go back to being alice.
+  perform pg_temp.as_owner();
   if not exists (select 1 from auth.sessions where id = b_sess) then
     raise exception 'bob''s session row was deleted by alice.';
   end if;
+  perform pg_temp.become(alice, a_sess);
 
   killed := public.revoke_session(a_sess2);
   if not killed then
@@ -124,6 +132,8 @@ begin
   if n <> 1 then
     raise exception 'revoke_other_sessions removed % sessions; expected 1.', n;
   end if;
+
+  perform pg_temp.as_owner();
   if not exists (select 1 from auth.sessions where id = a_sess) then
     raise exception
       'revoke_other_sessions ended the calling session. That is signOut(global), '
@@ -132,6 +142,7 @@ begin
   if not exists (select 1 from auth.sessions where id = b_sess) then
     raise exception 'revoke_other_sessions reached into another account.';
   end if;
+  perform pg_temp.become(alice, a_sess);
 
   -- ------------------------------------------------- 4. recovery codes are single-use
   codes := public.generate_mfa_recovery_codes();

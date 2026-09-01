@@ -68,9 +68,27 @@ comment on column public.works.source_url is
  * and both want one function rather than two spellings of the same upsert.
  *
  * Idempotent on both halves. A contributor is matched by slug, not by name: `slug` is
- * the `citext unique not null` column the seed migration already keys on, so matching
- * there is exact, index-backed, and agrees with the six rows that exist. Matching on
- * name instead would need its own case folding and would not agree with them.
+ * the `citext unique not null` column the seed migration already keys on, so it agrees
+ * with the six rows that exist. Matching on name would need its own case folding and
+ * would not.
+ *
+ * COMPARED AS `lower(slug::text)`, NOT WITH `=`, and that is not a style choice. `citext`
+ * is installed `with schema extensions`, so `=(citext, citext)` lives there — and with
+ * `set search_path = ''` no schema is searched, so the operator is invisible. The
+ * comparison does not fail: it falls through to `pg_catalog.=(text, text)` via citext's
+ * implicit cast, and becomes **case-sensitive**, which is the exact opposite of what
+ * choosing a citext column was for. Verified rather than reasoned about: inside a
+ * function with an empty search_path, `'Marcus-Aurelius'::citext = 'marcus-aurelius'::citext`
+ * returns false.
+ *
+ * The same trap has been sprung twice here already —
+ * `20260829131539_vector_operator_qualification.sql` for pgvector's `<=>`, and
+ * `20260901010000` for `topics.slug`, which resolved it the same way this does. Third
+ * time; it is a property of `search_path = ''` rather than an accident.
+ *
+ * `lower(...)` also matches the expression the seed rows already hold, and `as_slug` is
+ * lowercased by construction above. `on conflict (slug)` below is unaffected — index
+ * inference matches by column, not by operator.
  *
  * Slug collisions are therefore identity: two people who slugify the same are treated
  * as one contributor. That is the crude answer to "is this Mill the same Mill?", and it
@@ -105,7 +123,7 @@ begin
 
   select c.id into contributor_id
     from public.contributors c
-   where c.slug = as_slug::extensions.citext;
+   where lower(c.slug::text) = as_slug;
 
   if contributor_id is null then
     -- `slug` is not null with no default, so it has to be supplied. The conflict
@@ -119,7 +137,7 @@ begin
     if contributor_id is null then
       select c.id into contributor_id
         from public.contributors c
-       where c.slug = as_slug::extensions.citext;
+       where lower(c.slug::text) = as_slug;
     end if;
   end if;
 

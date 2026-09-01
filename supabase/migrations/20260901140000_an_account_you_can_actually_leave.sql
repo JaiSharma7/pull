@@ -33,7 +33,11 @@ create or replace function public.my_sessions()
 returns table (
   id           uuid,
   created_at   timestamptz,
-  refreshed_at timestamptz,
+  -- `timestamp`, not `timestamptz`: GoTrue declares `refreshed_at` without a time zone
+  -- while `created_at`, `updated_at` and `not_after` have one. Declaring it timestamptz
+  -- here does not error -- the assignment cast applies -- it reinterprets the value in
+  -- the session's TimeZone, which is right on a UTC connection and wrong on any other.
+  refreshed_at timestamp,
   not_after    timestamptz,
   aal          text,
   user_agent   text,
@@ -171,9 +175,9 @@ grant execute on function public.session_age_seconds() to authenticated;
 /**
  * Delete the caller's account and everything keyed to it.
  *
- * 27 foreign keys to `auth.users` cascade, so most of this is one delete. Four do not,
- * and they are the reason this function exists rather than a bare
- * `delete from auth.users`:
+ * Nineteen foreign keys in `public` reference `auth.users` with `on delete cascade`, so
+ * most of this is one delete. Four do not, and they are the reason this function exists
+ * rather than a bare `delete from auth.users`:
  *
  *   generation_jobs.requester_id   on delete set null
  *   summaries.author_id            on delete set null

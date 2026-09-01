@@ -17,10 +17,22 @@
 -- world-readable. The policy is corrected here and the sentence is corrected there.
 --
 -- Nothing in `apps/web` reads `profiles` or `follows`. Both are round 4 tables -- the
--- community round -- sitting in a round 2 database with their doors open, so closing
--- them costs no capability that exists today. When profiles become public it will be
--- because someone chose to publish one, and that is a policy this migration makes
--- room for rather than one it pre-empts.
+-- community round -- sitting in a round 2 database with their doors open. When profiles
+-- become public it will be because someone chose to publish one, and that is a policy
+-- this migration makes room for rather than one it pre-empts.
+--
+-- ONE DATABASE-SIDE READER DOES EXIST, and it is worth naming rather than discovering.
+-- `refresh_stale_knowledge_vectors` (20260901070000) is `security invoker` and drives
+-- its work loop off `select pr.id from public.profiles pr`. Under a role that respects
+-- RLS it would now see one row and silently become a no-op for everyone else.
+--
+-- It is safe today for a specific reason rather than by luck: it is granted to
+-- `postgres` alone, `pg_cron` runs it as `postgres`, and both `postgres` and
+-- `service_role` carry `rolbypassrls`. So the policy below does not reach it. What
+-- would reach it is granting it to `authenticated` -- which nothing should do, and
+-- which would now be a correctness bug as well as a privilege one. Recorded here
+-- because a silent no-op in a background refresh is the kind of failure that shows up
+-- months later as "the feed stopped personalising".
 
 -- 1. Self-only reads. -------------------------------------------------------------
 

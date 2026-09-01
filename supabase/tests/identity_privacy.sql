@@ -46,10 +46,13 @@ end $fn$;
 
 do $$
 declare
-  alice     uuid := extensions.gen_random_uuid();
-  bob       uuid := extensions.gen_random_uuid();
-  signup_id uuid;
-  local_part text;
+  alice        uuid := extensions.gen_random_uuid();
+  bob          uuid := extensions.gen_random_uuid();
+  carol        uuid := extensions.gen_random_uuid();
+  signup_id    uuid;
+  local_part   text;
+  carol_local  text;
+  carol_handle text;
   seen      int;
   handle    text;
 begin
@@ -66,6 +69,19 @@ begin
             '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
   end loop;
 
+  -- A third reader whose address local part is hex-shaped, so the assertion below has
+  -- something it could actually match against.
+  carol_local := substr(replace(carol::text, '-', ''), 1, 12);
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data)
+  values (carol, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated',
+          carol_local || '@example.test', '',
+          now(), now(), now(),
+          '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
+  select p.handle into strict carol_handle from public.profiles p where p.id = carol;
+
   insert into public.follows (follower_id, followee_id) values (alice, bob);
 
   -- ------------------------------------------- 1. a handle is not an address
@@ -80,11 +96,26 @@ begin
   if handle is null or length(handle) < 3 then
     raise exception 'signup produced no usable handle (got %)', coalesce(handle, '<null>');
   end if;
+  -- Asserted against a local part that is *hex-shaped*, so this can actually fail.
+  --
+  -- The first version of this test signed alice up as `privacy<8 hex>@example.test`
+  -- and asserted the handle does not contain that local part. It cannot: a generated
+  -- handle is `reader_` plus hex, and the literal `privacy` prefix makes containment
+  -- impossible however handles are derived. The assertion passed for a reason that had
+  -- nothing to do with the bug it names.
+  --
+  -- `carol`'s local part is 12 hex characters, which is exactly the shape a generated
+  -- handle is made of -- so if `handle_new_user` ever goes back to deriving from the
+  -- address, this fires.
+  if position(carol_local in carol_handle) > 0 then
+    raise exception
+      'the generated handle % contains the email local part %. A handle must not be '
+      'derived from an address -- see 20260901120000.',
+      carol_handle, carol_local;
+  end if;
   if position(local_part in handle) > 0 then
     raise exception
-      'the generated handle % still contains the email local part %. '
-      'A handle must not be derived from an address -- see 20260901120000.',
-      handle, local_part;
+      'the generated handle % still contains the email local part %.', handle, local_part;
   end if;
   if handle !~ '^reader_[0-9a-f]+$' then
     raise exception
@@ -99,15 +130,13 @@ begin
     json_build_object('sub', alice, 'role', 'authenticated')::text, true);
   perform pg_temp.assert_is_reader();
 
+  -- Three profiles exist; alice may see one. Stated as a count over the whole table
+  -- rather than as "cannot see bob", because the count also catches a policy that
+  -- leaks a row nobody thought to name.
   select count(*) into seen from public.profiles;
   if seen <> 1 then
     raise exception
-      'a signed-in reader can see % profiles; they may see exactly their own.', seen;
-  end if;
-
-  select count(*) into seen from public.profiles p where p.id = bob;
-  if seen <> 0 then
-    raise exception 'a reader can see another reader''s profile.';
+      'a signed-in reader can see % of 3 profiles; they may see exactly their own.', seen;
   end if;
 
   -- Alice follows Bob, so she may see that edge -- and only edges she is part of.

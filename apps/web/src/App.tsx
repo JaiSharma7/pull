@@ -42,6 +42,7 @@ import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
+import { SecondFactorGate } from './routes/SecondFactorGate.js';
 import { Topic } from './routes/Topic.js';
 import { Specimen } from './routes/Specimen.js';
 import {
@@ -169,6 +170,22 @@ export function App() {
    */
   const [routeTitle, setRouteTitle] = useState<{ path: string; title: string } | null>(null);
   /*
+   * Whether this session still owes a second factor.
+   *
+   * `null` while unknown, which matters: rendering the shell during the check would
+   * flash the reader's feed at them before the gate appears, and rendering the gate
+   * would flash a challenge at everyone who has no factor at all.
+   *
+   * Supabase does not enforce this by itself. After an email code the session is
+   * `aal1` and stays there unless the app asks for a challenge, and no policy here
+   * refuses an `aal1` token — so without this a reader who enrolled TOTP, saved their
+   * recovery codes and felt safer had exactly the protection they had before, and the
+   * app would never have told them. A control that cannot be exercised is worse than
+   * an absent one, because it is believed.
+   */
+  const [factorState, setFactorState] = useState<{ userId: string; owes: boolean } | null>(null);
+  const [factorChecks, setFactorChecks] = useState(0);
+  /*
    * Bumped when a reader saves their preferences, so the feed refetches under the
    * new weights. The feed is kept mounted (see below), so nothing else would make
    * it reconsider — and a preferences screen the feed ignores is precisely the
@@ -186,6 +203,37 @@ export function App() {
    * so /privacy resolves on a cold load and offline as well as from a link.
    */
   const [path, setPath] = useState(readLocation);
+
+  /*
+   * Ask on every session change, and again after a challenge is satisfied.
+   *
+   * `getAuthenticatorAssuranceLevel` returns what this session has and what the account
+   * requires; they differ exactly when a verified factor exists and has not been
+   * satisfied. Failing open on an error is deliberate and is the lesser evil: the
+   * alternative is a reader locked out of their own account by a network blip, and the
+   * factor is re-checked on the next load.
+   */
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
+    let live = true;
+    void supabase.auth.mfa
+      .getAuthenticatorAssuranceLevel()
+      .then(({ data, error }) => {
+        if (!live) return;
+        if (error) throw error;
+        setFactorState({
+          userId,
+          owes: data.nextLevel === 'aal2' && data.nextLevel !== data.currentLevel,
+        });
+      })
+      .catch(() => {
+        if (live) setFactorState({ userId, owes: false });
+      });
+    return () => {
+      live = false;
+    };
+  }, [session, factorChecks]);
 
   // The attribute is the single source of truth for the CSS; this keeps it in step.
   useEffect(() => {
@@ -435,6 +483,14 @@ export function App() {
    * linked to. Signed-in only -- unlike Appearance, every control on it acts on a
    * reader, so there is nothing here for a visitor to see.
    */
+  /*
+   * Stored against the user it describes, so signing out and back in cannot show the
+   * previous account's answer for a frame — and so nothing has to be reset in an
+   * effect, which is a synchronous setState the lint rule rightly refuses. `null` means
+   * "not answered for this reader yet", which is a different thing from "does not owe".
+   */
+  const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
+
   const accountOpen = isPath(path, '/account');
   const topicSlug = routeParam(path, '/topic');
   /*
@@ -528,6 +584,24 @@ export function App() {
     );
 
   if (!session && !publicRoute) return <Auth onNavigate={navigate} next={next} />;
+
+  /*
+   * Ahead of everything a signed-in reader can see, and after the public routes.
+   *
+   * A visitor reading a shared Pull is unaffected — they have no account and owe no
+   * factor. A reader who does owe one gets the challenge instead of the app, not a
+   * banner over it: `/account` is behind this gate too, which is why the way back in
+   * (a recovery code) lives on the gate itself rather than in settings the locked-out
+   * reader cannot reach.
+   */
+  if (session && owesFactor === null)
+    return (
+      <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
+        Loading…
+      </p>
+    );
+  if (session && owesFactor)
+    return <SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />;
 
   const shell = (
     <div className="shell">
