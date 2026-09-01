@@ -42,7 +42,7 @@ export default defineConfig({
    * No production sourcemap.
    *
    * It was 2.5MB beside a 557KB bundle — five times the app, published on a CDN and
-   * counted against the deploy on every build. The code is MIT and readable on GitHub,
+   * counted against the deploy on every build. The code is AGPL-3.0 and readable on GitHub,
    * so this was never protecting anything; it was simply the largest file in the
    * deployment, serving a debugger nobody attaches to production.
    *
