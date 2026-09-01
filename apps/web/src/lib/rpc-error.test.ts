@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSchemaBehind, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
+import { isSchemaMismatch, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
 import { isOfflineFailure } from './offline.js';
 
 /**
@@ -116,12 +116,12 @@ describe('a request that never reached the server', () => {
   });
 });
 
-describe('isSchemaBehind', () => {
+describe('isSchemaMismatch', () => {
   it('recognises the SQLSTATE for a column that does not exist', () => {
     // The exact shape the hosted project returned on 2026-09-01, seven migrations
     // behind a frontend that had already shipped the query.
     expect(
-      isSchemaBehind({
+      isSchemaMismatch({
         code: '42703',
         message: 'column works.source_url does not exist',
       }),
@@ -130,11 +130,24 @@ describe('isSchemaBehind', () => {
 
   it('recognises PostgREST catching it a layer earlier, where there is no SQLSTATE', () => {
     expect(
-      isSchemaBehind({
+      isSchemaMismatch({
         code: 'PGRST204',
         message: "Could not find the 'source_url' column of 'works' in the schema cache",
       }),
     ).toBe(true);
+  });
+
+  it('covers the table and function cases, not just the column one', () => {
+    /*
+     * The same deploy gap produces these. 20260901140000, 150000 and 190000 add
+     * functions the hosted project does not have, so an account screen reaching
+     * `delete_my_account` lands here exactly as a source page reaching `source_url`
+     * does — and before this it fell through to "something went wrong".
+     */
+    for (const code of ['42P01', '42883', 'PGRST202']) {
+      expect(isSchemaMismatch({ code, message: 'missing' }), code).toBe(true);
+      expect(isSchemaMismatch(rpcError({ code, message: 'missing' })), code).toBe(true);
+    }
   });
 
   it('survives the round trip through rpcError, which is how callers actually see it', () => {
@@ -143,10 +156,10 @@ describe('isSchemaBehind', () => {
      * SQLSTATE into `name` and there is nowhere else for it to have gone. A check
      * that only understood the raw shape would be dead code at every call site.
      */
-    expect(isSchemaBehind(rpcError({ code: '42703', message: 'column x does not exist' }))).toBe(
+    expect(isSchemaMismatch(rpcError({ code: '42703', message: 'column x does not exist' }))).toBe(
       true,
     );
-    expect(isSchemaBehind(rpcError({ code: 'PGRST204', message: 'schema cache' }))).toBe(true);
+    expect(isSchemaMismatch(rpcError({ code: 'PGRST204', message: 'schema cache' }))).toBe(true);
   });
 
   it('leaves every other failure alone', () => {
@@ -163,14 +176,14 @@ describe('isSchemaBehind', () => {
       { code: '', message: 'TypeError: Failed to fetch' },
       { message: 'no code at all' },
     ]) {
-      expect(isSchemaBehind(e), e.message).toBe(false);
-      expect(isSchemaBehind(rpcError(e)), e.message).toBe(false);
+      expect(isSchemaMismatch(e), e.message).toBe(false);
+      expect(isSchemaMismatch(rpcError(e)), e.message).toBe(false);
     }
   });
 
   it('is false for anything that is not an error shape', () => {
-    expect(isSchemaBehind(null)).toBe(false);
-    expect(isSchemaBehind(undefined)).toBe(false);
-    expect(isSchemaBehind(new Error('plain'))).toBe(false);
+    expect(isSchemaMismatch(null)).toBe(false);
+    expect(isSchemaMismatch(undefined)).toBe(false);
+    expect(isSchemaMismatch(new Error('plain'))).toBe(false);
   });
 });

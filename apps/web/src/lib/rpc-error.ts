@@ -68,7 +68,7 @@ export function rpcError(error: unknown): Error {
 }
 
 /**
- * Is this deployment's database older than the code talking to it?
+ * Do the app and the database disagree about what exists?
  *
  * Two things ship this product and only one of them is automatic. Vercel redeploys
  * `apps/web` on every push to `main`; migrations reach the hosted project only when
@@ -87,14 +87,34 @@ export function rpcError(error: unknown): Error {
  * one immediately, and it is the difference between an afternoon of bisecting the
  * frontend and one command.
  *
- * `42703` is Postgres refusing a column that is not there. `PGRST204` is PostgREST's
- * own version, raised from its cached schema before the query is sent — the same fact
- * caught one layer earlier, and it arrives with no SQLSTATE at all.
+ * WHAT IT PROVES, AND WHAT IT DOES NOT. These codes say the app asked for something the
+ * database does not have. They do NOT say which side is behind, and the first draft of
+ * this claimed they did. A column dropped on purpose by a newer migration, read by an
+ * older bundle out of the service worker's cache — which law 3 guarantees exists — is
+ * the same code with the direction reversed, and there the answer is a reload, not a
+ * migration. `PGRST204` inverts it a second way: it comes from PostgREST's schema cache,
+ * which goes stale *after* a migration is applied, and is answered by
+ * `notify pgrst, 'reload schema'` rather than by pushing anything.
+ *
+ * So the name is a description of the symptom and the copy says only that the two are
+ * out of step. The commands belong here, in front of whoever is reading the repository,
+ * and in `console.warn` — not asserted at a reader who cannot act on any of them.
+ *
+ * The codes: `42703` is Postgres refusing a column; `42P01` a table; `42883` a function,
+ * which is how a missing RPC arrives once PostgREST has passed it through. `PGRST202`
+ * and `PGRST204` are PostgREST's own versions of the last two, raised from its cached
+ * schema before the query is sent, and they carry no SQLSTATE at all. All five are the
+ * same fact — this deployment's schema and this bundle disagree — and the four beyond
+ * the first matter because 20260901140000, 150000 and 190000 add functions that a
+ * project behind on migrations does not have.
  */
-export function isSchemaBehind(error: unknown): boolean {
+const SCHEMA_MISMATCH_CODES = ['42703', '42P01', '42883', 'PGRST202', 'PGRST204'];
+
+export function isSchemaMismatch(error: unknown): boolean {
   if (error instanceof Error) {
-    return /^PostgrestError (42703|PGRST204)$/.test(error.name);
+    const code = /^PostgrestError (.+)$/.exec(error.name)?.[1];
+    return code !== undefined && SCHEMA_MISMATCH_CODES.includes(code);
   }
   const e = (error ?? {}) as RpcErrorShape;
-  return e.code === '42703' || e.code === 'PGRST204';
+  return typeof e.code === 'string' && SCHEMA_MISMATCH_CODES.includes(e.code);
 }

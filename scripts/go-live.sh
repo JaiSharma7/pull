@@ -3,12 +3,21 @@
 # Everything between "the pipeline exists in git" and "the pipeline runs in production".
 #
 #   login ──→ push migrations ──→ deploy worker ──→ REQUIRE_REAL_PROVIDERS ──→ cron ──→ enqueue
-#                    ▲
-#                    └── the step nothing else does. Vercel redeploys from git on
-#                        every push; Edge Functions do not. The worker in production
-#                        is version 1 from 05:16 UTC on 2026-08-30 — six hours older
-#                        than the commit that made the pipeline write real content.
-#                        Nothing errors, no CI check fails, and no job ever completes.
+#                    ▲                        ▲
+#                    │                        └── the step nothing else does. Vercel
+#                    │                            redeploys from git on
+#                    │                            every push; Edge Functions do not.
+#                    │                            The worker in production was version 1
+#                    │                            from 05:16 UTC on 2026-08-30 — older
+#                    │                            than the commit that made the pipeline
+#                    │                            write real content. Nothing errors, no
+#                    │                            CI check fails, and no job completes.
+#                    │
+#                    └── the other step nothing else does, and the one that was missing
+#                        entirely. The database moves only when somebody runs this; the
+#                        frontend moves on every push to main. On 2026-09-01 the gap was
+#                        seven migrations and every source page said "Something went
+#                        wrong reaching the library".
 #
 # Safe to re-run. Every step is idempotent: deploying twice makes a new version,
 # setting a secret twice sets the same value, and the job insert is a new row you
@@ -67,12 +76,39 @@ step "2/6  Push the migrations"
 # to apply, which is also the fastest way to see how far behind a project has drifted.
 #
 # `--project-ref` is a flag of `db push` itself on the pinned CLI (2.116.0) — the same
-# flag the two steps below use — so this needs no `supabase link` first. It does need
-# something they do not: `functions deploy` and `secrets set` go through the Management
-# API with the token from step 1, while this opens a Postgres connection, so it asks for
-# the database password unless the project is already linked with one saved. That prompt
-# is the step working, not failing.
-npx --yes supabase db push --project-ref "$PROJECT_REF"
+# flag the two steps below use — so this needs no `supabase link` first. It does open a
+# Postgres connection where they use the Management API, so it wants the database
+# password; `--yes` answers the confirmation and SUPABASE_DB_PASSWORD, if exported,
+# answers the rest, which is what keeps this runnable unattended.
+#
+# NOT FATAL, and that is the whole design of this block.
+#
+# `db push` refuses outright when the remote history table holds a version with no local
+# file — `missing-local`, which is checked before `missing-remote` and which
+# `--include-all` does not override. This project is in exactly that state today: 70 rows
+# remote, 18 of them stamped by `apply_migration` rather than by the CLI, so their
+# versions do not match any filename here (the giveaway is in the names — version
+# 20260831212059 is *called* `20260831210000_feed_listens_to_dwell`). Fixing that is
+# `supabase migration repair --status applied <version>` per row, against production, and
+# it is deliberately not something a deploy script should do for you at 2am.
+#
+# So a refusal here must not take the rest of the deploy with it. Under `set -e` it would:
+# the worker deploy, REQUIRE_REAL_PROVIDERS and both SQL blocks are the reason this file
+# exists, they do not depend on the schema being current, and they are precisely what
+# nothing else does. The failure is recorded, the remaining steps run, and the script
+# exits non-zero at the end so it cannot be mistaken for a clean deploy.
+migrations_pushed=1
+if ! npx --yes supabase db push --project-ref "$PROJECT_REF" --yes \
+     ${SUPABASE_DB_PASSWORD:+--password "$SUPABASE_DB_PASSWORD"}; then
+  migrations_pushed=0
+  echo
+  echo "  db push failed. The most likely cause is a remote history that does not match" >&2
+  echo "  supabase/migrations — see the note above this command." >&2
+  echo "  Look:  npx supabase migration list --project-ref $PROJECT_REF" >&2
+  echo "  Then:  npx supabase migration repair --status applied <version> …" >&2
+  echo "  The rest of this script still runs; it exits non-zero at the end." >&2
+  echo
+fi
 
 step "3/6  Deploy the worker"
 # --no-verify-jwt because the worker authenticates the dispatcher itself against a
@@ -136,6 +172,14 @@ cat <<'SQL'
   What proves it worked: `provider` reads 'gemini', not 'stub'.
 
 SQL
+
+if [ "$migrations_pushed" -eq 0 ]; then
+  step "Done, except the migrations"
+  echo "Everything else ran. The schema was NOT pushed — see step 2 above." >&2
+  echo "Until it is, apps/web can ask the database for columns it does not have," >&2
+  echo "and source pages answer with an error rather than a source." >&2
+  exit 1
+fi
 
 step "Done"
 echo "The worker now runs the reviewed pipeline. Tell Claude and it will enqueue,"
