@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Mark } from '@wap/ui';
 import privacySource from '../../../../docs/privacy.md?raw';
 import termsSource from '../../../../docs/terms.md?raw';
 import { Prose } from '../components/Prose.js';
@@ -53,7 +54,10 @@ export function Legal({ doc, onNavigate }: { doc: LegalDoc; onNavigate: (to: str
       </a>
 
       <header className="shell__masthead">
-        <span className="shell__wordmark">What a Pull</span>
+        <span className="shell__brand">
+          <Mark className="shell__mark" />
+          <span className="shell__wordmark">What a Pull</span>
+        </span>
         <a className="btn btn--plain" href="/" onClick={go('/')} style={{ marginLeft: 'auto' }}>
           Back to reading
         </a>

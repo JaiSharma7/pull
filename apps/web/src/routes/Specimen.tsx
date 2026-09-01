@@ -1,4 +1,4 @@
-import { Enough, Meter, PullCard } from '@wap/ui';
+import { Enough, Mark, Meter, PullCard } from '@wap/ui';
 import { Interrupt } from '../components/Interrupt.js';
 import type { FeedRow } from '../lib/types.js';
 
@@ -30,6 +30,14 @@ export function Specimen() {
   return (
     <main className="stack" style={{ padding: 'var(--space-6) var(--space-5)', maxWidth: '48rem' }}>
       <p className="meta">Specimen · The Archive</p>
+
+      {/* The brand lockup exactly as the masthead builds it, so /design-check has the
+          mark in its screenshot rather than only in a browser tab. */}
+      <span className="shell__brand">
+        <Mark className="shell__mark" />
+        <span className="shell__wordmark">What a Pull</span>
+      </span>
+
       <h1>Every component, one screen.</h1>
 
       <p className="meta" data-testid="delta-banner">

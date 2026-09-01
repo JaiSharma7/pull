@@ -3,14 +3,21 @@
  * Generate the app icons into apps/web/public/.
  *
  * There is no rasteriser on a plain CI box and no image dependency in this repo, so the
- * PNGs are encoded here from a pixel buffer with nothing but `zlib`. That is only
- * tolerable because the mark is deliberately geometric — flat fills, one accent, no
- * gradient (design law 1) — which is exactly what The Archive calls for anyway.
+ * PNGs are encoded here from a pixel buffer with nothing but `zlib`. Shapes are defined
+ * analytically — two ellipses, a rectangle and a dome — and sampled per pixel, which is
+ * all a mark this flat needs: no gradient, no shadow, one accent (design law 1).
  *
  * The mark: a magician's top hat in bone on an ink ground, with the band in oxblood.
  * The product is named for the thing pulled out of it, so the hat is the half you can
- * draw — three flat bars, no curves, which is what keeps it legible at 16px and what
- * lets it be encoded here without a rasteriser.
+ * draw.
+ *
+ * The brim is the recognition cue and it is a *curve*, not a bar. A top hat is the one
+ * common hat whose brim is dramatically wider than its crown and sweeps up at the ends,
+ * and both halves of that read matter: the earlier mark drew the brim as a flat
+ * rectangle and looked like a plinth. It is built here as the crescent left when one
+ * ellipse is subtracted from the same ellipse lifted above it — which gives the deep
+ * sweep at the centre and the two raised tips for free, and is exactly one expression
+ * in both the raster and the vector path.
  *
  * Run: node scripts/gen-icons.mjs
  */
@@ -76,81 +83,166 @@ function png(size, pixels) {
 }
 
 /**
+ * The hat's geometry, shared by the raster and vector paths so they cannot drift.
+ *
+ * Mirrored in `packages/ui/src/components/Mark.tsx`, which draws the same hat in the
+ * masthead, and pinned against the generated `favicon.svg` by `Mark.test.ts`: the tab
+ * and the top bar showing two different hats is the one failure worth a test here.
+ *
  * @param size   canvas edge in pixels
  * @param inset  fraction of the canvas the mark shrinks into. 1 fills the canvas; a
  *               maskable icon uses 0.6 so nothing lands outside the safe zone a
  *               launcher may crop to a circle.
  */
-/**
- * The hat's geometry, shared by the raster and vector paths so they cannot drift.
- *
- * Extents are symmetric about the centre (-0.245s to +0.245s) so the mark is optically
- * centred without a fudge factor: the brim is the heavy end, and letting it sit lower
- * than the crown is what makes a hat read as standing rather than floating.
- */
 function hat(size, inset) {
   const c = size / 2;
   const s = size * inset;
+
   /*
    * Proportioned for 16px first, because that is where this mark is actually read.
    *
-   * The previous numbers were reasonable on paper and failed in the browser tab. The
-   * band sits at the base of the crown, so the *lit* part of the crown is what the eye
-   * measures — and at 0.38w × (0.46 − 0.085)h that part was 1.01:1. A square. Rendered
-   * at 16, 24 and 32px it read as a pale box with a red underline; nobody looking at it
-   * saw a hat, which is the only thing a mark has to do.
+   * Three numbers carry the silhouette:
    *
-   * Two numbers carry the silhouette, and both are pushed:
+   * - **The lit crown is 1.35:1 tall.** The band sits at the base of the crown, so the
+   *   lit part is what the eye measures; at 1:1 it reads as a pale box with a red
+   *   underline rather than as a hat.
+   * - **The brim is over three times the crown's width**, which is the contrast that
+   *   says *top* hat rather than any other hat.
+   * - **The brim's sweep (`brimLift`) is three quarters of its depth (`brimRy`)**, which is
+   *   what raises the tips clear of the crown's foot. Flatten that ratio and the
+   *   crescent closes back into the bar this replaced.
    *
-   * - **The lit crown is 1.40:1 tall**, not square. Height came up and width went down,
-   *   because narrowing does more for the read than heightening at the same pixel cost.
-   * - **The brim is 2.5× the crown's width and half again as thick.** A top hat is the
-   *   only common hat whose brim is dramatically wider than its crown, so that contrast
-   *   is the whole recognition cue — and at 16px the old 0.09s brim landed on 1.4 device
-   *   pixels and antialiased itself into nothing.
-   *
-   * Extents stay symmetric about the centre. Anything changed here wants re-rendering at
-   * 16px and looking at, not reasoning about; `scripts/gen-icons.mjs` is fast to re-run.
+   * Anything changed here wants re-rendering at 16px and looking at, not reasoning
+   * about; this script is fast to re-run.
    */
-  const crownW = s * 0.33;
-  const crownTop = c - s * 0.33;
-  const crownH = s * 0.54;
-  const bandH = s * 0.078;
-  const bandTop = crownTop + crownH - bandH;
-  const brimW = s * 0.83;
-  const brimTop = crownTop + crownH;
-  const brimH = s * 0.125;
-  return { c, crownW, crownTop, crownH, bandH, bandTop, brimW, brimTop, brimH };
+  const crownW = s * 0.3;
+  const capRy = s * 0.048; // the dome on the crown, barely there at 16px and right at 512
+  const bandH = s * 0.09;
+  const brimRx = s * 0.46;
+  const brimRy = s * 0.175;
+  const brimLift = s * 0.132;
+  const litH = crownW * 1.35;
+
+  /*
+   * Vertical placement is solved, not nudged: the silhouette's top (the crown's dome)
+   * and its bottom (the brim's lowest point) are placed symmetrically about the centre,
+   * so the mark is optically centred at every inset without a fudge factor.
+   */
+  const brimCy = c - brimRy + (brimLift + bandH + litH) / 2;
+  const bandBottom = brimCy + brimRy - brimLift; // the brim's top edge at the centre
+  const bandTop = bandBottom - bandH;
+  const crownTop = bandTop - litH;
+
+  /*
+   * Where the two ellipse edges cross: the crescent's tips, raised `brimLift / 2` above
+   * the brim's centre line. Derived rather than chosen, so the vector path lands on the
+   * same two points the pixel test does.
+   */
+  const m = brimLift / (2 * brimRy);
+  const tipX = brimRx * Math.sqrt(1 - m * m);
+  const tipY = brimCy - brimRy * m;
+
+  /*
+   * The crown's foot, which nobody sees: it stops just inside the brim's lower edge
+   * measured at the crown's own width, so the two shapes join into one silhouette with
+   * neither a seam between them nor a spill below.
+   */
+  const kCrown = Math.sqrt(1 - (crownW / 2 / brimRx) ** 2);
+  const crownBottom = brimCy + brimRy * kCrown * 0.9;
+
+  return {
+    c,
+    crownW,
+    capRy,
+    crownTop,
+    crownBottom,
+    bandTop,
+    bandH,
+    brimCy,
+    brimRx,
+    brimRy,
+    brimLift,
+    tipX,
+    tipY,
+  };
 }
 
-function mark(size, inset) {
-  const h = hat(size, inset);
+const inEllipse = (px, py, cx, cy, rx, ry) => ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2 <= 1;
 
-  const inBox = (x, y, w, top, height) =>
-    x >= h.c - w / 2 && x < h.c + w / 2 && y >= top && y < top + height;
-
-  return (x, y) => {
-    // Sample at the pixel centre so the shapes meet cleanly at any size.
-    const px = x + 0.5;
-    const py = y + 0.5;
-    // Band before crown: it is drawn over the crown's lower edge, so it has to win.
-    if (inBox(px, py, h.crownW, h.bandTop, h.bandH)) return OXBLOOD;
-    if (inBox(px, py, h.crownW, h.crownTop, h.crownH)) return BONE;
-    if (inBox(px, py, h.brimW, h.brimTop, h.brimH)) return BONE;
+/** Flat colour at a point. Later shapes win, so this reads in reverse paint order. */
+function shade(h) {
+  return (px, py) => {
+    // The brim last, over the crown's foot and the band's lower corners.
+    if (
+      inEllipse(px, py, h.c, h.brimCy, h.brimRx, h.brimRy) &&
+      !inEllipse(px, py, h.c, h.brimCy - h.brimLift, h.brimRx, h.brimRy)
+    )
+      return BONE;
+    const inCrownW = px >= h.c - h.crownW / 2 && px < h.c + h.crownW / 2;
+    if (inCrownW && py >= h.bandTop && py < h.bandTop + h.bandH) return OXBLOOD;
+    if (inCrownW && py >= h.crownTop + h.capRy && py < h.crownBottom) return BONE;
+    if (inEllipse(px, py, h.c, h.crownTop + h.capRy, h.crownW / 2, h.capRy)) return BONE;
     return INK;
   };
 }
 
+/**
+ * @param size   canvas edge in pixels
+ * @param inset  see `hat`
+ *
+ * Sampled 4×4 per pixel and averaged. The mark is curved now, and a single sample at
+ * the pixel centre gave the brim a staircase edge at 192px and dropped its tips
+ * entirely at 32px. Averaging flat fills is antialiasing, not shading: no pixel here is
+ * part of a gradient, it is part of an edge.
+ */
+function mark(size, inset) {
+  const at = shade(hat(size, inset));
+  const STEPS = 4;
+  return (x, y) => {
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let sy = 0; sy < STEPS; sy++) {
+      for (let sx = 0; sx < STEPS; sx++) {
+        const [pr, pg, pb] = at(x + (sx + 0.5) / STEPS, y + (sy + 0.5) / STEPS);
+        r += pr;
+        g += pg;
+        b += pb;
+      }
+    }
+    const n = STEPS * STEPS;
+    return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+  };
+}
+
 const hex = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+const n = (v) => Number(v.toFixed(2));
+
+/**
+ * The brim, as one closed path: along the outer ellipse's lower edge from the left tip
+ * to the right, then back along the lifted ellipse's lower edge.
+ *
+ * Both arcs sweep through the bottom of their ellipse, which is what the flags say: the
+ * first runs against the angle (sweep 0) and spans more than half the ellipse
+ * (large-arc 1); the return runs with it (sweep 1) and spans less (large-arc 0).
+ */
+function brimPath(h) {
+  return (
+    `M ${n(h.c - h.tipX)} ${n(h.tipY)} ` +
+    `A ${n(h.brimRx)} ${n(h.brimRy)} 0 1 0 ${n(h.c + h.tipX)} ${n(h.tipY)} ` +
+    `A ${n(h.brimRx)} ${n(h.brimRy)} 0 0 1 ${n(h.c - h.tipX)} ${n(h.tipY)} Z`
+  );
+}
 
 function svg(size = 512, inset = 1) {
   const h = hat(size, inset);
-  // Same order as `mark`: crown, then brim, then the band over the crown's lower edge.
+  // Same order as `shade` reads in reverse: crown, dome, band, then the brim over both.
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="What a Pull">
   <rect width="${size}" height="${size}" fill="${hex(INK)}"/>
-  <rect x="${h.c - h.crownW / 2}" y="${h.crownTop}" width="${h.crownW}" height="${h.crownH}" fill="${hex(BONE)}"/>
-  <rect x="${h.c - h.brimW / 2}" y="${h.brimTop}" width="${h.brimW}" height="${h.brimH}" fill="${hex(BONE)}"/>
-  <rect x="${h.c - h.crownW / 2}" y="${h.bandTop}" width="${h.crownW}" height="${h.bandH}" fill="${hex(OXBLOOD)}"/>
+  <rect x="${n(h.c - h.crownW / 2)}" y="${n(h.crownTop + h.capRy)}" width="${n(h.crownW)}" height="${n(h.crownBottom - h.crownTop - h.capRy)}" fill="${hex(BONE)}"/>
+  <ellipse cx="${n(h.c)}" cy="${n(h.crownTop + h.capRy)}" rx="${n(h.crownW / 2)}" ry="${n(h.capRy)}" fill="${hex(BONE)}"/>
+  <rect x="${n(h.c - h.crownW / 2)}" y="${n(h.bandTop)}" width="${n(h.crownW)}" height="${n(h.bandH)}" fill="${hex(OXBLOOD)}"/>
+  <path d="${brimPath(h)}" fill="${hex(BONE)}"/>
 </svg>
 `;
 }
