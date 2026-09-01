@@ -236,15 +236,32 @@ export interface PipelineDb {
      */
     topics: TopicSlug[];
     /**
-     * Written only for a work this call creates, exactly like `topics`.
+     * Null from any job that is not publishing canonically, and that is a
+     * security boundary rather than a tidiness rule.
      *
-     * Re-scoring on reuse would let one job's draft overwrite another's ranking
-     * for a source that has not changed — and since a reused summary is adopted
-     * rather than regenerated, the second job's "draft" is not even the text the
-     * score would be describing.
+     * `enqueue_generation_job` is `security definer`, granted to `authenticated`,
+     * and inserts the requester's `target` jsonb verbatim without validating it.
+     * `generation_jobs.visibility` defaults to `private`, and `resolve_identity`
+     * only refuses a bad rights claim when the job is public — so a signed-in
+     * reader can queue any URL with any rights claim, or none, which narrows to
+     * `review_required` and scores 0.3. `template` is step 5 and `moderate`, the
+     * rights gate, is step 10: separate Edge Function invocations, so the `works`
+     * row commits five steps before anything checks it.
+     *
+     * Since `works` is keyed by `content_hash` and adopted rather than
+     * duplicated, that reader could pre-create the row for a source the project
+     * was about to publish and pin 0.24 of its `get_feed` score at 0.3 for every
+     * reader, permanently, at 50 jobs a day.
+     *
+     * So a non-canonical job writes no score at all and the column defaults
+     * stand. A canonical one writes, and — unlike before — also RE-scores a row
+     * it adopts, because otherwise a row a private job created first would keep
+     * its defaults forever. The original rule this replaces ("written only on
+     * creation") was reasoning about two honest jobs racing, which it got right;
+     * it simply never considered an adversarial requester.
      */
-    qualityScore: number;
-    trustScore: number;
+    qualityScore: number | null;
+    trustScore: number | null;
   }): Promise<{ workId: string; existing: boolean }>;
   createSummary(input: {
     workId: string;
@@ -310,7 +327,17 @@ export function trustFromProvenance(rights: RightsStatus, url: string | null): n
     } catch {
       host = '';
     }
+    /*
+     * Subdomains count, because the real ones are where the texts live —
+     * `www.gutenberg.org`, `en.wikisource.org`. With one exception that the
+     * suffix rule got wrong: `web.archive.org` is the Wayback Machine, which
+     * serves an archived copy of *any* site under an archive.org hostname. So
+     * `https://web.archive.org/web/…/https://anywhere.example/text` inherited
+     * the maximum score on the strength of a host that says nothing about the
+     * text behind it.
+     */
     const known = ['gutenberg.org', 'wikisource.org', 'classics.mit.edu', 'archive.org'];
+    if (host === 'web.archive.org') return 0.7;
     return known.some((k) => host === k || host.endsWith(`.${k}`)) ? 0.9 : 0.7;
   }
   if (rights === 'licensed') return 0.8;
@@ -730,8 +757,15 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         rightsStatus: acquired.rights,
         // Both deterministic, both from what is already in hand: no extra call,
         // and a quarter of `get_feed`'s score stops being the 0.5 default.
-        qualityScore: qualityFromDraft(summary),
-        trustScore: trustFromProvenance(acquired.rights, asString(job.target.url) || null),
+        //
+        // Only from a canonical job, though. See `upsertWork` for why the
+        // requester's own visibility is what decides whether their claims about
+        // a source are allowed to move a shared row's ranking.
+        qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
+        trustScore:
+          job.visibility === 'public'
+            ? trustFromProvenance(acquired.rights, asString(job.target.url) || null)
+            : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
         // `rights` already get. A job queued before this field existed replays with

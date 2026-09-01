@@ -90,9 +90,16 @@
  * Design law 5: colour is never the only signal. The Delta annotates a result the
  * reader has already met rather than hiding it, and the annotation has to survive
  * a monochrome screen and a reader who cannot distinguish the accent.
+ *
+ * Which only holds if the words can be read. `--text-faint` measures 2.72:1 on the
+ * light ground and 3.78:1 on the dark one, against the 4.5:1 docs/design.md asks of
+ * body text — and it is the one text token `[data-contrast='high']` does not remap,
+ * so the high-contrast setting could not rescue it either. `--text-muted` measures
+ * 5.18:1 and 6.82:1: the quietest legible step this palette has. It is also what
+ * `.meta` already sets, and the declaration stays so this reason stays with the rule.
  */
 .search__known {
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 /*
@@ -104,10 +111,20 @@
   padding: var(--space-3) 0;
 }
 
+/*
+ * A headline that happens to be a button, so it is typeset as a headline. `.btn`
+ * brings the metadata face's uppercase and +0.06em tracking with it, and promoting
+ * only the family left an idea rendering as Fraunces ALL CAPS — docs/design.md
+ * gives uppercase to the mono role, never to the words themselves. The tracking is
+ * the one `base.css` gives h1–h4, so a close match is set like the
+ * `.search__headline` above it rather than like a label.
+ */
 .search__close-link {
   text-align: left;
   padding-left: 0;
   padding-right: 0;
   font-family: var(--font-display);
   font-size: var(--step-0);
+  text-transform: none;
+  letter-spacing: -0.015em;
 }

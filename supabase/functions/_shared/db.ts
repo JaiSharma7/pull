@@ -189,9 +189,31 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         'look up work',
       ) as { id: string }[] | null;
 
+      /*
+       * A canonical job re-scores the row it adopts; anything else leaves it
+       * alone.
+       *
+       * Without this, gating the write on visibility would have made the
+       * poisoning worse rather than better: a private job would create the row
+       * with the column defaults, and the canonical generation that later
+       * adopted it would decline to score it, so every pre-created work would
+       * sit at 0.5 forever with no way to correct it.
+       */
+      const rescore = async (id: string) => {
+        if (qualityScore === null || trustScore === null) return;
+        must(
+          await supabase
+            .from('works')
+            .update({ quality_score: qualityScore, trust_score: trustScore })
+            .eq('id', id),
+          'rescore adopted work',
+        );
+      };
+
       const found = existing?.[0];
       if (found) {
         await fileUnderTopics(found.id, { onlyIfUnclassified: true });
+        await rescore(found.id);
         return { workId: found.id, existing: true };
       }
 
@@ -217,13 +239,14 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           // summary creation. The enum is the rights posture in `content-policy.md`
           // made unbypassable, and inventing a value defeats exactly that.
           rights_status: rightsStatus,
-          // Written only on creation, alongside the topics and for the same
-          // reason: re-scoring on reuse would let one job's draft overwrite
-          // another's ranking for a source that has not changed. Together these
-          // are 0.24 of `get_feed`'s score, which has been the 0.5 default for
-          // every generated work since the pipeline started producing them.
-          quality_score: qualityScore,
-          trust_score: trustScore,
+          // Omitted entirely when null, so the column defaults stand, rather
+          // than sent as null — both are `not null` with a 0.5 default, and an
+          // explicit null would fail the insert rather than fall back.
+          // `template` passes null for every job that is not publishing
+          // canonically; see `upsertWork`'s interface for the attack that makes
+          // that a boundary rather than a preference.
+          ...(qualityScore === null ? {} : { quality_score: qualityScore }),
+          ...(trustScore === null ? {} : { trust_score: trustScore }),
         })
         .select('id')
         .single();
@@ -241,6 +264,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           'adopt concurrently created work',
         ) as { id: string };
         await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
+        await rescore(raced.id);
         return { workId: raced.id, existing: true };
       }
 

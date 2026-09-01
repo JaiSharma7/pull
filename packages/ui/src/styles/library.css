@@ -31,11 +31,20 @@
  * treatment the navigation uses, for the same reason: `aria-pressed` is not a
  * visual signal, and a reader who cannot separate oxblood from ink would
  * otherwise have no way to tell which filter is on.
+ *
+ * The `border-color` reset is load-bearing, not tidying. `.btn[aria-pressed]` in
+ * components.css paints all four edges oxblood, and `.btn--plain`'s transparent is
+ * one class against a class and an attribute, so it loses. Setting only the bottom
+ * edge here therefore shipped a full outlined box — a row of oxblood chips, which
+ * is the exact thing the top of this file says these controls are not. Painting one
+ * edge back afterwards leaves an underline, which is what the navigation does and
+ * what the paragraph above has always claimed.
  */
 .library__filter[aria-pressed='true'] {
   color: var(--accent);
   font-weight: 500;
-  border-bottom: 1px solid var(--accent);
+  border-color: transparent;
+  border-bottom-color: var(--accent);
 }
 
 .library__collection {
@@ -44,8 +53,16 @@
   gap: var(--space-1);
 }
 
+/*
+ * The × deletes a collection, so it is not allowed to be the faintest thing on the
+ * screen. `--text-faint` measures 2.72:1 on the light ground and 3.78:1 on the dark
+ * one, against the 4.5:1 docs/design.md asks of body text, and it is the one text
+ * token `[data-contrast='high']` does not remap. `--text-muted` measures 5.18:1 and
+ * 6.82:1, and is already `.btn`'s own colour — the right answer twice over, because
+ * a destructive control has no business reading quieter than the buttons beside it.
+ */
 .library__remove {
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   padding-left: var(--space-1);
   padding-right: var(--space-1);

@@ -34,6 +34,20 @@ describe('trustFromProvenance', () => {
     expect(trustFromProvenance('public_domain', 'https://gutenberg.org.evil.test/a')).toBe(0.7);
   });
 
+  it('does not extend archive.org trust to the Wayback Machine', () => {
+    /*
+     * `web.archive.org` serves an archived copy of *any* site under an
+     * archive.org hostname, so the suffix rule handed the maximum score to a URL
+     * whose host says nothing about the text behind it. archive.org's own
+     * collections still earn it.
+     */
+    expect(trustFromProvenance('public_domain', 'https://archive.org/details/x')).toBe(0.9);
+    expect(trustFromProvenance('public_domain', 'https://ia801504.us.archive.org/x.txt')).toBe(0.9);
+    expect(
+      trustFromProvenance('public_domain', 'https://web.archive.org/web/2020/https://any.example/'),
+    ).toBe(0.7);
+  });
+
   it('puts anything awaiting a rights decision at the bottom', () => {
     expect(trustFromProvenance('review_required', 'https://www.gutenberg.org/x')).toBe(0.3);
   });
