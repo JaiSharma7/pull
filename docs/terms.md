@@ -178,17 +178,18 @@ you unless you publish it, and it is subject to the same rights rules as everyth
 
 ## 7. Contributing to the code
 
-Contributions to this repository are governed by the [GNU AGPL v3](../LICENSE) and the
-[Contributor Licence Agreement](../CLA.md), not by these Terms. What you send is
-released to everyone under the AGPL, exactly as the rest of the project is.
+Contributions to this repository are governed by the [GNU AGPL v3](../LICENSE), not by
+these Terms. Inbound is outbound: what you send is licensed to everyone on exactly the
+terms the project is already on.
 
-Two documents, because they do different jobs. Every commit carries a `Signed-off-by:`
-line — the [Developer Certificate of
-Origin](https://developercertificate.org/) — which is you stating, per commit, that you
-wrote the change or have the right to submit it; CI checks for it. The **CLA** is signed
-once, and grants us a licence broad enough to relicense your contribution, including
-into a paid service. You keep your copyright either way. `CONTRIBUTING.md` has the
+There is **no contributor licence agreement**. Instead, every commit carries a
+`Signed-off-by:` line — the [Developer Certificate of
+Origin](https://developercertificate.org/) — which is you stating that you wrote the
+change or have the right to submit it. CI checks for it. `CONTRIBUTING.md` has the
 details, including what is expected if you used an AI assistant.
+
+You keep copyright in what you write, and we gain no right to relicense it. Contributed
+code stays AGPL, and cannot be taken proprietary by anyone, us included.
 
 Contributing code does not create an account relationship, and does not make you a user
 of the hosted service.

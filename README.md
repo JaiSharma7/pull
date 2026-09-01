@@ -121,9 +121,19 @@ So the AGPL governs this version and everything after it. In practice that means
 protection arrives with new work rather than covering what is already out, which is the
 normal and unavoidable shape of a relicense.
 
-Contributions are additionally covered by the [Contributor Licence
-Agreement](./CLA.md), which lets the project offer paid services alongside the free
-ones without relicensing anyone's work by surprise. It is short, and it explains itself.
+**You may sell it.** The AGPL is not a non-commercial licence and this project does
+not want one. Host it and charge for it, fold it into something you sell, compete with
+us — all of that is permitted, and the condition above is the only price: the people
+using your instance get its source. What nobody can do is take it _closed_.
+
+**Contributions are welcome, and there is no CLA.** Inbound is outbound — what you send
+is released under the AGPL, the same terms the project is already on, so nothing you
+contribute can be relicensed out from under you, by the maintainers or anyone else.
+Contributions count as open source, because the AGPL is
+[OSI-approved](https://opensource.org/licenses/AGPL-3.0) — a licence forbidding
+commercial use would not be, which is a second reason this project does not use one.
+
+See [Contributing](#contributing) above for where to start.
 
 The hosted service's generated content, community submissions and user libraries are
 separate, are governed by [the Terms](./docs/terms.md), and are not part of this

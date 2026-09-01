@@ -178,11 +178,12 @@ jobs:
   # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
   #
   # `Signed-off-by:` is the contributor asserting they have the right to submit the
-  # code under the project's licence — a provenance record, per commit.
+  # code under the project's licence. It is a provenance record, per commit, and there
+  # is no CLA behind it — inbound is outbound.
   #
-  # It is not the whole story: CLA.md records the licence grant, once, and is signed by
-  # adding a name to CONTRIBUTORS.md. Nothing here checks that, deliberately — see the
-  # note in CLA.md — so a reviewer confirms it on a first contribution.
+  # It does not cover everything, by design: bot commits are skipped (below), anything
+  # reachable from DCO_SINCE predates the policy, and the job only runs on
+  # pull_request. Those are deliberate exemptions, not gaps someone should close.
   dco:
     name: dco
     if: github.event_name == 'pull_request'
