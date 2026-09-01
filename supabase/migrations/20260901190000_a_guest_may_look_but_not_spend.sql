@@ -158,10 +158,21 @@ begin
   -- pre-insert count and both decide they are under the limit.
   perform pg_advisory_xact_lock(pg_catalog.hashtextextended(uid::text, 0));
 
+  -- One cast beyond 171514, and the only line in this body that is not verbatim.
+  --
+  -- `date_trunc('day', now() at time zone 'utc')` is a NAIVE timestamp, and comparing a
+  -- `timestamptz` against one coerces it using the session's TimeZone rather than UTC. On
+  -- a connection set to America/New_York at 02:00 UTC the boundary lands in tomorrow and
+  -- `used` comes back 0 — which silently removes the stagger AND the ceiling, the exact
+  -- law 2 regression the rest of this section exists to prevent. Supabase runs UTC, so it
+  -- has always been latent rather than live; it is fixed here because this round added
+  -- assertions that depend on the count being right, and because a latent law 2 hole in a
+  -- function being rewritten anyway is not worth leaving for the day somebody sets a
+  -- TimeZone on a pooler.
   select count(*) into used
   from public.generation_jobs
   where requester_id = uid
-    and created_at >= date_trunc('day', (now() at time zone 'utc'));
+    and created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc';
 
   if used >= daily_hard_ceiling then
     raise exception 'daily generation ceiling reached (% jobs); try again tomorrow',
@@ -272,9 +283,11 @@ security definer
 set search_path = ''
 as $$
 declare
-  -- Bounded per run, so one nightly transaction can never be arbitrarily large -- and so
-  -- a backlog drains over several nights instead of locking `auth.users` for one long
-  -- one. At 30 days of guests this is far above any real volume.
+  -- Bounded per run: at most this many accounts a night, so a backlog drains over several
+  -- nights instead of locking `auth.users` for one long one. At 30 days of guests it is
+  -- far above any real volume. It bounds the accounts and not the work -- the cascade
+  -- from 5000 guests is however many history events and knowledge states they left --
+  -- which is the right thing to bound, but not the same thing.
   batch constant int := 5000;
 
   stale   uuid[];
@@ -291,7 +304,13 @@ begin
   end if;
 
   -- Four conditions where one would do, because the one is a third-party behaviour this
-  -- repository neither pins nor tests. `is_anonymous` is the fact, and GoTrue is what
+  -- repository neither pins nor tests. Three GoTrue behaviours are load-bearing here and
+  -- are worth naming so a future reader knows what to re-check: that `is_anonymous` is
+  -- set true at anonymous sign-in and flipped false on conversion, that an anonymous user
+  -- gets no `auth.identities` row, and that `auth.sessions.refreshed_at` moves on a token
+  -- refresh while `auth.users.last_sign_in_at` does not. If the second ever changes, this
+  -- predicate spares every guest and the sweep quietly deletes nothing -- safe for
+  -- readers, and the wrong direction for the storage problem the section exists to solve. `is_anonymous` is the fact, and GoTrue is what
   -- flips it to false when a guest converts to a permanent account -- so if that ever
   -- stops happening, or happens after the address is attached rather than with it, a
   -- real reader's account matches a predicate that deletes it. An account with an

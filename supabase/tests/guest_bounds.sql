@@ -101,9 +101,17 @@ begin
           now() - interval '90 days', now() - interval '90 days',
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
+  -- Every column on this row is aged EXCEPT `refreshed_at`, and that is the whole
+  -- design of the fixture. The sweep reads
+  -- `coalesce(refreshed_at at time zone 'utc', updated_at, created_at)`, so a session
+  -- row with a fresh `updated_at` is spared by the second arm and the first is never
+  -- consulted — which means this assertion would pass against a sweep that had
+  -- `refreshed_at` deleted from it outright, and the commit that added it exists
+  -- precisely because `refreshed_at` is the only column that moves on a refresh.
+  -- Isolating it is what makes this a test rather than a decoration.
   insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
   values (extensions.gen_random_uuid(), regular,
-          now() - interval '90 days', now(),
+          now() - interval '90 days', now() - interval '90 days',
           (now() at time zone 'utc') - interval '2 hours');
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
