@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
@@ -69,6 +70,16 @@ function readLocation(): string {
 const DESTINATIONS: { path: string; label: string }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
+  /*
+   * A destination rather than a seventh section, and last of the three.
+   *
+   * The sections are the reader's own material — a feed, a library, a history —
+   * and every one of them is a row keyed to a user, which is why `SECTIONS` is
+   * hidden from a visitor entirely. Appearance is neither: it is stored on the
+   * device, it needs no account, and a visitor must be able to reach it. That is
+   * the same shape Explore and Search already have, so it goes where they are.
+   */
+  { path: '/appearance', label: 'Appearance' },
 ];
 
 /**
@@ -303,9 +314,15 @@ export function App() {
   const searchOpen = isPath(path, '/search');
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
+  const appearanceOpen = isPath(path, '/appearance');
   const topicSlug = routeParam(path, '/topic');
   const routeOpen =
-    sourceId !== null || pullId !== null || searchOpen || exploreOpen || topicSlug !== null;
+    sourceId !== null ||
+    pullId !== null ||
+    searchOpen ||
+    exploreOpen ||
+    appearanceOpen ||
+    topicSlug !== null;
 
   /*
    * The library is readable without an account, and it always was.
@@ -326,9 +343,21 @@ export function App() {
    * ranked against a reader's own history, Review reads their memory, and
    * Library, History and Preferences are all rows keyed to a user. There is
    * nothing to show a visitor on any of them.
+   *
+   * Appearance joins them for a reason of its own rather than by extension. It
+   * is not personal data at all — `lib/appearance.ts` keeps it in `localStorage`
+   * precisely because a visitor has no row to write a theme into — so gating it
+   * would be the sign-in wall protecting nothing, at the moment it costs most: a
+   * stranger who followed a shared link into a bone-white page at two in the
+   * morning, and cannot turn the lights down without signing up first.
    */
   const publicRoute =
-    sourceId !== null || pullId !== null || searchOpen || exploreOpen || topicSlug !== null;
+    sourceId !== null ||
+    pullId !== null ||
+    searchOpen ||
+    exploreOpen ||
+    appearanceOpen ||
+    topicSlug !== null;
   const visitor = !session;
 
   if (!ready)
@@ -526,6 +555,7 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
+            {appearanceOpen && <Appearance />}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh
               // component rather than one that has to remember to reset its

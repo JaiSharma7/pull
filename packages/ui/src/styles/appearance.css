@@ -1,0 +1,182 @@
+/*
+ * The appearance screen.
+ *
+ * Hairline-separated groups in the reading column, and nothing else. This is the
+ * one screen whose subject is the stylesheet itself, so it is the worst possible
+ * place to spend a second accent or a fill: a reader switching to Night is
+ * looking straight at these rules while they change, and anything decorative
+ * here is decoration they have been invited to inspect.
+ *
+ * So the groups are separated the way every other section in this product is —
+ * one hairline above each — and the chosen option is marked by a filled dot and
+ * a heavier label rather than by a tinted chip. `library.css` explains why the
+ * chip is the closest this product comes to looking like the thing law 1 exists
+ * to avoid; a settings screen is exactly where a row of them would appear.
+ *
+ * Every colour, rule and radius is a token. No gradient, no shadow, no second
+ * accent, nothing that scrolls inside itself.
+ */
+
+/*
+ * The count leads, and it is a sentence rather than a tally.
+ *
+ * `.explore__totals` is the register this belongs to — mono, tracked, one step
+ * off the body — but it uppercases, and this line names options: "Night",
+ * "Paper", "High contrast". Uppercasing a proper name is how the catalogue's own
+ * type ramp says a name stops reading as a name, so the transform is the one
+ * thing not carried over.
+ */
+.appearance__summary {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  letter-spacing: 0.02em;
+  color: var(--text-soft);
+  margin: 0 0 var(--space-4);
+}
+
+.appearance__intro {
+  color: var(--text-muted);
+  margin-bottom: var(--space-6);
+}
+
+/*
+ * A fieldset per setting, its border dropped for the single hairline above that
+ * this design system already uses to separate sections — the same treatment as
+ * `.prefs__set`, whose legend style this reuses verbatim.
+ */
+.appearance__set {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 0;
+  padding: var(--space-4) 0 var(--space-3);
+}
+
+/*
+ * Dot, label, note. The note sits under the label rather than beside it because
+ * it is a full sentence and the column is 34rem: on one line the two would
+ * compete for the same measure and the note would win on length.
+ *
+ * `align-items: baseline` puts the dot on the label's baseline rather than in
+ * the middle of its line box, which is where a mark belongs next to type — the
+ * line box is 1.65 tall and centring in it floats the dot visibly high.
+ */
+.appearance__option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+/*
+ * The radio, drawn from tokens rather than by the platform.
+ *
+ * `appearance: none` is not cosmetic here. The reader can now force a theme, so
+ * a native control would be painted from the OS colour scheme while the page is
+ * painted from `data-theme` — choose Paper on a machine set to dark and the
+ * platform draws a dark widget on a bone ground. Drawing it here means the one
+ * accent and the hairline are the same ones everything else on the page uses.
+ *
+ * A hairline ring when it is not chosen; the accent, filled, when it is. That is
+ * the `▪` / `·` marker the preferences screen uses, in the shape a radio has to
+ * be. 50% is a circle rather than a rounded corner, so law 4's ≤4px is not what
+ * it is measured against — a squared-off radio would be a novel control, and a
+ * novel control is a worse outcome than a round one.
+ */
+.appearance__radio {
+  appearance: none;
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    border-color var(--transition);
+}
+
+/*
+ * Hover before checked, deliberately. Both are one class and one pseudo-class,
+ * so the cascade settles the tie on source order — and the other order paints an
+ * already-chosen option's ring in `--text` the moment a cursor crosses it, which
+ * reads as the selection being undone.
+ */
+.appearance__radio:hover {
+  border-color: var(--text);
+}
+
+.appearance__radio:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/*
+ * The focus ring is round too. `base.css` gives every focusable thing
+ * `--radius-sm`, which is right for a button and puts a squared ring around a
+ * circle here. Later in the cascade at equal specificity, so this wins.
+ */
+.appearance__radio:focus-visible {
+  border-radius: 50%;
+}
+
+/*
+ * A drawn control is invisible in forced-colours mode, where the system
+ * overrides `background` and `border-color` and there is no platform widget left
+ * underneath to fall back to. `CanvasText` is a system keyword rather than a
+ * colour this file has chosen, so law 1's single accent is untouched.
+ */
+@media (forced-colors: active) {
+  .appearance__radio {
+    border-color: CanvasText;
+  }
+
+  .appearance__radio:checked {
+    background: CanvasText;
+  }
+}
+
+/*
+ * The label is content, so the body face — the same call `.prefs__topic` makes
+ * for a topic name in a row of controls. The chosen one takes weight rather than
+ * the accent: the dot beside it is already spending the accent, and law 5 wants
+ * the state carried by something other than colour anyway.
+ */
+.appearance__label {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+.appearance__radio:checked + .appearance__label {
+  font-weight: 500;
+}
+
+/*
+ * Under the label, in the second column so it lines up with it rather than with
+ * the dot. `--text-muted` measures 5.18:1 on the light ground; `--text-faint` is
+ * 2.72:1 and is not a colour a sentence a reader has to read may be set in.
+ */
+.appearance__note {
+  grid-column: 2;
+  max-width: none;
+  margin: var(--space-1) 0 0;
+  font-size: var(--step--1);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.appearance__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.appearance__end {
+  margin-top: var(--space-5);
+}

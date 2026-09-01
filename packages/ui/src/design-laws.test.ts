@@ -66,6 +66,52 @@ describe('The Archive design laws', () => {
     }
   });
 
+  /**
+   * The same law, in the units the px check cannot see.
+   *
+   * `border-radius: 50%` is a circle, and the assertion above matches only
+   * `([\d.]+)px` — so every percentage, `rem`, `em` and `9999px`-in-disguise
+   * shorthand walked past it. A pill-shaped button written as `border-radius:
+   * 50%` is exactly the candy rounding law 1 exists to refuse, and it would have
+   * shipped green.
+   *
+   * Found while reviewing a stylesheet that used it legitimately, which is the
+   * useful case to reason from: a radio input is a circle because that is what
+   * distinguishes it from a checkbox, and squaring it to 2px would make the
+   * control lie about what it does. So this is an allow-list rather than a ban,
+   * and — like ORNAMENT_ONLY below — the list is the point. A selector earns a
+   * place on it by being a control whose shape carries meaning, not by being
+   * inconvenient to fix.
+   */
+  const ROUND_BY_NATURE = new Set(['.appearance__radio', '.appearance__radio:focus-visible']);
+
+  it('allows a non-px radius only where the shape is the affordance', () => {
+    const offenders: string[] = [];
+
+    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
+      for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        const radius = body!.match(/border-radius:\s*([^;]+)/)?.[1]?.trim();
+        if (!radius) continue;
+        // The px form is judged by the assertion above; anything else lands here.
+        // A bare `0` is not a unit slip — it is the flattest a corner gets, and
+        // the one value this law could never object to.
+        if (/^0[a-z%]*$/i.test(radius)) continue;
+        if (/^[\d.]+px$/.test(radius) || /^var\(--radius(-sm)?\)$/.test(radius)) continue;
+
+        const sel = selector!.trim();
+        if (sel.split(',').every((one) => ROUND_BY_NATURE.has(one.trim()))) continue;
+        offenders.push(`${f}: ${sel} sets border-radius: ${radius}`);
+      }
+    }
+
+    expect(
+      offenders,
+      `a radius the px check cannot measure is still a radius:\n  ${offenders.join('\n  ')}\n` +
+        `Use --radius / --radius-sm, or add the selector to ROUND_BY_NATURE if its shape ` +
+        `is what tells a reader what the control does.`,
+    ).toEqual([]);
+  });
+
   it('has exactly one accent colour', () => {
     const tokens = read('tokens.css');
     const accents = [...tokens.matchAll(/^\s*--accent(?:-hover)?:\s*([^;]+);/gm)];
