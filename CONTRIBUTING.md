@@ -192,6 +192,13 @@ Only **public domain** or **openly licensed** material may be committed to this
 repository. Never commit copyrighted book text, screenplays, transcripts you do not
 have rights to, or ripped media. See `docs/content-policy.md`.
 
+**Your own writing is a separate case, and is not being accepted yet.** Original
+summaries, commentary and translations are content rather than code, so "inbound is
+outbound" does not settle what happens to them — and no agreement covering them exists.
+Until one does, please open an issue to discuss rather than sending a pull request. A
+public-domain **source entry** is different and is welcome: a pointer to a work whose
+rights have expired needs no grant from anyone, because there is no right left to grant.
+
 The most useful contribution that needs no database is a source for the manifest:
 
 ```bash
