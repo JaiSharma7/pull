@@ -16,47 +16,23 @@ import { supabase } from './supabase.js';
  * one written for this file.
  */
 
-/*
- * The generated `Database` type does not know these functions until `pnpm db:types`
- * has been run against a stack carrying 20260901140000 and 20260901150000.
+/**
+ * Call one of the account RPCs and normalise its error.
  *
- * `packages/db/src/database.types.ts` is generated and must never be hand-edited (CI
- * regenerates it and fails on a diff), so the cast lives here instead, named, in one
- * place, rather than being sprinkled at each call site. Deleting this helper and
- * calling `supabase.rpc` directly is the whole of the follow-up once the types are
- * regenerated — and the typecheck will point at every line that needs it.
+ * A thin wrapper rather than a cast: `supabase.rpc` is fully typed against the
+ * generated `Database`, so the function name and its arguments are checked here. What
+ * this adds is the `rpcError` normalisation every other api module in this app does —
+ * postgrest-js resolves with a plain object, so `throw error` hands callers something
+ * that fails `instanceof Error`.
  */
-type UntypedRpc = (
-  name: string,
-  args?: Record<string, unknown>,
-) => PromiseLike<{
-  data: unknown;
-  error: unknown;
-}>;
-
-async function callRpc<T>(name: string, args?: Record<string, unknown>): Promise<T> {
-  const { data, error } = await (supabase.rpc as unknown as UntypedRpc)(name, args);
+async function callRpc<T>(
+  name: Parameters<typeof supabase.rpc>[0],
+  args?: Parameters<typeof supabase.rpc>[1],
+): Promise<T> {
+  const { data, error } = await supabase.rpc(name, args);
   if (error) throw rpcError(error);
   return data as T;
 }
-
-/**
- * The same gap, for `mfa_recovery_codes`, which the generated types do not carry yet.
- *
- * Narrower than it looks: it returns the query builder untyped, so the one call below
- * loses column checking on a table with three columns. Everything else in this file
- * keeps its types. Like `callRpc`, this disappears the moment `pnpm db:types` runs.
- */
-interface CountQuery {
-  select(
-    columns: string,
-    options: { count: 'exact'; head: true },
-  ): {
-    is(column: string, value: null): PromiseLike<{ count: number | null; error: unknown }>;
-  };
-}
-
-const untypedFrom = supabase.from as unknown as (table: string) => CountQuery;
 
 export interface AccountSession {
   id: string;
@@ -141,7 +117,8 @@ export async function redeemRecoveryCode(code: string): Promise<boolean> {
 }
 
 export async function unusedRecoveryCodeCount(): Promise<number> {
-  const { count, error } = await untypedFrom('mfa_recovery_codes')
+  const { count, error } = await supabase
+    .from('mfa_recovery_codes')
     .select('code_hash', { count: 'exact', head: true })
     .is('used_at', null);
   if (error) throw rpcError(error);
