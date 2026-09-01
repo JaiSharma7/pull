@@ -53,6 +53,12 @@ declare
   -- A token that cannot occur in the public-domain corpus, so a hit on it is
   -- proof of a leak rather than a coincidence.
   secret_token text := 'zqxjvwk';
+  -- A second one, for section 9. It needs more matches than any single word in
+  -- the public-domain corpus has, so it brings its own.
+  bulk_token   text := 'qzzytrb';
+  bulk_work    uuid;
+  bulk_summary uuid;
+  i            int;
   res      jsonb;
   res_again jsonb;
   related  jsonb;
@@ -226,6 +232,44 @@ begin
           ) t),
          30
   returning id into strict buried_pull_id;
+
+  -- FIFTY-ONE SOURCES THAT NOTHING ELSE IN THIS FILE CAN SEE.
+  --
+  -- Section 9 asserts that a caller-supplied limit has a ceiling, and the corpus
+  -- cannot make that assertion fail: the widest single word in the seeded
+  -- library matches twelve pulls, so `search_catalogue(word, 100000, 100000)`
+  -- returns twelve under a ceiling of fifty and twelve under no ceiling at all.
+  -- The check would pass against exactly the code it exists to catch. Fifty-one
+  -- is one more than the ceiling, which is the smallest number that can tell
+  -- them apart.
+  --
+  -- Built to be invisible to every other section, and both halves of that
+  -- matter:
+  --
+  --   * The token occurs nowhere else, so no other query reaches them.
+  --   * They carry NO EMBEDDING, so they cannot enter `alsoClose`, cannot enter
+  --     `related_pulls`, and cannot shift the centroid that `private_pull_id`
+  --     and `buried_pull_id` are positioned exactly on top of. A fixture that
+  --     moved that centroid would break section 3 and section 8 without either
+  --     of them being wrong.
+  for i in 1..51 loop
+    insert into public.works (kind, title, slug, rights_status)
+    values ('essay', 'Bounded source ' || bulk_token || ' ' || i,
+            'bounded-' || bulk_token || '-' || i, 'public_domain')
+    returning id into strict bulk_work;
+
+    insert into public.summaries (work_id, title, status, visibility, published_at)
+    values (bulk_work, 'Bounded source ' || bulk_token || ' ' || i,
+            'published', 'public', now())
+    returning id into strict bulk_summary;
+
+    insert into public.pulls (summary_id, ordinal, headline, body,
+                              estimated_read_seconds)
+    values (bulk_summary, 1,
+            'An idea about ' || bulk_token || ', number ' || i,
+            'A body that also says ' || bulk_token || ', so the lexical half '
+            'matches it and the vector half never sees it.', 30);
+  end loop;
 
   -- ---------------------------------------------------- 1. search finds things
   perform set_config('role', 'authenticated', true);
@@ -466,11 +510,58 @@ begin
       'the vector expansion came back empty, so the check above holds vacuously.';
   end if;
 
+  -- ------------------------- 9. a limit a stranger passes has a ceiling too
+  --
+  -- `greatest(p_limit_ideas, 1)` was a floor and nothing else, and this RPC is
+  -- granted to `anon`. An unauthenticated caller could ask for every matching
+  -- row and be handed it, bodies included -- past the 200-character query cap,
+  -- and past a results page that deliberately has no expansion control.
+  -- 20260901090000 clamps each page to 50.
+  res := public.search_catalogue(bulk_token, 100000, 100000);
+
+  if jsonb_array_length(res -> 'ideas') <> 50
+     or jsonb_array_length(res -> 'sources') <> 50 then
+    raise exception
+      'search_catalogue answered a request for 100000 with % ideas and % '
+      'sources. Both pages are clamped to 50: a limit with no ceiling is how a '
+      'stranger makes the database build the whole library into one document.',
+      jsonb_array_length(res -> 'ideas'), jsonb_array_length(res -> 'sources');
+  end if;
+
+  -- Clamped, and saying so. `counts` is what the interface reads to tell the
+  -- reader how much it is not showing, and `capped` is what makes a short list
+  -- legible as a short list. A clamp that shrank those too would leave the page
+  -- quietly claiming the library is smaller than it is.
+  if (res -> 'counts' ->> 'ideas')::int <> 51
+     or (res -> 'counts' ->> 'capped')::boolean is not true then
+    raise exception
+      'a clamped search stopped reporting the true totals: %. The ceiling '
+      'bounds what is sent, never what is counted.', res -> 'counts';
+  end if;
+
+  -- And the floor is exactly what it was before the ceiling arrived. `greatest`
+  -- ignores nulls, so a null limit still means one row rather than fifty --
+  -- which is what a client sends the moment it passes an absent value through.
+  if jsonb_array_length(public.search_catalogue(bulk_token, 0, 0) -> 'ideas') <> 1
+     or jsonb_array_length(public.search_catalogue(bulk_token, null, null) -> 'ideas') <> 1
+     or jsonb_array_length(public.related_pulls(mill_id, 0)) <> 1 then
+    raise exception
+      'the lower bound on a limit moved when the upper bound was added.';
+  end if;
+
+  -- `related_pulls` and `get_topic` carry the same clamp and are not asserted
+  -- here. Making either ceiling bite needs more than fifty sources whose pulls
+  -- carry EMBEDDINGS -- and those are visible to the vector half of sections 3,
+  -- 6 and 8, which are positioned against a centroid this file computes by
+  -- hand. Buying one assertion by making four others measure a different corpus
+  -- is a bad trade; `get_topic` belongs to catalogue.sql either way.
+
   raise notice 'SEARCH OK: finds seeded ideas, annotates what the reader knows '
                'without hiding it, keeps private material out of both the '
                'lexical and the vector half, is deterministic in results and in '
                'rationale, survives hostile input, never repeats a source, and '
-               'never presents a keyword match as something the words missed';
+               'never presents a keyword match as something the words missed, '
+               'and clamps a caller-supplied page size at both ends';
 end $$;
 
 rollback;
