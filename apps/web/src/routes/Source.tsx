@@ -92,6 +92,14 @@ function BackControl({
 }: {
   userId: string | null;
   onNavigate: (to: string) => void;
+  /**
+   * Report this source's name upward, so the browser tab and the history entry can
+   * say what the page is.
+   *
+   * `App` knows the address and not the title — the title only exists once the
+   * request comes back — so it arrives this way rather than being derived.
+   */
+  onTitle?: (title: string | null) => void;
 }) {
   const signedOut = userId === null;
   return (
@@ -110,6 +118,7 @@ export function Source({
   summaryId,
   userId,
   onNavigate,
+  onTitle,
 }: {
   workId: string;
   /**
@@ -128,6 +137,14 @@ export function Source({
    */
   userId: string | null;
   onNavigate: (to: string) => void;
+  /**
+   * Report this source's name upward, so the browser tab and the history entry can
+   * say what the page is.
+   *
+   * `App` knows the address and not the title — the title only exists once the
+   * request comes back — so it arrives this way rather than being derived.
+   */
+  onTitle?: (title: string | null) => void;
 }) {
   const [detail, setDetail] = useState<SourceDetail | null>(null);
   const [delta, setDelta] = useState<SourceDelta | null>(null);
@@ -179,6 +196,9 @@ export function Source({
           return;
         }
         setDetail(d);
+        // The summary's own title where it has one, the work's otherwise — the same
+        // choice the heading makes, so the tab and the page agree.
+        onTitle?.(d.summaryTitle ?? d.work.title);
       })
       .catch((e: unknown) => {
         if (!live) return;
@@ -206,7 +226,7 @@ export function Source({
     return () => {
       live = false;
     };
-  }, [workId, summaryId]);
+  }, [onTitle, workId, summaryId]);
 
   /*
    * Scroll to the anchored Pull once the list exists.
@@ -365,7 +385,9 @@ export function Source({
   if (!detail) {
     return (
       <section className="measure">
-        <p className="meta">Loading…</p>
+        <p className="meta" role="status">
+          Loading…
+        </p>
       </section>
     );
   }

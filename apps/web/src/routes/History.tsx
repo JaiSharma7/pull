@@ -97,7 +97,7 @@ export function History({
         <h1>Could not load your history.</h1>
         <p>
           {offline
-            ? 'You appear to be offline. Saved Pulls are still readable in your Library.'
+            ? 'You appear to be offline. The Pulls already loaded in your feed are still readable.'
             : 'Something went wrong reaching the library. Nothing has been lost.'}
         </p>
         <p className="meta">{error}</p>
@@ -117,7 +117,12 @@ export function History({
     );
   }
 
-  if (!entries) return <p className="meta">Loading…</p>;
+  if (!entries)
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
 
   if (entries.length === 0) {
     return (

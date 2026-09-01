@@ -4,6 +4,7 @@ import {
   type HighlightField,
   shapeHighlights,
 } from './highlights.js';
+import { pageAll } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -16,16 +17,38 @@ import { supabase } from './supabase.js';
 
 export async function fetchHighlights(userId: string, pullIds: string[]): Promise<Highlight[]> {
   if (pullIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from('highlights')
-    .select('id, pull_id, field, start_offset, end_offset, text')
-    .eq('user_id', userId)
-    .in('pull_id', pullIds)
-    .order('start_offset', { ascending: true });
-  if (error) throw rpcError(error);
+  /*
+   * Paged: `max_rows` is 100, and a source page's worth of pull ids can easily carry
+   * more highlights than that between them. Unpaged, a heavily-marked source rendered
+   * with some of its own highlights missing and nothing said so.
+   *
+   * Ordered by `id` rather than `start_offset` for the walk. The order has to
+   * partition the set, and `start_offset` is neither unique nor monotonic across
+   * pulls — two highlights at offset 0 on different pulls make the page boundary
+   * ambiguous, which repeats or drops rows. `shapeHighlights` sorts what it is given,
+   * so the display order is unaffected.
+   */
+  const data = await pageAll<{
+    id: string;
+    pull_id: string;
+    field: string;
+    start_offset: number;
+    end_offset: number;
+    text: string;
+  }>((from, to) =>
+    supabase
+      .from('highlights')
+      .select('id, pull_id, field, start_offset, end_offset, text')
+      .eq('user_id', userId)
+      .in('pull_id', pullIds)
+      .order('id', { ascending: true })
+      .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
 
   return shapeHighlights(
-    (data ?? []).map((r) => ({
+    data.map((r) => ({
       id: r.id,
       pullId: r.pull_id,
       field: r.field,
@@ -92,19 +115,51 @@ export async function countHighlights(userId: string): Promise<number> {
  * quiet incompleteness that makes an export untrustworthy.
  */
 export async function fetchExportData(userId: string): Promise<ExportSource[]> {
-  const { data: hi, error: hiError } = await supabase
-    .from('highlights')
-    .select('text, start_offset, pull_id, pulls(headline, summaries(works(id, title)))')
-    .eq('user_id', userId)
-    .order('start_offset', { ascending: true });
-  if (hiError) throw rpcError(hiError);
+  /*
+   * Both halves paged, and this is the query where it mattered most.
+   *
+   * `max_rows` is 100. Unpaged, a reader with more than a hundred highlights got a
+   * file containing a hundred of them, with no error and nothing in the document
+   * saying it was partial — so the export looked complete and was not, and they would
+   * only find out when they needed the part that was missing. This function's own
+   * docstring already argued that "an export that silently dropped those would be the
+   * kind of quiet incompleteness that makes an export untrustworthy", about a
+   * different omission, while doing exactly that with the row limit.
+   *
+   * Ordered by `id`: the walk needs a key that partitions the set, and `start_offset`
+   * is neither unique nor monotonic across pulls. `groupExport` builds its own order
+   * from the shape, so nothing downstream depends on the order rows arrive in.
+   */
+  type ExportRow = {
+    pull_id: string | null;
+    pulls: {
+      headline: string;
+      summaries: { works: { id: string; title: string } | null } | null;
+    } | null;
+  };
 
-  const { data: saves, error: saveError } = await supabase
-    .from('saved_items')
-    .select('note, pull_id, pulls(headline, summaries(works(id, title)))')
-    .eq('user_id', userId)
-    .not('note', 'is', null);
-  if (saveError) throw rpcError(saveError);
+  const hi = await pageAll<ExportRow & { text: string; start_offset: number }>((from, to) =>
+    supabase
+      .from('highlights')
+      .select('text, start_offset, pull_id, pulls(headline, summaries(works(id, title)))')
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
+
+  const saves = await pageAll<ExportRow & { note: string | null }>((from, to) =>
+    supabase
+      .from('saved_items')
+      .select('note, pull_id, pulls(headline, summaries(works(id, title)))')
+      .eq('user_id', userId)
+      .not('note', 'is', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
 
   type Row = {
     pull_id: string | null;

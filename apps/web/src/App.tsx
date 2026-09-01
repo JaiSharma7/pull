@@ -1,13 +1,41 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { Account } from './routes/Account.js';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
 import { Explore } from './routes/Explore.js';
 import { History } from './routes/History.js';
-import { Legal, legalDocFor } from './routes/Legal.js';
+
+/*
+ * The two screens that are worth splitting out, and only those.
+ *
+ * `Legal` inlines both `docs/privacy.md` and `docs/terms.md` through `?raw`, so every
+ * visitor was downloading the full text of two policies in order to read a Pull.
+ * `Account` is signed-in only and reached deliberately, so a visitor should not carry
+ * it either.
+ *
+ * The sections — Feed, Library, Review, History, Preferences — are deliberately NOT
+ * split. They are tab state inside a shell that keeps the feed mounted on purpose (see
+ * the long comment at the render site), and lazily mounting things inside that
+ * arrangement trades a real correctness argument for a smaller first byte. These two
+ * are route-gated rather than tab-gated, which is what makes them safe to defer.
+ */
+const Legal = lazy(() => import('./routes/Legal.js').then((m) => ({ default: m.Legal })));
+const Account = lazy(() => import('./routes/Account.js').then((m) => ({ default: m.Account })));
+
+/*
+ * Shown while a split chunk arrives. Matches the shell's own loading state rather than
+ * introducing a spinner: on a fast connection it is never seen, and on a slow one it
+ * should look like the rest of the app waiting rather than like something else.
+ */
+function RouteFallback() {
+  return (
+    <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
+      Loading…
+    </p>
+  );
+}
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
@@ -23,8 +51,10 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
+import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
+import { isKnownPath, titleFor } from './lib/title.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
@@ -124,6 +154,21 @@ export function App() {
   const [tab, setTab] = useState<Tab>('feed');
   const [stats, setStats] = useState<FeedStats | null>(null);
   /*
+   * The name of whatever is currently open, reported upward by the screen that loads it.
+   *
+   * `App` knows the *address* of a source but not its title, and the title is the half
+   * a person recognises in a tab strip or a history list. There is nothing to derive it
+   * from until a request comes back, so it has to be state.
+   *
+   * STORED WITH THE PATH IT DESCRIBES, which is the whole trick. The obvious version —
+   * a bare string plus an effect that clears it when `path` changes — is a synchronous
+   * setState inside an effect, which the lint rule rejects for the usual reason: it
+   * renders once with the stale title and again with null. Pairing the title with its
+   * address makes staleness a question the render can answer, so there is nothing to
+   * reset and no second render. A name from the previous page simply stops matching.
+   */
+  const [routeTitle, setRouteTitle] = useState<{ path: string; title: string } | null>(null);
+  /*
    * Bumped when a reader saves their preferences, so the feed refetches under the
    * new weights. The feed is kept mounted (see below), so nothing else would make
    * it reconsider — and a preferences screen the feed ignores is precisely the
@@ -146,6 +191,25 @@ export function App() {
   useEffect(() => {
     applyFocus(focus, document.documentElement);
   }, [focus]);
+
+  /*
+   * Keep the document title in step with what is showing.
+   *
+   * Set in an effect rather than during render because it is a DOM write, and React
+   * may render a component more than once for one commit. `titleFor` is pure and
+   * tested; this is only the part that touches the document.
+   */
+  useEffect(() => {
+    document.title = titleFor({
+      pathname: window.location.pathname,
+      tab,
+      // Only if it describes the address currently showing. Otherwise the tab keeps
+      // saying "On Liberty" while the next source loads, which is worse than saying
+      // "Source": confidently wrong for as long as the request takes.
+      documentTitle: routeTitle?.path === path ? routeTitle.title : null,
+      query: queryParam(path, 'q'),
+    });
+  }, [path, tab, routeTitle]);
 
   /*
    * Escape leaves fullscreen without asking the app, so the app has to listen.
@@ -281,6 +345,21 @@ export function App() {
   }
 
   /*
+   * Stable across renders, so `Source`'s load effect can depend on it honestly.
+   *
+   * An inline arrow would be a new function every render, and the effect that calls it
+   * would either re-run every render or lie in its dependency array — the lint rule
+   * that noticed is right on both counts.
+   *
+   * The address is read at call time rather than captured, so the title is filed
+   * against the page the answer actually arrived for, not the one that was showing
+   * when the callback was made.
+   */
+  const reportRouteTitle = useCallback((title: string | null) => {
+    setRouteTitle(title === null ? null : { path: readLocation(), title });
+  }, []);
+
+  /*
    * Navigate without leaving a back-stack entry.
    *
    * `/pull/:id` only ever resolves to a source, so pushing it would make Back return
@@ -318,7 +397,12 @@ export function App() {
    * session is not a policy anyone can check before handing over an address.
    */
   const legal = legalDocFor(path);
-  if (legal) return <Legal doc={legal} onNavigate={navigate} />;
+  if (legal)
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <Legal doc={legal} onNavigate={navigate} />
+      </Suspense>
+    );
 
   const sourceId = routeParam(path, '/source');
   // `?s=<summaryId>`, set by the /pull/:id redirect so the anchor resolves.
@@ -353,6 +437,20 @@ export function App() {
    */
   const accountOpen = isPath(path, '/account');
   const topicSlug = routeParam(path, '/topic');
+  /*
+   * A path that matches nothing.
+   *
+   * `vercel.json` rewrites every path to the bundle and the service worker falls back
+   * to it, which is what makes `/privacy` resolve on a cold load — and also what made
+   * `/nonsense` return 200 with the app in it. Before this, a visitor on a typo'd URL
+   * got the sign-in form and a signed-in reader got the feed, both under an address
+   * that described neither.
+   *
+   * Asked of `lib/title.ts` rather than rebuilt here, so the list of what has an
+   * address exists once. Two copies of it would drift, and the failure would be a page
+   * whose title says "Not found" above content that says otherwise.
+   */
+  const notFound = !isKnownPath(window.location.pathname);
   const routeOpen =
     sourceId !== null ||
     pullId !== null ||
@@ -400,10 +498,35 @@ export function App() {
 
   if (!ready)
     return (
-      <p className="meta" style={{ padding: 'var(--space-6)' }}>
+      <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
         Loading…
       </p>
     );
+  /*
+   * Ahead of the auth gate, deliberately. A visitor who mistypes a URL was not asking
+   * to sign in, and answering a wrong address with a sign-up wall is the least useful
+   * thing the app could say — it implies the page exists and is being withheld.
+   */
+  if (notFound)
+    return (
+      <main className="stack measure" style={{ padding: 'var(--space-6)' }}>
+        <p className="meta">404</p>
+        <h1 className="display">There is nothing at this address.</h1>
+        <p>
+          The link may be old, or mistyped. Everything that has an address of its own is reachable
+          from the feed.
+        </p>
+        <div className="stack">
+          <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
+            Go to the feed
+          </button>
+          <button type="button" className="btn" onClick={() => navigate('/explore')}>
+            Browse everything
+          </button>
+        </div>
+      </main>
+    );
+
   if (!session && !publicRoute) return <Auth onNavigate={navigate} next={next} />;
 
   const shell = (
@@ -582,6 +705,7 @@ export function App() {
                 summaryId={summaryParam ?? undefined}
                 userId={session?.user.id ?? null}
                 onNavigate={navigate}
+                onTitle={reportRouteTitle}
               />
             )}
             {pullId !== null && (
@@ -595,7 +719,9 @@ export function App() {
             {exploreOpen && <Explore onNavigate={navigate} />}
             {appearanceOpen && <Appearance />}
             {accountOpen && session && (
-              <Account userId={session.user.id} email={session.user.email ?? null} />
+              <Suspense fallback={<RouteFallback />}>
+                <Account userId={session.user.id} email={session.user.email ?? null} />
+              </Suspense>
             )}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh

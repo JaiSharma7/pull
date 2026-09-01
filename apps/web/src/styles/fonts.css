@@ -1,6 +1,74 @@
 /*
- * Fraunces, Inter and JetBrains Mono — all OFL, which an open-source project
- * requires. Loaded with display=swap so text is readable before the webfont
- * arrives; tokens.css names a real fallback stack for each.
+ * Fraunces, Inter and JetBrains Mono — all OFL, which an open-source project requires.
+ *
+ * SELF-HOSTED, and that is a privacy decision before it is a performance one. These
+ * used to be one `@import` from `fonts.googleapis.com`, which meant every visitor's IP
+ * address and User-Agent reached Google on first paint, before any consent and on the
+ * legal page as much as anywhere else. `docs/privacy.md` said there were "three, and
+ * only three" processors and named Supabase, Vercel and Google-as-model-provider; the
+ * font CDN was a fourth nobody had counted, sitting directly against the same
+ * document's "no cross-site tracking of any kind". Serving the files from our own
+ * origin removes the request rather than disclosing it, which is the better fix.
+ *
+ * It also repairs two things that were quietly broken:
+ *
+ *   * OFFLINE. `vite.config.ts` precaches `woff2`, and there were none to precache —
+ *     the files lived on another origin — so an offline reader silently fell back to
+ *     system fonts. Law 3 promises offline reading, and "offline but wearing a
+ *     different typeface" is a shabbier promise than the one made.
+ *   * THE WATERFALL. An `@import` inside a stylesheet is the slowest way to load a
+ *     font: HTML, then our CSS, then Google's CSS, then the file, four serial round
+ *     trips to two origins, with no `preconnect` anywhere in `index.html`.
+ *
+ * WHY @font-face BY HAND rather than importing the packages' own CSS. The variable
+ * packages ship every subset — Cyrillic, Greek, Vietnamese — about 5MB of woff2 in
+ * total. A browser downloads only what `unicode-range` selects, so that would be
+ * harmless at runtime and quite bad in the service worker, which precaches by glob and
+ * would pull all of it into every install. Naming the three latin files keeps the
+ * precache at ~136KB.
+ *
+ * The families are 'Fraunces Variable' and 'Inter Variable' because that is what the
+ * fontsource variable packages call them; `tokens.css` lists those first and keeps the
+ * non-variable names behind them, so a machine with the real font installed still uses
+ * it.
  */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Variable on the optical-size axis, which is why this face is here rather than a
+   static weight: Fraunces at display sizes wants different letterforms from Fraunces
+   in a heading, and `opsz` is what gives that for one file instead of several. */
+@font-face {
+  font-family: 'Fraunces Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/fraunces/files/fraunces-latin-opsz-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    u+0000-00ff, u+0131, u+0152-0153, u+02bb-02bc, u+02c6, u+02da, u+02dc, u+0304, u+0308, u+0329,
+    u+2000-206f, u+2074, u+20ac, u+2122, u+2191, u+2193, u+2212, u+2215, u+feff, u+fffd;
+}
+
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    u+0000-00ff, u+0131, u+0152-0153, u+02bb-02bc, u+02c6, u+02da, u+02dc, u+0304, u+0308, u+0329,
+    u+2000-206f, u+2074, u+20ac, u+2122, u+2191, u+2193, u+2212, u+2215, u+feff, u+fffd;
+}
+
+/* Static, not variable: the mono face is used at one weight in one size, so a
+   variable file would be paying for axes nothing moves. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+  unicode-range:
+    u+0000-00ff, u+0131, u+0152-0153, u+02bb-02bc, u+02c6, u+02da, u+02dc, u+0304, u+0308, u+0329,
+    u+2000-206f, u+2074, u+20ac, u+2122, u+2191, u+2193, u+2212, u+2215, u+feff, u+fffd;
+}

@@ -81,7 +81,12 @@ export function Review() {
     );
   }
 
-  if (!due) return <p className="meta">Loading…</p>;
+  if (!due)
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
 
   if (due.length === 0) {
     return (
@@ -129,7 +134,29 @@ export function Review() {
       }
     }
     setRevealed(false);
-    setDue((d) => (d ?? []).slice(1));
+    /*
+     * When the page empties, ask for the next one instead of declaring victory.
+     *
+     * `fetchDueReviews` takes `limit = 20` (api.ts). Grading the twentieth card left
+     * `due` empty, and the empty state below says "Nothing is fading. Everything you
+     * have saved is still solid" — to a reader who may have fifty more due. That is
+     * the exact lie this file's header comment was written about, arriving from the
+     * other direction: the original bug rendered it on a failed request, and this one
+     * rendered it on a successful but partial one.
+     *
+     * Bumping `reloads` reuses the effect rather than adding a second fetch path, so
+     * the cancellation and the offline handling stay in one place. The refetch is
+     * cheap and only happens once per twenty cards; if it comes back empty, the empty
+     * state is finally telling the truth.
+     *
+     * Computed from `due` and applied outside the updater, not inside it. A functional
+     * `setDue` may be invoked more than once for one update — StrictMode does it
+     * deliberately — so a `setReloads` in there would fire twice and fetch twice. An
+     * updater has to be pure; this is the reason why.
+     */
+    const rest = (due ?? []).slice(1);
+    setDue(rest);
+    if (rest.length === 0) setReloads((n) => n + 1);
   }
 
   return (
