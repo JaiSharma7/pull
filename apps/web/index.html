@@ -9,6 +9,46 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- iOS ignores the manifest's icons when a page is added to the home screen. -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!--
+      The reader's display settings, before the first paint.
+
+      This is duplicated logic and it is deliberate. `lib/appearance.ts` owns
+      these keys and attributes, but the module arrives with the bundle, and by
+      the time a module has parsed the browser has already painted — so a reader
+      who chose Night would get a bone-white flash on every single load, which is
+      the one moment that setting most obviously exists to prevent. There is no
+      ordering trick that beats "already in the document": the script has to be
+      inline, synchronous, and above the app.
+
+      Kept to exactly what that requires: three reads and three attributes, no
+      validation. An unrecognised stored value writes an attribute matching no
+      rule, which renders as the default — the same outcome the module's
+      `narrow` produces — and the module corrects the attribute a moment later
+      anyway.
+
+      `appearance.test.ts` pins the keys and attribute names against this file,
+      so the copy cannot drift silently.
+    -->
+    <script>
+      try {
+        var d = document.documentElement;
+        var s = [
+          ['wap:theme', 'data-theme', 'system'],
+          ['wap:contrast', 'data-contrast', 'normal'],
+          ['wap:text', 'data-text', 'normal'],
+        ];
+        for (var i = 0; i < s.length; i++) {
+          var v = localStorage.getItem(s[i][0]);
+          // Removed rather than set to the base value: `tokens.css` reads the
+          // system palette through `:root:not([data-theme='light'])`, which a
+          // literal `data-theme="system"` would not match.
+          if (v && v !== s[i][2]) d.setAttribute(s[i][1], v);
+        }
+      } catch (e) {
+        /* A browser blocking site data throws here. It reads in the default. */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
