@@ -64,10 +64,10 @@ pnpm db:reset        # apply migrations, including the seeded demo corpus
 pnpm dev             # http://127.0.0.1:5173
 ```
 
-Everything committed here is public domain, so a fresh clone runs with **no API keys**.
-What `db:reset` gives you is **6 works and 21 Pulls** — enough to watch every mechanic
-work, including a deliberately planted near-duplicate so the Delta visibly fires. It is
-not enough to feel like a product, and it is not meant to be.
+The demo corpus is drawn only from public-domain sources, so a fresh clone runs with
+**no provider API keys**. What `db:reset` gives you is **6 works and 21 Pulls** — enough
+to watch every mechanic work, including a deliberately planted near-duplicate so the
+Delta visibly fires. It is not enough to feel like a product, and it is not meant to be.
 
 The 101 sources in `scripts/corpus/public-domain.json` are titles and URLs; turning them
 into content runs the generation pipeline, which needs a model API key and an operator.
@@ -91,6 +91,10 @@ Running your own instance makes you the operator of your own service; those docu
 describe ours, not yours.
 
 ## Contributing
+
+> **Contribution status:** this repository is currently a read-only public preview.
+> External pull requests and issues are temporarily closed while the project stabilises;
+> the contribution channels described below will reopen later.
 
 Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) — setup, the contribution policy
 (DCO sign-off, and what is expected if you used an AI assistant), and how a change gets
