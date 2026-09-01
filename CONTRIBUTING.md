@@ -129,20 +129,18 @@ That is the DCO working rather than obstructing. Carrying someone else's change 
 your own pull request is precisely the case the certificate is written for — you are
 stating you have the right to submit it, which is a claim only you can make.
 
-### Sign the CLA (once)
+**There is no CLA.** Inbound is outbound: what you send is licensed to everyone on
+exactly the terms the project is already on, and nothing gives the maintainers rights
+over your work that you do not also keep.
 
-Alongside the per-commit DCO, first-time contributors sign the [Contributor Licence
-Agreement](./CLA.md) by adding their name to `CONTRIBUTORS.md` in the same pull request.
+This is deliberate. A CLA would let the project fold your code into something closed
+later, and asking for that is a real cost to you — so the project does not ask. The
+consequence it accepts in return is that contributed code stays AGPL, and cannot be
+taken proprietary by anyone, maintainers included.
 
-The two are not redundant. The DCO records **provenance**, per commit: you had the right
-to send this. The CLA records a **licence grant**, once: the project may relicense your
-contribution, including into a paid service offered alongside the free ones. You keep
-your copyright, and you keep every right to your own work.
-
-It is a short document and it states its trade-offs plainly, including what it lets the
-project do that the AGPL alone would not. Read it before you sign it. If you
-disagree with it, say so in the issue rather than the pull request — the terms are a
-reasonable thing to argue about, and that argument does not belong in a code review.
+Add yourself to [`CONTRIBUTORS.md`](./CONTRIBUTORS.md) in your first pull request if you
+would like to be credited. It is optional and it is not a signature — it is a list of
+people who built this, which is worth having on its own.
 
 ### If you used an AI assistant, say so
 

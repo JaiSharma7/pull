@@ -178,11 +178,9 @@ jobs:
   # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
   #
   # `Signed-off-by:` is the contributor asserting they have the right to submit the
-  # code under the project's licence — a provenance record, per commit.
-  #
-  # It is not the whole story: CLA.md records the licence grant, once, and is signed by
-  # adding a name to CONTRIBUTORS.md. Nothing here checks that, deliberately — see the
-  # note in CLA.md — so a reviewer confirms it on a first contribution.
+  # code under the project's licence. It is a provenance record, per commit, and it is
+  # the only thing this project asks: there is no CLA, so inbound is outbound and this
+  # check is the whole of the contribution paperwork.
   dco:
     name: dco
     if: github.event_name == 'pull_request'

@@ -121,9 +121,12 @@ So the AGPL governs this version and everything after it. In practice that means
 protection arrives with new work rather than covering what is already out, which is the
 normal and unavoidable shape of a relicense.
 
-Contributions are additionally covered by the [Contributor Licence
-Agreement](./CLA.md), which lets the project offer paid services alongside the free
-ones without relicensing anyone's work by surprise. It is short, and it explains itself.
+**Contributions are welcome, and there is no CLA.** Inbound is outbound — what you
+send is released under the AGPL, the same terms the project is already on. Nobody,
+maintainers included, can take contributed code proprietary. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) and
+[`docs/contributing-map.md`](./docs/contributing-map.md) for work that is genuinely
+self-contained.
 
 The hosted service's generated content, community submissions and user libraries are
 separate, are governed by [the Terms](./docs/terms.md), and are not part of this
