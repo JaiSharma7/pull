@@ -42,8 +42,8 @@ Most valuable, because they are where this design concentrates its risk:
 - Reports from a scanner with no reproduction. A tool's opinion about a header is not
   a vulnerability; show what an attacker gets.
 - Missing hardening headers, absent rate limits on unauthenticated reads, or the
-  contents of the client bundle. The bundle is meant to be readable — the code is MIT
-  and the publishable key is designed to ship in it.
+  contents of the client bundle. The bundle is meant to be readable — the code is
+  AGPL-3.0 and the publishable key is designed to ship in it.
 - Denial of service by volume against the hosted instance. Please do not.
 - Social engineering, physical access, or anything involving a third party's account.
 
