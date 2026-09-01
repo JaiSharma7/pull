@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEmailRateLimited } from './auth-errors.js';
+import { isAnonymousSignInDisabled, isEmailRateLimited } from './auth-errors.js';
 
 describe('isEmailRateLimited', () => {
   it('recognises the error code, which is the stable contract', () => {
@@ -36,6 +36,36 @@ describe('isEmailRateLimited', () => {
       'Signups not allowed for otp',
     ]) {
       expect(isEmailRateLimited({ message }), message).toBe(false);
+    }
+  });
+});
+
+describe('isAnonymousSignInDisabled', () => {
+  it('recognises the error code, which is the stable contract', () => {
+    expect(
+      isAnonymousSignInDisabled({ code: 'anonymous_provider_disabled', message: 'anything' }),
+    ).toBe(true);
+  });
+
+  it('falls back to the wording GoTrue actually sends', () => {
+    // Both shapes seen in the wild; the switch has been renamed once already.
+    expect(isAnonymousSignInDisabled({ message: 'Anonymous sign-ins are disabled' })).toBe(true);
+    expect(isAnonymousSignInDisabled({ message: 'anonymous provider is disabled' })).toBe(true);
+  });
+
+  it('leaves every other failure alone', () => {
+    /*
+     * The guard against over-matching. Telling a reader to go and turn on a project
+     * setting when their code has simply expired sends them somewhere they cannot fix
+     * anything -- and on a hosted project, somewhere they may not even have access to.
+     */
+    for (const message of [
+      'Token has expired or is invalid',
+      'Signups not allowed for otp',
+      'email rate limit exceeded',
+      'Database error creating anonymous user',
+    ]) {
+      expect(isAnonymousSignInDisabled({ message }), message).toBe(false);
     }
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
-import { isEmailRateLimited } from '../lib/auth-errors.js';
+import { isAnonymousSignInDisabled, isEmailRateLimited } from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { rememberDestination } from '../lib/pending-destination.js';
@@ -151,6 +151,14 @@ export function Auth({
    * about to be replaced.
    */
   const [busy, setBusy] = useState(urlToken !== null);
+  /*
+   * Which action `busy` is currently for.
+   *
+   * `busy` disables every control on the screen, which is right — one of these at a
+   * time — but it cannot say which one is working, and "Sending…" on the email button
+   * while a guest session is being minted describes something that is not happening.
+   */
+  const [openingGuest, setOpeningGuest] = useState(false);
   /** Whatever the reader pasted, before it has been worked out. See `usePastedLink`. */
   const [pasted, setPasted] = useState('');
   const [showPaste, setShowPaste] = useState(false);
@@ -394,6 +402,54 @@ export function Auth({
     }
   }
 
+  /*
+   * The way in that asks for nothing.
+   *
+   * Everything this product does for a reader is a row keyed to a user — the onboarding
+   * picker, the feed, the Delta, the tally in the rail. There is no version of any of
+   * it to show somebody who has not signed in, so the screen in front of a stranger was
+   * asking them to hand over an address for something they had not been shown. A guest
+   * session is a real `auth.users` row, so all of it simply works, and nothing else in
+   * the app needs to know.
+   *
+   * What it is not is an account. The session lives in this browser's storage and
+   * nothing can restore it — there is no address to send a code to — so the copy beside
+   * this button says that rather than implying otherwise, and `App` marks the shell
+   * "Guest" for as long as it lasts.
+   *
+   * Guests are bounded in the database rather than here: no generation (law 2 — an
+   * anonymous session is free to recreate, so a per-requester quota bounds nothing), no
+   * authored summaries, no reports. See 20260901190000. A bound that lived in this
+   * component would be a bound on the button, not on the session.
+   */
+  async function continueAsGuest() {
+    setBusy(true);
+    setOpeningGuest(true);
+    setError(null);
+    try {
+      // Same try/finally reasoning as `requestCode`: supabase-js rethrows anything that
+      // is not an AuthError, and a bare await would leave the button disabled for ever.
+      const { error } = await supabase.auth.signInAnonymously();
+      if (error) {
+        setError(
+          isAnonymousSignInDisabled(error)
+            ? 'Guest sessions are switched off for this deployment. Turn on anonymous ' +
+                'sign-ins under Authentication → Sign In / Providers, or use the email ' +
+                'route above — it works either way.'
+            : error.message,
+        );
+      }
+      // On success App.tsx's auth listener swaps this screen out; nothing to do here.
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
+      );
+    } finally {
+      setBusy(false);
+      setOpeningGuest(false);
+    }
+  }
+
   function startOver() {
     setSent(false);
     setCode('');
@@ -530,6 +586,37 @@ export function Auth({
             </button>
           </form>
         )}
+
+        {/*
+         * Directly under the primary action, because it is the alternative to it.
+         *
+         * Not down beside the paste hatch: that is an escape from a sign-in that went
+         * wrong, and this is a different offer entirely — the one for someone who has
+         * not decided to sign in at all. Put below the fold of secondary controls it
+         * would be found by the people who were going to sign in anyway.
+         *
+         * On both steps, for the same reason the paste hatch is: `sent` becomes true
+         * only after a send succeeds, so anything conditioned on it disappears exactly
+         * when the email route is the thing that failed.
+         *
+         * The sentence under it is not decoration. A guest session cannot be restored —
+         * there is no address to send a code to — and a product that let someone spend
+         * an evening stashing ideas without saying so would be lying by omission.
+         */}
+        <p className="titlepage__alts">
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => void continueAsGuest()}
+            disabled={busy}
+          >
+            {openingGuest ? 'Opening…' : 'Look around as a guest'}
+          </button>
+        </p>
+        <p className="titlepage__promise">
+          No email needed. A guest session lives in this browser only — it is not an account,
+          nothing is kept once it ends, and signing in later starts fresh.
+        </p>
 
         {/*
          * Reachable from BOTH steps, which is the whole point and was the bug.

@@ -52,6 +52,7 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
+import { isGuest } from './lib/guest.js';
 import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
@@ -551,6 +552,24 @@ export function App() {
     appearanceOpen ||
     topicSlug !== null;
   const visitor = !session;
+  /*
+   * A guest is signed in, and is not a reader with an account.
+   *
+   * The distinction is deliberately narrow. Everything keyed to a user works for a
+   * guest — the sections, the feed, the onboarding picker, the tally — because a guest
+   * IS a user, so `visitor` is the flag almost every line below wants. The only screen
+   * that would be a dead end is Account: it lists sessions, enrols a second factor and
+   * deletes the account, and every one of those either needs an address or needs a
+   * recent sign-in that a guest can never perform. So the destination is withheld and
+   * the route says why, rather than rendering controls that cannot complete.
+   */
+  const guest = isGuest(session);
+  /*
+   * Computed once and used by both navigations. They were filtering the same array with
+   * the same predicate written out twice, which is exactly how the masthead and the
+   * rail come to disagree about what a reader may reach.
+   */
+  const destinations = DESTINATIONS.filter((d) => !d.signedIn || (!visitor && !guest));
 
   if (!ready)
     return (
@@ -638,7 +657,7 @@ export function App() {
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-          {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
+          {destinations.map((d) => (
             <button
               key={d.path}
               type="button"
@@ -698,6 +717,32 @@ export function App() {
           >
             Sign in to keep these
           </button>
+        ) : guest ? (
+          /*
+            A marker and a door, in that order.
+
+            The marker is not decoration: a guest session looks exactly like an account
+            from the inside — same sections, same feed, same tally — and the one thing
+            that is different about it is the one thing nothing on screen would
+            otherwise say. It is set in the muted meta style rather than the accent,
+            because it is a statement of fact and not a warning.
+
+            "Sign in", not "Sign out", because that is what the button is for. It does
+            end the guest session — there is nothing else it could do, a guest cannot
+            hold two sessions at once — and the title says so, since work done as a
+            guest does not come with them.
+          */
+          <>
+            <span className="meta">Guest</span>
+            <button
+              type="button"
+              className="btn btn--plain"
+              title="Ends this guest session and returns to the sign-in screen. Anything you did as a guest stays with the guest session."
+              onClick={() => void supabase.auth.signOut()}
+            >
+              Sign in
+            </button>
+          </>
         ) : (
           <button
             type="button"
@@ -725,7 +770,7 @@ export function App() {
                   {s.label}
                 </button>
               ))}
-            {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
+            {destinations.map((d) => (
               <button
                 key={d.path}
                 type="button"
@@ -792,10 +837,42 @@ export function App() {
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
             {appearanceOpen && <Appearance />}
-            {accountOpen && session && (
+            {accountOpen && session && !guest && (
               <Suspense fallback={<RouteFallback />}>
                 <Account userId={session.user.id} email={session.user.email ?? null} />
               </Suspense>
+            )}
+            {/*
+              An answer rather than an empty column.
+
+              `/account` is withheld from a guest's navigation, and a URL is still a URL:
+              somebody arrives here from a bookmark or a shared address. Every control on
+              the real screen acts on an address — the sessions list, the second factor,
+              deletion, which needs a sign-in from the last ten minutes and therefore a
+              code in a mailbox — so rendering it would be a page of things that cannot
+              complete. This says which one thing to do instead.
+            */}
+            {accountOpen && guest && (
+              <section className="stack measure">
+                <h1 className="prose__heading">Account</h1>
+                <p>
+                  You are looking around as a guest, so there is no account to settle here yet — the
+                  controls on this screen all act on an email address.
+                </p>
+                <p className="meta">
+                  Signing in takes an address and a six-digit code. It starts a fresh account: what
+                  you have read as a guest stays with the guest session.
+                </p>
+                <div>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={() => void supabase.auth.signOut()}
+                  >
+                    Sign in with an email
+                  </button>
+                </div>
+              </section>
             )}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh
