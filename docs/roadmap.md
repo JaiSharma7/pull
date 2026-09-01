@@ -53,6 +53,15 @@ The app and the step-machine are live. What that took, so it is repeatable:
 - Verified end to end: a job walked all twelve steps to `succeeded`, wrote twelve
   `job_steps` rows and three `cost_ledger` rows (the three provider steps), and the worker
   returns 401 to a request with no token or a wrong one.
+- **A commit whose author email resolves to no GitHub account is `BLOCKED`, not built.**
+  Two deployments on 2026-08-31 — `db89391` on #40 and `e51c29a` on #42 — were authored as
+  `jaisharmahere@gmail.com` before that address was verified on the account, and both sit in
+  `BLOCKED`. The tell is in the deployment metadata: neither carries a
+  `githubCommitAuthorLogin`, while every deployment that built does, including the ones
+  authored as `noreply@anthropic.com` or by Dependabot. So what Vercel needs is that the
+  address be claimed by _some_ account, not that a particular human wrote the commit.
+  Verifying the address fixes later pushes; it does not retroactively unblock a deployment
+  that already failed, which needs a redeploy or a fresh commit.
 
 One deviation from law 5's spirit worth recording: `pnpm build` never worked on a cold
 checkout (`TS6310` — `--noEmit` in `tsc -b` applies to referenced composite projects).
