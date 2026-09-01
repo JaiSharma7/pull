@@ -83,7 +83,17 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       return reusable ? { workId: work.id, summaryId: reusable.id } : null;
     },
 
-    async upsertWork({ title, kind, contentHash, rightsStatus, topics, qualityScore, trustScore }) {
+    async upsertWork({
+      title,
+      kind,
+      contentHash,
+      rightsStatus,
+      topics,
+      qualityScore,
+      trustScore,
+      sourceUrl,
+      author,
+    }) {
       /*
        * File a newly created work under its topics.
        *
@@ -184,6 +194,36 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         }
       };
 
+      /*
+       * Credit the author, on the same terms as topic filing.
+       *
+       * Swallowed-but-logged for the same reason: attribution is worth less than the
+       * summary it accompanies, so a failure here must not fail a job that has already
+       * paid a provider. It is not silent, because a work with no author credited is
+       * invisible in exactly the way that matters — the job reports success and the
+       * only symptom is a source page that cannot say who wrote the thing.
+       *
+       * Applied to an adopted work as well as a new one, unlike topics. A second
+       * classification can overwrite a first and there is no way to tell which was
+       * right; a second author is either the same person, in which case
+       * `attribute_work` is a no-op, or a genuinely missing credit worth adding.
+       */
+      const creditAuthor = async (workId: string) => {
+        if (!author) return;
+        try {
+          const { error } = await supabase.rpc('attribute_work', {
+            p_work_id: workId,
+            p_author: author,
+          } as never);
+          if (error) throw new Error(error.message);
+        } catch (e) {
+          console.error(
+            `attribute_work: failed to credit "${author}" on ${workId}:`,
+            e instanceof Error ? e.message : e,
+          );
+        }
+      };
+
       const existing = must(
         await supabase.from('works').select('id').eq('content_hash', contentHash).limit(1),
         'look up work',
@@ -199,6 +239,26 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * adopted it would decline to score it, so every pre-created work would
        * sit at 0.5 forever with no way to correct it.
        */
+      /*
+       * An adopted work gets a source URL if it has none.
+       *
+       * Only if it has none: overwriting would let a later job redirect an existing
+       * work's outbound link, and that link is the thing law 4's argument rests on.
+       * Filling an empty one is how the 102 works generated before this column existed
+       * acquire a source without a separate backfill script for each new one.
+       */
+      const backfillSourceUrl = async (id: string) => {
+        if (!sourceUrl) return;
+        must(
+          await supabase
+            .from('works')
+            .update({ source_url: sourceUrl } as never)
+            .eq('id', id)
+            .is('source_url', null),
+          'backfill source url',
+        );
+      };
+
       const rescore = async (id: string) => {
         if (qualityScore === null || trustScore === null) return;
         must(
@@ -213,6 +273,8 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       const found = existing?.[0];
       if (found) {
         await fileUnderTopics(found.id, { onlyIfUnclassified: true });
+        await creditAuthor(found.id);
+        await backfillSourceUrl(found.id);
         await rescore(found.id);
         return { workId: found.id, existing: true };
       }
@@ -247,7 +309,10 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           // that a boundary rather than a preference.
           ...(qualityScore === null ? {} : { quality_score: qualityScore }),
           ...(trustScore === null ? {} : { trust_score: trustScore }),
-        })
+          // Where a reader can go and read the thing itself. Omitted rather than
+          // nulled when absent, matching the scores above.
+          ...(sourceUrl ? { source_url: sourceUrl } : {}),
+        } as never)
         .select('id')
         .single();
 
@@ -264,12 +329,15 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           'adopt concurrently created work',
         ) as { id: string };
         await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
+        await creditAuthor(raced.id);
+        await backfillSourceUrl(raced.id);
         await rescore(raced.id);
         return { workId: raced.id, existing: true };
       }
 
       const workId = (data as { id: string }).id;
       await fileUnderTopics(workId);
+      await creditAuthor(workId);
       return { workId, existing: false };
     },
 

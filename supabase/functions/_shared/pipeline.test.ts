@@ -633,6 +633,69 @@ describe('reuse skips the paid work', () => {
     expect(received.upsertWork).toMatchObject({ qualityScore: null, trustScore: null });
   });
 
+  /*
+   * Attribution reaches the database, asserted on the value rather than on the call.
+   *
+   * The roadmap records why this shape matters: four values were rejected by Postgres
+   * and by nothing above it, because "a test that mocks the database cannot catch an
+   * invalid enum member unless it asserts the member". `source_url` and the author are
+   * the same kind of value — carried through several hops, dropped silently if a hop
+   * forgets, and invisible in a green test suite that only counts calls.
+   *
+   * It is also the assertion that would have caught the original bug. The URL was
+   * validated by `resolve_identity` and returned in its output from round 1; nothing
+   * ever wrote it down, and the whole of law 4's argument rested on it.
+   */
+  it('carries the source url and the author through to upsertWork', async () => {
+    const { deps, received } = harness(null);
+    const job = {
+      ...deps.job,
+      target: { url: 'https://en.wikisource.org/wiki/On_Liberty', author: 'John Stuart Mill' },
+    };
+
+    await runPipelineStep('template', {
+      ...deps,
+      job,
+      priorOutputs: {
+        acquire: {
+          text: 't',
+          hash: 'h',
+          title: 'ti',
+          kind: 'essay',
+          rights: 'public_domain',
+          url: 'https://en.wikisource.org/wiki/On_Liberty',
+        },
+        synthesize: SYNTHESIZED,
+      },
+    } as never);
+
+    expect(received.upsertWork).toMatchObject({
+      sourceUrl: 'https://en.wikisource.org/wiki/On_Liberty',
+      author: 'John Stuart Mill',
+    });
+  });
+
+  /*
+   * Absent is null, not undefined and not the empty string.
+   *
+   * `upsertWork` omits the column when the value is falsy so the database default
+   * stands; an empty string would insert one, and a work whose source_url is '' fails
+   * the shape check added with the column. A pasted-text job legitimately has no URL.
+   */
+  it('sends null rather than an empty string when there is no source or author', async () => {
+    const { deps, received } = harness(null);
+
+    await runPipelineStep('template', {
+      ...deps,
+      priorOutputs: {
+        acquire: { text: 't', hash: 'h', title: 'ti', kind: 'essay', rights: 'public_domain' },
+        synthesize: SYNTHESIZED,
+      },
+    } as never);
+
+    expect(received.upsertWork).toMatchObject({ sourceUrl: null, author: null });
+  });
+
   it('leaves a new source to walk every step', async () => {
     const { deps } = harness(null);
 

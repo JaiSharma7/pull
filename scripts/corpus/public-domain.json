@@ -40,11 +40,16 @@
     "than accepted and silently truncated, which is most of a full-length book and is why",
     "so few Gutenberg entries survive here.",
     "",
-    "`author` is for whoever reads this file. It is deliberately NOT carried into the",
-    "job target, because `works` has no author column and `upsertWork` takes only",
-    "title, kind, contentHash and rightsStatus — so passing it would imply an",
-    "attribution the database never stores. Attribution is a schema change, not a",
-    "manifest field."
+    "`author` is carried into the job target, and until 20260901160000 it deliberately",
+    "was not. The old reason was sound and is now spent: `works` had no author column and",
+    "`upsertWork` took only title, kind, contentHash and rightsStatus, so passing an author",
+    "would have implied an attribution the database never stored.",
+    "",
+    "That migration is the schema change this note said attribution needed --",
+    "`works.source_url`, plus `attribute_work` writing `contributors` and",
+    "`work_contributors`. So the field now reaches a column instead of the floor, and",
+    "'every idea is anchored to a real source you can open' stops being a claim the code",
+    "cannot support."
   ],
   "sources": [
     {

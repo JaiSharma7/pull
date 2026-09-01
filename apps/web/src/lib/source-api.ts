@@ -17,7 +17,13 @@ import { supabase } from './supabase.js';
  * error rather than a fingerprint leak — the safe direction, and the reason a new
  * column is invisible to the API until someone grants it here too.
  */
-const WORK_COLUMNS = 'id, kind, title, subtitle, slug, year, description' as const;
+const WORK_COLUMNS =
+  'id, kind, title, subtitle, slug, year, description, source_url, ' +
+  // The author, through the join table that has existed since round 1 and was written
+  // by nothing but the seed migration until 20260901160000. Embedded rather than
+  // fetched separately: a source page already makes several round trips and a byline
+  // is not worth another.
+  'work_contributors(role, contributor:contributors(name))';
 
 export interface SourceWork {
   id: string;
@@ -27,6 +33,16 @@ export interface SourceWork {
   slug: string;
   year: number | null;
   description: string | null;
+  /**
+   * Where to read the original.
+   *
+   * Null for every work generated before `works.source_url` existed, and for a job
+   * that supplied pasted text rather than a URL — so the page must render without it
+   * rather than assuming it. `20260901160000` backfills the ones that can be matched.
+   */
+  sourceUrl: string | null;
+  /** Credited authors, in the order the join table gives them. Often empty. */
+  authors: string[];
 }
 
 export interface SourcePull {
@@ -116,6 +132,46 @@ export interface SourceDetail {
  * worse than no Delta: it is a specific, checkable claim that happens to be false.
  * `published_at` gives the pairing something stable to agree on.
  */
+/** The shape PostgREST returns for `WORK_COLUMNS`, before it is given nicer names. */
+interface WorkRow {
+  id: string;
+  kind: string;
+  title: string;
+  subtitle: string | null;
+  slug: string;
+  year: number | null;
+  description: string | null;
+  source_url: string | null;
+  work_contributors:
+    { role: string; contributor: { name: string } | { name: string }[] | null }[] | null;
+}
+
+/*
+ * `contributor` arrives as an object or an array depending on how PostgREST resolves
+ * the embed, so both are handled rather than assumed. Only `role = 'author'` is taken:
+ * the table can hold translators, editors and narrators, and a byline that silently
+ * included a translator would be a misattribution rather than extra credit.
+ */
+function toWork(r: WorkRow): SourceWork {
+  const authors = (r.work_contributors ?? [])
+    .filter((wc) => wc.role === 'author')
+    .flatMap((wc) => (Array.isArray(wc.contributor) ? wc.contributor : [wc.contributor]))
+    .map((c) => c?.name)
+    .filter((n): n is string => Boolean(n));
+
+  return {
+    id: r.id,
+    kind: r.kind,
+    title: r.title,
+    subtitle: r.subtitle,
+    slug: r.slug,
+    year: r.year,
+    description: r.description,
+    sourceUrl: r.source_url,
+    authors,
+  };
+}
+
 export async function fetchSource(
   workId: string,
   preferSummaryId?: string,
@@ -127,8 +183,9 @@ export async function fetchSource(
     .limit(1);
   if (workError) throw rpcError(workError);
 
-  const work = (workRows ?? [])[0] as SourceWork | undefined;
-  if (!work) return null;
+  const workRow = (workRows ?? [])[0] as WorkRow | undefined;
+  if (!workRow) return null;
+  const work = toWork(workRow);
 
   /*
    * `preferSummaryId` names the summary a Pull actually belongs to.

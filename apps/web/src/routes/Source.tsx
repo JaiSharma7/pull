@@ -381,6 +381,43 @@ export function Source({
       <h1 className="prose__heading">{detail.summaryTitle ?? work.title}</h1>
       {work.subtitle ? <p className="source__subtitle">{work.subtitle}</p> : null}
 
+      {/*
+        The byline and the link to the original — the first outbound source link this
+        app has ever had.
+
+        The README has said "every idea is anchored to a real source you can open"
+        since round 1 and it was not true: there was no `href` to any original
+        anywhere, and `works` had no column that could hold one. That is not a copy
+        problem. Law 4 is "analysis, not reproduction", and the argument for why
+        publishing commentary is fair rather than substitutive is precisely that it
+        sends the reader to the source. A summary of a book with no author credited and
+        nothing linking out is the artefact that argument disclaims.
+
+        Rendered together and immediately under the title, because that is where a
+        citation belongs — putting it at the foot of the page would make it something
+        the reader finds after deciding, rather than while.
+
+        Both are optional and independently so. `source_url` is null for every work
+        generated before the column existed and for any job that supplied pasted text;
+        `authors` is empty wherever nothing has credited one yet. The page renders
+        without either rather than assuming.
+
+        `rel="noreferrer noopener"` matches the one other external link in the app
+        (Colophon): `noopener` because a target-blank link otherwise hands the opened
+        page a live `window.opener` reference back into this one.
+      */}
+      {(work.authors.length > 0 || work.sourceUrl) && (
+        <p className="meta source__attribution">
+          {work.authors.length > 0 && <span>{work.authors.join(' · ')}</span>}
+          {work.authors.length > 0 && work.sourceUrl && <span aria-hidden="true"> · </span>}
+          {work.sourceUrl && (
+            <a href={work.sourceUrl} target="_blank" rel="noreferrer noopener">
+              Read the original
+            </a>
+          )}
+        </p>
+      )}
+
       {detail.elevatorPitch ? <p className="source__pitch">{detail.elevatorPitch}</p> : null}
       {detail.whyItMatters ? (
         <>
