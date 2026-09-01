@@ -40,30 +40,120 @@ describe('The Archive design laws', () => {
     }
   });
 
+  /**
+   * Any way of writing a colour, not just `#rrggbb`.
+   *
+   * The hex check was the whole of this law, and hex is only one notation. A rule
+   * written `rgba(20, 18, 14, .12)` or `oklch(…)` declares a colour the palette
+   * has never heard of and sailed straight past it — and the failure is not
+   * hypothetical elsewhere in the file, where a `border-radius: 50%` walked past a
+   * check that matched only `px`.
+   */
+  const COLOUR_LITERAL =
+    /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix)\(/g;
+
   it('defines colour only in tokens.css', () => {
     for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
       // Data-URI SVGs carry their own encoded markup; strip them before looking
-      // for hex, or the embedded paper-grain filter reads as a colour literal.
+      // for colour, or the embedded paper-grain filter reads as a literal.
       const withoutDataUris = code(f).replace(/url\("data:[^"]*"\)/g, '');
-      const hexes: string[] = withoutDataUris.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
-      expect(hexes, `${f} hardcodes ${hexes.join(', ')} outside tokens.css`).toEqual([]);
+      const found: string[] = withoutDataUris.match(COLOUR_LITERAL) ?? [];
+      expect(found, `${f} hardcodes ${found.join(', ')} outside tokens.css`).toEqual([]);
     }
   });
 
+  /**
+   * The same law, in the place a stylesheet check cannot look.
+   *
+   * A colour can reach the page through `style={{ … }}` without touching a `.css`
+   * file at all, and an inline literal is worse than a stylesheet one rather than
+   * equivalent: it cannot be overridden by the theme blocks, so a panel painted
+   * that way keeps its light-mode colours in dark mode and ignores the
+   * high-contrast setting entirely. Named roles that swap are the whole mechanism
+   * by which this product has two themes.
+   *
+   * `scripts/gen-icons.mjs` is deliberately out of scope: a favicon is a file on
+   * disk with no page to inherit from, so it has to name its own two colours.
+   */
+  it('lets no colour literal into component source either', () => {
+    const roots = [
+      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
+      join(import.meta.dirname, 'components'),
+    ].filter(existsSync);
+    expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
+
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        // Tests carry palette literals on purpose — this file most of all.
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          const src = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+          for (const hit of src.match(COLOUR_LITERAL) ?? []) {
+            offenders.push(`${entry.name}: ${hit}`);
+          }
+        }
+      }
+    };
+    for (const r of roots) walk(r);
+
+    expect(
+      offenders,
+      `a colour written in a component cannot be swapped by the theme or reached by the ` +
+        `high-contrast setting:\n  ${offenders.join('\n  ')}\n` +
+        `Use a var(--token) and define it in tokens.css.`,
+    ).toEqual([]);
+  });
+
+  /**
+   * Two ceilings, not one — a block may be 3px, a control 2px.
+   *
+   * Tightened from a flat 4px by the design session. The split is the point: at
+   * the sizes a control is actually drawn, 4px is proportionally much rounder
+   * than the same 4px on a card, so one number applied to both reads as candy on
+   * the small thing and barely registers on the large one. The tokens carry the
+   * distinction, which is why the check can be this short — `--radius` is the
+   * block radius and `--radius-sm` the control radius, and every rule in the
+   * repository uses one of them rather than a literal.
+   */
+  const MAX_RADIUS = { '--radius': 3, '--radius-sm': 2 };
+
   it('keeps corner radii small — candy rounding is the look being avoided', () => {
     const tokens = read('tokens.css');
-    for (const name of ['--radius:', '--radius-sm:']) {
-      const value = tokens.match(new RegExp(`${name}\\s*([\\d.]+)px`))?.[1];
-      expect(Number(value), `${name} is too round`).toBeLessThanOrEqual(4);
+    for (const [name, ceiling] of Object.entries(MAX_RADIUS)) {
+      const value = tokens.match(new RegExp(`${name}:\\s*([\\d.]+)px`))?.[1];
+      expect(Number(value), `${name} is too round`).toBeLessThanOrEqual(ceiling);
     }
     for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
       const literals = [...code(f).matchAll(/border-radius:\s*([\d.]+)px/g)].map((m) =>
         Number(m[1]),
       );
       for (const px of literals) {
-        expect(px, `${f} sets a ${px}px radius literal`).toBeLessThanOrEqual(4);
+        // The block ceiling, since a literal does not say which it is. A control
+        // that needs 2px should say `var(--radius-sm)` and be judged above.
+        expect(px, `${f} sets a ${px}px radius literal`).toBeLessThanOrEqual(
+          MAX_RADIUS['--radius'],
+        );
       }
     }
+  });
+
+  /**
+   * The control radius has to be the one every focusable thing actually gets.
+   *
+   * `base.css` gives the focus ring `--radius-sm`, and that ring is drawn around
+   * every button, input and `[tabindex]` in the product — so that one declaration
+   * is where the control ceiling is really enforced. Pinned because the two could
+   * drift silently: tightening `--radius-sm` does nothing for controls if the
+   * ring stops using it, and nothing else in this file reads base.css.
+   */
+  it('draws the focus ring at the control radius, not the block radius', () => {
+    const ring = read('base.css').match(/:focus-visible\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(ring, 'no :focus-visible rule found in base.css').not.toBe('');
+    expect(ring, 'the focus ring no longer uses the control radius').toMatch(
+      /border-radius:\s*var\(--radius-sm\)/,
+    );
   });
 
   /**
@@ -409,16 +499,22 @@ describe('The Archive legibility laws', () => {
   const darkBlock = tokens.match(/:root\[data-theme='dark'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
 
   /**
-   * Tokens that may sit below the text threshold, because no rule uses them for
-   * text. Every entry is a deliberate exemption with a named use — the list is
-   * the point, not the escape hatch. Adding to it should feel like a decision.
+   * Every text token clears the floor, and there is no list of exceptions.
    *
-   *   --text-faint  the `·` chip separator in components.css, and the `::before`
-   *                 list ordinals in source.css and daily.css. Ornament that
-   *                 carries no word a reader has to make out.
+   * There used to be one — `--text-faint` sat at 2.72:1 as "ornament", with a
+   * second allow-list naming the selectors permitted to paint with it, and a
+   * third check policing that list. All of it existed to hold one token below the
+   * line, and the exemption was self-justifying: because faint was ornament it
+   * did not need to clear 4.5:1, and because it did not clear 4.5:1 the
+   * high-contrast setting had nothing to rescue — so a reader who asked for more
+   * contrast got exactly the same 2.72:1 from every rule that had adopted it.
+   *
+   * The amended law is "no text role below 4.5:1 against its own ground, faint
+   * included", so the token was raised and the machinery deleted. A `·` set in a
+   * legible colour costs nothing; a word a reader cannot make out costs them the
+   * word. If a future token genuinely is not text, it should not be named
+   * `--text-*`.
    */
-  const ORNAMENT_ONLY = new Set(['--text-faint']);
-
   it.each([
     ['light', () => lightBlock],
     ['dark', () => darkBlock],
@@ -436,7 +532,6 @@ describe('The Archive legibility laws', () => {
     expect(textTokens.length, `${theme} palette exposes no --text-* tokens`).toBeGreaterThan(2);
 
     for (const name of textTokens) {
-      if (ORNAMENT_ONLY.has(name)) continue;
       for (const [label, ground] of [
         ['--surface', surface!],
         ['--surface-raised', raised!],
@@ -444,63 +539,12 @@ describe('The Archive legibility laws', () => {
         const ratio = contrast(p.get(name)!, ground);
         expect(
           ratio,
-          `${theme}: ${name} on ${label} is ${ratio.toFixed(2)}:1 — docs/design.md requires 4.5:1 ` +
-            `for body text. Either darken the token, or add it to ORNAMENT_ONLY with the ` +
-            `non-text uses that justify it.`,
+          `${theme}: ${name} on ${label} is ${ratio.toFixed(2)}:1 — docs/design.md requires ` +
+            `4.5:1 for every text role, faint included. There is no ornament exemption: ` +
+            `move the token, or stop calling it text.`,
         ).toBeGreaterThanOrEqual(4.5);
       }
     }
-  });
-
-  /**
-   * The high-contrast setting must be able to rescue anything a rule can reach.
-   *
-   * `:root[data-contrast='high']` remaps `--text-muted` and both rules, but not
-   * `--text-faint` — so a reader who has asked for more contrast got exactly the
-   * same 2.72:1 from the four rules that had adopted it. A token that is exempt
-   * from the ratio check above must therefore also be one the setting does not
-   * need to reach: ornament in both directions, or neither.
-   */
-  /**
-   * The token check above cannot see a RULE adopting an ornament token for text
-   * — which is how all four of the reviewed violations actually happened. So the
-   * exemption is paid for here: a token on ORNAMENT_ONLY may be a `color:` only
-   * where it is genuinely ornament.
-   *
-   * Ornament means one of two shapes, and the list is deliberately short:
-   *
-   *   ::before / ::after   a generated counter or mark, not a word the reader
-   *                        has to make out. The list ordinals in source.css and
-   *                        daily.css.
-   *   an explicit selector the separator in a chip row, which is a single `·`.
-   *
-   * Anything else using a sub-threshold token is text at 2.72:1, whatever it is
-   * called.
-   */
-  const ORNAMENT_SELECTORS = new Set(['.pull-card__chip-sep']);
-
-  it('uses an ornament-only token as a colour only where it is actually ornament', () => {
-    const offenders: string[] = [];
-
-    for (const f of cssFiles) {
-      if (f === 'tokens.css') continue; // the palette defines them; it does not paint with them
-      for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-        for (const token of ORNAMENT_ONLY) {
-          if (!new RegExp(`color:\\s*var\\(${token}\\)`).test(body!)) continue;
-          const sel = selector!.trim();
-          const isPseudo = /::(before|after)\b/.test(sel);
-          const isListed = sel.split(',').every((s) => ORNAMENT_SELECTORS.has(s.trim()));
-          if (!isPseudo && !isListed) offenders.push(`${f}: ${sel} paints text with ${token}`);
-        }
-      }
-    }
-
-    expect(
-      offenders,
-      `these render words a reader has to read, at a ratio docs/design.md forbids:\n  ` +
-        `${offenders.join('\n  ')}\n` +
-        `Use --text-muted, or add the selector to ORNAMENT_SELECTORS if it really is a mark.`,
-    ).toEqual([]);
   });
 
   /**
@@ -531,20 +575,47 @@ describe('The Archive legibility laws', () => {
     ).toMatch(new RegExp(`color-scheme:\\s*${scheme}\\s*;`));
   });
 
-  it('leaves no text token both below the threshold and beyond the reach of high contrast', () => {
-    const high = tokens.match(/:root\[data-contrast='high'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(high, 'no [data-contrast=high] block found').not.toBe('');
-    const remapped = new Set([...high.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!));
+  /**
+   * High contrast has to reach every text role a reader might struggle with.
+   *
+   * This assertion used to run the other way: it checked that a token exempt from
+   * the floor was NOT remapped here, which made the exemption airtight in both
+   * directions and protected nobody. With the exemption gone, the useful question
+   * is the opposite one — a reader who turns this on is telling us the default
+   * palette is not working for them, and a role the setting cannot reach is a
+   * role that ignores them.
+   *
+   * The threshold is comfort rather than the 4.5:1 floor: a token already at 13:1
+   * has nothing to gain from being remapped to `--text`, while everything in the
+   * 4.5–7 band is exactly what someone enables this for.
+   */
+  const COMFORTABLE = 7;
 
-    for (const name of ORNAMENT_ONLY) {
-      expect(
-        remapped.has(name),
-        `${name} is exempt from the contrast floor but IS remapped under ` +
-          `[data-contrast='high'] — so something treats it as text after all. Take it out ` +
-          `of ORNAMENT_ONLY and let the ratio check judge it.`,
-      ).toBe(false);
-    }
-  });
+  it.each([
+    ['light', () => lightBlock],
+    ['dark', () => darkBlock],
+  ])(
+    'lets high contrast reach every %s text role that is not already comfortable',
+    (theme, get) => {
+      const high = tokens.match(/:root\[data-contrast='high'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+      expect(high, 'no [data-contrast=high] block found').not.toBe('');
+      const remapped = new Set([...high.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!));
+
+      const p = palette(get());
+      const grounds = [p.get('--surface')!, p.get('--surface-raised')!];
+
+      for (const name of [...p.keys()].filter((n) => n.startsWith('--text'))) {
+        const worst = Math.min(...grounds.map((g) => contrast(p.get(name)!, g)));
+        if (worst >= COMFORTABLE) continue;
+        expect(
+          remapped.has(name),
+          `${theme}: ${name} sits at ${worst.toFixed(2)}:1 — inside the band a reader enables ` +
+            `high contrast for — but [data-contrast='high'] does not remap it, so turning the ` +
+            `setting on changes nothing for any rule that uses it.`,
+        ).toBe(true);
+      }
+    },
+  );
 
   /**
    * The type ramp: uppercase and positive tracking belong to the metadata role.

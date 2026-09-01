@@ -208,7 +208,7 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
     const { data, error } = await supabase
       .from('saved_items')
       .select(
-        'id, created_at, pull_id, stash_id, note, archived, read_later, pulls(id, headline, body, why_it_matters, summaries(works(id, title, kind)))',
+        'id, created_at, pull_id, stash_id, note, archived, read_later, pulls(id, headline, body, why_it_matters, explanation, example, summaries(works(id, title, kind)))',
       )
       .eq('user_id', userId)
       .not('pull_id', 'is', null)
@@ -229,6 +229,8 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
         headline: string;
         body: string;
         why_it_matters: string | null;
+        explanation: string | null;
+        example: string | null;
         summaries: { works: { id: string; title: string; kind: string | null } | null } | null;
       } | null;
     }[];
@@ -244,6 +246,8 @@ export async function fetchLibrary(userId: string): Promise<LibraryItem[]> {
         headline: r.pulls.headline,
         body: r.pulls.body,
         whyItMatters: r.pulls.why_it_matters,
+        explanation: r.pulls.explanation,
+        example: r.pulls.example,
         savedAt: r.created_at,
         work: work ?? { id: '', title: 'Unknown source', kind: null },
         saveId: r.id,

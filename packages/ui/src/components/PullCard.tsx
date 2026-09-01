@@ -1,4 +1,5 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { clampDepth, defaultDepth, depthLevels, HEADLINE_SCALE } from '../depth.js';
 
 export interface PullCardSource {
   title: string;
@@ -11,17 +12,25 @@ export interface PullCardProps {
   source: PullCardSource;
   headline: string;
   body: string;
-  /** Shown on the flip side — the "why this matters" half of the card. */
+  /** The third stop — the named second movement. */
   whyItMatters?: string | null;
   example?: string | null;
+  /**
+   * The fourth stop — the full argument.
+   *
+   * `get_feed` has returned this since `20260829130428_get_feed` and no screen
+   * ever rendered it: the card had two faces and this was neither of them. It is
+   * the deepest thing the feed already pays for.
+   */
+  explanation?: string | null;
   /** Chapter, timestamp or section the claim is anchored to. */
   sourceTrail?: string | null;
   /**
    * Open the source this Pull came from.
    *
-   * Optional because the chip has always been able to stand as plain text, and a
-   * card rendered without a destination — the design specimen, an offline row whose
-   * work is not cached — should not present a control that goes nowhere.
+   * Also what decides whether the dial gets its last stop: a card without a
+   * resolvable source — the design specimen, an offline row whose work is not
+   * cached — should not draw one that goes nowhere.
    */
   onOpenSource?: () => void;
   saved?: boolean;
@@ -49,17 +58,39 @@ export interface PullCardProps {
    */
   onShare?: () => void;
   shareLabel?: string;
-  /** Rendered under the flip content — counterpoint, conviction controls, etc. */
+  /**
+   * Depth, lifted out of the card when a screen wants to remember it.
+   *
+   * The feed does, across cards: a reader who opened one Pull to its full
+   * argument is saying something about how they want to read, not about that one
+   * idea. Uncontrolled when omitted, so a card rendered on its own still works.
+   */
+  depth?: number;
+  onDepthChange?: (depth: number) => void;
+  /** Rendered with the argument — counterpoint, conviction controls, etc. */
   children?: ReactNode;
 }
 
 /**
  * The product's core object: one idea, anchored to a real source.
  *
- * Front is the claim; the flip carries why it matters and the trail back to the
- * original. Both faces stay mounted so the back is readable by a screen reader
- * and reachable by keyboard — `inert` keeps whichever face is hidden out of the
- * tab order rather than relying on visual stacking.
+ * The card carries the Depth Dial from `docs/product.md`: one canonical record
+ * rendered at the length the reader asks for. Nothing is fetched and nothing
+ * regenerates between stops, which is why depth is free and why law 2 permits it
+ * at all — the dial is a lens, not a request.
+ *
+ * It replaces a two-sided flip, and the flip is worth recording because its
+ * failure was structural rather than cosmetic. `.flip__face--back` was
+ * `position: absolute; inset: 0`, so the back was sized by the *front* — and
+ * carried `overflow-y: auto` to cope. Every Pull whose "why it matters" ran
+ * longer than its claim therefore got a scrollbar inside the card, on a screen
+ * that is already a scroll: more detail made the reading area smaller, which is
+ * the wrong direction for a control whose whole purpose is more detail. Depth
+ * that appends to the flow cannot reproduce it — there is no fixed height left
+ * to overflow.
+ *
+ * It also cost three stops. The card had exactly two states, so `explanation` had
+ * nowhere to go and the headline could not be read on its own.
  */
 export function PullCard({
   source,
@@ -67,6 +98,7 @@ export function PullCard({
   body,
   whyItMatters,
   example,
+  explanation,
   sourceTrail,
   saved = false,
   onSave,
@@ -76,129 +108,262 @@ export function PullCard({
   onShare,
   shareLabel = 'Share',
   onOpenSource,
+  depth: controlledDepth,
+  onDepthChange,
   children,
 }: PullCardProps) {
-  const [flipped, setFlipped] = useState(false);
-  const backId = useId();
+  const levels = depthLevels({
+    headline,
+    body,
+    whyItMatters,
+    example,
+    explanation,
+    hasSource: Boolean(onOpenSource),
+  });
+
+  const [ownDepth, setOwnDepth] = useState(() => defaultDepth(levels));
+  const panelId = useId();
+  const dialId = useId();
+
+  // Clamped rather than trusted: a remembered depth arrives from a card that may
+  // have had more stops than this one.
+  const depth = clampDepth(controlledDepth ?? ownDepth, levels);
+  /*
+   * Which stops are open, by name rather than by index.
+   *
+   * The stops a card offers depend on the text it has, so position is not
+   * identity: a Pull with an `explanation` and no `why_it_matters` puts 'full'
+   * one turn in. Keying the panels off the index rendered that card an empty
+   * "Why this matters" heading and never showed the argument underneath.
+   */
+  const shown = new Set(levels.slice(0, depth + 1).map((level) => level.key));
+
+  const setDepth = (next: number) => {
+    const clamped = clampDepth(next, levels);
+    setOwnDepth(clamped);
+    onDepthChange?.(clamped);
+  };
+
+  /*
+   * A radio group is driven by the arrows, not by Tab — the group takes one tab
+   * stop and the arrows move within it. Both axes are bound because the dial is
+   * a column in the margin at most widths and a row at the foot at the rest, and
+   * which one a reader reaches for follows what they can see.
+   *
+   * Bound to the stops rather than to the group, because the group is not itself
+   * focusable: with a roving tabindex the focus is always on a radio, so that is
+   * where the key arrives. Selection and focus move together, which is what makes
+   * it a radio group rather than a row of buttons — the reader arrows through
+   * depths and the card follows, without a second keystroke to commit.
+   */
+  const onStopKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    if (step === undefined) return;
+    event.preventDefault();
+
+    const next = clampDepth(depth + step, levels);
+    setDepth(next);
+    // The DOM order of the stops is the level order, so the index addresses the
+    // button directly and no ref array is needed to keep the two in step.
+    const stops = event.currentTarget.parentElement?.querySelectorAll('[role="radio"]');
+    (stops?.[next] as HTMLElement | undefined)?.focus();
+  };
 
   const chip = [source.title, source.creator, source.kind].filter(Boolean) as string[];
+  const atSource = levels[depth]?.key === 'source';
 
   return (
-    <article className="flip" data-flipped={flipped}>
-      <div className="flip__inner">
-        <div className="pull-card flip__face flip__face--front" inert={flipped}>
+    <article className="pull-card" data-depth={depth}>
+      {/*
+        The chip becomes the way into the source when there is one to open.
+        A button rather than a link because the shell routes in-process, and
+        `btn--plain` keeps it looking like the metadata it already was: this is
+        an affordance the reader discovers, not a call to action competing with
+        the idea underneath it.
+      */}
+      {onOpenSource ? (
+        <button
+          type="button"
+          className="btn btn--plain pull-card__chip pull-card__chip--link"
+          // The visible text is metadata, so on its own it announces as a title
+          // with no indication it does anything -- unlike Save and Listen, which
+          // carry explicit labels. The underline is a sighted-only affordance.
+          aria-label={`Open the source: ${source.title}`}
+          onClick={onOpenSource}
+        >
+          {chip.map((part, i) => (
+            <span key={part}>
+              {i > 0 && <span className="pull-card__chip-sep"> · </span>}
+              {part}
+            </span>
+          ))}
+        </button>
+      ) : (
+        <p className="pull-card__chip">
+          {chip.map((part, i) => (
+            <span key={part}>
+              {i > 0 && <span className="pull-card__chip-sep"> · </span>}
+              {part}
+            </span>
+          ))}
+        </p>
+      )}
+      <hr className="pull-card__rule" />
+
+      <div className="pull-card__spread">
+        {/*
+          The dial sits in the margin beside the idea, not under it: it is an
+          instrument you turn while reading, and putting it at the foot would make
+          it something you go and find. It falls back to a row at the foot only
+          where the window cannot hold the measure and the margin both — the
+          reading column is what gives way last.
+
+          Rendered at all only when there is somewhere to go. A dial with one stop
+          is furniture.
+        */}
+        {levels.length > 1 && (
+          <div className="pull-card__dial" role="radiogroup" aria-labelledby={dialId}>
+            <p className="pull-card__dial-label" id={dialId}>
+              Depth
+            </p>
+            {levels.map((level, i) => (
+              <button
+                key={level.key}
+                type="button"
+                role="radio"
+                className="btn btn--plain pull-card__stop-btn"
+                aria-checked={i === depth}
+                aria-controls={panelId}
+                // The visible label is a duration, and "35 sec" announced on its
+                // own says nothing about which way the dial is being turned.
+                aria-label={level.aria}
+                // One tab stop for the group; the arrows move within it.
+                tabIndex={i === depth ? 0 : -1}
+                onClick={() => setDepth(i)}
+                onKeyDown={onStopKey}
+              >
+                <span
+                  className="pull-card__tick"
+                  style={{ width: level.tick }}
+                  aria-hidden="true"
+                />
+                <span className="pull-card__stop-label">{level.label}</span>
+              </button>
+            ))}
+            {/*
+              The words behind the clock. A duration is a claim about the reader;
+              a word count is a fact about the card, and showing both is what
+              stops the first from drifting.
+            */}
+            <p className="pull-card__dial-words">{levels[depth]?.words ?? 0} words</p>
+          </div>
+        )}
+
+        <div className="pull-card__reading">
           {/*
-            The chip becomes the way into the source when there is one to open.
-            A button rather than a link because the shell routes in-process, and
-            `btn--plain` keeps it looking like the metadata it already was: this is
-            an affordance the reader discovers, not a call to action competing with
-            the idea underneath it.
+            The headline scales down as the dial turns out, so the card reads as
+            one object changing rather than a page with things appended to it.
           */}
-          {onOpenSource ? (
-            <button
-              type="button"
-              className="btn btn--plain pull-card__chip pull-card__chip--link"
-              // The visible text is metadata, so on its own it announces as a title
-              // with no indication it does anything -- unlike Save and Listen, which
-              // carry explicit labels. The underline is a sighted-only affordance.
-              aria-label={`Open the source: ${source.title}`}
-              onClick={onOpenSource}
-            >
-              {chip.map((part, i) => (
-                <span key={part}>
-                  {i > 0 && <span className="pull-card__chip-sep"> · </span>}
-                  {part}
-                </span>
-              ))}
-            </button>
-          ) : (
-            <p className="pull-card__chip">
-              {chip.map((part, i) => (
-                <span key={part}>
-                  {i > 0 && <span className="pull-card__chip-sep"> · </span>}
-                  {part}
-                </span>
-              ))}
-            </p>
-          )}
-          <hr className="pull-card__rule" />
+          <h2
+            className="pull-card__headline"
+            style={{ '--headline-scale': HEADLINE_SCALE[depth] ?? 1.45 } as CSSProperties}
+          >
+            {headline}
+          </h2>
 
-          <h2 className="pull-card__headline">{headline}</h2>
-          <p className="pull-card__body">{body}</p>
+          {/*
+            One region for everything past the headline, so a screen reader is
+            told once that the card grew rather than once per paragraph, and so
+            the dial has a single thing to point `aria-controls` at.
+          */}
+          <div className="pull-card__depth-panel" id={panelId} aria-live="polite">
+            {shown.has('claim') && (
+              <div className="pull-card__stop">
+                <p className="pull-card__body">{body}</p>
+              </div>
+            )}
 
-          <div className="pull-card__footer">
-            {sourceTrail && <span className="pull-card__trail">{sourceTrail}</span>}
-            {onSave && (
-              <button
-                type="button"
-                className="btn"
-                aria-pressed={saved}
-                onClick={onSave}
-                aria-label={saved ? `Unsave: ${headline}` : `Save: ${headline}`}
-              >
-                {saved ? 'Saved' : 'Save'}
-              </button>
+            {shown.has('why') && (
+              <div className="pull-card__stop">
+                <p className="pull-card__movement">Why this matters</p>
+                {whyItMatters && <p className="pull-card__body">{whyItMatters}</p>}
+                {example && (
+                  <p className="pull-card__body">
+                    <span className="meta">Example</span>
+                    <br />
+                    {example}
+                  </p>
+                )}
+              </div>
             )}
-            {onAsk && (
-              <button type="button" className="btn" onClick={onAsk}>
-                Ask
-              </button>
+
+            {shown.has('full') && (
+              <div className="pull-card__stop">
+                <p className="pull-card__movement">In full</p>
+                <p className="pull-card__body">{explanation}</p>
+              </div>
             )}
-            {onShare && (
-              <button
-                type="button"
-                className="btn"
-                onClick={onShare}
-                aria-label={`${shareLabel}: ${headline}`}
-              >
-                {shareLabel}
-              </button>
+
+            {/*
+              The terminus is an offer rather than a wall: every source in the
+              corpus is public domain and readable without an account, which is
+              the whole reason the dial can end by sending the reader away.
+            */}
+            {atSource && onOpenSource && (
+              <div className="pull-card__stop">
+                <p className="pull-card__movement">Go to the source</p>
+                <button type="button" className="btn pull-card__out" onClick={onOpenSource}>
+                  {`Read ${source.title} in full`}
+                </button>
+              </div>
             )}
-            {onListen && (
-              <button
-                type="button"
-                className="btn"
-                onClick={onListen}
-                aria-pressed={listening}
-                aria-label={listening ? `Stop reading: ${headline}` : `Listen to: ${headline}`}
-              >
-                {listening ? 'Stop' : 'Listen'}
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn btn--plain"
-              aria-expanded={flipped}
-              aria-controls={backId}
-              onClick={() => setFlipped(true)}
-            >
-              Why
-            </button>
+
+            {/* Counterpoint and the conviction controls belong to the argument,
+                so they arrive with it rather than under a bare headline. */}
+            {shown.has('why') && children}
           </div>
         </div>
+      </div>
 
-        <div className="pull-card flip__face flip__face--back" id={backId} inert={!flipped}>
-          <p className="pull-card__chip">Why this matters</p>
-          <hr className="pull-card__rule" />
-
-          {whyItMatters && <p className="pull-card__body">{whyItMatters}</p>}
-          {example && (
-            <p className="pull-card__body">
-              <span className="meta">Example</span>
-              <br />
-              {example}
-            </p>
-          )}
-
-          {children}
-
-          <div className="pull-card__footer">
-            {sourceTrail && <span className="pull-card__trail">From {sourceTrail}</span>}
-            <button type="button" className="btn btn--plain" onClick={() => setFlipped(false)}>
-              Back
-            </button>
-          </div>
-        </div>
+      <div className="pull-card__footer">
+        {sourceTrail && <span className="pull-card__trail">{sourceTrail}</span>}
+        {onSave && (
+          <button
+            type="button"
+            className="btn"
+            aria-pressed={saved}
+            onClick={onSave}
+            aria-label={saved ? `Unsave: ${headline}` : `Save: ${headline}`}
+          >
+            {saved ? 'Saved' : 'Save'}
+          </button>
+        )}
+        {onAsk && (
+          <button type="button" className="btn" onClick={onAsk}>
+            Ask
+          </button>
+        )}
+        {onShare && (
+          <button
+            type="button"
+            className="btn"
+            onClick={onShare}
+            aria-label={`${shareLabel}: ${headline}`}
+          >
+            {shareLabel}
+          </button>
+        )}
+        {onListen && (
+          <button
+            type="button"
+            className="btn"
+            onClick={onListen}
+            aria-pressed={listening}
+            aria-label={listening ? `Stop reading: ${headline}` : `Listen to: ${headline}`}
+          >
+            {listening ? 'Stop' : 'Listen'}
+          </button>
+        )}
       </div>
     </article>
   );

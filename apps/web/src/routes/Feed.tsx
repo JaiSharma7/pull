@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Enough, PullCard } from '@wap/ui';
+import { Enough, PullCard, textAtDepth } from '@wap/ui';
 import { Interrupt, type InterruptAnswer } from '../components/Interrupt.js';
 import * as api from '../lib/api.js';
 import {
@@ -144,6 +144,19 @@ export function Feed({
     );
     setShareStatus(note ? { pullId: row.id, note } : null);
   }
+  /*
+   * How much detail the reader wants, kept for the session rather than per card.
+   *
+   * Someone who opens one Pull to its full argument is saying something about how
+   * they read, not about that idea, and making them turn the dial again on every
+   * card would make a preference into a chore. `clampDepth` in `@wap/ui`
+   * reconciles it with each card, since not every Pull has all five stops.
+   *
+   * Starts at 1 — the claim, which is what the card has always shown. Stop 0 is
+   * the headline alone, an option rather than the state to drop a reader into: a
+   * feed of bare headlines is a table of contents.
+   */
+  const [depth, setDepth] = useState(1);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -526,14 +539,14 @@ export function Feed({
         setSpeakingId(null);
         return;
       }
-      speak(`${row.headline}. ${row.body}`, {
+      speak(textAtDepth({ ...row, hasSource: Boolean(onOpenSource) }, depth), {
         // Guarded on the id: cancelling the previous utterance fires *its* `onend`,
         // and without the check that ending would clear the card that just started.
         onEnd: () => setSpeakingId((id) => (id === row.id ? null : id)),
       });
       setSpeakingId(row.id);
     },
-    [speakingId],
+    [speakingId, depth, onOpenSource],
   );
 
   // Speech outlives the component — `speechSynthesis` is global — so a reader who
@@ -775,6 +788,8 @@ export function Feed({
             onShare={() => void share(item.row)}
             shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}
+            depth={depth}
+            onDepthChange={setDepth}
           />
         ),
       )}
@@ -816,6 +831,8 @@ function PullCardInView({
   onShare,
   shareNote: shareOutcomeNote,
   shareLabel: shareControlLabel,
+  depth,
+  onDepthChange,
 }: {
   row: FeedRow;
   saved: boolean;
@@ -832,6 +849,9 @@ function PullCardInView({
   shareNote: string | null;
   /** Renamed on the way in so it does not shadow the `shareLabel` helper. */
   shareLabel: string;
+  /** The session's depth, so the dial does not reset on every card. */
+  depth: number;
+  onDepthChange: (depth: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -909,6 +929,7 @@ function PullCardInView({
         body={row.body}
         whyItMatters={row.whyItMatters}
         example={row.example}
+        explanation={row.explanation}
         sourceTrail={row.summaryTitle}
         saved={saved}
         onSave={onSave}
@@ -917,6 +938,8 @@ function PullCardInView({
         onOpenSource={onOpenSource}
         onShare={onShare}
         shareLabel={shareControlLabel}
+        depth={depth}
+        onDepthChange={onDepthChange}
       />
       {/* Inside `feed__item`, not beside it: that div is the scroll-snap
           target, and a sibling would break the card into two snap units. */}

@@ -62,16 +62,35 @@ Detailed in `.claude/skills/delta/SKILL.md`. In brief:
 
 ## The Depth Dial
 
+Five stops in the margin beside the idea, drawn as ticks that lengthen with depth:
+
 ```
-⚡ 30 sec   Quick Pull
-● 3 min    Key ideas
-● 8 min    Full summary
-● 15 min   Deep dive
-● Source   Go deeper
+—      Shortest    the headline, set at display size
+——     Short       + the claim
+———    Medium      + why it matters, and the example
+————   Long        + the full argument
+—————  Source      the work itself, in full
 ```
 
 These are **not separate generations**. One canonical structured summary is rendered at
-different depths — which is what makes depth free.
+different depths — which is what makes depth free, and what keeps the dial inside law 2:
+turning it fetches nothing and regenerates nothing. It is a lens, not a request.
+
+**The labels are computed, never authored.** Each stop shows the reading time for the
+words it reveals, at 210wpm, cumulative from the headline. A dial that said "8 min" over
+300 words would be a lie told on the product's behalf, and time saved is the one number
+the business model rests on. `packages/ui/src/depth.ts` is the whole of that arithmetic
+and calls nothing.
+
+**A short card gets a short dial.** The stops come from the text a Pull actually has —
+most have `why_it_matters`, only some have `explanation` — so the control is not
+identical everywhere. That is the honest cost of driving it from real content, and it is
+preferred to the alternative: a fixed five-stop scale whose deeper stops open on nothing.
+
+The card grows to fit the stop it is on. It never scrolls inside itself, and nothing in
+`components.css` may give it a height or an overflow — a card that scrolled internally
+would make asking for more detail cost reading area, which is backwards for the one
+control whose entire purpose is more detail.
 
 ## Anti-goals
 

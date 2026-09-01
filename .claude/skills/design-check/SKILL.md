@@ -26,14 +26,14 @@ All three faces are OFL — required, since this repo is open source.
 
 ## Reject on sight
 
-| Violation                                          | Why                                               |
-| -------------------------------------------------- | ------------------------------------------------- |
-| `linear-gradient` / `radial-gradient` on a surface | Deepstash's signature; we use flat ground + grain |
-| `box-shadow` for elevation                         | We separate with hairline rules, not depth        |
-| A second accent colour                             | One accent is the whole discipline                |
-| `border-radius` above `4px` on a card              | Candy rounding is the look we are avoiding        |
-| Colour used as the only signal                     | Fails contrast and colour-blind users             |
-| A hardcoded hex outside `tokens.css`               | Tokens exist so the system stays one system       |
+| Violation                                                                | Why                                                                          |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `linear-gradient` / `radial-gradient` on a surface                       | Deepstash's signature; we use flat ground + grain                            |
+| `box-shadow` for elevation                                               | We separate with hairline rules, not depth                                   |
+| A second accent colour                                                   | One accent is the whole discipline                                           |
+| `border-radius` above `3px` on a block, `2px` on a control               | Candy rounding is the look we are avoiding                                   |
+| Colour used as the only signal                                           | Fails contrast and colour-blind users                                        |
+| A hardcoded colour outside `tokens.css`, in CSS **or** an inline `style` | An inline literal cannot be swapped by the theme or reached by high contrast |
 
 Shadows are permitted in exactly one place: a focus ring, where it is an accessibility
 affordance rather than decoration.
@@ -43,7 +43,8 @@ affordance rather than decoration.
 - A visible focus state that is not only a colour change.
 - Reachable and operable by keyboard alone, in a sensible tab order.
 - An accessible name (visible text, `aria-label`, or a labelled control).
-- Contrast ≥ 4.5:1 for body text, ≥ 3:1 for large text and UI boundaries.
+- Contrast ≥ 4.5:1 for every text role against its own ground, faint included — there
+  is no ornament exemption — and ≥ 3:1 for large text and UI boundaries.
 - Motion behind `prefers-reduced-motion`.
 
 `eslint-plugin-jsx-a11y` runs as **errors** in CI check 1. Do not silence a rule to pass;
