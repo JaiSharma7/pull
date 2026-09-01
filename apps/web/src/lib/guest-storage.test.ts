@@ -51,6 +51,24 @@ describe('tokenIsGuest', () => {
     }
   });
 
+  it('fails CLOSED for a session it cannot classify', () => {
+    /*
+     * The installed @supabase/auth-js already has a branch that saves a session with the
+     * `user` key deleted (when `auth.userStorage` is configured). Under the old rule that
+     * read as "not a guest", which meant `localStorage` -- every guest token in the one
+     * place this module exists to keep them out of, with no test failing.
+     */
+    expect(tokenIsGuest(JSON.stringify({ access_token: 'a', expires_at: 1 }))).toBe(true);
+    expect(tokenIsGuest(JSON.stringify({ access_token: 'a', user: null }))).toBe(true);
+  });
+
+  it('still treats a non-session value as not a guest', () => {
+    // The PKCE code verifier and friends are not sessions and must stay in localStorage,
+    // or a sign-in link opened in a fresh tab has nothing to verify against.
+    expect(tokenIsGuest('"a-code-verifier-string"')).toBe(false);
+    expect(tokenIsGuest(JSON.stringify({ expires_at: 1 }))).toBe(false);
+  });
+
   it('does not accept a truthy non-boolean', () => {
     expect(tokenIsGuest(JSON.stringify({ user: { is_anonymous: 'true' } }))).toBe(false);
     expect(tokenIsGuest(JSON.stringify({ user: { is_anonymous: 1 } }))).toBe(false);
@@ -92,9 +110,14 @@ describe('createSplitAuthStorage', () => {
     expect(store.getItem(KEY)).toBe(readerToken);
   });
 
-  it('adopts a guest token already in localStorage, then moves it on the next write', () => {
-    // The upgrade path. A guest signed in before this module existed must not be signed
-    // out by the deploy that adds it.
+  it('migrates a stranded guest token on the READ, not on the next write', () => {
+    /*
+     * Found live by the security review of #48. auth-js does not re-persist a session it
+     * just recovered, and only refreshes inside a 90-second expiry margin -- so a guest who
+     * opens the app, reads, and closes the browser performs no `setItem` at all. Waiting
+     * for a write left their token in `localStorage` across the restart, which is the exact
+     * leak this module exists to close.
+     */
     const session = fake();
     const local = fake();
     local.map.set(KEY, guestToken);
@@ -102,36 +125,54 @@ describe('createSplitAuthStorage', () => {
 
     expect(store.getItem(KEY)).toBe(guestToken);
 
-    store.setItem(KEY, guestToken);
+    // One read is enough. No write happens in this test at all.
     expect(session.map.get(KEY)).toBe(guestToken);
     expect(local.map.has(KEY)).toBe(false);
   });
 
-  it('prefers the reader token when a stale guest copy is also present', () => {
+  it('evicts a stranded guest token even when sessionStorage refuses the move', () => {
+    const local = fake();
+    local.map.set(KEY, guestToken);
+    const session: KeyValueStore = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('storage disabled');
+      },
+      removeItem: () => undefined,
+    };
+
+    const store = createSplitAuthStorage(session, local);
+    // The caller still gets a working session for this page's lifetime...
+    expect(store.getItem(KEY)).toBe(guestToken);
+    // ...but localStorage, where it must never be, no longer holds it.
+    expect(local.map.has(KEY)).toBe(false);
+  });
+
+  it('leaves a reader token in localStorage alone on read', () => {
+    const session = fake();
+    const local = fake();
+    local.map.set(KEY, readerToken);
+    const store = createSplitAuthStorage(session, local);
+
+    expect(store.getItem(KEY)).toBe(readerToken);
+    expect(local.map.get(KEY)).toBe(readerToken);
+    expect(session.map.has(KEY)).toBe(false);
+  });
+
+  it('never hands this tab another reader signed in on the same machine', () => {
     /*
-     * Codex P1 on #48, and it asserted the bug the other way round before this.
+     * The security finding on #48, and this file asserted the opposite for two commits.
      *
-     * `sessionStorage` is per-tab and `localStorage` is shared, so a guest reading in tab A
-     * cannot see that tab B signed in with an address. Preferring the session copy signs
-     * the converted reader back into the throwaway account they just left.
+     * Shared machine: Bob is a guest in this tab (`sessionStorage`); Alice signs in with
+     * her email in another (`localStorage`, shared). Preferring the account with an address
+     * hands Bob Alice's Library, her notes and her address on /account. Nothing at this
+     * layer can tell that apart from "the same person converted in another tab", so the
+     * preference resolves toward the smaller blast radius: this tab's own session.
      */
     const session = fake();
     const local = fake();
     session.map.set(KEY, guestToken);
     local.map.set(KEY, readerToken);
-
-    expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(readerToken);
-  });
-
-  it('prefers the session copy when both are guest tokens', () => {
-    // The tie-break reorders exactly one combination -- a guest shadowing a reader -- and
-    // without this case, dropping `&& !tokenIsGuest(fromLocal)` from it changes nothing
-    // any test can see.
-    const session = fake();
-    const local = fake();
-    const older = JSON.stringify({ access_token: 'older', user: { id: 'u', is_anonymous: true } });
-    session.map.set(KEY, guestToken);
-    local.map.set(KEY, older);
 
     expect(createSplitAuthStorage(session, local).getItem(KEY)).toBe(guestToken);
   });
@@ -154,8 +195,7 @@ describe('createSplitAuthStorage', () => {
     expect(local.map.has(KEY)).toBe(false);
   });
 
-  it('prefers the session copy when neither is a stale guest shadowing a reader', () => {
-    // The tie-break is narrow on purpose: it reorders exactly one combination.
+  it('reads this tab first whatever the other store holds', () => {
     const session = fake();
     const local = fake();
     session.map.set(KEY, readerToken);

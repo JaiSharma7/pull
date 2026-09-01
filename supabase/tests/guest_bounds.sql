@@ -422,6 +422,33 @@ begin
     when check_violation then null;
   end;
 
+  -- THE MONTH-BEARING CASE IS DELIBERATELY NOT ASSERTED HERE, and that is worth a note so
+  -- the next person does not think it was forgotten.
+  --
+  -- 20260901230000 moved this guard from comparing the argument to evaluating the cutoff,
+  -- because an interval comparison normalises a month to thirty days while the predicate
+  -- below uses calendar arithmetic. `interval '1 mon -29 days'` is the demonstration: it
+  -- compares as one day (so the old guard passed it), and on 2026-03-29 its cutoff is
+  -- 2026-03-29 itself -- every guest in the product, deleted mid-session.
+  --
+  -- But the divergence only exists when the month being stepped back over is shorter than
+  -- thirty days, or when the day-of-month clamps. Checked against Postgres: that same
+  -- interval yields a cutoff of one day ago on 2026-07-15, and today it does not trip the
+  -- guard at all. So an assertion written with a literal interval passes or fails
+  -- depending on the date CI happens to run, which is a flaky test rather than a
+  -- regression test, and a flaky test in a suite this size costs more than the coverage
+  -- is worth. The guard is written on the cutoff for the reason the migration states; this
+  -- comment is the record that the gap is known and unasserted.
+
+  -- Null, which was safe only by accident before: every downstream comparison went
+  -- null so nothing was selected. An irreversible delete should not rely on that.
+  begin
+    perform public.sweep_guest_accounts(null::interval);
+    raise exception 'sweep_guest_accounts accepted a null interval rather than refusing it.';
+  exception
+    when check_violation then null;
+  end;
+
   select count(*) into guest_left   from auth.users u where u.id = guest;
   select count(*) into reader_left  from auth.users u where u.id = reader;
   select count(*) into regular_left from auth.users u where u.id = regular;

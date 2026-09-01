@@ -72,10 +72,16 @@ address:
   need an account we can attribute the request to. (The first two are not yet exposed in
   the app for anyone; the limit is in the database, so it holds whenever they are.)
 - **We delete it for you.** A guest session that has not been used for a day is removed
-  outright, along with everything keyed to it. You do not have to ask. A day is short on
-  purpose: a guest account is an identity nobody can prove they own, holding a reader's
-  stashes, notes and history, so the shorter it exists the less there is to lose. Come
-  back the next evening and it is still there; come back on Monday and it is not.
+  outright **from our database**, along with everything keyed to it. You do not have to
+  ask. A day is short on purpose: a guest account is an identity nobody can prove they own,
+  holding a reader's stashes, notes and history, so the shorter it exists the less there is
+  to lose. Come back the next evening and it is still there; come back on Monday and it is
+  not.
+
+  What that does not cover, said plainly rather than left to the word "everything": the
+  copy your own browser keeps for offline reading. Clearing the site's data in your browser
+  is what removes that, and on a shared computer it is worth doing. We are working on
+  clearing it for you when a session ends.
 
 Signing in afterwards starts a fresh account. A guest session is not carried over — there is
 no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
@@ -241,12 +247,21 @@ Three things survive, none of them attached to you:
   what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
 
-**A guest session is deleted for you.** Unused for a day, it is removed outright —
-account row, preferences, history, everything keyed to it — by a scheduled sweep
-(`sweep_guest_accounts`). This is the one place where the "while your account exists,
-your data exists" rule above does not hold, and deliberately: a guest session has no
-address, so nobody can come back to it and nobody can ask us to delete it. Keeping it
+**A guest session is deleted for you.** Unused for a day, it is removed outright from the
+database — account row, preferences, history, everything keyed to it — by a scheduled
+sweep (`sweep_guest_accounts`). This is the one place where the "while your account
+exists, your data exists" rule above does not hold, and deliberately: a guest session has
+no address, so nobody can come back to it and nobody can ask us to delete it. Keeping it
 indefinitely would be hoarding reading history belonging to people we cannot contact.
+
+The sweep reaches our database and not your device. The offline copy the app keeps in your
+browser — the Pulls it cached to read without a connection, and anything you wrote while
+offline that had not yet been sent — is not cleared when the session ends, and it is not
+scoped to one reader, so on a shared computer an offline load can show the previous
+person's cached feed. That is a gap we are closing rather than a design decision, and it is
+recorded here because a policy that said "everything" while that was true would be the
+kind of claim this document exists not to make. Clearing the site's data in your browser
+removes it today.
 
 Anything published under a future community feature is covered in the Terms.
 

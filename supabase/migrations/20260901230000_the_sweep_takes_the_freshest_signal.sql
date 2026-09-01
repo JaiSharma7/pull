@@ -73,17 +73,35 @@ declare
   stale   uuid[];
   removed int;
 begin
-  -- A floor on the argument, because this is an irreversible bulk delete of accounts
-  -- with no soft-delete and no dry run. `sweep_guest_accounts(interval '-100 years')`
-  -- would take out every guest session in the product including ones minted a second
-  -- ago. Only `postgres` can call it, so this is a footgun rather than a hole -- and a
-  -- footgun on a delete of `auth.users` is worth one line.
+  -- A floor, because this is an irreversible bulk delete of accounts with no soft-delete
+  -- and no dry run. `sweep_guest_accounts(interval '-100 years')` would take out every
+  -- guest session in the product including ones minted a second ago. Only `postgres` can
+  -- call it, so this is a footgun rather than a hole -- and a footgun on a delete of
+  -- `auth.users` is worth the lines.
   --
-  -- The default sits on this floor rather than above it, so the guard is not theoretical:
-  -- an operator reaching for a shorter interval is reaching past the shortest lifetime
-  -- the product is willing to offer.
-  if p_older_than < interval '1 day' then
-    raise exception 'sweep_guest_accounts refuses an age below one day (got %)', p_older_than
+  -- IT GUARDS THE CUTOFF, NOT THE ARGUMENT, and the difference is not pedantry. Comparing
+  -- intervals uses Postgres's normalisation, where a month is thirty days; the predicate
+  -- below uses CALENDAR arithmetic, where it is however long the month actually is. The
+  -- two disagree, so a month-bearing interval passes an interval comparison and still
+  -- lands on a cutoff of now(). The security review of #48 verified it on the hosted
+  -- database:
+  --
+  --   interval '1 mon -29 days' < interval '1 day'                      -> false
+  --   timestamptz '2026-03-29 12:00+00' - interval '1 mon -29 days'     -> 2026-03-29 12:00+00
+  --
+  -- So `sweep_guest_accounts(interval '1 mon -29 days')` run on 29 March passed the old
+  -- guard and then deleted every guest in the product, mid-session, up to the batch limit
+  -- -- while 20260901220000's comment claimed it "refuses anything below one day". A guard
+  -- that is wrong is worse than no guard, because the comment above it is what the next
+  -- operator trusts.
+  --
+  -- Evaluating `now() - p_older_than` asks the only question that matters: how recent is
+  -- the cutoff this call will actually use. `null` is refused explicitly rather than left
+  -- to fall through -- it was harmless by accident (every comparison downstream goes null,
+  -- so nothing is selected), and an irreversible delete should not rely on that.
+  if p_older_than is null or now() - p_older_than > now() - interval '1 day' then
+    raise exception
+      'sweep_guest_accounts refuses a cutoff newer than one day ago (got %)', p_older_than
       using errcode = 'check_violation';
   end if;
 

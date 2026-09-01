@@ -8,9 +8,15 @@
  * the server: `localStorage` survives a browser restart, so on a shared or public machine
  * the next person to open the browser lands inside the previous guest's session — their
  * stashes, their notes, their history — with no sign-in wall in the way and nothing on
- * screen to suggest the account is not theirs. That is the one way this product can leak
- * one reader's material to another, and it does not need a bug to happen: it is what
- * "stay signed in" means, applied to an account nobody owns.
+ * screen to suggest the account is not theirs. It does not need a bug to happen: it is
+ * what "stay signed in" means, applied to an account nobody owns.
+ *
+ * It is NOT the only place one reader's material can reach another, and this comment said
+ * it was until the review of #48. `lib/offline.ts` keeps the cached feed and any unsent
+ * writes in IndexedDB, nothing in the app ever clears either store, and `readCachedPulls`
+ * has no user filter -- so an offline load can render the previous person's cached feed to
+ * whoever is at the machine. That is a real gap, it is filed separately, and closing this
+ * one does not close it. `docs/privacy.md` says so rather than implying otherwise.
  *
  * So: a guest's token goes to `sessionStorage`, which the browser discards when the tab
  * is closed, and everybody else's stays in `localStorage`, where "stay signed in" is
@@ -41,21 +47,46 @@ export interface KeyValueStore {
  *
  * `=== true` for the same reason `isGuest` uses it: `is_anonymous` is absent from every
  * token minted before anonymous sign-ins were switched on, and absent means *not a
- * guest*. Anything unparseable is treated as not-a-guest too, which is the safe
- * direction — the cost of being wrong is a session that outlives a browser restart, and
- * the cost of guessing the other way is signing a real reader out when the shape of
- * supabase-js's stored value changes.
+ * guest*.
+ *
+ * WHAT HAPPENS WHEN THE SHAPE IS NOT THE ONE WE EXPECT, which is the whole security
+ * question here and which this function got wrong until the review of #48. The old rule
+ * was "anything unreadable is not a guest", and not-a-guest is written to `localStorage` —
+ * so a change in supabase-js's stored shape would silently put every guest token in
+ * exactly the place the module exists to keep them out of, with no test failing.
+ *
+ * That is not hypothetical. The installed `@supabase/auth-js` ALREADY has a branch that
+ * saves a session with the `user` key deleted (taken when `auth.userStorage` is
+ * configured), and `@supabase/ssr` stores a base64 envelope. Either arriving through a
+ * dependency bump would flip every guest to `localStorage`.
+ *
+ * So the answer now depends on whether the value looks like a session at all:
+ *
+ *   * not JSON, or not an object -> NOT a guest. This is the PKCE code verifier and the
+ *     other non-session keys supabase-js keeps, and they must stay in `localStorage` or a
+ *     sign-in link opened in a fresh tab has nothing to verify against.
+ *   * an object with a readable `user` -> the claim decides. Absent `is_anonymous` means a
+ *     token minted before anonymous sign-ins existed, which is a reader.
+ *   * an object that carries an `access_token` but no readable `user` -> treated as a
+ *     GUEST. This is the fail-closed case: a session we cannot classify is confined to the
+ *     tab rather than persisted. The cost of being wrong is signing a reader out, which
+ *     they can undo with an email; the cost of the other direction is handing the next
+ *     person at a shared machine somebody's reading, which nobody can undo.
  */
 export function tokenIsGuest(value: string): boolean {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed !== 'object' || parsed === null) return false;
-    const user = (parsed as { user?: unknown }).user;
-    if (typeof user !== 'object' || user === null) return false;
-    return (user as { is_anonymous?: unknown }).is_anonymous === true;
+    parsed = JSON.parse(value);
   } catch {
     return false;
   }
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const record = parsed as { user?: unknown; access_token?: unknown };
+  const user = record.user;
+  if (typeof user === 'object' && user !== null) {
+    return (user as { is_anonymous?: unknown }).is_anonymous === true;
+  }
+  return typeof record.access_token === 'string';
 }
 
 /**
@@ -85,31 +116,61 @@ export function createSplitAuthStorage(
 
   return {
     /*
-     * `sessionStorage` first, EXCEPT that an account with an address outranks a guest.
+     * This tab's own storage first, always. No tie-break.
      *
-     * The ordinary case is one store holding one token, and then this is just "wherever it
-     * is". The tie is the interesting part, and a plain `??` got it wrong: `sessionStorage`
-     * is per-tab while `localStorage` is shared, so a guest reading in tab A cannot see
-     * that tab B has since signed in with an email address. Tab A's own `sessionStorage`
-     * still holds the guest token; `localStorage` now holds the reader's. Preferring the
-     * session copy would sign the converted reader back into the throwaway account they
-     * just left — in the tab they are most likely to still have open.
+     * It had one for a while, and reverting it is the most consequential line in this file.
+     * Codex found that a stale guest tab could destroy a converted reader's session, which
+     * was true and had two halves: the tab READ the guest token, and its next write then
+     * REMOVED the reader's token from `localStorage`. The fix preferred the reader's token
+     * here — and the security review of #48 showed what that costs:
      *
-     * Resolved toward the account that can be recovered. A guest session is unreachable by
-     * design once it is gone, so mistakenly keeping the reader's costs a browser refresh
-     * and mistakenly keeping the guest's costs an account nobody can get back into.
+     *   A shared library machine. Bob is reading as a guest in tab A, so his token is in
+     *   that tab's `sessionStorage`. Alice signs in with her email in tab B, so hers is in
+     *   the shared `localStorage`. Bob reloads. Preferring the account with an address
+     *   hands Bob Alice's session — her Library, her notes, her address on /account.
      *
-     * The fallback to `localStorage` is also the upgrade path: a guest whose token was
-     * written there before this module existed keeps their session, and the first
-     * `setItem` of the hour — supabase-js refreshes well inside `jwt_expiry` — moves it
-     * across. Nobody is signed out by the deploy that adds this.
+     * There is no rule here that can tell "the same person converted in another tab" from
+     * "a different person signed in on this machine", because at this layer the two are
+     * the same two values. So the preference is resolved toward the SMALLER blast radius,
+     * and cross-reader escalation is far larger than one tab of one person's own session
+     * being out of date.
+     *
+     * Reverting it costs nothing that mattered, because the damaging half of Codex's
+     * finding is fixed independently in `setItem`: a guest write never removes a non-guest
+     * token. The converted reader's persistence survives either way. What changes is only
+     * that a tab which never converted goes on being the guest it always was — which is
+     * also the honest description of that tab.
      */
     getItem: (key) => {
       const fromSession = guard(() => session.getItem(key), null);
+      if (fromSession !== null) return fromSession;
+
       const fromLocal = guard(() => local.getItem(key), null);
-      if (fromSession === null) return fromLocal;
-      if (fromLocal === null) return fromSession;
-      return tokenIsGuest(fromSession) && !tokenIsGuest(fromLocal) ? fromLocal : fromSession;
+      if (fromLocal === null) return null;
+
+      /*
+       * The upgrade path, and it MIGRATES rather than merely reading.
+       *
+       * A guest token written to `localStorage` before this module shipped is moved across
+       * here, on the read, because waiting for a write does not work: auth-js's
+       * `_recoverAndRefresh` deliberately does not re-persist a session it just loaded, and
+       * it only refreshes inside a 90-second expiry margin. A guest who opens the app,
+       * reads for ten minutes and closes the browser performs no `setItem` at all — so the
+       * old comment here, which promised "the first setItem of the hour moves it across",
+       * described a write that a short session never makes. Their token stayed in
+       * `localStorage`, survived the restart, and greeted the next person at that machine.
+       * Found live in the review of #48.
+       *
+       * The eviction is unconditional even when the `sessionStorage` write fails, because
+       * `localStorage` is the one place this token must not be. A guest whose browser
+       * refuses `sessionStorage` keeps the session in memory for as long as the page lives,
+       * which is what the sign-in screen already promises.
+       */
+      if (tokenIsGuest(fromLocal)) {
+        write(session, key, fromLocal);
+        guard(() => local.removeItem(key), undefined);
+      }
+      return fromLocal;
     },
 
     setItem: (key, value) => {
