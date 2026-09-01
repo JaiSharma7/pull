@@ -308,12 +308,30 @@ describe('segment', () => {
  */
 describe('reuse skips the paid work', () => {
   function harness(reuse: { workId: string; summaryId: string } | null) {
-    const calls = { summary: 0, embedding: 0, createSummary: 0, insertPulls: 0 };
+    const calls = {
+      summary: 0,
+      embedding: 0,
+      createSummary: 0,
+      insertPulls: 0,
+      insertQuizQuestions: 0,
+    };
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
     const received: {
-      upsertWork?: { kind: string; rightsStatus: string; topics: string[] };
+      upsertWork?: {
+        kind: string;
+        rightsStatus: string;
+        topics: string[];
+        qualityScore: number | null;
+        trustScore: number | null;
+      };
       createSummary?: { authorId: string | null; visibility: string };
+      insertQuizQuestions?: readonly {
+        pullId: string;
+        prompt: string;
+        answer: string;
+        distractors: string[];
+      }[];
     } = {};
 
     const deps = {
@@ -358,7 +376,13 @@ describe('reuse skips the paid work', () => {
       },
       db: {
         findPublishedSummaryByHash: async (_hash: string, _requesterId: string | null) => reuse,
-        upsertWork: async (input: { kind: string; rightsStatus: string; topics: string[] }) => {
+        upsertWork: async (input: {
+          kind: string;
+          rightsStatus: string;
+          topics: string[];
+          qualityScore: number | null;
+          trustScore: number | null;
+        }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
         },
@@ -367,9 +391,38 @@ describe('reuse skips the paid work', () => {
           received.createSummary = input;
           return 's1';
         },
-        insertPulls: async () => {
+        /*
+         * Returns a row per generated Pull, which it did not before.
+         *
+         * `[]` meant `questionsToWrite` always paired nothing, so `cards` never
+         * reached `insertQuizQuestions` — and the fake did not implement that
+         * method at all. The suite was green because the one path that spends
+         * money and writes permanent rows was never taken; with a real row it
+         * threw `db.insertQuizQuestions is not a function`. The 38 `as never`
+         * casts at the call sites are what let a missing member compile.
+         *
+         * Ordinals are the array index because that is what the real
+         * `insertPulls` assigns, and returning them REVERSED would be the better
+         * fake — `questionsToWrite` pairs on the returned ordinal precisely
+         * because PostgREST may answer in any order. That is asserted separately
+         * in scoring.test.ts rather than baked in here, so this stays the shape
+         * a caller actually sees.
+         */
+        insertPulls: async (_summaryId: string, pulls: readonly unknown[]) => {
           calls.insertPulls++;
-          return [];
+          return pulls.map((_, ordinal) => ({ ordinal, id: `p${ordinal}` }));
+        },
+        insertQuizQuestions: async (
+          rows: readonly {
+            pullId: string;
+            prompt: string;
+            answer: string;
+            distractors: string[];
+          }[],
+        ) => {
+          calls.insertQuizQuestions++;
+          received.insertQuizQuestions = rows;
+          return undefined;
         },
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,
@@ -423,6 +476,81 @@ describe('reuse skips the paid work', () => {
     const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
     expect(acquired.jumpTo).toBe('publish');
+  });
+
+  /*
+   * The `cards` step's question write, which nothing exercised.
+   *
+   * `insertPulls` used to return `[]` in this fake, so `questionsToWrite` paired
+   * nothing and `insertQuizQuestions` was never called — which was the only
+   * reason the suite passed, because the fake did not implement that method.
+   * The step that spends money and writes permanent rows had no coverage at all.
+   */
+  it('writes a question for every generated Pull that carries one', async () => {
+    const { deps, calls, received } = harness(null);
+
+    const cards = await runPipelineStep('cards', {
+      ...deps,
+      priorOutputs: {
+        template: { summaryId: 's1' },
+        synthesize: {
+          pulls: [
+            {
+              headline: 'h0',
+              body: 'b0',
+              whyItMatters: 'w0',
+              question: { prompt: 'q0?', answer: 'a0', distractors: ['x', 'y', 'z'] },
+            },
+            // No question: a source too thin to support a fair one omits it
+            // rather than inventing it, and this must not become "undefined".
+            { headline: 'h1', body: 'b1', whyItMatters: 'w1' },
+          ],
+        },
+      },
+    } as never);
+
+    expect(calls.insertQuizQuestions).toBe(1);
+    expect(received.insertQuizQuestions).toEqual([
+      { pullId: 'p0', prompt: 'q0?', answer: 'a0', distractors: ['x', 'y', 'z'] },
+    ]);
+    expect(cards.output).toMatchObject({ questions: 1 });
+  });
+
+  it('writes no questions at all rather than calling with an empty list', async () => {
+    const { deps, calls } = harness(null);
+
+    await runPipelineStep('cards', {
+      ...deps,
+      priorOutputs: {
+        template: { summaryId: 's1' },
+        synthesize: { pulls: [{ headline: 'h', body: 'b', whyItMatters: 'w' }] },
+      },
+    } as never);
+
+    expect(calls.insertQuizQuestions).toBe(0);
+  });
+
+  /*
+   * The scores a requester must not be able to set.
+   *
+   * This harness's job is `visibility: 'private'`, which is what
+   * `enqueue_generation_job` gives any signed-in reader by default. `works` is
+   * adopted by `content_hash`, so a score written here would be inherited by the
+   * canonical summary of the same source and pin 0.24 of its ranking for
+   * everyone. Null means `upsertWork` omits the columns and their defaults hold.
+   */
+  it('writes no ranking scores from a job that is not publishing canonically', async () => {
+    const { deps, received } = harness(null);
+
+    await runPipelineStep('template', {
+      ...deps,
+      priorOutputs: {
+        acquire: { text: 't', hash: 'h', title: 'ti', kind: 'essay', rights: 'public_domain' },
+        synthesize: SYNTHESIZED,
+      },
+    } as never);
+
+    expect(received.upsertWork).toMatchObject({ qualityScore: null, trustScore: null });
   });
 
   it('leaves a new source to walk every step', async () => {

@@ -1,0 +1,130 @@
+/*
+ * Search results.
+ *
+ * A catalogue, not a feed. The rows are separated by hairlines rather than set in
+ * cards, because a card is the feed's unit — one idea met alone — and a result is
+ * a pointer to somewhere rather than the thing itself. Every colour, rule and
+ * radius is a token; no gradient, no shadow, no second accent. See law 1 and
+ * docs/design.md.
+ *
+ * Nothing here scrolls inside itself. An inner scroll pane is how an unbounded
+ * list gets built by accident, and law 7 says the page must have a bottom the
+ * reader can reach.
+ */
+
+.search__form {
+  margin: 0 0 var(--space-5);
+}
+
+.search__row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+/*
+ * The input takes the room and the button takes what it needs. `min-width: 0` is
+ * load-bearing: a flex item's default minimum is its content width, so without it
+ * the search field refuses to shrink below its placeholder and the button is
+ * pushed off the edge on a 375px screen.
+ */
+.search__row .field__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.search__row .btn {
+  flex: 0 0 auto;
+}
+
+/*
+ * The count leads the results, so it is set larger than the metadata around it —
+ * it is a finding rather than a label. Tabular figures because it is a number
+ * first and a sentence second, and proportional digits make a count look
+ * approximate.
+ */
+.search__count {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  margin: 0 0 var(--space-3);
+}
+
+.search__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.search__item {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.search__headline {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: 0 0 var(--space-2);
+}
+
+.search__body {
+  margin: 0 0 var(--space-2);
+  color: var(--text-soft);
+}
+
+.search__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+/*
+ * "You know this" is a word, not a colour.
+ *
+ * Design law 5: colour is never the only signal. The Delta annotates a result the
+ * reader has already met rather than hiding it, and the annotation has to survive
+ * a monochrome screen and a reader who cannot distinguish the accent.
+ *
+ * Which only holds if the words can be read. `--text-faint` measures 2.72:1 on the
+ * light ground and 3.78:1 on the dark one, against the 4.5:1 docs/design.md asks of
+ * body text — and it is the one text token `[data-contrast='high']` does not remap,
+ * so the high-contrast setting could not rescue it either. `--text-muted` measures
+ * 5.18:1 and 6.82:1: the quietest legible step this palette has. It is also what
+ * `.meta` already sets, and the declaration stays so this reason stays with the rule.
+ */
+.search__known {
+  color: var(--text-muted);
+}
+
+/*
+ * The neighbours the words missed. One line each: they are a weaker claim than a
+ * word match — a measurement rather than a match — so they get less room, and the
+ * heading above them says where they came from.
+ */
+.search__list--close .search__item {
+  padding: var(--space-3) 0;
+}
+
+/*
+ * A headline that happens to be a button, so it is typeset as a headline. `.btn`
+ * brings the metadata face's uppercase and +0.06em tracking with it, and promoting
+ * only the family left an idea rendering as Fraunces ALL CAPS — docs/design.md
+ * gives uppercase to the mono role, never to the words themselves. The tracking is
+ * the one `base.css` gives h1–h4, so a close match is set like the
+ * `.search__headline` above it rather than like a label.
+ */
+.search__close-link {
+  text-align: left;
+  padding-left: 0;
+  padding-right: 0;
+  font-family: var(--font-display);
+  font-size: var(--step-0);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}

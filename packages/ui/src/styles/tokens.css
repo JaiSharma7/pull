@@ -107,7 +107,29 @@
   }
 }
 
+/*
+ * A forced theme has to tell the BROWSER, not only the stylesheet.
+ *
+ * `base.css` declares `color-scheme: light dark`, which is right for the default
+ * — it lets the user agent paint scrollbars, form autofill and native controls
+ * to match whatever the OS is set to. It is wrong the moment a reader overrides
+ * that here. Measured: an OS in dark mode with "Paper" chosen renders the bone
+ * palette correctly and keeps a dark scrollbar and dark autofill, because the
+ * UA is still being told the page can be either.
+ *
+ * So each forced theme names exactly one scheme. The page was always right; the
+ * furniture around it was not, and a display setting that leaves the scrollbar
+ * arguing with the page has not really been applied.
+ *
+ * Only these two blocks. `[data-contrast]` and `[data-text]` change ink and
+ * scale, not which of the two grounds the reader is on.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --surface: #14120e;
   --surface-raised: #1c1a16;
   --text: #f4f1ea;

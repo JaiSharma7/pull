@@ -69,7 +69,28 @@ export interface CanonicalSummary {
   title: string;
   elevatorPitch: string;
   whyItMatters: string;
-  pulls: { headline: string; body: string; whyItMatters: string }[];
+  pulls: {
+    headline: string;
+    body: string;
+    whyItMatters: string;
+    /**
+     * A recall question about this idea, produced by the same call.
+     *
+     * `quiz_questions` has been read by `get_due_reviews` since round 1 and
+     * written by nothing: six rows, all seeded, against 156 pulls. `recall` is
+     * 45% of the interrupt distribution, so Interleaved Recall — the mechanic
+     * this product is built on — had nothing to ask about 96% of the library.
+     *
+     * Optional for the same reason `topics` is: a provider that predates the
+     * field is still a valid provider, and an absent question means the
+     * interrupt falls back to the self-graded reveal rather than failing.
+     *
+     * It rides on the synthesis call rather than becoming a step of its own, so
+     * it costs no extra request and only a few output tokens — the same trade
+     * `topics` already made, and the reason both are affordable at all.
+     */
+    question?: { prompt: string; answer: string; distractors?: string[] };
+  }[];
   /**
    * Topic slugs this work belongs under, from the fixed taxonomy in `pipeline.ts`.
    *
@@ -172,6 +193,13 @@ export const stubSummaryProvider: SummaryProvider = {
                 : `Placeholder body for ${input.workTitle}, produced without a model.`,
             whyItMatters:
               'The stub provider produces one Pull so the pipeline can be exercised end to end without an API key.',
+            // A real question, so the no-key path exercises the write rather
+            // than the skip. Same reasoning as the real topic slug below.
+            question: {
+              prompt: `What does ${input.workTitle} claim?`,
+              answer: 'That the stub provider produced this idea.',
+              distractors: ['Nothing at all.', 'Something a model wrote.', 'A different work.'],
+            },
           },
         ],
         // A real slug, not a placeholder: `upsertWork` looks these up against

@@ -115,3 +115,84 @@
   text-decoration: underline;
   text-underline-offset: 0.25em;
 }
+
+/*
+ * "Close to this" — ideas elsewhere in the library.
+ *
+ * A list of pointers rather than of cards, and set quieter than the source's own
+ * ideas: this is a way out of the page, not more of it. Hairlines only, per law 1.
+ *
+ * Quieter has a floor. `--text-faint` measures 2.72:1 on the light ground and
+ * 3.78:1 on the dark one, under the 4.5:1 docs/design.md asks of body text; the
+ * muted grey `.meta` already sets measures 5.18:1 and 6.82:1.
+ */
+.source__related-anchor {
+  margin: calc(var(--space-2) * -1) 0 var(--space-3);
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.source__related {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.source__related-item {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * A headline that happens to be a button. `.btn` brings the metadata face's
+ * uppercase and +0.06em tracking with it, and promoting only the family rendered
+ * these ideas as Fraunces ALL CAPS; uppercase is the mono role in docs/design.md.
+ * The tracking is the one `base.css` gives h1–h4, so a pointer is typeset like the
+ * headline it points at.
+ */
+.source__related-link {
+  text-align: left;
+  padding-left: 0;
+  padding-right: 0;
+  font-family: var(--font-display);
+  font-size: var(--step-0);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}
+
+/*
+ * An authored edge says what kind of disagreement or descent it is; a measured
+ * neighbour says nothing and gets no line at all. The accent marks the edge
+ * because a claim somebody made is the more interesting of the two — and it is
+ * accompanied by words, never carried by the colour alone.
+ */
+.source__related-kind {
+  margin: var(--space-1) 0 0;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/*
+ * A highlight.
+ *
+ * An underline and a faint ground, not a fill. `<mark>`'s default is a yellow
+ * block, which is both a second colour law 1 does not permit and the exact
+ * highlighter-pen look this design is the opposite of. The rule underneath is
+ * what carries it, so the mark survives a monochrome screen and a reader who
+ * cannot separate the accent from the text — design law 5.
+ */
+.source__mark {
+  background: var(--surface-raised);
+  color: inherit;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 1px;
+}
+
+.source__pull-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+}

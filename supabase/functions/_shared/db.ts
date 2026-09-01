@@ -83,7 +83,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       return reusable ? { workId: work.id, summaryId: reusable.id } : null;
     },
 
-    async upsertWork({ title, kind, contentHash, rightsStatus, topics }) {
+    async upsertWork({ title, kind, contentHash, rightsStatus, topics, qualityScore, trustScore }) {
       /*
        * File a newly created work under its topics.
        *
@@ -189,9 +189,31 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         'look up work',
       ) as { id: string }[] | null;
 
+      /*
+       * A canonical job re-scores the row it adopts; anything else leaves it
+       * alone.
+       *
+       * Without this, gating the write on visibility would have made the
+       * poisoning worse rather than better: a private job would create the row
+       * with the column defaults, and the canonical generation that later
+       * adopted it would decline to score it, so every pre-created work would
+       * sit at 0.5 forever with no way to correct it.
+       */
+      const rescore = async (id: string) => {
+        if (qualityScore === null || trustScore === null) return;
+        must(
+          await supabase
+            .from('works')
+            .update({ quality_score: qualityScore, trust_score: trustScore })
+            .eq('id', id),
+          'rescore adopted work',
+        );
+      };
+
       const found = existing?.[0];
       if (found) {
         await fileUnderTopics(found.id, { onlyIfUnclassified: true });
+        await rescore(found.id);
         return { workId: found.id, existing: true };
       }
 
@@ -217,6 +239,14 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           // summary creation. The enum is the rights posture in `content-policy.md`
           // made unbypassable, and inventing a value defeats exactly that.
           rights_status: rightsStatus,
+          // Omitted entirely when null, so the column defaults stand, rather
+          // than sent as null — both are `not null` with a 0.5 default, and an
+          // explicit null would fail the insert rather than fall back.
+          // `template` passes null for every job that is not publishing
+          // canonically; see `upsertWork`'s interface for the attack that makes
+          // that a boundary rather than a preference.
+          ...(qualityScore === null ? {} : { quality_score: qualityScore }),
+          ...(trustScore === null ? {} : { trust_score: trustScore }),
         })
         .select('id')
         .single();
@@ -234,6 +264,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           'adopt concurrently created work',
         ) as { id: string };
         await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
+        await rescore(raced.id);
         return { workId: raced.id, existing: true };
       }
 
@@ -338,6 +369,34 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       ) as { id: string; ordinal: number }[] | null;
 
       return (rows ?? []).map((r) => ({ id: r.id, ordinal: r.ordinal }));
+    },
+
+    async insertQuizQuestions(rows) {
+      if (rows.length === 0) return;
+      must(
+        await supabase
+          .from('quiz_questions')
+          .upsert(
+            rows.map((r) => ({
+              pull_id: r.pullId,
+              prompt: r.prompt,
+              answer: r.answer,
+              distractors: r.distractors,
+              kind: 'recall',
+            })),
+            // `(pull_id, kind)`, which is what `quiz_questions_pull_kind_key`
+            // actually is. `pull_id` alone raises 42P10 — there was no unique
+            // constraint on it, and a fake PipelineDb accepts any conflict
+            // target because it never reaches Postgres.
+            //
+            // Matches how `insertPulls` handles a retry: a step that partially
+            // wrote and then failed must converge on a second run rather than
+            // collide and fail permanently.
+            { onConflict: 'pull_id,kind' },
+          )
+          .select('id'),
+        'insert quiz questions',
+      );
     },
 
     async setPullEmbeddings(rows) {

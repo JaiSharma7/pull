@@ -66,6 +66,18 @@ export interface LibraryItem {
   whyItMatters: string | null;
   savedAt: string;
   work: { id: string; title: string; kind: string | null };
+  /**
+   * The `saved_items` row, as distinct from the Pull it points at.
+   *
+   * Every organising action — moving it into a stash, marking it for later,
+   * archiving it, attaching a note — updates the SAVE, not the Pull, and the
+   * Library previously had no reason to know the difference. It does now.
+   */
+  saveId: string;
+  stashId: string | null;
+  note: string | null;
+  archived: boolean;
+  readLater: boolean;
 }
 
 /** One source the reader has saved from, with its Delta. */

@@ -168,6 +168,32 @@ const SUMMARY_SCHEMA = {
           headline: { type: 'STRING' },
           body: { type: 'STRING' },
           whyItMatters: { type: 'STRING' },
+          /*
+           * One recall question per idea, from the same call.
+           *
+           * `distractors` are what turn the recall interrupt from a self-graded
+           * reveal into something that can actually be wrong — and grading three
+           * wrong answers against one right one is a comparison the client does,
+           * so no model is anywhere near the read path.
+           *
+           * Not in `required`: a source too thin to support a fair question
+           * should omit it rather than invent one, and `get_due_reviews` already
+           * copes with a pull that has none.
+           */
+          question: {
+            type: 'OBJECT',
+            properties: {
+              prompt: { type: 'STRING' },
+              answer: { type: 'STRING' },
+              distractors: {
+                type: 'ARRAY',
+                items: { type: 'STRING' },
+                minItems: 3,
+                maxItems: 3,
+              },
+            },
+            required: ['prompt', 'answer', 'distractors'],
+          },
         },
         required: ['headline', 'body', 'whyItMatters'],
       },

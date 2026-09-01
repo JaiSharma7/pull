@@ -1,0 +1,163 @@
+/*
+ * The catalogue.
+ *
+ * Index lines, not cards. A card is the feed's unit — one idea met alone — and a
+ * column of them is the exact screenshot law 7 says could be mistaken for a
+ * video feed with the sound off. A contents page could not be, which is why
+ * every row here is a name, a hairline and a number.
+ *
+ * Nothing scrolls inside itself. An inner scroll pane is how an unbounded list
+ * gets built by accident; the page must have a bottom the reader can reach.
+ *
+ * Every colour, rule and radius is a token. No gradient, no shadow, no second
+ * accent. See law 1 and docs/design.md.
+ */
+
+/*
+ * The size of the library, and of a topic. Tabular figures because these are
+ * numbers first and a sentence second, and proportional digits make a row of
+ * counts look approximate.
+ */
+.explore__totals {
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  margin: 0 0 var(--space-5);
+}
+
+.explore__parents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explore__parent {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * Name left, count right, on one baseline. `space-between` rather than a fixed
+ * column so the row is proportioned to the reading measure at every width —
+ * a new fixed rem dimension inside a layout rule is a smell.
+ */
+.explore__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/*
+ * The type ramp, stated once because it was not being followed.
+ *
+ * A name is content, so every name in this catalogue is the display face: a parent
+ * at `--step-2`, a child at `--step-0`, a source title at `--step-1`. The counts
+ * beside them are metadata, so they stay mono, uppercase and tracked. That is the
+ * split docs/design.md draws between the display and metadata roles.
+ *
+ * Following it takes two extra declarations on every name, because these are
+ * `.btn`s: the uppercase and the +0.06em arrive with the class, and changing the
+ * family and the size does not clear them. Left uncleared, a parent rendered as
+ * serif ALL CAPS while its own children rendered as mono ALL CAPS — the same word
+ * given two wrong answers. Names clear both and take the tightened tracking
+ * `base.css` gives h1–h4, so a topic is set like a heading, which is what it is.
+ */
+.explore__parent-name {
+  padding-left: 0;
+  padding-right: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}
+
+.explore__count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/*
+ * Children wrap inline rather than stacking. A parent with five children should
+ * read as one entry in a catalogue, not as six — and at 375px they still wrap
+ * onto as many lines as they need without a media query.
+ */
+.explore__children {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.explore__child {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+/* A name, so the display face — one step below its parent. See the ramp above. */
+.explore__child-name {
+  padding-left: 0;
+  padding-right: 0;
+  font-family: var(--font-display);
+  font-size: var(--step-0);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}
+
+/*
+ * The same muted grey as a parent's count, not a step fainter: it is the same kind
+ * of fact one level down. `--text-faint` measures 2.72:1 on the light ground and
+ * 3.78:1 on the dark one, under the 4.5:1 docs/design.md asks of body text.
+ */
+.explore__child-count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* One topic's sources. Same index treatment, one level down. */
+.explore__sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explore__source {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* A name, so the display face. See the ramp above `.explore__parent-name`. */
+.explore__source-title {
+  padding-left: 0;
+  padding-right: 0;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}
+
+.explore__source-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--text-soft);
+}
+
+.explore__source-meta {
+  margin: var(--space-2) 0 0;
+  text-transform: none;
+  letter-spacing: 0;
+}

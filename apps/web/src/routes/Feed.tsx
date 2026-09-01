@@ -14,8 +14,11 @@ import {
 } from '../lib/offline.js';
 import { createDwellTracker } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
+import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
+import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
+import * as stashApi from '../lib/stash-api.js';
 import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
@@ -34,6 +37,26 @@ const RETRY_MAX_MS = 5 * 60_000;
  * feel broken (law 3).
  */
 const CAN_SPEAK = speechSupported();
+const SHARE_LABEL = shareLabel(shareCapability(navigator));
+
+/**
+ * The calls a queued write replays into.
+ *
+ * Named once here rather than built per drain, and handed to `replayWrite` as a
+ * port so that the mapping itself — which kind becomes which call — stays
+ * testable without a Supabase client.
+ */
+const REPLAY_PORT: ReplayPort = {
+  savePull: api.savePull,
+  unsavePull: api.unsavePull,
+  recordRead: api.recordRead,
+  gradeRecall: api.gradeRecall,
+  saveExplanation: api.saveExplanation,
+  setConviction: api.setConviction,
+  updateSavedItem: stashApi.updateSavedItem,
+  createStash: stashApi.createStash,
+  deleteStash: stashApi.deleteStash,
+};
 
 /**
  * What the session rail shows.
@@ -95,6 +118,32 @@ export function Feed({
   const [loadingMore, setLoadingMore] = useState(false);
   /** The card being read aloud, if any. Null is silence. */
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+
+  /*
+   * What the share control actually did, which was previously unobservable.
+   *
+   * `shareOrCopy` has always returned an outcome and all three callers threw it
+   * away, so on the copy path the button said "Copy link", copied, and said
+   * nothing -- and a clipboard the browser refused looked identical to success.
+   * Scoped to one Pull rather than the screen because the feed shows several and
+   * a bare "Link copied." beside the wrong one is its own small lie.
+   */
+  const [shareStatus, setShareStatus] = useState<{ pullId: string; note: string } | null>(null);
+
+  async function share(row: FeedRow) {
+    setShareStatus(null);
+    const note = shareNote(
+      await shareOrCopy(
+        shareTarget({
+          origin: window.location.origin,
+          pullId: row.id,
+          headline: row.headline,
+          workTitle: row.work.title,
+        }),
+      ),
+    );
+    setShareStatus(note ? { pullId: row.id, note } : null);
+  }
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [done, setDone] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -238,24 +287,11 @@ export function Feed({
       setOffline(false);
       return drainPending(
         userId,
-        async (write) => {
-          if (write.kind === 'save') await api.savePull(write.pullId, userId);
-          else if (write.kind === 'unsave') await api.unsavePull(write.pullId, userId);
-          else if (write.kind === 'explain')
-            await api.saveExplanation(userId, write.pullId, write.text, write.mutationId);
-          else if (write.kind === 'conviction')
-            await api.setConviction(
-              write.pullId,
-              write.stance,
-              write.mutationId,
-              write.submittedAt,
-            );
-          // Queued by the Review screen, which has no drain of its own. This
-          // component is kept mounted by the shell precisely so the session's state
-          // survives a tab switch, which makes it the one place a drain can live.
-          else if (write.kind === 'recall') await api.gradeRecall(write.pullId, write.grade);
-          else await api.recordRead(write.pullId, 0, 0);
-        },
+        // Every kind is mapped in `replayWrite`, including the ones the Review
+        // screen and the Library queue. This component is kept mounted by the
+        // shell precisely so the session's state survives a tab switch, which
+        // makes it the one place a drain can live.
+        (write) => replayWrite(userId, write, REPLAY_PORT),
         // Read from the live auth session, not from component state. Signing
         // out unmounts this component rather than re-rendering it, so a ref
         // would stop updating at exactly the moment it matters and the drain
@@ -732,6 +768,9 @@ export function Feed({
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
             listening={speakingId === item.row.id}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
+            onShare={() => void share(item.row)}
+            shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
+            shareLabel={SHARE_LABEL}
           />
         ),
       )}
@@ -770,6 +809,9 @@ function PullCardInView({
   onOpenSource,
   onListen,
   listening,
+  onShare,
+  shareNote: shareOutcomeNote,
+  shareLabel: shareControlLabel,
 }: {
   row: FeedRow;
   saved: boolean;
@@ -781,6 +823,11 @@ function PullCardInView({
   /** Absent where the browser cannot speak, so no dead control is rendered. */
   onListen?: () => void;
   listening: boolean;
+  onShare: () => void;
+  /** What the last share attempt did, or null when there is nothing to say. */
+  shareNote: string | null;
+  /** Renamed on the way in so it does not shadow the `shareLabel` helper. */
+  shareLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -831,7 +878,16 @@ function PullCardInView({
         onListen={onListen}
         listening={listening}
         onOpenSource={onOpenSource}
+        onShare={onShare}
+        shareLabel={shareControlLabel}
       />
+      {/* Inside `feed__item`, not beside it: that div is the scroll-snap
+          target, and a sibling would break the card into two snap units. */}
+      {shareOutcomeNote && (
+        <p className="meta" role="status">
+          {shareOutcomeNote}
+        </p>
+      )}
     </div>
   );
 }

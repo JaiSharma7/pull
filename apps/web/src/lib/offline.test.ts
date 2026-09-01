@@ -6,14 +6,49 @@ import {
   hasPending,
   isOfflineFailure,
   onPendingQueued,
+  queueIfOffline,
   queueMutation,
   readCachedPulls,
+  writeScope,
   type PendingWrite,
 } from './offline.js';
+import { TRANSPORT_ERROR } from './rpc-error.js';
 import type { FeedRow } from './types.js';
 
 const USER_A = 'user-a';
 const USER_B = 'user-b';
+
+/**
+ * The pull a queued write names, for the kinds that name one.
+ *
+ * Not every kind does any more: an organising patch names a `saved_items` row
+ * and a collection write names a `stashes` row. The narrowing is what keeps
+ * these assertions about the writes they were written for.
+ */
+const pullOf = (m: PendingWrite): string => ('pullId' in m ? m.pullId : `not-a-pull:${m.kind}`);
+
+/**
+ * Run something with `navigator.onLine` pinned.
+ *
+ * Node has a `navigator` with no `onLine` at all, so leaving it alone means
+ * testing the branch that only fires under `undefined` — and every assertion
+ * about "the server refused this" would pass for the wrong reason the day the
+ * runtime grows the property. Pinned, and restored, at module scope because both
+ * `isOfflineFailure` and `queueIfOffline` turn on it.
+ */
+const withOnline = <T>(value: boolean | undefined, run: () => T): T => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    value: value === undefined ? undefined : { onLine: value },
+    configurable: true,
+  });
+  try {
+    return run();
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'navigator', original);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+};
 
 const row = (id: string): FeedRow => ({
   id,
@@ -57,8 +92,8 @@ describe('pending mutation queue', () => {
     await queueMutation(USER_A, { kind: 'save', pullId: 'y' });
 
     const applied: string[] = [];
-    const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
-      applied.push(`${kind}:${pullId}`);
+    const drained = await drainPending(USER_A, async (m) => {
+      applied.push(`${m.kind}:${pullOf(m)}`);
     });
 
     expect(drained).toBe(3);
@@ -75,9 +110,9 @@ describe('pending mutation queue', () => {
     await queueMutation(USER_A, { kind: 'save', pullId: 'other' });
 
     const applied: string[] = [];
-    const drained = await drainPending(USER_A, async ({ kind, pullId }) => {
-      applied.push(`${kind}:${pullId}`);
-      if (pullId === 'stuck') throw new Error('gone');
+    const drained = await drainPending(USER_A, async (m) => {
+      applied.push(`${m.kind}:${pullOf(m)}`);
+      if (pullOf(m) === 'stuck') throw new Error('gone');
     });
 
     // The failing write is attempted, its follow-up is skipped to preserve
@@ -87,8 +122,8 @@ describe('pending mutation queue', () => {
 
     // Both of the stuck pull's writes are still queued, still in order.
     const retried: string[] = [];
-    await drainPending(USER_A, async ({ kind, pullId }) => {
-      retried.push(`${kind}:${pullId}`);
+    await drainPending(USER_A, async (m) => {
+      retried.push(`${m.kind}:${pullOf(m)}`);
     });
     expect(retried).toEqual(['save:stuck', 'unsave:stuck']);
   });
@@ -185,6 +220,170 @@ describe('queued learning writes', () => {
   });
 });
 
+/**
+ * Organising a library with no connection.
+ *
+ * Law 3 promises unlimited stashing. Before these kinds existed, moving a save
+ * between collections on a train updated the screen optimistically, dropped the
+ * PATCH, and then asked the same dead connection for the whole library — so the
+ * reader watched their change disappear and their shelf turn into an error page
+ * at once.
+ */
+describe('queued library writes', () => {
+  it('carries an organising patch and the save it belongs to', async () => {
+    // The patch is the payload: which columns the reader touched and what they
+    // set them to. An entry that survives without it replays as nothing.
+    const patch = { stashId: 'st-1', note: 'Worth arguing with', archived: false };
+    await queueMutation(USER_A, { kind: 'organise', saveId: 'sv-1', patch });
+
+    const applied: PendingWrite[] = [];
+    const drained = await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(drained).toBe(1);
+    expect(applied).toEqual([{ kind: 'organise', saveId: 'sv-1', patch }]);
+  });
+
+  it('carries a collection’s client-minted id, name and parent', async () => {
+    // The id is minted before the first attempt, which is the whole reason a
+    // create is replayable: the retry collides on the primary key instead of
+    // making a second folder with the same name.
+    await queueMutation(USER_A, {
+      kind: 'stash-create',
+      stashId: 'st-9',
+      name: 'Field notes',
+      parentId: 'st-1',
+    });
+
+    const applied: PendingWrite[] = [];
+    await drainPending(USER_A, async (m) => {
+      applied.push(m);
+    });
+
+    expect(applied).toEqual([
+      { kind: 'stash-create', stashId: 'st-9', name: 'Field notes', parentId: 'st-1' },
+    ]);
+  });
+
+  it('holds a collection delete behind the create it followed, and lets other subjects past', async () => {
+    /*
+     * The one ordering in this feature that is not merely untidy to get wrong.
+     *
+     * A create replayed after its own delete brings back a collection the reader
+     * threw away — the delete finds no row, shrugs, and the create then lands.
+     * Both writes name the same `stashes.id`, so they share a scope and a stuck
+     * create holds the delete behind it. An unrelated saved item is a different
+     * subject and must not be held up by either.
+     */
+    const user = 'user-scopes';
+    await queueMutation(user, {
+      kind: 'stash-create',
+      stashId: 'st',
+      name: 'Field notes',
+      parentId: null,
+    });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(user, { kind: 'stash-delete', stashId: 'st' });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(user, { kind: 'organise', saveId: 'sv', patch: { archived: true } });
+
+    const attempted: string[] = [];
+    const drained = await drainPending(user, async (m) => {
+      attempted.push(writeScope(m));
+      // The parent row is not there yet — the create's first realistic failure.
+      if (m.kind === 'stash-create') throw new Error('foreign key violation');
+    });
+
+    expect(attempted).toEqual(['stash:st', 'save:sv']);
+    expect(drained).toBe(1);
+
+    // Neither collection write was lost, and they still replay in order.
+    const retried: string[] = [];
+    await drainPending(user, async (m) => {
+      retried.push(m.kind);
+    });
+    expect(retried).toEqual(['stash-create', 'stash-delete']);
+  });
+
+  it('keeps a pull, a saved item and a collection in separate scopes when their ids collide', () => {
+    // All three are uuids from different tables. Unprefixed, one table's id
+    // would silently share a blocking scope with another's the first time the
+    // strings matched, coupling two writes that have nothing to do with
+    // each other.
+    const id = 'the-same-uuid';
+    const scopes = new Set([
+      writeScope({ kind: 'save', pullId: id }),
+      writeScope({ kind: 'organise', saveId: id, patch: { archived: true } }),
+      writeScope({ kind: 'stash-delete', stashId: id }),
+    ]);
+    expect(scopes.size).toBe(3);
+  });
+
+  it('gives a kind it does not know a scope of its own', () => {
+    // Same version-skew case as `replayWrite`'s. Without a scope it would be
+    // `undefined`, which every other unknown entry would then share — one stuck
+    // leftover blocking another that has nothing to do with it.
+    const scope = writeScope({ kind: 'from-a-later-version' } as unknown as PendingWrite);
+    expect(scope).toBe('unknown:from-a-later-version');
+  });
+
+  it('keeps two patches to one saved item in the order the reader made them', async () => {
+    // Last-write-wins on a column, so order is the only thing that decides where
+    // the save ends up. Same subject, so one scope, so oldest first.
+    const user = 'user-two-patches';
+    await queueMutation(user, { kind: 'organise', saveId: 'sv', patch: { archived: true } });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(user, { kind: 'organise', saveId: 'sv', patch: { archived: false } });
+
+    const applied: boolean[] = [];
+    await drainPending(user, async (m) => {
+      if (m.kind === 'organise' && m.patch.archived !== undefined) applied.push(m.patch.archived);
+    });
+    expect(applied).toEqual([true, false]);
+  });
+});
+
+/**
+ * Which failures are worth keeping, and which are worth saying out loud.
+ *
+ * The distinction is the whole finding: queueing on *every* error would swallow a
+ * 500 and an RLS refusal into a queue that retries them forever, and reloading on
+ * every error turns a dropped connection into a dead end.
+ */
+describe('queueIfOffline', () => {
+  it('keeps a write whose request never reached the server, and says it did', async () => {
+    const user = 'user-kept';
+    const transport = new Error('TypeError: Failed to fetch');
+    transport.name = TRANSPORT_ERROR;
+    const write: PendingWrite = { kind: 'organise', saveId: 'sv', patch: { readLater: true } };
+
+    const kept = await withOnline(true, () => queueIfOffline(user, transport, write));
+    expect(kept).toBe(true);
+
+    const applied: PendingWrite[] = [];
+    await drainPending(user, async (m) => {
+      applied.push(m);
+    });
+    expect(applied).toEqual([write]);
+  });
+
+  it('refuses a failure the server actually answered, so the caller can surface it', async () => {
+    // A permission denial is not a connectivity problem. Queued, it would be
+    // retried forever and never reach the reader; the caller has to hear `false`
+    // so it can say something.
+    const user = 'user-refused';
+    const denied = new Error('permission denied for table saved_items');
+    denied.name = 'PostgrestError 42501';
+
+    const kept = await withOnline(true, () =>
+      queueIfOffline(user, denied, { kind: 'stash-delete', stashId: 'st' }),
+    );
+    expect(kept).toBe(false);
+    expect(await hasPending(user)).toBe(false);
+  });
+});
+
 describe('retry scheduling', () => {
   it('announces a queued write so a retry can be scheduled without an online event', async () => {
     // A 500 or a timeout queues a write while navigator.onLine stays true, so
@@ -228,15 +427,15 @@ describe('account scoping', () => {
     await queueMutation(USER_B, { kind: 'save', pullId: 'b-only' });
 
     const asB: string[] = [];
-    await drainPending(USER_B, async ({ pullId }) => {
-      asB.push(pullId);
+    await drainPending(USER_B, async (m) => {
+      asB.push(pullOf(m));
     });
     expect(asB).toEqual(['b-only']);
 
     // A's write is untouched and still theirs to drain.
     const asA: string[] = [];
-    await drainPending(USER_A, async ({ pullId }) => {
-      asA.push(pullId);
+    await drainPending(USER_A, async (m) => {
+      asA.push(pullOf(m));
     });
     expect(asA).toEqual(['a-only']);
   });
@@ -254,15 +453,15 @@ describe('drain single-flight', () => {
     // Two concurrent drains for A must share one pass; B's must run its own,
     // otherwise B would await A's work — which filters to A's entries — and
     // then never retry its own.
-    const a1 = drainPending(USER_A, async ({ pullId }) => {
-      seen.push(pullId);
+    const a1 = drainPending(USER_A, async (m) => {
+      seen.push(pullOf(m));
       await gate;
     });
-    const a2 = drainPending(USER_A, async ({ pullId }) => {
-      seen.push(`dup:${pullId}`);
+    const a2 = drainPending(USER_A, async (m) => {
+      seen.push(`dup:${pullOf(m)}`);
     });
-    const b1 = drainPending(USER_B, async ({ pullId }) => {
-      seen.push(pullId);
+    const b1 = drainPending(USER_B, async (m) => {
+      seen.push(pullOf(m));
     });
 
     release();
@@ -286,8 +485,8 @@ describe('identity revalidation', () => {
 
     await drainPending(
       USER_A,
-      async ({ pullId }) => {
-        applied.push(pullId);
+      async (m) => {
+        applied.push(pullOf(m));
         signedIn = USER_B; // sign-out lands while the first write is in flight
       },
       () => signedIn === USER_A,
@@ -299,8 +498,8 @@ describe('identity revalidation', () => {
     // The remainder is still A's, untouched, and replays when A returns.
     signedIn = USER_A;
     const later: string[] = [];
-    await drainPending(USER_A, async ({ pullId }) => {
-      later.push(pullId);
+    await drainPending(USER_A, async (m) => {
+      later.push(pullOf(m));
     });
     expect(later).toEqual(['second']);
   });
@@ -315,20 +514,6 @@ describe('identity revalidation', () => {
  * they were the ones being hidden.
  */
 describe('isOfflineFailure', () => {
-  const withOnline = <T>(value: boolean | undefined, run: () => T): T => {
-    const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-    Object.defineProperty(globalThis, 'navigator', {
-      value: value === undefined ? undefined : { onLine: value },
-      configurable: true,
-    });
-    try {
-      return run();
-    } finally {
-      if (original) Object.defineProperty(globalThis, 'navigator', original);
-      else Reflect.deleteProperty(globalThis, 'navigator');
-    }
-  };
-
   it('is true when the browser says there is no network', () => {
     // Whatever the error was, there is no point calling it a server problem.
     expect(withOnline(false, () => isOfflineFailure(new Error('anything')))).toBe(true);

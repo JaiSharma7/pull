@@ -1128,6 +1128,7 @@ export type Database = {
           id: string
           image_asset_id: string | null
           ordinal: number
+          search_tsv: unknown
           spoiler_level: Database["public"]["Enums"]["spoiler_level"]
           summary_id: string
           updated_at: string
@@ -1144,6 +1145,7 @@ export type Database = {
           id?: string
           image_asset_id?: string | null
           ordinal: number
+          search_tsv?: unknown
           spoiler_level?: Database["public"]["Enums"]["spoiler_level"]
           summary_id: string
           updated_at?: string
@@ -1160,6 +1162,7 @@ export type Database = {
           id?: string
           image_asset_id?: string | null
           ordinal?: number
+          search_tsv?: unknown
           spoiler_level?: Database["public"]["Enums"]["spoiler_level"]
           summary_id?: string
           updated_at?: string
@@ -1686,6 +1689,7 @@ export type Database = {
           kind: Database["public"]["Enums"]["work_kind"]
           quality_score: number
           rights_status: Database["public"]["Enums"]["rights_status"]
+          search_tsv: unknown
           slug: string
           subtitle: string | null
           title: string
@@ -1702,6 +1706,7 @@ export type Database = {
           kind: Database["public"]["Enums"]["work_kind"]
           quality_score?: number
           rights_status?: Database["public"]["Enums"]["rights_status"]
+          search_tsv?: unknown
           slug: string
           subtitle?: string | null
           title: string
@@ -1718,6 +1723,7 @@ export type Database = {
           kind?: Database["public"]["Enums"]["work_kind"]
           quality_score?: number
           rights_status?: Database["public"]["Enums"]["rights_status"]
+          search_tsv?: unknown
           slug?: string
           subtitle?: string | null
           title?: string
@@ -1750,6 +1756,7 @@ export type Database = {
       }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
+      disable_knowledge_vector_refresh: { Args: never; Returns: string }
       dismissal_damping: { Args: { p_user_id: string }; Returns: number }
       due_pressure: { Args: { p_user_id: string }; Returns: number }
       enable_generation_dispatcher: {
@@ -1764,8 +1771,14 @@ export type Database = {
         Args: { p_project_url: string; p_seconds?: number }
         Returns: string
       }
+      enable_knowledge_vector_refresh: {
+        Args: { p_batch?: number; p_cron?: string }
+        Returns: number
+      }
+      enable_log_retention: { Args: { p_cron?: string }; Returns: number }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
       generation_secret: { Args: { p_name: string }; Returns: string }
+      get_catalogue: { Args: never; Returns: Json }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {
@@ -1779,6 +1792,7 @@ export type Database = {
         Returns: Json
       }
       get_source_delta: { Args: { p_work_id: string }; Returns: Json }
+      get_topic: { Args: { p_limit?: number; p_slug: string }; Returns: Json }
       grade_recall: {
         Args: {
           p_grade: Database["public"]["Enums"]["recall_grade"]
@@ -1803,6 +1817,7 @@ export type Database = {
         }
       }
       job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
+      knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
       plan_interleave: {
@@ -1819,6 +1834,14 @@ export type Database = {
           kind: Database["public"]["Enums"]["interrupt_kind"]
           slot_index: number
         }[]
+      }
+      prune_operational_logs: {
+        Args: {
+          p_cron_days?: number
+          p_output_days?: number
+          p_response_hours?: number
+        }
+        Returns: Json
       }
       record_failed_job_step: {
         Args: {
@@ -1873,9 +1896,26 @@ export type Database = {
         Args: { p_user_id?: string }
         Returns: undefined
       }
+      refresh_stale_knowledge_vectors: {
+        Args: { p_limit?: number }
+        Returns: Json
+      }
+      related_pulls: {
+        Args: { p_limit?: number; p_pull_id: string }
+        Returns: Json
+      }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
+      }
+      search_catalogue: {
+        Args: {
+          p_kinds?: Database["public"]["Enums"]["work_kind"][]
+          p_limit_ideas?: number
+          p_limit_sources?: number
+          p_query: string
+        }
+        Returns: Json
       }
       seeded_unit: {
         Args: { page: number; salt?: string; seed: number; slot: number }

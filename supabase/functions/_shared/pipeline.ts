@@ -235,6 +235,33 @@ export interface PipelineDb {
      * another's for a source that has not changed.
      */
     topics: TopicSlug[];
+    /**
+     * Null from any job that is not publishing canonically, and that is a
+     * security boundary rather than a tidiness rule.
+     *
+     * `enqueue_generation_job` is `security definer`, granted to `authenticated`,
+     * and inserts the requester's `target` jsonb verbatim without validating it.
+     * `generation_jobs.visibility` defaults to `private`, and `resolve_identity`
+     * only refuses a bad rights claim when the job is public — so a signed-in
+     * reader can queue any URL with any rights claim, or none, which narrows to
+     * `review_required` and scores 0.3. `template` is step 5 and `moderate`, the
+     * rights gate, is step 10: separate Edge Function invocations, so the `works`
+     * row commits five steps before anything checks it.
+     *
+     * Since `works` is keyed by `content_hash` and adopted rather than
+     * duplicated, that reader could pre-create the row for a source the project
+     * was about to publish and pin 0.24 of its `get_feed` score at 0.3 for every
+     * reader, permanently, at 50 jobs a day.
+     *
+     * So a non-canonical job writes no score at all and the column defaults
+     * stand. A canonical one writes, and — unlike before — also RE-scores a row
+     * it adopts, because otherwise a row a private job created first would keep
+     * its defaults forever. The original rule this replaces ("written only on
+     * creation") was reasoning about two honest jobs racing, which it got right;
+     * it simply never considered an adversarial requester.
+     */
+    qualityScore: number | null;
+    trustScore: number | null;
   }): Promise<{ workId: string; existing: boolean }>;
   createSummary(input: {
     workId: string;
@@ -263,8 +290,139 @@ export interface PipelineDb {
     pulls: { headline: string; body: string; whyItMatters: string | null }[],
   ): Promise<{ ordinal: number; id: string }[]>;
   setPullEmbeddings(rows: { id: string; embedding: number[] }[]): Promise<void>;
+  /**
+   * Recall questions, one per Pull that has one.
+   *
+   * Keyed by the written Pull's id rather than by array position, for the reason
+   * `insertPulls` returns ordinals at all: a question attached to the wrong idea
+   * is invisible and permanent.
+   */
+  insertQuizQuestions(
+    rows: { pullId: string; prompt: string; answer: string; distractors: string[] }[],
+  ): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
+}
+
+/**
+ * How far a source is to be trusted, from where it came from.
+ *
+ * `works.trust_score` and `works.quality_score` are 0.24 of `get_feed`'s score
+ * combined, and no step has ever written either — so every generated work has
+ * sat at the 0.5 default forever while the six hand-seeded ones carry real
+ * numbers. A quarter of the ranking has been a constant.
+ *
+ * Deterministic, and deliberately not a model's opinion: this runs at generation
+ * time where a model would be permitted, but a provenance judgement that varies
+ * between two runs over the same URL is not a judgement, it is noise with a
+ * decimal point. A known public-domain archive is more trustworthy than an
+ * arbitrary host serving the same text, and that is the whole claim.
+ */
+export function trustFromProvenance(rights: RightsStatus, url: string | null): number {
+  if (rights === 'review_required') return 0.3;
+  if (rights === 'public_domain') {
+    let host = '';
+    try {
+      host = url ? new URL(url).hostname.toLowerCase() : '';
+    } catch {
+      host = '';
+    }
+    /*
+     * Subdomains count, because the real ones are where the texts live —
+     * `www.gutenberg.org`, `en.wikisource.org`. With one exception that the
+     * suffix rule got wrong: `web.archive.org` is the Wayback Machine, which
+     * serves an archived copy of *any* site under an archive.org hostname. So
+     * `https://web.archive.org/web/…/https://anywhere.example/text` inherited
+     * the maximum score on the strength of a host that says nothing about the
+     * text behind it.
+     */
+    const known = ['gutenberg.org', 'wikisource.org', 'classics.mit.edu', 'archive.org'];
+    if (host === 'web.archive.org') return 0.7;
+    return known.some((k) => host === k || host.endsWith(`.${k}`)) ? 0.9 : 0.7;
+  }
+  if (rights === 'licensed') return 0.8;
+  return 0.5;
+}
+
+/**
+ * How good the draft looks, from its own shape.
+ *
+ * Structural only, for the same reason: a critic model asked "how good is this"
+ * returns a different number each time it is asked. What can be measured
+ * consistently is whether the summary is the shape a summary should be — enough
+ * ideas, bodies of a readable length, every idea saying why it matters, and a
+ * classification that lets a reader's preferences reach it at all.
+ *
+ * Centred so a merely adequate draft lands near the 0.5 default rather than
+ * above it: this has to be able to rank a weak generated work BELOW the seeded
+ * corpus, or writing it changes nothing.
+ */
+export function qualityFromDraft(summary: {
+  pulls: { body: string; whyItMatters?: string }[];
+  // `unknown` because the caller reads this off a stored step output, where it
+  // has already been through JSON and back. Narrowed below rather than asserted.
+  topics?: unknown;
+}): number {
+  const pulls = summary.pulls ?? [];
+  if (pulls.length === 0) return 0.3;
+
+  // Eight to fourteen ideas is what a source page needs for the Delta to say
+  // anything ("4 of 18 are new to you" needs an 18). Fewer is thin; more is
+  // usually the model padding.
+  const count = Math.min(1, pulls.length / 8);
+
+  const lengths = pulls.map((p) => (p.body ?? '').trim().length);
+  const inBand = lengths.filter((n) => n >= 200 && n <= 900).length / pulls.length;
+
+  const explained =
+    pulls.filter((p) => (p.whyItMatters ?? '').trim().length > 0).length / pulls.length;
+
+  const classified = Array.isArray(summary.topics) && summary.topics.length > 0 ? 1 : 0;
+
+  const score = 0.35 * count + 0.3 * inBand + 0.2 * explained + 0.15 * classified;
+  // Clamped rather than trusted: every term is already bounded, and a future
+  // edit that unbalances the weights should produce a wrong ranking rather than
+  // a value Postgres refuses.
+  return Math.max(0, Math.min(1, Number(score.toFixed(3))));
+}
+
+/**
+ * The quiz questions that are safe to write, paired to the Pulls that were.
+ *
+ * Narrowed rather than trusted. The provider's schema requires all three fields,
+ * but a stub or a future provider does not go through Gemini at all — and this
+ * repo has already lost a run to four values TypeScript accepted and Postgres
+ * refused, discovered only after the expensive call had been paid for.
+ *
+ * A question missing either half is dropped rather than written half-formed:
+ * `get_due_reviews` copes with a Pull that has no question, and cannot cope with
+ * one whose answer is the string "undefined".
+ *
+ * Paired by ORDINAL, never by array position. `insertPulls` returns ordinals for
+ * exactly this reason — a question attached to the wrong idea is invisible and
+ * permanent.
+ */
+export function questionsToWrite(
+  pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
+  written: readonly { ordinal: number; id: string }[],
+): { pullId: string; prompt: string; answer: string; distractors: string[] }[] {
+  const byOrdinal = new Map(written.map((w) => [w.ordinal, w.id]));
+  const out: { pullId: string; prompt: string; answer: string; distractors: string[] }[] = [];
+
+  pulls.forEach((p, ordinal) => {
+    const pullId = byOrdinal.get(ordinal);
+    const q = p.question;
+    if (!pullId || !q) return;
+    const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
+    const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
+    if (!prompt || !answer) return;
+    const distractors = Array.isArray(q.distractors)
+      ? q.distractors.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+      : [];
+    out.push({ pullId, prompt, answer, distractors });
+  });
+
+  return out;
 }
 
 interface AcquireOutput {
@@ -597,6 +755,17 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
+        // Both deterministic, both from what is already in hand: no extra call,
+        // and a quarter of `get_feed`'s score stops being the 0.5 default.
+        //
+        // Only from a canonical job, though. See `upsertWork` for why the
+        // requester's own visibility is what decides whether their claims about
+        // a source are allowed to move a shared row's ranking.
+        qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
+        trustScore:
+          job.visibility === 'public'
+            ? trustFromProvenance(acquired.rights, asString(job.target.url) || null)
+            : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
         // `rights` already get. A job queued before this field existed replays with
@@ -657,10 +826,23 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       if (!templated.summaryId) throw new Error('cards: template produced no summary');
 
       const summary = priorOutputs.synthesize as
-        { pulls: { headline: string; body: string; whyItMatters: string }[] } | undefined;
+        | {
+            pulls: {
+              headline: string;
+              body: string;
+              whyItMatters: string;
+              question?: { prompt?: unknown; answer?: unknown; distractors?: unknown };
+            }[];
+          }
+        | undefined;
       const pulls = summary?.pulls ?? [];
       const written = await db.insertPulls(templated.summaryId, pulls);
-      return { output: { pulls: written } };
+
+      const questions = questionsToWrite(pulls, written);
+
+      if (questions.length > 0) await db.insertQuizQuestions(questions);
+
+      return { output: { pulls: written, questions: questions.length } };
     }
 
     /**
