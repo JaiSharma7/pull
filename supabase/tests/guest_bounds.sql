@@ -43,6 +43,7 @@ end $fn$;
 do $$
 declare
   guest        uuid := extensions.gen_random_uuid();
+  regular      uuid := extensions.gen_random_uuid();
   reader       uuid := extensions.gen_random_uuid();
   some_work    uuid;
   refused      boolean;
@@ -54,6 +55,7 @@ declare
   i            int;
   guest_left   int;
   reader_left  int;
+  regular_left int;
 begin
   -- Both accounts are created through the real trigger rather than by inserting into
   -- `profiles` directly: `handle_new_user` is what gives a guest the preference row the
@@ -81,6 +83,26 @@ begin
           'guest-bounds' || left(reader::text, 8) || '@example.test', '',
           now(), now() - interval '90 days', now(),
           '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, false);
+
+  -- A second guest, the same age, who is still here. Signed in 90 days ago like the
+  -- first one and has refreshed their token this morning — a person who found the
+  -- product, kept the tab, and comes back to it.
+  --
+  -- This is the fixture that makes section 4 mean anything. Without it the sweep passes
+  -- whether it keys on creation or on disuse, and keying on creation deletes this
+  -- reader's stashes and knowledge states out from under a live session.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (regular, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '90 days', now() - interval '90 days',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
+  values (extensions.gen_random_uuid(), regular,
+          now() - interval '90 days', now(),
+          (now() at time zone 'utc') - interval '2 hours');
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
   select w.id into some_work from public.works w limit 1;
@@ -248,8 +270,9 @@ begin
 
   perform public.sweep_guest_accounts(interval '30 days');
 
-  select count(*) into guest_left  from auth.users u where u.id = guest;
-  select count(*) into reader_left from auth.users u where u.id = reader;
+  select count(*) into guest_left   from auth.users u where u.id = guest;
+  select count(*) into reader_left  from auth.users u where u.id = reader;
+  select count(*) into regular_left from auth.users u where u.id = regular;
 
   if guest_left <> 0 then
     raise exception
@@ -258,8 +281,15 @@ begin
   end if;
   if reader_left <> 1 then
     raise exception
-      'the sweep deleted a reader who signed in with an address. It must key on '
-      'is_anonymous and nothing else.';
+      'the sweep deleted a reader who signed in with an address. A guest is an account '
+      'with no address, no phone and no linked identity -- not merely a flag.';
+  end if;
+  if regular_left <> 1 then
+    raise exception
+      'the sweep deleted a guest who refreshed their session two hours ago. It is keyed '
+      'on disuse, not on age: docs/privacy.md promises "has not been used for 30 days", '
+      'and deleting somebody mid-session takes their stashes and knowledge states with '
+      'no address to recover through.';
   end if;
 end $$;
 
