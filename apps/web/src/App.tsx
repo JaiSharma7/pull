@@ -52,6 +52,7 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
+import { isGuest } from './lib/guest.js';
 import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
@@ -192,6 +193,13 @@ export function App() {
    * "control that changes nothing" this product cannot afford.
    */
   const [prefsSaved, setPrefsSaved] = useState(0);
+  /*
+   * Whether a guest has asked to leave, and is being asked to mean it.
+   *
+   * Lives here rather than in the panel because the panel is inline JSX in this
+   * component; if it ever becomes its own route it should take this with it.
+   */
+  const [guestLeaving, setGuestLeaving] = useState(false);
   /*
    * The only routed thing in the app.
    *
@@ -551,6 +559,24 @@ export function App() {
     appearanceOpen ||
     topicSlug !== null;
   const visitor = !session;
+  /*
+   * A guest is signed in, and is not a reader with an account.
+   *
+   * The distinction is deliberately narrow. Everything keyed to a user works for a
+   * guest — the sections, the feed, the onboarding picker, the tally — because a guest
+   * IS a user, so `visitor` is the flag almost every line below wants. The only screen
+   * that would be a dead end is Account: it lists sessions, enrols a second factor and
+   * deletes the account, and every one of those either needs an address or needs a
+   * recent sign-in that a guest can never perform. So the destination is withheld and
+   * the route says why, rather than rendering controls that cannot complete.
+   */
+  const guest = isGuest(session);
+  /*
+   * Computed once and used by both navigations. They were filtering the same array with
+   * the same predicate written out twice, which is exactly how the masthead and the
+   * rail come to disagree about what a reader may reach.
+   */
+  const destinations = DESTINATIONS.filter((d) => !d.signedIn || (!visitor && !guest));
 
   if (!ready)
     return (
@@ -638,7 +664,7 @@ export function App() {
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-          {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
+          {destinations.map((d) => (
             <button
               key={d.path}
               type="button"
@@ -659,27 +685,33 @@ export function App() {
             The masthead itself stays visible in focus mode: a full-screen reading mode
             with no visible way out is the pattern this product exists not to be.
           */}
-        <button
-          type="button"
-          className="btn btn--plain"
-          style={{ marginLeft: 'auto' }}
-          aria-pressed={focus}
-          title="Larger type, no rails. The line length stays the same."
-          onClick={() => {
-            const next = !focus;
-            setFocus(next);
-            storeFocus(next);
-            // Inside the click, because `requestFullscreen` is rejected outside a
-            // user gesture. Awaiting it would also delay the CSS half behind a
-            // permission decision the CSS half does not depend on.
-            void (next ? enterFullscreen(document) : exitFullscreen(document));
-          }}
-        >
-          {focus ? 'Exit focus' : 'Focus'}
-        </button>
+        {/*
+          Wrapped, so the trailing controls stay together and stay right. The auto margin
+          moved off this button and onto the group: an auto margin resolves per flex line,
+          so with three trailing children it pushed only the ones sharing its line and let
+          the last wrap alone to the left under the others.
+        */}
+        <span className="shell__actions">
+          <button
+            type="button"
+            className="btn btn--plain"
+            aria-pressed={focus}
+            title="Larger type, no rails. The line length stays the same."
+            onClick={() => {
+              const next = !focus;
+              setFocus(next);
+              storeFocus(next);
+              // Inside the click, because `requestFullscreen` is rejected outside a
+              // user gesture. Awaiting it would also delay the CSS half behind a
+              // permission decision the CSS half does not depend on.
+              void (next ? enterFullscreen(document) : exitFullscreen(document));
+            }}
+          >
+            {focus ? 'Exit focus' : 'Focus'}
+          </button>
 
-        {visitor ? (
-          /*
+          {visitor ? (
+            /*
               A door, not a wall. A visitor reached this screen through a shared
               link or the catalogue; the offer to keep what they find is the
               reason to sign in, and it belongs where they already are rather
@@ -689,24 +721,72 @@ export function App() {
               it: `#p-<pullId>` is the idea that was shared, and a sign-in that
               returns to the source without it returns to the wrong place.
             */
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() =>
-              navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
-            }
-          >
-            Sign in to keep these
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() => void supabase.auth.signOut()}
-          >
-            Sign out
-          </button>
-        )}
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() =>
+                navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
+              }
+            >
+              Sign in to keep these
+            </button>
+          ) : guest ? (
+            /*
+            A marker and a way out, and neither of them is `signOut` here.
+
+            The first draft put "Sign in" in the pixel where every account holder's
+            "Sign out" sits, wired straight to `signOut()`, with the consequence stated
+            only in a `title`. Three things were wrong with that, and they compound.
+
+            It is destructive and irreversible: a guest has no address and no password,
+            so the token in this browser IS the credential, and ending the session
+            deletes an evening of reading with no way to get it back. A `title` needs a
+            hover, so a keyboard reader tabbing to it never sees the warning, and a
+            screen reader treats it as a description of a button that already has a name
+            and mostly does not announce it. The disclosure that does exist in text
+            lived on /account -- which this same commit withholds from a guest's
+            navigation, so it was written for an audience that could not reach it.
+
+            And it frequently did not even sign anyone in. `signOut()` alone only
+            reaches the sign-in screen from an address that is not a public route; from
+            /explore, /search, /appearance or a shared source -- all of which a guest
+            can be on -- the session ended and the shell simply re-rendered as a
+            visitor, so the reader lost everything and gained nothing.
+
+            So this navigates to /account instead, which for a guest is the panel below:
+            the consequence in plain visible text, and the destructive step behind a
+            second, deliberate press. /account is not a public route, so `signOut()`
+            there does land on the sign-in screen -- the one place it always worked.
+          */
+            <span className="shell__guest">
+              <span className="meta">Reading as a guest</span>
+              {/*
+              The control disappears on the page it leads to. `navigate` pushes
+              unconditionally, so pressing it from /account changed nothing on screen and
+              grew the Back stack by one — a button that looks live, does nothing visible,
+              and costs the reader a press to undo. The marker stays, because the fact it
+              states is still true.
+            */}
+              {!accountOpen && (
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => navigate('/account')}
+                >
+                  Sign in
+                </button>
+              )}
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => void supabase.auth.signOut()}
+            >
+              Sign out
+            </button>
+          )}
+        </span>
       </header>
 
       <div className="shell__body">
@@ -725,7 +805,7 @@ export function App() {
                   {s.label}
                 </button>
               ))}
-            {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
+            {destinations.map((d) => (
               <button
                 key={d.path}
                 type="button"
@@ -792,10 +872,95 @@ export function App() {
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
             {appearanceOpen && <Appearance />}
-            {accountOpen && session && (
+            {accountOpen && session && !guest && (
               <Suspense fallback={<RouteFallback />}>
                 <Account userId={session.user.id} email={session.user.email ?? null} />
               </Suspense>
+            )}
+            {/*
+              An answer rather than an empty column.
+
+              `/account` is withheld from a guest's navigation, and a URL is still a URL:
+              somebody arrives here from a bookmark or a shared address. Every control on
+              the real screen acts on an address — the sessions list, the second factor,
+              deletion, which needs a sign-in from the last ten minutes and therefore a
+              code in a mailbox — so rendering it would be a page of things that cannot
+              complete. This says which one thing to do instead.
+            */}
+            {accountOpen && guest && (
+              <section className="stack measure">
+                <p className="meta">Account</p>
+                {/*
+                  A plain `h1`, matching Account.tsx. `.prose__heading` carries a 3rem
+                  top margin and expects to be the first child of a `.prose`; used here
+                  it wins over the stack's 1rem and floats the eyebrow away from its own
+                  heading, so the two versions of this route open differently.
+                */}
+                <h1>You are reading as a guest.</h1>
+                <p>
+                  There is no account to manage here yet — every control on this screen acts on an
+                  email address, and a guest session has none. That is also what makes the next part
+                  worth reading before you press it.
+                </p>
+                {/*
+                  Plain body text, deliberately not `.meta`.
+
+                  `.meta` is uppercase mono at --step--1: a chip face, right for "For You" and
+                  "The Delta" and wrong for the one paragraph on this screen that carries a
+                  consequence. All-caps destroys word shape, and this is the sentence a reader
+                  has to actually read rather than glance at.
+                */}
+                <p id="guest-consequence">
+                  Signing in starts a <strong>fresh account</strong>. This guest session ends when
+                  you do, and it cannot be reopened — there is no address to send a code to — so
+                  what you have read and stashed as a guest stays behind.
+                </p>
+                {/*
+                  Two presses, which is the shape every irreversible action on the real
+                  Account screen already takes: "make them do something that could not be a
+                  misclick". This one has less recoverability than any of them — no address,
+                  so no export and no way back — and a reader can arrive here from a
+                  bookmark, primed to hit the primary button because they came to sign in.
+                  Oxblood is not what makes it safe; the second press is.
+                */}
+                <div className="stack">
+                  {guestLeaving ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        aria-describedby="guest-consequence"
+                        onClick={() => {
+                          // Navigate first: `signOut()` alone leaves the address at
+                          // /account, which keeps the tab title reading "Account" over the
+                          // sign-in screen and drops the next guest straight back onto this
+                          // panel instead of the feed.
+                          navigate('/');
+                          void supabase.auth.signOut();
+                        }}
+                      >
+                        Yes — end it and sign in
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => setGuestLeaving(false)}
+                      >
+                        Keep reading as a guest
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      aria-describedby="guest-consequence"
+                      onClick={() => setGuestLeaving(true)}
+                    >
+                      End this guest session and sign in
+                    </button>
+                  )}
+                </div>
+              </section>
             )}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh

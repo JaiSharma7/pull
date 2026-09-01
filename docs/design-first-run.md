@@ -114,6 +114,17 @@ Decisions, and the reasoning that is not obvious:
 - **A hairline between promise and action.** The rule is the only ornament, per law 1.
 - **The masthead is small, not large.** A large logo is what an app does when it has
   nothing to say. The sentence is the brand.
+- **"Look around as a guest", directly under the primary action.** The screen above asks
+  for an address before the product has demonstrated anything, which is asking for trust
+  on credit — and it had to, because every screen worth seeing is keyed to a user. An
+  anonymous session removes the reason: a guest gets a real user row, so onboarding, the
+  feed and the Delta all work with no special case anywhere.
+
+  It stays a `btn--plain` under the oxblood button rather than becoming a second primary.
+  A screen with two equal actions asks a question instead of making an offer, and the
+  offer here is still "sign in" — a guest session cannot be recovered, and the line under
+  the button says so rather than letting someone find out later. That sentence is load
+  bearing: it is the difference between an honest shortcut and a trap.
 
 ## 2 · Sign in, step two — the code
 

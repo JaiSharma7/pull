@@ -16,7 +16,8 @@ the operator of your own service, and this document says nothing about what you 
 
 ## The short version
 
-- We ask for **an email address**. Not a password, not a phone number, not your real name.
+- We ask for **an email address**. Not a password, not a phone number, not your real name —
+  and you can look around as a guest without giving us even that.
 - The product keeps a model of **what you have read and what you appear to know**, because
   refusing to re-teach you things is the entire point of it.
 - **No advertising trackers, no third-party analytics, no data sold or shared for anyone
@@ -40,6 +41,29 @@ the operator of your own service, and this document says nothing about what you 
 
 Sign-in is a one-time code or link sent to your email. **We never hold a password**, because
 we never set one.
+
+### Looking around as a guest
+
+You can use the product without giving us an address at all. "Look around as a guest" on the
+sign-in screen creates a **guest session**: a row in the same user table as everyone else,
+with no address, no name and nothing that identifies you.
+
+It behaves like an account because it is one, technically — the topics you pick, what you
+read and what you stash are stored the same way, under an identifier that exists only in
+your browser. Three things are different, and all three are consequences of there being no
+address:
+
+- **It cannot be recovered.** Clear the browser's storage, or open the product on another
+  device, and the session is gone with no way back in. There is nothing to send a code to.
+- **You cannot request a generation, publish a summary, or file a moderation report.** Those
+  need an account we can attribute the request to. (The first two are not yet exposed in
+  the app for anyone; the limit is in the database, so it holds whenever they are.)
+- **We delete it for you.** A guest session that has not been used for 30 days is removed
+  outright, along with everything keyed to it. You do not have to ask.
+
+Signing in afterwards starts a fresh account. A guest session is not carried over — there is
+no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
+exactly the kind of linking this policy exists to say we do not do.
 
 ### What you create
 
@@ -200,6 +224,13 @@ Three things survive, none of them attached to you:
   token count and a cost. It never held a user id, and it is how this project can state
   what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
+
+**A guest session is deleted for you.** Unused for 30 days, it is removed outright —
+account row, preferences, history, everything keyed to it — by a scheduled sweep
+(`sweep_guest_accounts`). This is the one place where the "while your account exists,
+your data exists" rule above does not hold, and deliberately: a guest session has no
+address, so nobody can come back to it and nobody can ask us to delete it. Keeping it
+indefinitely would be hoarding reading history belonging to people we cannot contact.
 
 Anything published under a future community feature is covered in the Terms.
 

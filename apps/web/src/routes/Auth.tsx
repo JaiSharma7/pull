@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
-import { isEmailRateLimited } from '../lib/auth-errors.js';
+import { isAnonymousSignInDisabled, isEmailRateLimited } from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { rememberDestination } from '../lib/pending-destination.js';
@@ -151,6 +151,25 @@ export function Auth({
    * about to be replaced.
    */
   const [busy, setBusy] = useState(urlToken !== null);
+  /*
+   * Which action `busy` is currently for.
+   *
+   * `busy` disables every control on the screen, which is right — one of these at a
+   * time — but it cannot say which one is working, and "Sending…" on the email button
+   * while a guest session is being minted describes something that is not happening.
+   */
+  const [openingGuest, setOpeningGuest] = useState(false);
+  /*
+   * The guest failure, kept out of `error`.
+   *
+   * `error` renders inside whichever form is on screen — above the email field on step
+   * one, above the code boxes on step two. A guest failure shown there appears roughly
+   * a primary button's height above the control that caused it and directly under one
+   * the reader never touched, which reads as "the email send failed". Announced the
+   * same way; it is only sighted readers who are misled, which is why it survived the
+   * first draft.
+   */
+  const [guestError, setGuestError] = useState<string | null>(null);
   /** Whatever the reader pasted, before it has been worked out. See `usePastedLink`. */
   const [pasted, setPasted] = useState('');
   const [showPaste, setShowPaste] = useState(false);
@@ -204,6 +223,7 @@ export function Auth({
 
     setBusy(true);
     setError(null);
+    setGuestError(null);
     // try/finally, not try/catch-then-reset: supabase-js converts its own AuthErrors
     // into `{ error }` but rethrows anything else — a DNS failure, an offline device,
     // a wedged Web Lock. Resetting `busy` after a bare await therefore left the button
@@ -256,6 +276,7 @@ export function Auth({
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setGuestError(null);
     // `type: 'email'` covers both a new and a returning reader; Supabase resolves which
     // it is. On success the client stores the session and App.tsx's auth listener swaps
     // this screen out, so there is nothing to do with the result here.
@@ -358,6 +379,7 @@ export function Auth({
 
     setBusy(true);
     setError(null);
+    setGuestError(null);
     try {
       // Each branch reports its own `error`; supabase-js only throws for transport.
       const { error } =
@@ -394,10 +416,82 @@ export function Auth({
     }
   }
 
+  /*
+   * The way in that asks for nothing.
+   *
+   * Everything this product does for a reader is a row keyed to a user — the onboarding
+   * picker, the feed, the Delta, the tally in the rail. There is no version of any of
+   * it to show somebody who has not signed in, so the screen in front of a stranger was
+   * asking them to hand over an address for something they had not been shown. A guest
+   * session is a real `auth.users` row, so all of it simply works, and nothing else in
+   * the app needs to know.
+   *
+   * What it is not is an account. The session lives in this browser's storage and
+   * nothing can restore it — there is no address to send a code to — so the copy beside
+   * this button says that rather than implying otherwise, and `App` marks the shell
+   * "Guest" for as long as it lasts.
+   *
+   * Guests are bounded in the database rather than here: no generation (law 2 — an
+   * anonymous session is free to recreate, so a per-requester quota bounds nothing), no
+   * authored summaries, no reports. See 20260901190000. A bound that lived in this
+   * component would be a bound on the button, not on the session.
+   */
+  async function continueAsGuest() {
+    setBusy(true);
+    setOpeningGuest(true);
+    /*
+     * Both slots, in both directions.
+     *
+     * Every action on this screen clears every message, because two of them on screen at
+     * once contradict each other. The live case is not hypothetical: on a project where
+     * anonymous sign-ins are off, a reader presses this, is told "use the email route
+     * above", does exactly that, hits the SMTP rate limit — and would otherwise be
+     * looking at one alert saying use the email route and another saying it is closed.
+     */
+    setGuestError(null);
+    setError(null);
+    try {
+      // Same try/finally reasoning as `requestCode`: supabase-js rethrows anything that
+      // is not an AuthError, and a bare await would leave the button disabled for ever.
+      const { error } = await supabase.auth.signInAnonymously();
+      if (error) {
+        if (isAnonymousSignInDisabled(error)) {
+          /*
+           * Two audiences, two channels, and they want opposite things.
+           *
+           * Whoever runs the deployment needs the name of the switch —
+           * `enable_anonymous_sign_ins` is hosted configuration this repository cannot
+           * push, so "it does not work" is useless to them. A reader needs to know the
+           * route is closed and that the other one is open; sending them to a Supabase
+           * dashboard menu is sending them somewhere they have no account for.
+           *
+           * So the operator's half goes to the console, where an operator looks, and
+           * the reader is told the thing they can act on.
+           */
+          console.warn(
+            'Anonymous sign-ins are disabled for this Supabase project, so the guest ' +
+              'button cannot work. Turn them on under Authentication → Sign In / ' +
+              'Providers; supabase/config.toml only configures the local stack.',
+          );
+          setGuestError('Guest sessions are not available here — use the email route above.');
+        } else setGuestError(error.message);
+      }
+      // On success App.tsx's auth listener swaps this screen out; nothing to do here.
+    } catch (e) {
+      setGuestError(
+        e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
+      );
+    } finally {
+      setBusy(false);
+      setOpeningGuest(false);
+    }
+  }
+
   function startOver() {
     setSent(false);
     setCode('');
     setError(null);
+    setGuestError(null);
   }
 
   /**
@@ -412,6 +506,7 @@ export function Auth({
   async function resend() {
     setBusy(true);
     setError(null);
+    setGuestError(null);
     setCode('');
     try {
       // Before the request, not after: if it fails the reader stays put and the
@@ -495,7 +590,7 @@ export function Auth({
               </p>
             )}
             <button type="submit" className="btn btn--primary" disabled={busy}>
-              {busy ? 'Checking…' : 'Sign in'}
+              {busy && !openingGuest ? 'Checking…' : 'Sign in'}
             </button>
             <p className="titlepage__alts">
               <button type="button" className="btn btn--plain" onClick={resend} disabled={busy}>
@@ -526,10 +621,67 @@ export function Auth({
               </p>
             )}
             <button type="submit" className="btn btn--primary" disabled={busy}>
-              {busy ? 'Sending…' : 'Send a sign-in code'}
+              {busy && !openingGuest ? 'Sending…' : 'Send a sign-in code'}
             </button>
           </form>
         )}
+
+        {/*
+         * Directly under the primary action, because it is the alternative to it.
+         *
+         * Not down beside the paste hatch: that is an escape from a sign-in that went
+         * wrong, and this is a different offer entirely — the one for someone who has
+         * not decided to sign in at all. Put below the fold of secondary controls it
+         * would be found by the people who were going to sign in anyway.
+         *
+         * On both steps, for the same reason the paste hatch is: `sent` becomes true
+         * only after a send succeeds, so anything conditioned on it disappears exactly
+         * when the email route is the thing that failed.
+         *
+         * The sentence under it is not decoration. A guest session cannot be restored —
+         * there is no address to send a code to — and a product that let someone spend
+         * an evening stashing ideas without saying so would be lying by omission.
+         */}
+        {/*
+          One group, not three siblings of the stack.
+
+          `.stack` puts the same gap between every child, so a button, its failure and
+          its terms as three siblings sit equidistant from each other and from the
+          unrelated control below — the sentence then reads as a statement about the
+          page rather than as the terms of the button above it.
+        */}
+        <div
+          className="stack titlepage__alts"
+          style={{ '--stack-gap': 'var(--space-2)' } as React.CSSProperties}
+        >
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => void continueAsGuest()}
+            disabled={busy}
+          >
+            {openingGuest ? 'Opening…' : 'Look around as a guest'}
+          </button>
+          {guestError && (
+            <p role="alert" className="titlepage__error">
+              {guestError}
+            </p>
+          )}
+          {/*
+            A `p`, not a `span`, and the reason is worth a line because it looked fine in
+            the diff. `.stack > * + *` separates children with `margin-block-start`, and a
+            vertical margin does nothing at all on a non-replaced inline element — so as a
+            span this sentence had no gap above it and shared a line with the button,
+            rendering as "LOOK AROUND AS A GUESTNo email needed. A guest session…" on the
+            first screen a stranger sees. It only looked right in the one state where
+            `guestError` is set, because that block splits the inline run.
+          */}
+          <p className="titlepage__promise">
+            No email needed. A guest session is only reachable from this browser: it cannot be
+            recovered on another device, it does not carry over when you sign in, and it is deleted
+            after 30 days unused.
+          </p>
+        </div>
 
         {/*
          * Reachable from BOTH steps, which is the whole point and was the bug.
@@ -580,7 +732,7 @@ export function Auth({
               inside it. Or the six-digit code on its own.
             </p>
             <button type="submit" className="btn btn--primary" disabled={busy || !pasted.trim()}>
-              {busy ? 'Checking…' : 'Sign in with that'}
+              {busy && !openingGuest ? 'Checking…' : 'Sign in with that'}
             </button>
           </form>
         )}
@@ -593,7 +745,7 @@ export function Auth({
           to it rather than after.
         */}
         <p className="titlepage__legal">
-          Signing in accepts our{' '}
+          Signing in — or looking around as a guest — accepts our{' '}
           <a href="/terms" onClick={go('/terms')}>
             Terms
           </a>{' '}
@@ -601,7 +753,7 @@ export function Auth({
           <a href="/privacy" onClick={go('/privacy')}>
             Privacy Policy
           </a>
-          . We ask for an email address and nothing else.
+          . We ask for an email address and nothing else; as a guest, nothing at all.
         </p>
 
         {/* Last, because it is the strongest sentence on the screen and it answers the
@@ -618,8 +770,21 @@ export function Auth({
          * what every shared link used to run into.
          */}
         <p className="titlepage__promise">
-          <button type="button" className="btn btn--plain" onClick={() => onNavigate('/explore')}>
-            Or look around first
+          {/*
+            Renamed, because it stopped being the only way in that asks for nothing.
+            "Or look around first" and "Look around as a guest" are the same four words
+            to a reader scanning a column, and they do different things: this one browses
+            the published library signed out, with no user row created at all, and the
+            other mints a guest session that carries a feed and an onboarding picker.
+            The label now says which is which.
+          */}
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => onNavigate('/explore')}
+            disabled={busy}
+          >
+            Or just browse, signed out
           </button>
         </p>
       </div>

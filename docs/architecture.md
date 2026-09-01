@@ -136,6 +136,32 @@ dev` work with no setup.
 than no variable. Artwork is the first thing cut under cost pressure (law 2), and the
 product degrades to typography, which the design brief was built for anyway.
 
+## What an operator has to switch on
+
+Three things in this schema are scheduled rather than automatic, and one is hosted
+configuration. None of them is applied by a migration, deliberately: CI check 4 replays
+every migration from zero, and a migration that calls `cron.schedule` makes that replay
+depend on `pg_cron` running as a background worker inside a test container. The cost is
+that they have to be listed somewhere, which is here.
+
+| Call, once, as `postgres`                   | What stops without it                                             |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| `enable_generation_dispatcher_with_token()` | The queue never ticks; generation jobs sit in `pgmq` for ever     |
+| `enable_knowledge_vector_refresh()`         | Knowledge centroids go stale, so the Delta slowly stops filtering |
+| `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out      |
+| `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
+
+The last one is newer than the others and fails differently. `sweep_guest_accounts`
+deletes anonymous accounts after 30 days, and that retention promise is load-bearing:
+`docs/privacy.md` states it to readers, and it is half the argument for letting a guest
+write to the personal tables at all (`20260901190000`). Unscheduled, `auth.users` only
+grows, and the policy says something the database is not doing.
+
+**Anonymous sign-ins must also be on in the hosted project** — Authentication → Sign In /
+Providers. `supabase/config.toml` configures the local stack and nothing else, so a
+deploy without that switch shows every visitor a guest button that reports it cannot
+work.
+
 ## Offline
 
 Built on the web **before** any native wrapper, so Capacitor becomes an enhancement

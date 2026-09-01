@@ -30,3 +30,21 @@ export function isEmailRateLimited(error: AuthErrorLike): boolean {
   if (error.code === 'over_email_send_rate_limit') return true;
   return /rate limit/i.test(error.message);
 }
+
+/**
+ * Whether the project simply does not offer guest sessions.
+ *
+ * `enable_anonymous_sign_ins` is in `supabase/config.toml`, which configures the local
+ * stack and nothing else: the hosted project has the same switch under Authentication →
+ * Sign In / Providers, and this repository cannot push it. That is the same class of
+ * problem as Site URL — a setting no code here can see, whose absence looks like a bug
+ * in the app.
+ *
+ * So it is named rather than reported. "Anonymous sign-ins are disabled" tells the
+ * reader nothing they can act on; naming the switch tells whoever is running the
+ * deployment exactly what to turn on, and the reader still has the email route.
+ */
+export function isAnonymousSignInDisabled(error: AuthErrorLike): boolean {
+  if (error.code === 'anonymous_provider_disabled') return true;
+  return /anonymous (sign[- ]?ins?|provider)[^.]*disabled/i.test(error.message);
+}

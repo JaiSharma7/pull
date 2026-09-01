@@ -43,6 +43,31 @@ additional_redirect_urls = ["http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 jwt_expiry = 3600
 enable_signup = true
 
+# A guest session: a real user row with no address attached to it.
+#
+# The point is the first five minutes. Onboarding is a preference row keyed to a user
+# (`OnboardingGate` in Preferences.tsx), the feed is a query keyed to a user, and the
+# Delta is a knowledge state keyed to a user -- so there is no way to show any of it to
+# somebody who has not signed in, and asking for an address before the product has
+# demonstrated anything is asking for trust on credit.
+#
+# `signInAnonymously` gives a real `auth.users` row, so `handle_new_user` writes the
+# profile and preference rows, RLS behaves exactly as it does for anyone else, and every
+# screen works without a special case. What it does NOT give is a way back in: the
+# session lives in this browser's storage and nothing can restore it, which is why the
+# UI says so rather than implying a guest has an account.
+#
+# The cost side is bounded in 20260901190000: a guest may not enqueue generation (law 2
+# -- anonymous sessions are unlimited, so per-user generation quota would be no quota at
+# all), may not author a summary, and may not file a report. See that migration.
+# A running stack does NOT pick this up. `supabase start` against containers that are
+# already up reports them and returns; it does not re-read this file. So on a machine
+# where the stack was already running, the guest button fails with
+# `anonymous_provider_disabled` and the app correctly reports that guest sessions are
+# switched off — which looks exactly like a bug in the button. `supabase stop && supabase
+# start` is the fix. Verified on 2026-09-01 by hitting precisely this.
+enable_anonymous_sign_ins = true
+
 # A one-time code is the whole credential here, so its lifetime is the window in which
 # a leaked email is a working account. Ten minutes is long enough to switch apps, find
 # the message and type six digits, and short enough that a code sitting in a synced
@@ -56,6 +81,21 @@ otp_expiry = 600
 # recoverable state rather than a dead end -- which is what makes it safe to set at
 # all. Without it, the send button is an open relay pointed at somebody's inbox.
 max_frequency = "60s"
+
+# What a guest session costs to mint, per hour, per address.
+#
+# A sign-in code is rate-limited by the mailbox it has to arrive at; a guest session has
+# no such natural brake, so the ceiling has to be stated. 30 an hour per IP is GoTrue's
+# own default and is far above real use -- a person presses the button once -- while
+# keeping a script from filling `auth.users` from one machine faster than the sweep in
+# 20260901190000 empties it.
+#
+# It is not the whole defence and should not be read as one: an address pool routes
+# around it. The defences that do not care where the request came from are the ones in
+# that migration -- a guest cannot enqueue generation, so the expensive door is shut
+# regardless of how many sessions exist.
+[auth.rate_limit]
+anonymous_users = 30
 
 # Second factor. GoTrue owns enrolment, challenge and verification; the recovery half
 # -- codes that remove a lost factor -- is in 20260901150000, because Supabase does not

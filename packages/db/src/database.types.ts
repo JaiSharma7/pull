@@ -1800,6 +1800,7 @@ export type Database = {
         Args: { p_project_url: string; p_seconds?: number }
         Returns: string
       }
+      enable_guest_sweep: { Args: { p_cron?: string }; Returns: number }
       enable_knowledge_vector_refresh: {
         Args: { p_batch?: number; p_cron?: string }
         Returns: number
@@ -1846,6 +1847,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      is_guest: { Args: never; Returns: boolean }
       job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
@@ -2004,6 +2006,7 @@ export type Database = {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean
       }
+      sweep_guest_accounts: { Args: { p_older_than?: string }; Returns: number }
       synthetic_embedding: { Args: { p_axes: Json }; Returns: string }
       topic_affinity: {
         Args: { p_weights: Json; p_work_id: string }
