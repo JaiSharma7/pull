@@ -1,5 +1,9 @@
 # Contributing
 
+> **Contribution status:** external pull requests and issues are temporarily closed
+> while the project stabilises. This guide documents the policy that will apply when
+> those channels reopen.
+
 ## Setup
 
 ```bash
@@ -78,8 +82,9 @@ outside contributor or have to run untrusted code with credentials in scope.
 
 ## How a change gets reviewed
 
-**You do not need to run anything a maintainer runs.** Open a pull request with green
-CI and a description that says _why_; a maintainer takes it from there.
+When external contributions reopen, **you will not need to run anything a maintainer
+runs.** Open a pull request with green CI and a description that says _why_; a
+maintainer takes it from there.
 
 `AGENTS.md` describes an agent-assisted review gate the maintainers use — Codex on the
 first pass, then four specialist reviewers over non-overlapping slices. That is a
@@ -169,8 +174,9 @@ What this rules out is narrow and specific:
   you have to have checked. `docs/roadmap.md` is the tone: things that were verified,
   and things that were not, marked as which.
 
-Findings from a scanner or a model are welcome as **issues** with a reproduction. They
-are not welcome as a PR that changes code on the strength of a claim nobody confirmed.
+When issues reopen, findings from a scanner or a model will be welcome there with a
+reproduction. They will not be welcome as a PR that changes code on the strength of a
+claim nobody confirmed.
 
 ## The seven laws
 
@@ -195,11 +201,13 @@ have rights to, or ripped media. See `docs/content-policy.md`.
 **Your own writing is a separate case, and is not being accepted yet.** Original
 summaries, commentary and translations are content rather than code, so "inbound is
 outbound" does not settle what happens to them — and no agreement covering them exists.
-Until one does, please open an issue to discuss rather than sending a pull request. A
-public-domain **source entry** is different and is welcome: a pointer to a work whose
-rights have expired needs no grant from anyone, because there is no right left to grant.
+Until one does, discuss original writing in an issue after that channel reopens rather
+than sending a pull request. A public-domain **source entry** is different and will be
+welcome when external contributions reopen: a pointer to a work whose rights have
+expired needs no grant from anyone, because there is no right left to grant.
 
-The most useful contribution that needs no database is a source for the manifest:
+When contribution channels reopen, the most useful contribution that needs no database
+will be a source for the manifest:
 
 ```bash
 # add an entry to scripts/corpus/public-domain.json, then

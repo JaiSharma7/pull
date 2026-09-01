@@ -131,10 +131,11 @@ not want one. Host it and charge for it, fold it into something you sell, compet
 us — all of that is permitted, and the condition above is the only price: the people
 using your instance get its source. What nobody can do is take it _closed_.
 
-**Contributions are welcome, and there is no CLA.** Inbound is outbound — what you send
-is released under the AGPL, the same terms the project is already on, so nothing you
-contribute can be relicensed out from under you, by the maintainers or anyone else.
-Contributions count as open source, because the AGPL is
+**External contributions will be welcome when the channels reopen, and there is no
+CLA.** Inbound is outbound — what you send is released under the AGPL, the same terms
+the project is already on, so nothing you contribute can be relicensed out from under
+you, by the maintainers or anyone else. Contributions count as open source, because the
+AGPL is
 [OSI-approved](https://opensource.org/licenses/AGPL-3.0) — a licence forbidding
 commercial use would not be, which is a second reason this project does not use one.
 
