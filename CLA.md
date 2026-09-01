@@ -42,8 +42,10 @@ a completely reasonable position and no one will think less of you for it.
 You accept these terms by **signing** — adding your name to `CONTRIBUTORS.md`, as
 "How to sign" below describes. Signing covers Your present and future Contributions to
 this repository. Submitting a pull request is not itself acceptance: if you have not
-signed, you are not bound by this document, and the contribution is not merged until you
-either sign or say you would rather not.
+signed, you are not bound by this document. Nor is the contribution merged — a change
+the project has no licence grant over is one it cannot ship, so declining leaves the
+pull request unmerged rather than clearing the way for it. That is a real choice with a
+real consequence, and it is better than the alternative of binding people silently.
 
 Except for the licences granted here, You reserve all right, title and interest in and
 to Your Contributions.

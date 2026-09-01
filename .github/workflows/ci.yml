@@ -178,8 +178,11 @@ jobs:
   # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
   #
   # `Signed-off-by:` is the contributor asserting they have the right to submit the
-  # code under the project's licence. It is also the reason CONTRIBUTING.md can ask
-  # for a named human behind every line without needing a CLA to administer.
+  # code under the project's licence — a provenance record, per commit.
+  #
+  # It is not the whole story: CLA.md records the licence grant, once, and is signed by
+  # adding a name to CONTRIBUTORS.md. Nothing here checks that, deliberately — see the
+  # note in CLA.md — so a reviewer confirms it on a first contribution.
   dco:
     name: dco
     if: github.event_name == 'pull_request'
@@ -191,6 +194,11 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          # Who opened the pull request, per GitHub — not a git author field, which the
+          # committer chooses freely. The bot exemption below is gated on this so that
+          # setting `user.email` to something ending `[bot]@users.noreply.github.com`
+          # cannot skip the check on a human's pull request.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           # The commit that introduced this check. Anything that is an ancestor of it
           # predates the policy and is exempt.
           #
@@ -218,13 +226,21 @@ jobs:
             # Without this, every dependency update is red forever — which does not
             # add rigour, it teaches reviewers to scroll past a failing DCO. A check
             # that is always red for a whole class of pull requests is worse than
-            # the gap it closes. This is a provenance record, not an access control:
-            # anyone willing to forge an author name to dodge it could equally paste
-            # a `Signed-off-by` line they are not entitled to.
-            case "$(git show -s --format='%ae' "$sha")" in
-              *'[bot]@users.noreply.github.com')
-                echo "skipped, bot commit: $(git show -s --format='%h %s' "$sha")"
-                continue
+            # the gap it closes.
+            #
+            # Two conditions, not one. `PR_AUTHOR` comes from GitHub and cannot be
+            # set by the committer; the author email can. Requiring both means a
+            # human cannot exempt their own commits by choosing a `[bot]@…` email,
+            # and a bot's pull request still cannot launder a human's unsigned commit
+            # that happens to be pushed onto its branch.
+            case "$PR_AUTHOR" in
+              *'[bot]')
+                case "$(git show -s --format='%ae' "$sha")" in
+                  *'[bot]@users.noreply.github.com')
+                    echo "skipped, bot commit: $(git show -s --format='%h %s' "$sha")"
+                    continue
+                    ;;
+                esac
                 ;;
             esac
             checked=$((checked + 1))

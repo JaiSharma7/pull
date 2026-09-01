@@ -1,7 +1,12 @@
 # Terms of Service
 
-**Effective 1 September 2026.** Every revision of this document is a commit in this
-repository.
+**Effective 1 October 2026.** The version before this one governs until then — §14
+promises material changes are announced before they take effect, and the licence row in
+the table below and the contributor terms in §7 are material. Every revision of this
+document is a commit in this repository, so what changed and when is public history.
+
+The code licence is not on that clock. It changed the day the relicense commit landed;
+these Terms describe the hosted service, and only that description waits.
 
 These terms are a contract between you and the operator of **What a Pull** ("we", "us")
 covering the hosted service at whatapull.com and its apps. By using the service you accept
