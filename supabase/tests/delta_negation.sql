@@ -190,17 +190,36 @@ begin
 
   -- The comparison above is only meaningful while every other user-dependent
   -- term is equal. Both readers take default preferences from handle_new_user,
-  -- and neither has a knowledge centroid -- today `user_knowledge_vectors` is
-  -- written only by an explicit RPC. If that ever becomes a trigger on
-  -- knowledge_states, the 0.18 uvec term would diverge and the failure above
-  -- would blame the negation fix for someone else's change. Say so here.
+  -- and neither has a knowledge centroid -- but the REASON has changed, and it
+  -- is worth writing down because it is now a weaker reason than it was.
+  --
+  -- `user_knowledge_vectors` used to be written only by an RPC nobody called.
+  -- Since 20260901070000_the_feed_finally_knows_what_you_know.sql it is also
+  -- written by `refresh_stale_knowledge_vectors`, which a pg_cron job runs
+  -- every fifteen minutes, and that tick WOULD break the premise: run in this
+  -- transaction it gives reader_knows a one-idea centroid and reader_blank
+  -- none at all, because reader_blank has no knowledge states to average. That
+  -- asymmetry is exactly the divergence this check exists to catch -- one
+  -- reader scoring the uvec term as a real distance while the other scores the
+  -- neutral 0.5.
+  --
+  -- What holds the premise up now is transaction isolation, not absence: these
+  -- readers are created inside this transaction and rolled back, so no tick can
+  -- ever see them. Which leaves precisely one way for this to fire, and it is
+  -- the one worth catching -- somebody put a centroid write on the read path: a
+  -- trigger on knowledge_states, or a refresh call inside record_read or
+  -- get_feed. In that case the 0.18 uvec term diverges between these two
+  -- readers and the failure above would blame the negation fix for it.
   if exists (
     select 1 from public.user_knowledge_vectors
     where user_id in (reader_knows, reader_blank)
   ) then
     raise exception
-      'premise broken: a reader gained a knowledge vector, so the two scores '
-      'are no longer comparable and this assertion no longer tests the Delta.';
+      'premise broken: a reader gained a knowledge vector inside this '
+      'transaction, so the 0.18 uvec term is no longer equal for the two '
+      'readers and the score comparison above no longer tests the Delta. The '
+      'scheduled refresh cannot reach these readers -- look for a trigger on '
+      'knowledge_states, or a refresh_knowledge_vector call on the read path.';
   end if;
 
   -- ...and the contradiction is not counted as a saving. Asserted as a

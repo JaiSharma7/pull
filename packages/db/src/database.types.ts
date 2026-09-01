@@ -1756,6 +1756,7 @@ export type Database = {
       }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
+      disable_knowledge_vector_refresh: { Args: never; Returns: string }
       dismissal_damping: { Args: { p_user_id: string }; Returns: number }
       due_pressure: { Args: { p_user_id: string }; Returns: number }
       enable_generation_dispatcher: {
@@ -1769,6 +1770,10 @@ export type Database = {
       enable_generation_dispatcher_with_token: {
         Args: { p_project_url: string; p_seconds?: number }
         Returns: string
+      }
+      enable_knowledge_vector_refresh: {
+        Args: { p_batch?: number; p_cron?: string }
+        Returns: number
       }
       enable_log_retention: { Args: { p_cron?: string }; Returns: number }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
@@ -1812,6 +1817,7 @@ export type Database = {
         }
       }
       job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
+      knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
       plan_interleave: {
@@ -1889,6 +1895,10 @@ export type Database = {
       refresh_knowledge_vector: {
         Args: { p_user_id?: string }
         Returns: undefined
+      }
+      refresh_stale_knowledge_vectors: {
+        Args: { p_limit?: number }
+        Returns: Json
       }
       related_pulls: {
         Args: { p_limit?: number; p_pull_id: string }
