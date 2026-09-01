@@ -35,10 +35,14 @@ And the app keeps a model of what you already know, so it stops re-teaching it.
 
 ## Stack
 
-React 19 · Vite 8 · TanStack Router + Query · PWA — over Supabase (Postgres 17,
-pgvector, pgmq, Auth, Storage, Edge Functions). No LLM ever runs in the read path:
-ranking, search and the Delta are SQL and vector maths, which is what makes the free
-tier affordable.
+React 19 · Vite 8 · Zod · PWA — over Supabase (Postgres 17, pgvector, pgmq, Auth,
+Storage, Edge Functions). No LLM ever runs in the read path: ranking, search and the
+Delta are SQL and vector maths, which is what makes the free tier affordable.
+
+There is no router and no data-fetching library. The handful of real URLs are matched
+by pure helpers in `apps/web/src/lib/routes.ts` and driven by `history.pushState` in
+`App.tsx`; requests go through `supabase-js` where they are needed, and what is kept
+for offline reading is written to IndexedDB.
 
 ## Quick start
 

@@ -76,13 +76,20 @@ and reviewers should reject it on that basis alone.
 
 ## Stack
 
-| Layer    | Choice                                                           |
-| -------- | ---------------------------------------------------------------- |
-| Frontend | React 19 · Vite 8 · TanStack Router + Query · Zod · PWA          |
-| Backend  | Supabase — Postgres 17, PostgREST, Auth, Storage, Edge Functions |
-| Vectors  | `pgvector` 0.8 with HNSW, 1536 dimensions                        |
-| Queue    | `pgmq`, ticked by `pg_cron` over `pg_net`                        |
-| Monorepo | pnpm workspaces + Turborepo                                      |
+| Layer    | Choice                                                             |
+| -------- | ------------------------------------------------------------------ |
+| Frontend | React 19 · Vite 8 · Zod · PWA — no router or data-fetching library |
+| Backend  | Supabase — Postgres 17, PostgREST, Auth, Storage, Edge Functions   |
+| Vectors  | `pgvector` 0.8 with HNSW, 1536 dimensions                          |
+| Queue    | `pgmq`, ticked by `pg_cron` over `pg_net`                          |
+| Monorepo | pnpm workspaces + Turborepo                                        |
+
+Routing is `history.pushState` and a `popstate` listener in `apps/web/src/App.tsx`, over
+path helpers in `apps/web/src/lib/routes.ts` that are pure and unit-tested. Reading is tab
+state on purpose — a Pull is not a page — so only the things that need an address you can
+send someone have one: a source, a Pull, a topic, search, and the legal documents. Data is
+fetched by `supabase-js` in the component that needs it; the offline copy lives in
+IndexedDB via `lib/offline.ts`, not in a query cache.
 
 Hosted project `pull`, ref `zjvfwhjwaytyogdxeddo`, region `ca-central-1`.
 

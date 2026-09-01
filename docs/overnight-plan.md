@@ -447,8 +447,11 @@ and an honest account is this product's whole claim:
 
 1. **TanStack Router / Query.** Zero imports today; adopting either is a whole-app refactor
    touching every file Wave 2 depends on. PR #6's hand-rolled `pushState` + `popstate` is
-   ~80 lines from a route table and conflicts with nothing. Do not remove the unused deps
-   either — lockfile churn for no reader-visible gain.
+   ~80 lines from a route table and conflicts with nothing. **Since revised:** the two
+   unused deps have been dropped from `apps/web/package.json`. Deferring the adoption was
+   right; leaving the dependencies declared was not — a package nothing imports is a claim
+   about the app the app cannot support, and both stack tables were repeating it back as
+   though it were true.
 2. **Search.** No tsvector, no RPC, no UI. Round 3.
 3. **Wiring `refresh_knowledge_vector`.** The `uvec` term is a constant `0.5` for every card,
    so it is _inert_ — it does not distort ranking, it wastes 18% of the weight budget. The
