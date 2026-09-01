@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
@@ -196,10 +196,58 @@ export function App() {
   /*
    * Whether a guest has asked to leave, and is being asked to mean it.
    *
+   * Holds the ADDRESS the confirmation was opened at rather than a boolean, so that
+   * navigating away puts it back in its box. This component never unmounts, so a boolean
+   * is sticky: a guest who presses "End this guest session", thinks better of it, goes to
+   * Explore and comes back later meets the panel already asking "Yes — end it and sign
+   * in" as its primary button, with no memory of having asked for it. A two-press
+   * confirmation whose first press can be days old and on another screen is a one-press
+   * confirmation.
+   *
+   * Derived rather than reset in an effect, because an effect that calls `setState` in
+   * its body is a cascading render (and the lint rule that says so is right): the
+   * question "is this confirmation still live?" has an answer in the render that needs
+   * it, so it does not need to be stored twice and kept in step.
+   *
    * Lives here rather than in the panel because the panel is inline JSX in this
    * component; if it ever becomes its own route it should take this with it.
    */
-  const [guestLeaving, setGuestLeaving] = useState(false);
+  const [guestLeavingAt, setGuestLeavingAt] = useState<string | null>(null);
+  /*
+   * Where keyboard focus goes when that flag flips, and why this is a ref rather than an
+   * effect keyed on `guestLeaving`.
+   *
+   * Pressing either control unmounts the button that was pressed and mounts a different
+   * one, so focus falls to `<body>` — a keyboard reader is dropped at the top of the
+   * document with no announcement, in the middle of a confirmation they are halfway
+   * through. The fix has to move focus, and it has to move it only on that transition:
+   * an effect keyed on `guestLeaving` alone also fires when the panel first mounts, which
+   * would steal focus from whatever a reader was doing and land it on a button that ends
+   * their session. So the handlers say where focus should go, and the effect below spends
+   * that intent exactly once.
+   *
+   * Entering the confirmation focuses the SAFE control, not the destructive one. Space
+   * or Enter pressed twice in a row is the misclick this pair exists to catch, and
+   * focusing "Yes" would make the second press land on it.
+   */
+  const guestWantsFocus = useRef<'end' | 'keep' | null>(null);
+  const guestEndRef = useRef<HTMLButtonElement>(null);
+  const guestKeepRef = useRef<HTMLButtonElement>(null);
+  /*
+   * Spends that intent, once, after the render that swapped the buttons over.
+   *
+   * No dependency array on purpose: a ref is not reactive, so there is nothing React
+   * could key this on, and the guard makes it a no-op on every render but the one that
+   * matters. Declared up here with the rest of the hooks rather than beside the panel it
+   * serves, because this component returns early for the specimen and legal routes and a
+   * hook below those runs in some renders and not others.
+   */
+  useEffect(() => {
+    const want = guestWantsFocus.current;
+    if (want === null) return;
+    guestWantsFocus.current = null;
+    (want === 'keep' ? guestKeepRef : guestEndRef).current?.focus();
+  });
   /*
    * The only routed thing in the app.
    *
@@ -500,6 +548,12 @@ export function App() {
   const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
 
   const accountOpen = isPath(path, '/account');
+
+  /*
+   * Live only at the address it was opened at. See `guestLeavingAt`.
+   */
+  const guestLeaving = guestLeavingAt !== null && guestLeavingAt === path;
+
   const topicSlug = routeParam(path, '/topic');
   /*
    * A path that matches nothing.
@@ -916,6 +970,19 @@ export function App() {
                   what you have read and stashed as a guest stays behind.
                 </p>
                 {/*
+                  The expiry, said here as well as on the sign-in screen.
+
+                  A guest reads the sign-in screen once, before they have anything to lose, and
+                  this screen only once they do. Saying it in one place would mean the sentence
+                  that matters — everything here goes in a day — is only ever shown to somebody
+                  who has not yet made anything worth keeping.
+                */}
+                <p>
+                  A guest session is also deleted a day after you last use it, along with everything
+                  keyed to it. Reading today and coming back tomorrow keeps it; leaving it for a
+                  weekend does not. Signing in with an email address is what makes any of it stay.
+                </p>
+                {/*
                   Two presses, which is the shape every irreversible action on the real
                   Account screen already takes: "make them do something that could not be a
                   misclick". This one has less recoverability than any of them — no address,
@@ -923,7 +990,16 @@ export function App() {
                   bookmark, primed to hit the primary button because they came to sign in.
                   Oxblood is not what makes it safe; the second press is.
                 */}
-                <div className="stack">
+                {/*
+                  `.actions`, not `.stack`, and the difference is visible rather than
+                  pedantic. `.stack` separates children with `margin-block-start` alone,
+                  which does nothing useful between two `<button>`s: they are
+                  `inline-block`, so they flow onto one line and the margin lands above
+                  the pair. This confirmation rendered as "YES — END IT AND SIGN IN"
+                  butted against "KEEP READING AS A GUEST" with a text node's worth of
+                  space between them, destructive option first.
+                */}
+                <div className="actions">
                   {guestLeaving ? (
                     <>
                       <button
@@ -943,8 +1019,14 @@ export function App() {
                       </button>
                       <button
                         type="button"
+                        ref={guestKeepRef}
                         className="btn btn--plain"
-                        onClick={() => setGuestLeaving(false)}
+                        onClick={() => {
+                          // Focus returns to the control that opened the confirmation,
+                          // which is where a keyboard reader was before they asked.
+                          guestWantsFocus.current = 'end';
+                          setGuestLeavingAt(null);
+                        }}
                       >
                         Keep reading as a guest
                       </button>
@@ -952,9 +1034,13 @@ export function App() {
                   ) : (
                     <button
                       type="button"
+                      ref={guestEndRef}
                       className="btn btn--primary"
                       aria-describedby="guest-consequence"
-                      onClick={() => setGuestLeaving(true)}
+                      onClick={() => {
+                        guestWantsFocus.current = 'keep';
+                        setGuestLeavingAt(path);
+                      }}
                     >
                       End this guest session and sign in
                     </button>
