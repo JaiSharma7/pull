@@ -66,3 +66,55 @@ export function rpcError(error: unknown): Error {
   wrapped.name = e.code ? `PostgrestError ${e.code}` : 'PostgrestError';
   return wrapped;
 }
+
+/**
+ * Do the app and the database disagree about what exists?
+ *
+ * Two things ship this product and only one of them is automatic. Vercel redeploys
+ * `apps/web` on every push to `main`; migrations reach the hosted project only when
+ * somebody runs `supabase db push`. So a pull request that adds a column and selects
+ * it — which is an ordinary, correct pull request — puts a query for that column in
+ * front of every reader the moment it merges, and the column arrives whenever the
+ * next person remembers.
+ *
+ * That is not hypothetical and it is why this exists. On 2026-09-01 the hosted project
+ * was seven migrations behind, `works.source_url` did not exist there, and every source
+ * page a reader opened from a card answered "Something went wrong reaching the library"
+ * — with `column works.source_url does not exist` printed underneath in the small grey
+ * line nobody reads as an instruction.
+ *
+ * The reader cannot act on either sentence. Whoever runs the deployment can act on this
+ * one immediately, and it is the difference between an afternoon of bisecting the
+ * frontend and one command.
+ *
+ * WHAT IT PROVES, AND WHAT IT DOES NOT. These codes say the app asked for something the
+ * database does not have. They do NOT say which side is behind, and the first draft of
+ * this claimed they did. A column dropped on purpose by a newer migration, read by an
+ * older bundle out of the service worker's cache — which law 3 guarantees exists — is
+ * the same code with the direction reversed, and there the answer is a reload, not a
+ * migration. `PGRST204` inverts it a second way: it comes from PostgREST's schema cache,
+ * which goes stale *after* a migration is applied, and is answered by
+ * `notify pgrst, 'reload schema'` rather than by pushing anything.
+ *
+ * So the name is a description of the symptom and the copy says only that the two are
+ * out of step. The commands belong here, in front of whoever is reading the repository,
+ * and in `console.warn` — not asserted at a reader who cannot act on any of them.
+ *
+ * The codes: `42703` is Postgres refusing a column; `42P01` a table; `42883` a function,
+ * which is how a missing RPC arrives once PostgREST has passed it through. `PGRST202`
+ * and `PGRST204` are PostgREST's own versions of the last two, raised from its cached
+ * schema before the query is sent, and they carry no SQLSTATE at all. All five are the
+ * same fact — this deployment's schema and this bundle disagree — and the four beyond
+ * the first matter because 20260901140000, 150000 and 190000 add functions that a
+ * project behind on migrations does not have.
+ */
+const SCHEMA_MISMATCH_CODES = ['42703', '42P01', '42883', 'PGRST202', 'PGRST204'];
+
+export function isSchemaMismatch(error: unknown): boolean {
+  if (error instanceof Error) {
+    const code = /^PostgrestError (.+)$/.exec(error.name)?.[1];
+    return code !== undefined && SCHEMA_MISMATCH_CODES.includes(code);
+  }
+  const e = (error ?? {}) as RpcErrorShape;
+  return typeof e.code === 'string' && SCHEMA_MISMATCH_CODES.includes(e.code);
+}

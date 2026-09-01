@@ -157,6 +157,32 @@ deletes anonymous accounts after 30 days, and that retention promise is load-bea
 write to the personal tables at all (`20260901190000`). Unscheduled, `auth.users` only
 grows, and the policy says something the database is not doing.
 
+**The frontend deploys itself and the database does not.** Vercel redeploys `apps/web`
+from git on every push to `main`; migrations reach the hosted project only when somebody
+runs `supabase db push` (step 2 of `scripts/go-live.sh`). So a pull request that adds a
+column and selects it — an ordinary, correct pull request — ships the query to every
+reader on merge and the column whenever the next person remembers.
+
+That is not a hypothetical. On 2026-09-01 the hosted project was seven migrations behind:
+`works.source_url` arrived in `20260901160000`, `apps/web/src/lib/source-api.ts` selected
+it, and every source page a reader opened from a card answered `42703: column
+works.source_url does not exist`. Nothing was broken except the gap between the two. The
+source page now recognises that class of failure and says the two are out of step — without
+guessing which side is behind, because the error does not say: a column dropped by a newer
+migration and read by an older cached bundle is the same code pointing the other way. The
+commands go to the console, where an operator looks, rather than into reader copy on a page
+any visitor can open.
+
+**The push itself is not currently possible on this project, and that is a separate
+repair.** `db push` refuses when the remote history holds a version with no local file.
+This project has 70 rows of history, 18 of them stamped by `apply_migration` rather than by
+the CLI — so their versions match no filename here, and `--include-all` does not override it
+(`missing-local` is checked first). Reconciling it is `supabase migration repair --status
+applied <version>` per row, against production. `go-live.sh` therefore treats a failed push
+as loud but not fatal: the worker deploy and the secrets are the reason that script exists,
+they do not depend on the schema, and it exits non-zero at the end so a failed push cannot
+read as a clean deploy.
+
 **Anonymous sign-ins must also be on in the hosted project** — Authentication → Sign In /
 Providers. `supabase/config.toml` configures the local stack and nothing else, so a
 deploy without that switch shows every visitor a guest button that reports it cannot

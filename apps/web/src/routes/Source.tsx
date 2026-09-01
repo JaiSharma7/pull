@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSourceDelta } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { anchoredPullId } from '../lib/routes.js';
+import { isSchemaMismatch } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
@@ -168,6 +169,16 @@ export function Source({
    */
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * Whether the app and the database disagree about what exists, rather than a fault.
+   *
+   * Kept apart from `error` because it changes what is true, not just what is said:
+   * every other failure here is worth trying again, and this one will fail identically
+   * every time until somebody deploys something. Which somebody, and which direction,
+   * the error does not say — see `isSchemaMismatch` — so the sentence below does not
+   * guess, and the command goes to the console where an operator will find it.
+   */
+  const [schemaMismatch, setSchemaMismatch] = useState(false);
   const [offline, setOffline] = useState(false);
   /*
    * What the last share did, and which idea it was for.
@@ -203,6 +214,20 @@ export function Source({
       .catch((e: unknown) => {
         if (!live) return;
         setOffline(isOfflineFailure(e));
+        const mismatch = isSchemaMismatch(e);
+        setSchemaMismatch(mismatch);
+        if (mismatch) {
+          // The operator's half. Not in the page: /source/:id is reachable signed out,
+          // so a CLI command there is stack detail shown to every visitor, aimed at
+          // somebody who is not among them.
+          console.warn(
+            'This deployment asked for something the database does not have. If the ' +
+              'database is behind: `supabase db push`. If a migration has just been ' +
+              "applied: `notify pgrst, 'reload schema'`. If the page is an old cached " +
+              'bundle: reload.',
+            e,
+          );
+        }
         setError(e instanceof Error ? e.message : 'Could not load this source.');
       });
 
@@ -374,7 +399,11 @@ export function Source({
         <p>
           {offline
             ? 'You appear to be offline. This source needs a connection.'
-            : 'Something went wrong reaching the library.'}
+            : schemaMismatch
+              ? 'This page asked the library for something it does not have — the app and the ' +
+                'database are out of step. Nothing you can do will change that, and trying ' +
+                'again will not either; it needs whoever runs this deployment.'
+              : 'Something went wrong reaching the library.'}
         </p>
         <p className="meta">{error}</p>
         <BackControl userId={userId} onNavigate={onNavigate} />
