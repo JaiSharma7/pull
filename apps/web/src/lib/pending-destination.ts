@@ -84,7 +84,11 @@ export function rememberDestination(to: string | null, now: number = Date.now())
  * decides what a safe destination is.
  */
 export function takeDestination(now: number = Date.now()): string | null {
-  let raw: string | null = null;
+  // No initialiser: every path that reaches the read below has assigned it, and the
+  // `catch` returns rather than falling through. eslint 10 puts `no-useless-assignment`
+  // in its recommended set and is right that a `= null` here is dead — which is what
+  // blocks the eslint 10 bump (#43) until this lands.
+  let raw: string | null;
   try {
     raw = localStorage.getItem(KEY);
     localStorage.removeItem(KEY);
