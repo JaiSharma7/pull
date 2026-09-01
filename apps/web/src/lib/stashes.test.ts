@@ -6,10 +6,13 @@ import {
   canNest,
   canNestNew,
   descendantIds,
+  detachSaves,
   emptyLibraryMessage,
+  emptyLibraryScreen,
   findNode,
   flattenTree,
   shapeStashes,
+  withoutStashes,
   type Stash,
 } from './stashes.js';
 
@@ -290,5 +293,81 @@ describe('shapeStashes', () => {
   it('returns an empty list for anything that is not an array', () => {
     expect(shapeStashes(null)).toEqual([]);
     expect(shapeStashes({})).toEqual([]);
+  });
+});
+
+/**
+ * The screen a reader sees when they have kept nothing.
+ *
+ * "Nothing kept" and "nothing to take away" are different facts, and the Library
+ * used to conflate them: it returned early with one sentence, and the export
+ * control sat below that return in the branch a reader with no saves never
+ * reaches. `fetchExportData` reads `highlights` and `saved_items` in separate
+ * queries precisely because a highlight does not require a save — so that reader
+ * is real, has a file waiting, and could not reach the button that builds it.
+ */
+describe('emptyLibraryScreen', () => {
+  it('offers no export when there would be nothing in it', () => {
+    // With no saves there are no notes either, so the highlights are the whole
+    // of the export. None of them means the file would be empty, and a control
+    // that writes an empty file is its own small lie.
+    const screen = emptyLibraryScreen(0);
+    expect(screen.exportable).toBe(false);
+    expect(screen.body).not.toMatch(/highlight/);
+  });
+
+  it('offers the export to a reader who has highlights and has kept nothing', () => {
+    const screen = emptyLibraryScreen(3);
+    expect(screen.exportable).toBe(true);
+    expect(screen.body).toContain('3 highlights already');
+  });
+
+  it('counts one highlight as one', () => {
+    expect(emptyLibraryScreen(1).body).toContain('1 highlight already');
+  });
+
+  it('still invites the reader to save something either way', () => {
+    // The offer is an addition to the empty state, not a replacement for it.
+    for (const count of [0, 4]) {
+      expect(emptyLibraryScreen(count).heading).toBe('Nothing kept yet.');
+      expect(emptyLibraryScreen(count).body).toContain('Save a Pull from the feed');
+    }
+  });
+});
+
+/**
+ * Deleting a collection, mirrored locally while offline.
+ *
+ * The two foreign keys are one word apart in the same migration and have
+ * opposite consequences: `stashes.parent_id` is `on delete cascade`, so the
+ * collections beneath go, while `saved_items.stash_id` is `on delete set null`,
+ * so the saves stay and merely become unfiled. Offline the screen cannot reload
+ * to find out which happened, so it has to know.
+ */
+describe('a deleted collection, mirrored locally', () => {
+  it('takes every collection beneath it', () => {
+    const doomed = new Set(['a', 'b']);
+    const left = withoutStashes([stash('a'), stash('b', 'a'), stash('c')], doomed);
+    expect(left.map((s) => s.id)).toEqual(['c']);
+  });
+
+  it('keeps every save and merely unfiles the ones that were inside', () => {
+    // The single thing law 3 promises cannot happen: an unlimited library
+    // destroyed by one click on a folder.
+    const saves = [
+      { id: 's1', stashId: 'b' },
+      { id: 's2', stashId: 'c' },
+      { id: 's3', stashId: null },
+    ];
+    expect(detachSaves(saves, new Set(['a', 'b']))).toEqual([
+      { id: 's1', stashId: null },
+      { id: 's2', stashId: 'c' },
+      { id: 's3', stashId: null },
+    ]);
+  });
+
+  it('returns untouched saves by identity, so nothing re-renders for nothing', () => {
+    const saves = [{ id: 's2', stashId: 'c' }];
+    expect(detachSaves(saves, new Set(['a']))[0]).toBe(saves[0]);
   });
 });

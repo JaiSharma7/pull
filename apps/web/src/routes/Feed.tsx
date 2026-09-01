@@ -14,9 +14,11 @@ import {
 } from '../lib/offline.js';
 import { createDwellTracker } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
+import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
+import * as stashApi from '../lib/stash-api.js';
 import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
@@ -36,6 +38,25 @@ const RETRY_MAX_MS = 5 * 60_000;
  */
 const CAN_SPEAK = speechSupported();
 const SHARE_LABEL = shareLabel(shareCapability(navigator));
+
+/**
+ * The calls a queued write replays into.
+ *
+ * Named once here rather than built per drain, and handed to `replayWrite` as a
+ * port so that the mapping itself — which kind becomes which call — stays
+ * testable without a Supabase client.
+ */
+const REPLAY_PORT: ReplayPort = {
+  savePull: api.savePull,
+  unsavePull: api.unsavePull,
+  recordRead: api.recordRead,
+  gradeRecall: api.gradeRecall,
+  saveExplanation: api.saveExplanation,
+  setConviction: api.setConviction,
+  updateSavedItem: stashApi.updateSavedItem,
+  createStash: stashApi.createStash,
+  deleteStash: stashApi.deleteStash,
+};
 
 /**
  * What the session rail shows.
@@ -266,24 +287,11 @@ export function Feed({
       setOffline(false);
       return drainPending(
         userId,
-        async (write) => {
-          if (write.kind === 'save') await api.savePull(write.pullId, userId);
-          else if (write.kind === 'unsave') await api.unsavePull(write.pullId, userId);
-          else if (write.kind === 'explain')
-            await api.saveExplanation(userId, write.pullId, write.text, write.mutationId);
-          else if (write.kind === 'conviction')
-            await api.setConviction(
-              write.pullId,
-              write.stance,
-              write.mutationId,
-              write.submittedAt,
-            );
-          // Queued by the Review screen, which has no drain of its own. This
-          // component is kept mounted by the shell precisely so the session's state
-          // survives a tab switch, which makes it the one place a drain can live.
-          else if (write.kind === 'recall') await api.gradeRecall(write.pullId, write.grade);
-          else await api.recordRead(write.pullId, 0, 0);
-        },
+        // Every kind is mapped in `replayWrite`, including the ones the Review
+        // screen and the Library queue. This component is kept mounted by the
+        // shell precisely so the session's state survives a tab switch, which
+        // makes it the one place a drain can live.
+        (write) => replayWrite(userId, write, REPLAY_PORT),
         // Read from the live auth session, not from component state. Signing
         // out unmounts this component rather than re-rendering it, so a ref
         // would stop updating at exactly the moment it matters and the drain

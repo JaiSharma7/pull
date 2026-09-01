@@ -3,7 +3,8 @@ import { PullCard } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
-import { fetchExportData } from '../lib/highlights-api.js';
+import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
+import { queueIfOffline } from '../lib/offline.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
@@ -16,9 +17,12 @@ import {
   buildStashTree,
   canNestNew,
   descendantIds,
+  detachSaves,
   emptyLibraryMessage,
+  emptyLibraryScreen,
   flattenTree,
   newStashId,
+  withoutStashes,
 } from '../lib/stashes.js';
 import type { LibraryItem, SourceDelta } from '../lib/types.js';
 
@@ -45,6 +49,14 @@ const FILTERS: { id: LibraryFilter; label: string }[] = [
 export function Library({ userId }: { userId: string }) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [stashes, setStashes] = useState<Stash[]>([]);
+  /*
+   * Highlights the reader has, whether or not they kept the Pull they are on.
+   *
+   * Only a count, and only so the empty state can tell "nothing here" apart from
+   * "nothing kept, but your highlights are still yours". `fetchExportData` reads
+   * highlights in a query of its own for the same reason.
+   */
+  const [highlightCount, setHighlightCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [openWork, setOpenWork] = useState<string | null>(null);
   const [delta, setDelta] = useState<Record<string, SourceDelta>>({});
@@ -105,11 +117,18 @@ export function Library({ userId }: { userId: string }) {
    */
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.fetchLibrary(userId), stashApi.fetchStashes(userId)])
-      .then(([rows, s]) => {
+    Promise.all([
+      api.fetchLibrary(userId),
+      stashApi.fetchStashes(userId),
+      // Caught here rather than at the end: a count that fails costs the reader
+      // the export control, not their library.
+      countHighlights(userId).catch(() => 0),
+    ])
+      .then(([rows, s, highlights]) => {
         if (cancelled) return;
         setItems(rows);
         setStashes(s);
+        setHighlightCount(highlights);
         // A load that worked ends the failure before it. Without this the error
         // screen outlives its own cause: `error` was set in exactly one place
         // and cleared in none, so one flaky request replaced a working library
@@ -174,8 +193,17 @@ export function Library({ userId }: { userId: string }) {
    * Every one of these is a last-write-wins update on one `saved_items` row, so
    * a failure is recoverable by doing it again — and waiting for a round trip
    * before moving a card into a folder makes organising a library feel like
-   * filing a form. On failure the row is reloaded rather than rolled back
-   * locally, because the server is the thing that knows what actually landed.
+   * filing a form. On a failure the server actually answered, the row is
+   * reloaded rather than rolled back locally, because the server is the thing
+   * that knows what actually landed.
+   *
+   * A failure the network swallowed is the opposite case and used to be handled
+   * as if it were the same one. Nothing knew anything, the write was dropped, and
+   * `reload()` then asked a connection that had just failed for the whole library
+   * — turning a working screen into the error state and losing the reader's
+   * change in the same motion. Law 3 promises unlimited stashing; a promise that
+   * only holds on wifi is a smaller promise. So it is queued and the optimistic
+   * state stands, which is what the reader already sees.
    */
   function patchSave(item: LibraryItem, patch: stashApi.SavePatch) {
     setItems((prev) =>
@@ -191,7 +219,8 @@ export function Library({ userId }: { userId: string }) {
           : i,
       ),
     );
-    stashApi.updateSavedItem(item.saveId, patch).catch((e: unknown) => {
+    stashApi.updateSavedItem(item.saveId, patch).catch(async (e: unknown) => {
+      if (await queueIfOffline(userId, e, { kind: 'organise', saveId: item.saveId, patch })) return;
       console.error('Could not update the save', e);
       reload();
     });
@@ -240,8 +269,18 @@ export function Library({ userId }: { userId: string }) {
     try {
       await stashApi.createStash(userId, stash);
     } catch (e) {
-      console.error('Could not create the collection', e);
-      reload();
+      // The id above is already minted, so the queued replay collides on the
+      // primary key rather than creating a second folder with the same name.
+      const queued = await queueIfOffline(userId, e, {
+        kind: 'stash-create',
+        stashId: stash.id,
+        name: stash.name,
+        parentId: stash.parentId,
+      });
+      if (!queued) {
+        console.error('Could not create the collection', e);
+        reload();
+      }
     } finally {
       setBusy(false);
     }
@@ -261,18 +300,36 @@ export function Library({ userId }: { userId: string }) {
       : `Delete “${node.name}”? Nothing you have kept is deleted.`;
     if (!window.confirm(warning)) return;
 
+    // Every collection in `doomed` goes, not only the one named — so a selection
+    // pointing at any of them would survive the row it names and leave the
+    // screen filtering by a collection that no longer exists.
+    const clearSelection = () => {
+      if (stashId !== null && doomed.has(stashId)) setStashId(null);
+    };
+
     setBusy(true);
     try {
       await stashApi.deleteStash(node.id);
-      // Every collection in `doomed` goes, not only the one named — so a
-      // selection pointing at any of them would survive the row it names and
-      // leave the screen filtering by a collection that no longer exists.
-      if (stashId !== null && doomed.has(stashId)) setStashId(null);
+      clearSelection();
+      reload();
     } catch (e) {
-      console.error('Could not delete the collection', e);
+      if (await queueIfOffline(userId, e, { kind: 'stash-delete', stashId: node.id })) {
+        /*
+         * Reloading is the one thing that must not happen here: the request that
+         * just failed is the same one a reload would make. So the two foreign
+         * keys are mirrored locally instead — `parent_id` cascades, `stash_id`
+         * sets null — which is exactly what the reader was warned about and
+         * exactly what the queued delete will do when it lands.
+         */
+        setStashes((prev) => withoutStashes(prev, doomed));
+        setItems((prev) => (prev === null ? null : detachSaves(prev, doomed)));
+        clearSelection();
+      } else {
+        console.error('Could not delete the collection', e);
+        reload();
+      }
     } finally {
       setBusy(false);
-      reload();
     }
   }
 
@@ -317,17 +374,40 @@ export function Library({ userId }: { userId: string }) {
 
   if (!items) return <p className="meta">Loading…</p>;
 
-  if (items.length === 0)
+  /*
+   * Nothing kept is not the same as nothing to take away.
+   *
+   * This branch returns before the controls below it, and the export button was
+   * one of them — so a reader with highlights and no saves could not reach the
+   * one control that would have given them their own words back. `fetchExportData`
+   * reads `highlights` and `saved_items` in separate queries precisely because a
+   * highlight does not require a save, which is what makes that reader real.
+   *
+   * The offer is made only when there is something in it: with no saves there
+   * are no notes either, so the highlight count is the whole of the export.
+   */
+  if (items.length === 0) {
+    const empty = emptyLibraryScreen(highlightCount);
     return (
       <div className="stack measure">
         <p className="meta">Library</p>
-        <h1>Nothing kept yet.</h1>
-        <p>
-          Save a Pull from the feed and it lands here, grouped by where it came from — with how much
-          of that source you have left to meet.
-        </p>
+        <h1>{empty.heading}</h1>
+        <p>{empty.body}</p>
+        {empty.exportable ? (
+          <p>
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => void exportHighlights()}
+              disabled={busy}
+            >
+              Export highlights
+            </button>
+          </p>
+        ) : null}
       </div>
     );
+  }
 
   return (
     <div className="stack">

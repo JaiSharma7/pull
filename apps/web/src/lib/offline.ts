@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
 import { TRANSPORT_ERROR } from './rpc-error.js';
+import type { SavePatch } from './stash-api.js';
 import type { FeedRow } from './types.js';
 
 /**
@@ -80,7 +81,103 @@ export type PendingWrite =
        * delayed past a newer decision is a no-op rather than a reversal.
        */
       submittedAt: number;
-    };
+    }
+  /**
+   * One organising change to one saved item — its collection, its note, its
+   * archive or read-later flag.
+   *
+   * Law 3 promises unlimited stashing, and a promise that fails offline is a
+   * smaller promise. Before this kind existed, moving a save between collections
+   * on a train updated the screen, lost the write, and then reloaded a library
+   * that could not load — so the reader watched their change vanish and their
+   * shelf turn into an error page in one motion.
+   *
+   * Replay-safe because `updateSavedItem` is a last-write-wins `update` on the
+   * named columns of one row: applying `archived = true` twice is applying it
+   * once. `saveId` is `saved_items.id`, so a save deleted while offline makes
+   * this a zero-row update rather than an error — PostgREST does not treat a
+   * missing match as a failure, and the entry drains instead of wedging.
+   *
+   * The patch carries only the columns the reader touched, which is why two
+   * patches for the same save cannot clobber each other's unrelated fields.
+   * Same-column ones can, so their order matters — see `writeScope`.
+   */
+  | { kind: 'organise'; saveId: string; patch: SavePatch }
+  /**
+   * A collection created while disconnected.
+   *
+   * The id is minted by the client (`newStashId`), which is what makes this
+   * replayable at all: `createStash` swallows `23505`, so a retry after a lost
+   * response collides on the primary key instead of creating a second folder
+   * with the same name. That is the same shape the `save` kind already has, one
+   * table over.
+   *
+   * `parentId` is stored as the reader chose it. A create whose parent is itself
+   * still queued can fail its foreign key on the first attempt; it stays queued
+   * and succeeds on the next pass, because the parent was queued earlier and the
+   * drain runs oldest first.
+   */
+  | { kind: 'stash-create'; stashId: string; name: string; parentId: string | null }
+  /**
+   * A collection deleted while disconnected.
+   *
+   * `delete … where id = $1` removes zero rows the second time, which is not an
+   * error, so a replay is a no-op. What it is *not* safe against is being
+   * replayed before the create it follows: the delete would find nothing, the
+   * create would then land, and a collection the reader deleted would come back.
+   * Ordering per stash is what forbids that, and it is `writeScope`'s job.
+   */
+  | { kind: 'stash-delete'; stashId: string };
+
+/**
+ * Which queued writes must keep their order relative to each other.
+ *
+ * Order is not global here and never was. It is *per subject*: replaying a save
+ * after a later unsave resurrects something the reader removed, but a stuck
+ * write for one pull says nothing about another, so a failure blocks one subject
+ * and the drain continues elsewhere. Without that, a single permanently invalid
+ * entry — a save for a pull deleted while offline — would wedge the queue for
+ * everything, forever.
+ *
+ * Three kinds of subject now, and each is a different table's primary key:
+ *
+ *   pull:…    the six reading writes, keyed by `pulls.id`
+ *   save:…    an organising patch, keyed by `saved_items.id`
+ *   stash:…   a collection created or deleted, keyed by `stashes.id`
+ *
+ * The prefix is not decoration. All three are uuids drawn from different tables,
+ * and an unprefixed key would let one table's id share a blocking scope with
+ * another's — quietly coupling two unrelated writes the first time the strings
+ * matched. It also keeps the create/delete pair for one stash in one scope,
+ * which is the ordering that actually has to hold.
+ */
+export function writeScope(write: PendingWrite): string {
+  switch (write.kind) {
+    case 'save':
+    case 'unsave':
+    case 'read':
+    case 'recall':
+    case 'explain':
+    case 'conviction':
+      return `pull:${write.pullId}`;
+    case 'organise':
+      return `save:${write.saveId}`;
+    case 'stash-create':
+    case 'stash-delete':
+      return `stash:${write.stashId}`;
+  }
+  /*
+   * Unreachable for any `PendingWrite`, and the `never` is what proves it: a
+   * kind added to the union without a branch above fails this assignment at
+   * compile time rather than falling out of here with no scope.
+   *
+   * It is reachable at all only for an entry IndexedDB kept across an app
+   * version that dropped a kind. Such an entry gets a scope of its own, so it
+   * blocks nothing but itself.
+   */
+  const unknown: never = write;
+  return `unknown:${String((unknown as { kind?: unknown }).kind)}`;
+}
 
 interface WapDB extends DBSchema {
   pulls: { key: string; value: FeedRow & { cachedAt: number } };
@@ -183,12 +280,14 @@ export async function hasPending(userId: string): Promise<boolean> {
 /**
  * Drain queued writes, oldest first.
  *
- * Ordering only has to hold *per pull*: replaying a save after a later unsave
- * would resurrect something the reader removed, but a stuck write for one pull
- * says nothing about another. So a failure blocks only that pull's remaining
- * writes and the drain continues elsewhere — otherwise one permanently invalid
- * item (a save for a pull deleted while offline, say) would wedge the queue for
- * every pull, forever.
+ * Ordering only has to hold *per subject* — per pull, per saved item, per
+ * collection. Replaying a save after a later unsave would resurrect something
+ * the reader removed, and replaying a stash create after the delete that
+ * followed it would bring back a collection they threw away; but a stuck write
+ * for one subject says nothing about another. So a failure blocks only that
+ * subject's remaining writes and the drain continues elsewhere — otherwise one
+ * permanently invalid item (a save for a pull deleted while offline, say) would
+ * wedge the queue for everything, forever. `writeScope` names the subject.
  */
 // Keyed by user, not global. A single shared promise meant that if the account
 // changed mid-drain, the new account's mount-time call would await the previous
@@ -255,16 +354,17 @@ async function runDrain(
       // mid-drain must stop the remaining writes rather than attribute them to
       // whoever signs in next. The entries stay queued for their real owner.
       if (!isStillCurrent()) break;
-      if (blocked.has(item.pullId)) continue;
+      // Project rather than forward the row: `id`, `userId` and `at` are
+      // bookkeeping for this queue, not part of the write being replayed.
+      const { id: _id, userId: _userId, at: _at, ...write } = item;
+      const scope = writeScope(write);
+      if (blocked.has(scope)) continue;
       try {
-        // Project rather than forward the row: `id`, `userId` and `at` are
-        // bookkeeping for this queue, not part of the write being replayed.
-        const { id: _id, userId: _userId, at: _at, ...write } = item;
         await apply(write);
       } catch {
-        // Keep it queued and skip the rest of this pull's writes, preserving
+        // Keep it queued and skip the rest of this subject's writes, preserving
         // their relative order for the next attempt.
-        blocked.add(item.pullId);
+        blocked.add(scope);
         continue;
       }
       if (item.id !== undefined) await database.delete('pending', item.id);
@@ -317,4 +417,29 @@ export function isOfflineFailure(error: unknown): boolean {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
   if (error instanceof TypeError) return true;
   return error instanceof Error && error.name === TRANSPORT_ERROR;
+}
+
+/**
+ * Keep a write the network lost; surface anything the server refused.
+ *
+ * The two failures look identical at the call site and mean opposite things. A
+ * PATCH that never left the device is a change the reader made and still wants,
+ * so it belongs in the queue and the screen should carry on as if it landed. A
+ * 500, an expired JWT or an RLS refusal is a real failure: the write may already
+ * have applied, the local state may now be a lie, and the reader has to hear
+ * about it.
+ *
+ * Returns whether the write was queued, so the caller knows whether it still has
+ * an error on its hands. Callers that answer a failure by reloading must ask
+ * this first — reloading offline replaces a working screen with a dead end, and
+ * that is precisely the reload worth not doing.
+ */
+export async function queueIfOffline(
+  userId: string,
+  error: unknown,
+  write: PendingWrite,
+): Promise<boolean> {
+  if (!isOfflineFailure(error)) return false;
+  await queueMutation(userId, write);
+  return true;
 }

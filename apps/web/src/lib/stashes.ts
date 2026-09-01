@@ -308,6 +308,83 @@ export function emptyLibraryMessage(
   return here ? `Nothing in ${here} yet. Move a save into it from below.` : 'Nothing kept yet.';
 }
 
+/**
+ * The whole screen when the reader has kept nothing at all.
+ *
+ * Distinct from `emptyLibraryMessage`, which explains an empty *list* inside a
+ * library that has contents. This one answers the harder question: with no
+ * saves, is there still anything of the reader's here?
+ *
+ * There can be. Highlights are their own table and `fetchExportData` reads them
+ * in a query of their own, precisely because a highlight does not require a
+ * save — a reader can mark a passage on a source page without keeping it. So
+ * "nothing kept" and "nothing to export" are different facts, and the screen
+ * used to conflate them: it returned early with one sentence and left the export
+ * control stranded in the branch below, unreachable by exactly the reader who
+ * had something to take out.
+ *
+ * `exportable` is the count rather than a guess, because a control that writes
+ * an empty file is its own small lie. With no saves there are no notes either,
+ * so the highlights are the entire contents of the export.
+ */
+export interface EmptyLibraryScreen {
+  heading: string;
+  body: string;
+  /** Whether an export would contain anything, and so whether to offer one. */
+  exportable: boolean;
+}
+
+export function emptyLibraryScreen(highlightCount: number): EmptyLibraryScreen {
+  const heading = 'Nothing kept yet.';
+  const invitation = 'Save a Pull from the feed and it lands here, grouped by where it came from';
+
+  if (highlightCount <= 0) {
+    return {
+      heading,
+      body: `${invitation} — with how much of that source you have left to meet.`,
+      exportable: false,
+    };
+  }
+
+  const marked = `${highlightCount} highlight${highlightCount === 1 ? '' : 's'}`;
+  return {
+    heading,
+    body: `${invitation}. You have ${marked} already, marked on pages you did not keep — yours to take out whenever you like.`,
+    exportable: true,
+  };
+}
+
+/**
+ * The collections left after a delete, mirrored locally.
+ *
+ * `stashes.parent_id` is `on delete cascade`, so deleting one takes every
+ * collection beneath it. Pass `descendantIds(tree, id)`; passing the single id
+ * would leave orphans on screen that the server has already removed.
+ */
+export function withoutStashes<T extends { id: string }>(
+  stashes: readonly T[],
+  doomed: ReadonlySet<string>,
+): T[] {
+  return stashes.filter((s) => !doomed.has(s.id));
+}
+
+/**
+ * The saves left after a delete, mirrored locally — every one of them.
+ *
+ * `saved_items.stash_id` is `on delete set null` in the same migration, one word
+ * different from the `cascade` above and the opposite consequence: the folder
+ * goes, what was in it stays and simply becomes unfiled. Rows that were not in a
+ * doomed collection are returned by identity so React does not re-render them.
+ */
+export function detachSaves<T extends { stashId: string | null }>(
+  items: readonly T[],
+  doomed: ReadonlySet<string>,
+): T[] {
+  return items.map((i) =>
+    i.stashId !== null && doomed.has(i.stashId) ? { ...i, stashId: null } : i,
+  );
+}
+
 /** A client-minted id, so creating a stash is replayable after a lost response. */
 export function newStashId(): string {
   return globalThis.crypto.randomUUID();

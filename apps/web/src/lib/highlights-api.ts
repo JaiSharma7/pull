@@ -67,6 +67,23 @@ export async function deleteHighlight(id: string): Promise<void> {
 }
 
 /**
+ * How many passages the reader has marked, without fetching one of them.
+ *
+ * The Library's empty state has to know whether an export would contain
+ * anything: a highlight does not require a save, so a reader can have kept
+ * nothing and still have something to take out. `head: true` asks PostgREST for
+ * the count alone, so answering that question costs no rows.
+ */
+export async function countHighlights(userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('highlights')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId);
+  if (error) throw rpcError(error);
+  return count ?? 0;
+}
+
+/**
  * Everything a reader has marked or written, shaped for the Markdown export.
  *
  * Two queries rather than a join through `saved_items`, because a highlight does
