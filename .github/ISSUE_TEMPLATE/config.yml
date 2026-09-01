@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/JaiSharma7/pull/security/advisories/new
+    about: Report privately instead. Please do not open a public issue.
