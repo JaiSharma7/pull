@@ -503,6 +503,34 @@ describe('The Archive legibility laws', () => {
     ).toEqual([]);
   });
 
+  /**
+   * A forced theme must tell the browser which scheme it is.
+   *
+   * `base.css` sets `color-scheme: light dark`, which is correct for the default
+   * — the user agent paints scrollbars, autofill and native controls to match
+   * the OS. It is wrong the instant a reader overrides the theme: measured, an
+   * OS in dark mode with "Paper" chosen rendered the bone palette with a dark
+   * scrollbar, because the UA was still being told the page could be either.
+   *
+   * The palette and the furniture around it have to agree, and nothing else in
+   * this file would have noticed them disagreeing — every colour assertion here
+   * reads the stylesheet, and a scrollbar is not in it.
+   */
+  it.each([
+    ['light', 'light'],
+    ['dark', 'dark'],
+  ])('declares color-scheme for the forced %s theme', (theme, scheme) => {
+    const tokens = read('tokens.css');
+    const block = tokens.match(
+      new RegExp(`:root\\[data-theme='${theme}'\\]\\s*\\{[\\s\\S]*?\\n\\}`),
+    )?.[0];
+    expect(block, `no :root[data-theme='${theme}'] block in tokens.css`).toBeTruthy();
+    expect(
+      block,
+      `a reader who forces the ${theme} theme still gets UA surfaces painted for the OS`,
+    ).toMatch(new RegExp(`color-scheme:\\s*${scheme}\\s*;`));
+  });
+
   it('leaves no text token both below the threshold and beyond the reach of high contrast', () => {
     const high = tokens.match(/:root\[data-contrast='high'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(high, 'no [data-contrast=high] block found').not.toBe('');
