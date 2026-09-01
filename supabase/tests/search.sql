@@ -58,7 +58,12 @@ declare
   bulk_token   text := 'qzzytrb';
   bulk_work    uuid;
   bulk_summary uuid;
-  i            int;
+  -- `bulk_i`, not `i`. A plpgsql variable shadows a table alias of the same
+  -- name anywhere in the block, and this file uses `jsonb_array_elements(...) i`
+  -- in a dozen assertions -- so declaring `i` made every one of them fail with
+  -- "column reference i is ambiguous". It passed every check that runs a
+  -- statement at a time and failed the moment the file ran as one block.
+  bulk_i       int;
   res      jsonb;
   res_again jsonb;
   related  jsonb;
@@ -252,21 +257,21 @@ begin
   --     and `buried_pull_id` are positioned exactly on top of. A fixture that
   --     moved that centroid would break section 3 and section 8 without either
   --     of them being wrong.
-  for i in 1..51 loop
+  for bulk_i in 1..51 loop
     insert into public.works (kind, title, slug, rights_status)
-    values ('essay', 'Bounded source ' || bulk_token || ' ' || i,
-            'bounded-' || bulk_token || '-' || i, 'public_domain')
+    values ('essay', 'Bounded source ' || bulk_token || ' ' || bulk_i,
+            'bounded-' || bulk_token || '-' || bulk_i, 'public_domain')
     returning id into strict bulk_work;
 
     insert into public.summaries (work_id, title, status, visibility, published_at)
-    values (bulk_work, 'Bounded source ' || bulk_token || ' ' || i,
+    values (bulk_work, 'Bounded source ' || bulk_token || ' ' || bulk_i,
             'published', 'public', now())
     returning id into strict bulk_summary;
 
     insert into public.pulls (summary_id, ordinal, headline, body,
                               estimated_read_seconds)
     values (bulk_summary, 1,
-            'An idea about ' || bulk_token || ', number ' || i,
+            'An idea about ' || bulk_token || ', number ' || bulk_i,
             'A body that also says ' || bulk_token || ', so the lexical half '
             'matches it and the vector half never sees it.', 30);
   end loop;
