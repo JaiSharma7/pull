@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -312,5 +312,250 @@ describe('The Archive viewport laws', () => {
       expect(value, `type step "${value}" is not fluid`).toMatch(/clamp\(/);
       expect(value, `type step "${value}" ignores the reader's font size`).toMatch(/rem/);
     }
+  });
+});
+
+/**
+ * The two laws `docs/design.md` states and this file did not enforce.
+ *
+ * Both were found by a design review rather than by a test, and both had shipped
+ * as live violations on four rules each — which is the argument for pinning them
+ * here rather than trusting the next reviewer to look. The stylesheets were
+ * fixed in a separate pass; this describe block is only about closing the gap
+ * that let them through.
+ */
+describe('The Archive legibility laws', () => {
+  /** `#rrggbb` → relative luminance, per WCAG 2.x. */
+  const luminance = (hex: string) => {
+    const channels = [1, 3, 5]
+      .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+  };
+
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  /**
+   * One level of `var()` indirection, which is exactly what the palettes use:
+   * `--text-faint: var(--warm-faint)` in the light block, a literal in the dark
+   * one. Resolving deeper is not needed and would invite this helper to become a
+   * CSS engine.
+   */
+  const palette = (block: string) => {
+    const raw = new Map<string, string>();
+    for (const [, name, value] of block.matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
+      raw.set(name!, value!.trim());
+    }
+    const resolved = new Map<string, string>();
+    for (const [name, value] of raw) {
+      const ref = value.match(/^var\((--[\w-]+)\)$/);
+      const literal = ref ? (raw.get(ref[1]!) ?? '') : value;
+      if (/^#[0-9a-f]{6}$/i.test(literal)) resolved.set(name, literal);
+    }
+    return resolved;
+  };
+
+  const tokens = read('tokens.css');
+  const lightBlock = tokens.match(/:root\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+  const darkBlock = tokens.match(/:root\[data-theme='dark'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+
+  /**
+   * Tokens that may sit below the text threshold, because no rule uses them for
+   * text. Every entry is a deliberate exemption with a named use — the list is
+   * the point, not the escape hatch. Adding to it should feel like a decision.
+   *
+   *   --text-faint  the `·` chip separator in components.css, and the `::before`
+   *                 list ordinals in source.css and daily.css. Ornament that
+   *                 carries no word a reader has to make out.
+   */
+  const ORNAMENT_ONLY = new Set(['--text-faint']);
+
+  it.each([
+    ['light', () => lightBlock],
+    ['dark', () => darkBlock],
+  ])('every %s text token a rule can use clears 4.5:1 on both surfaces', (theme, get) => {
+    const block = get();
+    expect(block, `no ${theme} palette block found in tokens.css`).not.toBe('');
+    const p = palette(block);
+
+    const surface = p.get('--surface');
+    const raised = p.get('--surface-raised');
+    expect(surface, `${theme} palette has no resolvable --surface`).toBeDefined();
+    expect(raised, `${theme} palette has no resolvable --surface-raised`).toBeDefined();
+
+    const textTokens = [...p.keys()].filter((n) => n.startsWith('--text'));
+    expect(textTokens.length, `${theme} palette exposes no --text-* tokens`).toBeGreaterThan(2);
+
+    for (const name of textTokens) {
+      if (ORNAMENT_ONLY.has(name)) continue;
+      for (const [label, ground] of [
+        ['--surface', surface!],
+        ['--surface-raised', raised!],
+      ] as const) {
+        const ratio = contrast(p.get(name)!, ground);
+        expect(
+          ratio,
+          `${theme}: ${name} on ${label} is ${ratio.toFixed(2)}:1 — docs/design.md requires 4.5:1 ` +
+            `for body text. Either darken the token, or add it to ORNAMENT_ONLY with the ` +
+            `non-text uses that justify it.`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  /**
+   * The high-contrast setting must be able to rescue anything a rule can reach.
+   *
+   * `:root[data-contrast='high']` remaps `--text-muted` and both rules, but not
+   * `--text-faint` — so a reader who has asked for more contrast got exactly the
+   * same 2.72:1 from the four rules that had adopted it. A token that is exempt
+   * from the ratio check above must therefore also be one the setting does not
+   * need to reach: ornament in both directions, or neither.
+   */
+  /**
+   * The token check above cannot see a RULE adopting an ornament token for text
+   * — which is how all four of the reviewed violations actually happened. So the
+   * exemption is paid for here: a token on ORNAMENT_ONLY may be a `color:` only
+   * where it is genuinely ornament.
+   *
+   * Ornament means one of two shapes, and the list is deliberately short:
+   *
+   *   ::before / ::after   a generated counter or mark, not a word the reader
+   *                        has to make out. The list ordinals in source.css and
+   *                        daily.css.
+   *   an explicit selector the separator in a chip row, which is a single `·`.
+   *
+   * Anything else using a sub-threshold token is text at 2.72:1, whatever it is
+   * called.
+   */
+  const ORNAMENT_SELECTORS = new Set(['.pull-card__chip-sep']);
+
+  it('uses an ornament-only token as a colour only where it is actually ornament', () => {
+    const offenders: string[] = [];
+
+    for (const f of cssFiles) {
+      if (f === 'tokens.css') continue; // the palette defines them; it does not paint with them
+      for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        for (const token of ORNAMENT_ONLY) {
+          if (!new RegExp(`color:\\s*var\\(${token}\\)`).test(body!)) continue;
+          const sel = selector!.trim();
+          const isPseudo = /::(before|after)\b/.test(sel);
+          const isListed = sel.split(',').every((s) => ORNAMENT_SELECTORS.has(s.trim()));
+          if (!isPseudo && !isListed) offenders.push(`${f}: ${sel} paints text with ${token}`);
+        }
+      }
+    }
+
+    expect(
+      offenders,
+      `these render words a reader has to read, at a ratio docs/design.md forbids:\n  ` +
+        `${offenders.join('\n  ')}\n` +
+        `Use --text-muted, or add the selector to ORNAMENT_SELECTORS if it really is a mark.`,
+    ).toEqual([]);
+  });
+
+  it('leaves no text token both below the threshold and beyond the reach of high contrast', () => {
+    const high = tokens.match(/:root\[data-contrast='high'\]\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(high, 'no [data-contrast=high] block found').not.toBe('');
+    const remapped = new Set([...high.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!));
+
+    for (const name of ORNAMENT_ONLY) {
+      expect(
+        remapped.has(name),
+        `${name} is exempt from the contrast floor but IS remapped under ` +
+          `[data-contrast='high'] — so something treats it as text after all. Take it out ` +
+          `of ORNAMENT_ONLY and let the ratio check judge it.`,
+      ).toBe(false);
+    }
+  });
+
+  /**
+   * The type ramp: uppercase and positive tracking belong to the metadata role.
+   *
+   * `.btn` sets `text-transform: uppercase` and `letter-spacing: 0.06em`, which
+   * is right for a control. Four rules then promoted a `.btn` to the display face
+   * for a headline or a topic name and inherited both, so content rendered as
+   * Fraunces ALL CAPS at +1.0 to +1.5px tracking.
+   *
+   * THE CHECK HAS TO READ THE MARKUP, and the first version of it did not — which
+   * is worth recording, because it failed in exactly the way this whole review
+   * round is about. It looked for `.btn` in the CSS *selector*; but `.btn` is
+   * never in the selector, it is in the `className` string:
+   *
+   *     className="btn btn--plain explore__parent-name"
+   *     .explore__parent-name { font-family: var(--font-display) }
+   *
+   * So the assertion could not fire for any real case, and it passed when the fix
+   * it was written to protect was reverted. A test that cannot fail is worse than
+   * no test, because it also stops anyone writing the one that would.
+   *
+   * The broad alternative — "every display-face rule must declare
+   * text-transform" — was measured and rejected: 8 of the 13 display-face rules
+   * omit it today and all 8 are correct, so it would mean editing working
+   * stylesheets to satisfy a test.
+   *
+   * Reading `apps/web` from a `packages/ui` test crosses a package boundary. That
+   * is deliberate: the invariant is repo-wide, the classes and the rules that
+   * style them live on opposite sides of it, and the check is worth more than the
+   * layering. Missing markup is a hard failure rather than a skip.
+   */
+  it('never puts the display face on a class that markup combines with .btn', () => {
+    const roots = [
+      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
+      join(import.meta.dirname, 'components'),
+    ].filter(existsSync);
+    expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
+
+    /** Every class that markup ever puts alongside `btn`. */
+    const withButton = new Set<string>();
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name)) {
+          for (const [, list] of readFileSync(full, 'utf8').matchAll(
+            /className=(?:"([^"]*)"|\{`([^`]*)`\})/g,
+          )) {
+            const classes = (list ?? '').split(/\s+/).filter(Boolean);
+            if (!classes.includes('btn')) continue;
+            for (const c of classes) if (c !== 'btn' && !c.startsWith('btn--')) withButton.add(c);
+          }
+        }
+      }
+    };
+    for (const r of roots) walk(r);
+    expect(withButton.size, 'no className combined with btn was found').toBeGreaterThan(4);
+
+    const offenders: string[] = [];
+    for (const f of cssFiles) {
+      for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        if (!/font-family:\s*var\(--font-display\)/.test(body!)) continue;
+        // The bare class this rule styles, if markup ever pairs it with `btn`.
+        const named = [...selector!.matchAll(/\.([\w-]+)/g)].map((m) => m[1]!);
+        if (!named.some((c) => withButton.has(c))) continue;
+
+        const clearsTransform = /text-transform:\s*(?!uppercase)[\w-]+/.test(body!);
+        const clearsTracking = /letter-spacing:\s*/.test(body!);
+        if (!clearsTransform || !clearsTracking) {
+          offenders.push(
+            `${f}: ${selector!.trim()} — ` +
+              [
+                clearsTransform ? null : 'inherits text-transform: uppercase from .btn',
+                clearsTracking ? null : 'inherits letter-spacing: 0.06em from .btn',
+              ]
+                .filter(Boolean)
+                .join(', '),
+          );
+        }
+      }
+    }
+
+    expect(
+      offenders,
+      `a headline set in the display face is content, not metadata:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
   });
 });

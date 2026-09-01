@@ -551,7 +551,10 @@
 .titlepage__mark {
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  /* --text-muted, not --text-faint. This is a word on the first screen a visitor
+     ever sees; faint measures 2.72:1 on the light ground, which docs/design.md
+     forbids for text. Found by design-laws.test.ts rather than by a reviewer. */
+  color: var(--text-muted);
 }
 
 /* The sentence is the brand, so the sentence is what is large. A big logo is what
