@@ -1,6 +1,9 @@
 # Data model
 
-38 tables in `public`, applied as migrations `0001`–`0013`. Every one has RLS
+39 tables in `public`, created across the 70 timestamped migrations in
+`supabase/migrations/` (`YYYYMMDDHHMMSS_name.sql`, applied in filename order — the
+range moves with every push, so count the files rather than trusting a number here).
+Every one has RLS
 enabled with at least one policy, every foreign key has a supporting index, and
 every `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the
 whole thing from zero and asserts all of that.
@@ -31,6 +34,7 @@ Work                                              ← the thing itself
 generation_jobs ─── job_steps ─── cost_ledger
 reports ─── moderation_decisions · rights_requests
 daily_pulls · interleave_config · rate_limits
+blocked_email_domains                             ← refused at signup
 ```
 
 ## Decisions worth knowing
