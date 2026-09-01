@@ -1,13 +1,21 @@
 # Contributors
 
-Everyone listed here has signed the [Contributor Licence Agreement](./CLA.md).
+The people who built What a Pull.
 
-Add yourself in the same pull request as your first contribution — one line, in the form
-below, at the end of the list. That line is your signature, and the version records which
-text you agreed to, so a later revision of the CLA does not silently rewrite it.
+This is a credits file, not a legal one. There is no CLA to sign — see
+[`CONTRIBUTING.md`](./CONTRIBUTING.md). Contributing licenses your work to everyone under
+the [AGPL](./LICENSE), the same terms the rest of the project is on, and you keep
+copyright in what you wrote.
+
+Add yourself in your first pull request if you would like to be credited. One line, at
+the end of the list, in whatever form you want to be known by:
 
 ```
-- Your Name (@your-github-handle) — CLA v1.0
+- Your Name (@your-github-handle)
 ```
 
-- Jai Sharma (@JaiSharma7) — CLA v1.0 — maintainer and copyright holder
+It is entirely optional, and nobody will chase you for it. It is here because a list of
+the people who built something is worth having, and because "I contributed to this" reads
+better when the project says so too.
+
+- Jai Sharma (@JaiSharma7) — maintainer
