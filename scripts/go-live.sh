@@ -65,6 +65,13 @@ step "2/6  Push the migrations"
 #
 # Idempotent — already-applied migrations are skipped — and it prints what it is about
 # to apply, which is also the fastest way to see how far behind a project has drifted.
+#
+# `--project-ref` is a flag of `db push` itself on the pinned CLI (2.116.0) — the same
+# flag the two steps below use — so this needs no `supabase link` first. It does need
+# something they do not: `functions deploy` and `secrets set` go through the Management
+# API with the token from step 1, while this opens a Postgres connection, so it asks for
+# the database password unless the project is already linked with one saved. That prompt
+# is the step working, not failing.
 npx --yes supabase db push --project-ref "$PROJECT_REF"
 
 step "3/6  Deploy the worker"
