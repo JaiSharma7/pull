@@ -13,6 +13,19 @@ updates:
         dependency-type: development
       production-dependencies:
         dependency-type: production
+    ignore:
+      # typescript-eslint 8.x declares `typescript: >=4.8.4 <6.1.0`. On TypeScript 7
+      # it does not degrade — it throws at import time ("typescript-eslint does not
+      # support TS 7.0"), so `pnpm lint` dies before a single rule runs and the lint
+      # job is red across the whole monorepo. Upstream tracks TS >=7.1 support in
+      # typescript-eslint#10940; TypeScript's own guidance is to keep the TS 6 API
+      # side by side, which is a larger change than a version bump should make.
+      #
+      # Scoped deliberately to the major: 6.x minors and patches still arrive, and
+      # this expires on its own the moment typescript-eslint widens the range and
+      # someone deletes this entry.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:
