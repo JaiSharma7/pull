@@ -139,9 +139,41 @@ jobs:
       - uses: actions/checkout@v5
         # Full history: a key removed in a later commit is still in every clone.
         with: { fetch-depth: 0 }
-      - uses: gitleaks/gitleaks-action@v2
+      # The binary, pinned, rather than gitleaks/gitleaks-action@v2.
+      #
+      # The action was tried first and fails on every pull request: "GITHUB_TOKEN is
+      # now required to scan pull requests". Supplying it would work, and would also
+      # be the first `secrets.*` reference in this file — which the comment at the top
+      # says there should not be. `secrets.GITHUB_TOKEN` is the auto-provided token
+      # rather than a configured one, so it is not the supply-chain hazard that comment
+      # is really about, but "no secrets here at all" is a property worth keeping
+      # literally true rather than one with an exception a reader has to evaluate.
+      #
+      # It also removes two surprises: the action does a licence check (free for
+      # individual accounts, required for organisations, so this would break the day
+      # the repo moves to an org) and it installs whatever gitleaks version it likes —
+      # 8.24.3 today, against the 8.28.0 the config was written and verified on.
+      - name: Scan for committed credentials
         env:
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.28.0
+        run: |
+          set -euo pipefail
+          # Arch-detected rather than hardcoded x64. `ubuntu-latest` is x64 today and
+          # GitHub is rolling out arm64 runners; on the wrong one the download succeeds
+          # and the binary dies with "Exec format error", which reads like a corrupt
+          # release rather than the one-word problem it is. (Found by running this
+          # locally on an aarch64 machine.)
+          case "$(uname -m)" in
+            x86_64)  GL_ARCH=x64 ;;
+            aarch64) GL_ARCH=arm64 ;;
+            *) echo "::error::unsupported arch $(uname -m) for gitleaks"; exit 1 ;;
+          esac
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          # `git` scans every commit reachable here, not just the diff: a key removed in
+          # a later commit is still in every clone that fetched the earlier one.
+          /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner .
 
   # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
   #
