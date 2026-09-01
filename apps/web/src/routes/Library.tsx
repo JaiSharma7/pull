@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PullCard } from '@wap/ui';
+import { PullCard, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
@@ -74,6 +74,9 @@ export function Library({ userId }: { userId: string }) {
    * success. Kept per save so the answer appears beside the button pressed.
    */
   const [shareStatus, setShareStatus] = useState<{ saveId: string; note: string } | null>(null);
+  /* One depth for the screen, for the reason the Feed keeps one: it is a reading
+     preference, not a property of any single saved idea. */
+  const [depth, setDepth] = useState(1);
 
   /*
    * Everything the reader has marked or written, as a file they keep.
@@ -542,9 +545,13 @@ export function Library({ userId }: { userId: string }) {
                     headline={item.headline}
                     body={item.body}
                     whyItMatters={item.whyItMatters}
+                    example={item.example}
+                    explanation={item.explanation}
                     sourceTrail={group.title}
                     saved
-                    onListen={() => speak(`${item.headline}. ${item.body}`)}
+                    depth={depth}
+                    onDepthChange={setDepth}
+                    onListen={() => speak(textAtDepth(item, depth))}
                     onShare={() => void share(item, group.title)}
                     shareLabel={shareLabel(shareCapability(navigator))}
                   />

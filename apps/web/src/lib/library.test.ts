@@ -20,6 +20,8 @@ const item = (id: string, workId: string, workTitle: string): LibraryItem => ({
   headline: `headline ${id}`,
   body: `body ${id}`,
   whyItMatters: null,
+  explanation: null,
+  example: null,
   savedAt: '2026-08-30T00:00:00Z',
   work: { id: workId, title: workTitle, kind: 'book' },
   saveId: `save-${id}`,
