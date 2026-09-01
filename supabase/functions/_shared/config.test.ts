@@ -44,6 +44,43 @@ function vaultWith(secrets: Record<string, string>) {
 
 const noVault = () => vaultWith({});
 
+/**
+ * The names `public.generation_secret` will actually hand over.
+ *
+ * Mirrored from the migration rather than imported, because the SQL is the
+ * authority and a copy that has to be updated by hand is the point: if somebody
+ * adds a `getSecret` call for a fourth name, this list is what refuses it until
+ * a migration says otherwise.
+ */
+const ALLOWED_VAULT_SECRETS = ['google_ai_api_key', 'anthropic_api_key', 'worker_dispatch_token'];
+
+/**
+ * A Vault that refuses like the real one.
+ *
+ * `vaultWith` returns null for anything it does not hold, which is what a fake
+ * does and not what Postgres does. `generation_secret` RAISES for a name outside
+ * its allowlist, PostgREST turns that into an error, and the worker's callback is
+ * `if (error) throw` — so an unlisted name does not degrade to the stub provider,
+ * it fails the step.
+ *
+ * That distinction is exactly what hid the bug this helper exists to prevent:
+ * `anthropic_api_key` was missing from the allowlist for as long as the fallback
+ * has existed, and every test passed because no fake ever refused.
+ */
+function refusingVault(secrets: Record<string, string>) {
+  const asked: string[] = [];
+  return {
+    asked,
+    getSecret: async (name: string) => {
+      asked.push(name);
+      if (!ALLOWED_VAULT_SECRETS.includes(name)) {
+        throw new Error(`read secret ${name}: generation_secret: ${name} is not a worker secret`);
+      }
+      return secrets[name] ?? null;
+    },
+  };
+}
+
 describe('resolveProviders — key resolution', () => {
   it('uses the environment key without consulting Vault', async () => {
     const vault = noVault();
@@ -276,6 +313,53 @@ describe('resolveProviders — the paid fallback', () => {
 
     expect(providers.summary.name).toBe('gemini->anthropic');
     expect(vault.asked).toContain('anthropic_api_key');
+  });
+
+  it('resolves the fallback key from a Vault that refuses names it was not given', async () => {
+    /*
+     * The same assertion as above, against a Vault that raises for an unlisted name
+     * the way `generation_secret` does. It fails on the schema this repo shipped for
+     * four months: `anthropic_api_key` was not in the allowlist, so the RPC raised
+     * 42501, the worker's `if (error) throw` propagated it out of `resolveProviders`,
+     * and setting SUMMARY_FALLBACK_PROVIDER=anthropic with the key in Vault stopped
+     * the queue instead of extending it.
+     *
+     * Which is worth stating plainly: the fallback exists for the day the Gemini
+     * free tier is spent mid-wave. Its Vault path failing closed — and failing the
+     * whole step rather than the fallback — is a stall at the one moment the
+     * fallback was supposed to prevent one.
+     */
+    const vault = refusingVault({ anthropic_api_key: 'sk-ant-test' });
+    const providers = await resolveProviders(
+      envOf({ GOOGLE_AI_API_KEY: 'k', SUMMARY_FALLBACK_PROVIDER: 'anthropic' }),
+      vault.getSecret,
+    );
+
+    expect(providers.summary.name).toBe('gemini->anthropic');
+    expect(vault.asked).toContain('anthropic_api_key');
+  });
+
+  it('propagates a Vault refusal rather than quietly falling back', async () => {
+    /*
+     * The behaviour that made the missing allowlist entry so expensive, pinned so a
+     * future reader does not "fix" it into a silent catch. A secret that is UNSET is
+     * a supported state — null, and the stubs take over. A secret the database
+     * REFUSES TO DISCLOSE is a misconfiguration, and swallowing it would put the
+     * deployment back in the state law 2's cost model cannot see: serving stub prose
+     * with nothing in the logs.
+     *
+     * `getSecret` is the seam, so this asserts on the seam: an unlisted name throws,
+     * and `resolveProviders` does not catch it.
+     */
+    const vault = refusingVault({});
+    await expect(vault.getSecret('service_role_key')).rejects.toThrow('is not a worker secret');
+
+    await expect(
+      resolveProviders(envOf({ SUMMARY_FALLBACK_PROVIDER: 'anthropic' }), async (name: string) => {
+        if (name === 'anthropic_api_key') throw new Error('read secret: refused');
+        return 'k';
+      }),
+    ).rejects.toThrow('refused');
   });
 
   it('runs the primary alone when the fallback was asked for but has no key', async () => {
