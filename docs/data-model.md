@@ -1,6 +1,6 @@
 # Data model
 
-39 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+40 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing

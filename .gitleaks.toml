@@ -1,0 +1,68 @@
+# Secret scanning for a repository that commits two credentials on purpose.
+#
+# Law 7 says the browser gets the publishable key and nothing else, and it is right:
+# a `VITE_*` variable is compiled into the bundle every visitor downloads, so the two
+# `sb_publishable_…` values below are public by construction and committing them is
+# what makes `pnpm dev` work on a fresh clone.
+#
+# That is exactly why an automated scan is worth having. "We commit some keys on
+# purpose" is the condition under which a real one slips through unnoticed — a
+# reviewer who has learned that `.env.production` is fine stops reading it. So the two
+# intentional values are allowlisted *by their exact string*, and anything else that
+# looks like a credential fails the build. Rotating either one is a two-line change
+# here, which is the correct amount of friction.
+#
+# Run locally:  pnpm exec gitleaks git --config .gitleaks.toml
+# Run on the tree only:  pnpm exec gitleaks dir --config .gitleaks.toml .
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret key (sb_secret_…) — server-side only, never committed"
+regex = '''sb_secret_[A-Za-z0-9_-]{20,}'''
+keywords = ["sb_secret_"]
+
+[[rules]]
+id = "supabase-legacy-service-role-jwt"
+description = "Legacy Supabase service_role JWT"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]*(service_role|c2VydmljZV9yb2xl)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+'''
+keywords = ["eyJ"]
+
+[[rules]]
+id = "google-ai-api-key"
+description = "Google AI / Gemini API key"
+regex = '''AIza[0-9A-Za-z_-]{35}'''
+keywords = ["AIza"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-(?:api|admin)[0-9a-zA-Z_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[allowlist]
+description = """
+The two publishable keys this repository commits deliberately, and the fixtures that
+are not credentials. Matched by exact value, not by path: allowlisting the file would
+also wave through a real secret that someone later added to it.
+"""
+
+regexes = [
+  # apps/web/.env.development — the local stack at 127.0.0.1:54321. `supabase start`
+  # prints this same value on every machine; it is useless off loopback.
+  '''sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH''',
+  # apps/web/.env.production — the hosted project. Designed for the browser; RLS, not
+  # secrecy, is what protects the data behind it.
+  '''sb_publishable_FFodjTdZJuSdDZkCQlqO6Q_ikfASHHu''',
+  # Test fixtures in supabase/functions/_shared/config.test.ts. Deliberately not
+  # shaped like a real key, and asserted on, so they cannot quietly become one.
+  '''sk-ant-test''',
+]
+
+paths = [
+  '''pnpm-lock\.yaml''',
+  # This file names the patterns it hunts for, which every scanner then finds in it.
+  '''\.gitleaks\.toml''',
+]

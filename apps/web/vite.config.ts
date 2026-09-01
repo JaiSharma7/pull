@@ -38,7 +38,19 @@ export default defineConfig({
     }),
   ],
   server: { port: 5173, host: '127.0.0.1' },
-  build: { target: 'es2022', sourcemap: true },
+  /*
+   * No production sourcemap.
+   *
+   * It was 2.5MB beside a 557KB bundle — five times the app, published on a CDN and
+   * counted against the deploy on every build. The code is MIT and readable on GitHub,
+   * so this was never protecting anything; it was simply the largest file in the
+   * deployment, serving a debugger nobody attaches to production.
+   *
+   * `hidden` rather than `false` would keep the file for a symbol uploader if error
+   * reporting is ever added, and adding error reporting is a privacy policy change
+   * first (see `components/ErrorBoundary.tsx`), so it can be turned back on then.
+   */
+  build: { target: 'es2022', sourcemap: false },
   test: {
     environment: 'node',
     /*

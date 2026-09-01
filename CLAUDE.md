@@ -34,9 +34,20 @@ and reviewers should reject it on that basis alone.
    replacement for the original. Every source carries a `rights_status`. See
    `docs/content-policy.md`.
 
-5. **Privacy law — RLS on every table, in the migration that creates it.**
+5. **Privacy law — RLS enabled and a policy present on every table in `public`.**
    A table without a policy is a data breach waiting for traffic. CI check 4 enforces
-   this; do not add an exemption to get a build green.
+   exactly this — the end state, on a database replayed from zero — and also that every
+   foreign key has a non-partial index, that every `SECURITY DEFINER` function pins its
+   `search_path`, and that no two permissive policies overlap on SELECT. Do not add an
+   exemption to get a build green.
+
+   New tables should enable RLS and carry their policy **in their own migration**, and
+   the existing schema does not: tables land in `20260829124548_learning.sql` and its
+   siblings, policies in `20260829124730_rls.sql`. Since migrations are append-only that
+   split cannot be retrofitted, so it is a standing deviation rather than a rule nobody
+   follows. The law is written as what CI can actually assert, because a law stated
+   more strongly than it is enforced is one contributors get rejected for while `main`
+   breaks it.
 
 6. **Migration law — append-only.**
    Never edit a migration that has been pushed. Add a new one that supersedes it.
@@ -76,13 +87,13 @@ and reviewers should reject it on that basis alone.
 
 ## Stack
 
-| Layer    | Choice                                                             |
-| -------- | ------------------------------------------------------------------ |
-| Frontend | React 19 · Vite 8 · Zod · PWA — no router or data-fetching library |
-| Backend  | Supabase — Postgres 17, PostgREST, Auth, Storage, Edge Functions   |
-| Vectors  | `pgvector` 0.8 with HNSW, 1536 dimensions                          |
-| Queue    | `pgmq`, ticked by `pg_cron` over `pg_net`                          |
-| Monorepo | pnpm workspaces + Turborepo                                        |
+| Layer    | Choice                                                       |
+| -------- | ------------------------------------------------------------ |
+| Frontend | React 19 · Vite 8 · PWA — no router or data-fetching library |
+| Backend  | Supabase — Postgres 17, PostgREST, Auth, Edge Functions      |
+| Vectors  | `pgvector` 0.8 with HNSW, 1536 dimensions                    |
+| Queue    | `pgmq`, ticked by `pg_cron` over `pg_net`                    |
+| Monorepo | pnpm workspaces + Turborepo                                  |
 
 Routing is `history.pushState` and a `popstate` listener in `apps/web/src/App.tsx`, over
 path helpers in `apps/web/src/lib/routes.ts` that are pure and unit-tested. Reading is tab
@@ -111,11 +122,28 @@ pnpm db:test        # read-path behaviour, as a real reader under RLS
 ## Conventions
 
 - **Conventional commits** (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`).
-- **Zod schemas in `packages/schemas` are the source of truth for shapes.** Database
-  enums and their TypeScript mirrors change in the same commit.
-- **`packages/ranking` mirrors the SQL read path in pure TypeScript** so it can be
-  unit-tested without a database. SQL stays authoritative; a parity test keeps them
-  honest. If you change one, change both.
+- **`packages/schemas` mirrors the database enums, and the mirror is compile-time
+  enforced.** `packages/db/src/enum-parity.ts` asserts both directions against the
+  generated types, so a migration that adds an enum member fails typecheck until the
+  mirror follows. Database enums and their TypeScript mirrors change in the same commit.
+
+  It says `as const` arrays rather than Zod schemas because that is what is there. Zod
+  was named here, in the README and in `CONTRIBUTING.md` as "the source of truth for
+  shapes", and was imported by nothing in the repository while being a declared
+  dependency of two packages — the same failure commit `4507a7f` removed two other
+  packages for.
+
+- **`packages/ranking` mirrors the interleave planner in pure TypeScript** so its
+  placement rules can be tested over thousands of sessions without a database. SQL stays
+  authoritative. If you change one, change both.
+
+  Two limits, because the claim used to be larger than the code. It mirrors
+  `plan_interleave` and `seeded_unit` and **not** `get_feed`'s scorer, the Delta or
+  `search_catalogue` — those live only in SQL. And the parity test runs against a
+  committed JSON fixture captured by hand, not against the database, so a change to the
+  SQL planner passes CI unless someone regenerates the fixture. Closing that is in
+  `docs/contributing-map.md`.
+
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
   from `pnpm db:types`, and CI fails if it is stale.
 

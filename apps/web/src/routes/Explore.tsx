@@ -76,7 +76,12 @@ export function Explore({ onNavigate }: { onNavigate: (to: string) => void }) {
     );
   }
 
-  if (!settled) return <p className="meta">Loading…</p>;
+  if (!settled)
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
 
   if (catalogue.parents.length === 0) {
     return (

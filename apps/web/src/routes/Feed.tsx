@@ -12,7 +12,7 @@ import {
   queueMutation,
   readCachedPulls,
 } from '../lib/offline.js';
-import { createDwellTracker } from '../lib/dwell.js';
+import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
@@ -658,7 +658,11 @@ export function Feed({
   }
 
   if (!feed) {
-    return <p className="meta">Loading…</p>;
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
   }
 
   /*
@@ -846,10 +850,42 @@ function PullCardInView({
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
+
+    /*
+     * A card has to be looked at for a moment before it counts as read.
+     *
+     * `onRead` used to fire on the first intersecting entry, so flicking through
+     * twenty cards recorded twenty reads, twenty history rows and twenty knowledge
+     * states — and then told the reader they had read twenty ideas. This file spends
+     * a great deal of effort not inflating that number (see the comments on
+     * `readCount` and on keeping the feed mounted); this was the one path that did.
+     *
+     * `MIN_DWELL_MS` already exists in `lib/dwell.ts` and says exactly what this
+     * needs — "below this it is a card passing through the viewport on the way
+     * somewhere else" — and nothing used it for the read event.
+     *
+     * The timer is cancelled on leaving, so scrolling past costs nothing. Only the
+     * *first* qualifying dwell fires: `fired` makes a card that is scrolled back to
+     * still one read, which is what `handledSlots` assumes downstream.
+     */
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let fired = false;
+
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (e.isIntersecting) onRead();
+          if (e.isIntersecting) {
+            if (!fired && timer === undefined) {
+              timer = setTimeout(() => {
+                fired = true;
+                timer = undefined;
+                onRead();
+              }, MIN_DWELL_MS);
+            }
+          } else if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
           onVisible(e.isIntersecting);
         }
       },
@@ -857,6 +893,7 @@ function PullCardInView({
     );
     io.observe(el);
     return () => {
+      if (timer !== undefined) clearTimeout(timer);
       io.disconnect();
       onVisible(false);
     };

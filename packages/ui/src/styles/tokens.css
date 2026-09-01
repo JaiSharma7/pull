@@ -30,8 +30,10 @@
   --accent-hover: var(--oxblood-soft);
 
   /* Type --------------------------------------------------------------- */
-  --font-display: 'Fraunces', 'Iowan Old Style', georgia, 'Times New Roman', serif;
-  --font-body: 'Inter', -apple-system, blinkmacsystemfont, 'Segoe UI', helvetica, sans-serif;
+  --font-display:
+    'Fraunces Variable', 'Fraunces', 'Iowan Old Style', georgia, 'Times New Roman', serif;
+  --font-body:
+    'Inter Variable', 'Inter', -apple-system, blinkmacsystemfont, 'Segoe UI', helvetica, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, sfmono-regular, menlo, monospace;
 
   /*

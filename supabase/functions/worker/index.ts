@@ -1,4 +1,3 @@
-// deno-lint-ignore-file no-explicit-any
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';

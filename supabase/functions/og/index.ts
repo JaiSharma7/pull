@@ -9,17 +9,31 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
  * whole app, and redirects a real browser straight through to the app.
  */
 
-// Overridable by an APP_ORIGIN secret; the default is the deployed origin so this
-// works without one. It is a URL, not a credential, so it belongs in the source
-// rather than in the secret store.
-//
-// SET THE SECRET IN PRODUCTION. Every link this function emits carries this
-// origin into somebody else's inbox, so while the default is a preview host,
-// every share advertises the preview rather than the product. It is the one
-// piece of configuration here whose absence is invisible until a stranger
-// clicks it.
-const APP_ORIGIN =
-  Deno.env.get('APP_ORIGIN') ?? 'https://pull-jai-sharmas-projects-d3062905.vercel.app';
+/*
+ * Required, with no fallback.
+ *
+ * This used to default to the author's Vercel preview host, for the reasonable-
+ * sounding reason that a URL is not a credential and a default means the function
+ * runs without configuration. Both halves were wrong in practice. Every link this
+ * function emits carries the origin into somebody else's inbox, so a wrong default
+ * is not a missing feature — it is every share advertising a preview build, and
+ * the file's own comment said so while shipping the default anyway. A default that
+ * a comment shouts about is a default that should not exist.
+ *
+ * It also put the deployment's account slug in a repository that is about to be
+ * public, which is not a secret and is still nobody's business.
+ *
+ * Failing at module load is deliberate: the alternative is a function that returns
+ * 200 with the wrong links, which nothing detects until a stranger clicks one.
+ */
+const APP_ORIGIN = Deno.env.get('APP_ORIGIN');
+if (!APP_ORIGIN) {
+  throw new Error(
+    'og: APP_ORIGIN is not set. Set it to the public origin of the app ' +
+      '(for example https://whatapull.com) — every share link this function emits ' +
+      'is built from it.',
+  );
+}
 
 const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
   auth: { persistSession: false },

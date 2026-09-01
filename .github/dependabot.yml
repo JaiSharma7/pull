@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # One PR per ecosystem rather than one per package. CONTRIBUTING.md closes bulk
+    # PRs unreviewed, and a bot opening fifteen of them a week is the same problem
+    # wearing a badge.
+    groups:
+      dev-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

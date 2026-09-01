@@ -118,27 +118,38 @@ Consequences, and they are not optional:
 
 ```
 ┌─────────────────────────────────┐
-│ ATOMIC HABITS · JAMES CLEAR     │  ← mono chip, warm grey
+│ MEDITATIONS · MARCUS AURELIUS   │  ← mono chip, warm grey
 │ ─────────────────────────────── │  ← hairline rule
 │                                 │
-│ Your environment often          │  ← Fraunces display
-│ beats your motivation.          │
+│ What blocks the way             │  ← Fraunces display
+│ becomes the way.                │
 │                                 │
-│ The easier a behaviour is to    │  ← Inter body
-│ begin, the less motivation it   │
-│ requires each time.             │
+│ An obstruction is not only an   │  ← Inter body
+│ interruption of the work. It is │
+│ often the material it is made   │
+│ of.                             │
 │                                 │
-│ ── ch.3 ──────── SAVE  ASK  ♪   │  ← source trail + actions
+│ ── bk.5 ──────── SAVE  ASK  ♪   │  ← source trail + actions
 └─────────────────────────────────┘
 ```
 
 The flip reveals _Why this matters_, the full source trail (chapter or timestamp →
 evidence → the original), and Counterpoint · Example · Ask.
 
+The example is a real seeded Pull rather than an invented one, and deliberately from a
+public-domain work. This used to illustrate the card with an in-copyright bestseller,
+which is a small thing and exactly the small thing law 4 is about: a repository whose
+rule is that only public-domain material is committed should not reach for a title under
+copyright the moment it needs a plausible example.
+
 ## Accessibility
 
-Ships in round one, not "later". Apple's listing currently shows Deepstash declaring no
-accessibility features at all; this is both free competitive ground and simply correct.
+Ships in round one, not "later", and the reason is the first line of this document: if
+typography is the ornament, then legible type, real focus states and honest semantics are
+the product rather than a compliance exercise laid over it.
+
+Enforced rather than intended: `jsx-a11y` rules are lint **errors** in
+`eslint.config.js`, so an unlabelled control fails CI in the same way a type error does.
 
 - Full keyboard navigation with a visible, non-colour-only focus state.
 - Screen-reader labels on every control; the feed is a real list with real headings.

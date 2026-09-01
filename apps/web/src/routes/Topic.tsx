@@ -98,7 +98,12 @@ export function Topic({ slug, onNavigate }: { slug: string; onNavigate: (to: str
     );
   }
 
-  if (!settled) return <p className="meta">Loading…</p>;
+  if (!settled)
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
 
   if (missing || !page) {
     return (

@@ -7,9 +7,18 @@ These terms are a contract between you and the operator of **What a Pull** ("we"
 covering the hosted service at whatapull.com and its apps. By using the service you accept
 them. If you do not, do not use the service.
 
-**The code is separate.** This repository is MIT-licensed and you may do what that licence
-permits, including running your own instance. These terms govern _our_ hosted service, not
-your copy of the software.
+**Three different things live in this repository, and only one of them is governed here.**
+Confusing them is the easiest mistake to make now that the source is public, so:
+
+|                                                                                               | Governed by                                                                                                                                            |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                     |
+| **The code** — everything in this repository                                                  | The [MIT licence](../LICENSE). Do what it permits, including running your own instance                                                                 |
+| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones |
+
+Running your own copy does not make you our user and does not make us your processor. If
+you offer it to other people, the Privacy Policy in this repository describes _our_
+service; publishing it unchanged as a description of yours would be inaccurate.
 
 ## 1. Who may use it
 
@@ -57,19 +66,32 @@ all — will only ever apply to expensive generation, never to the learning feat
 
 ### Ours and our licensors'
 
-Pulls, summaries, artwork, the design system and the service itself are owned by us or our
-licensors. You may read, save, quote with attribution, and share links. You may not scrape
-the corpus in bulk, redistribute it as a competing dataset or product, or train a model on
-it, without written permission.
+The design system, the software and the service itself are owned by us or our licensors —
+the software under the MIT licence in this repository. You may read, save, quote with
+attribution, and share links. We ask that you not scrape the corpus in bulk, redistribute
+it as a competing dataset or product, or train a model on it.
 
-Where a source is in the public domain, the underlying work is free for anyone — our
-particular summary, structure and commentary is not.
+**How strong that claim is, honestly.** Most summaries here are produced end to end by a
+language model, and under current U.S. Copyright Office guidance material generated
+without human authorship is not protected by copyright. So for those, the paragraph above
+is a term of this agreement — binding on you because you accepted it in order to use the
+service — rather than a copyright we can assert against the world. Where a human selected,
+arranged, edited or wrote, that part is ours in the ordinary way. We would rather state
+the distinction than imply a stronger claim and hope nobody checks.
+
+Where a source is in the public domain, the underlying work is free for anyone, and always
+was. Nothing here narrows that.
 
 ### That it is machine-generated, and imperfect
 
 **Summaries are produced by language models and are interpretations, not the source.** They
 can be wrong, incomplete, out of date, or confidently mistaken about a book they describe.
-Every Pull carries its source so you can check it, and checking it is the intended use.
+Every Pull names its source, and a source page carries the author and a link to the
+original where we hold one, so you can check it — checking it is the intended use.
+
+Works generated before the schema could store a link do not all have one yet, and a
+summary produced from text somebody pasted in has no public original to point at. Where
+the link is missing, the summary is still an interpretation and should be treated as one.
 
 Nothing here is **professional advice** — not medical, legal, financial, or psychological.
 Ideas from a summarised book are not a substitute for a professional who knows your
@@ -83,7 +105,7 @@ quotation, reproduced passages, or scene-by-scene retellings. The reasoning is i
 [`content-policy.md`](./content-policy.md), and it is a product rule before it is a legal
 one: a summary that replaces the book is both more legally exposed and a worse way to learn.
 
-If you believe something we have published crosses that line, section 7 is how to tell us,
+If you believe something we have published crosses that line, section 8 is how to tell us,
 and we would rather hear it early.
 
 ### Yours
@@ -118,10 +140,15 @@ Do not:
 - Impersonate anyone, or misrepresent a source
 - Resell, sublicense or otherwise commercially redistribute the service or its corpus
 
-**Security research is welcome.** Testing against your own account and reporting what you
-find in good faith to the address in section 12 is not a breach of these terms, and we will
-not pursue you for it. Give us reasonable time to fix an issue before publishing it, and do
-not access, alter or exfiltrate anyone else's data while you look.
+**Security research is welcome**, and [`SECURITY.md`](../SECURITY.md) says what is in
+scope, what is not, and what we already know about. Testing against your own account and
+reporting what you find in good faith — to **security@whatapull.com** or through GitHub's
+private vulnerability reporting — is not a breach of these terms, and we will not pursue
+you for it. Give us reasonable time to fix an issue before publishing it, and do not
+access, alter or exfiltrate anyone else's data while you look.
+
+The source, the schema and every policy are public, and a local stack is one command
+away, so there is rarely a reason to probe the hosted service to find something.
 
 ## 6. Generation, quotas and cost
 
@@ -133,10 +160,34 @@ published.
 Generating a summary of a document you supply does not make it public. It stays private to
 you unless you publish it, and it is subject to the same rights rules as everything else.
 
-## 7. Copyright complaints (DMCA)
+## 7. Contributing to the code
 
-We respond to notices under the **Digital Millennium Copyright Act, 17 U.S.C. § 512**, and we
-terminate the accounts of repeat infringers.
+Contributions to this repository are governed by the [MIT licence](../LICENSE), not by
+these Terms. Inbound is outbound: what you send is licensed to everyone on exactly the
+terms the project is already licensed on.
+
+There is **no contributor licence agreement**. Instead, every commit carries a
+`Signed-off-by:` line — the [Developer Certificate of
+Origin](https://developercertificate.org/) — which is you stating that you wrote the
+change or have the right to submit it. CI checks for it. `CONTRIBUTING.md` has the
+details, including what is expected if you used an AI assistant.
+
+Contributing code does not create an account relationship, and does not make you a user
+of the hosted service.
+
+## 8. Copyright complaints (DMCA)
+
+We respond to notices modelled on the **Digital Millennium Copyright Act, 17 U.S.C. § 512**,
+and we terminate the accounts of repeat infringers.
+
+**Being straight about the safe harbour.** § 512(c) protection requires the designated
+agent to be _registered with the U.S. Copyright Office_, and that registration has not
+been completed. So this is the § 512 process, followed in full and in good faith, and we
+do not currently claim the statutory safe harbour that comes with registering. Nothing
+below changes for you as a rights holder: the notice reaches a monitored address and is
+acted on. It is recorded because claiming a protection one has not perfected is the kind
+of paper shield that is worse than none — and because this repository is public, so the
+claim is checkable.
 
 **To report infringement**, send to the designated agent below a written notice including:
 
@@ -149,7 +200,7 @@ terminate the accounts of repeat infringers.
 6. A statement, **under penalty of perjury**, that your notice is accurate and that you are
    the owner or authorised to act for them
 
-**Designated agent:** jaisharmahere@gmail.com
+**Designated agent:** copyright@whatapull.com
 
 **Counter-notice.** If your material was removed and you believe that was a mistake or a
 misidentification, you may send a counter-notice with your signature, identification of the
@@ -162,20 +213,20 @@ complainant files suit.
 Knowingly misrepresenting that material is infringing — or was wrongly removed — carries
 liability for damages under § 512(f).
 
-## 8. Reports and moderation
+## 9. Reports and moderation
 
 You can report content. We review reports, and we can remove material or restrict an account
 where these terms or the law require it. Decisions are logged. Where we remove something you
 posted we will tell you what and why, unless the law prevents us, and you can dispute it by
 replying.
 
-## 9. Availability, and changes to the service
+## 10. Availability, and changes to the service
 
 The service is provided as it is. We may change, suspend or discontinue features, and this
 is early software — expect defects. Where we discontinue something material and you have
 content in it, we will give reasonable notice and a way to export.
 
-## 10. Disclaimers and liability
+## 11. Disclaimers and liability
 
 **To the fullest extent permitted by law**, the service is provided **"as is" and "as
 available"**, without warranties of any kind, express or implied, including merchantability,
@@ -195,13 +246,13 @@ that cannot lawfully be excluded** — and if you are a consumer, your statutory
 unaffected. Where such a limit is unenforceable against you, it applies only to the extent
 permitted.
 
-## 11. Indemnity
+## 12. Indemnity
 
 If you are using the service for business purposes, you agree to indemnify us against claims
 arising from your content, your use of the service, or your breach of these terms. This does
 not apply to you as a consumer using the service personally.
 
-## 12. Governing law and disputes
+## 13. Governing law and disputes
 
 These terms are governed by the laws of the **State of Delaware, USA**, without regard to its
 conflict-of-laws rules. Disputes go to the state and federal courts located in Delaware, and
@@ -214,7 +265,7 @@ gives you that right.
 **Talk to us first.** Email the address below with what happened and what you want. Most
 things end there, and we would rather resolve a problem than litigate it.
 
-## 13. The rest
+## 14. The rest
 
 - **Whole agreement.** These terms and the [Privacy Policy](./privacy.md) are the agreement
   between us on this subject.
@@ -227,10 +278,14 @@ things end there, and we would rather resolve a problem than litigate it.
   public.
 - **Survival.** Sections 4, 5, 10, 11 and 12 survive termination.
 
-## 14. Contact
+## 15. Contact
 
-**jaisharmahere@gmail.com** — legal notices, copyright complaints, security reports.
+| Address                     | For                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| **legal@whatapull.com**     | Legal notices and anything about these Terms                                 |
+| **copyright@whatapull.com** | Copyright complaints and counter-notices — the designated agent in section 8 |
+| **privacy@whatapull.com**   | Data requests and anything in the [Privacy Policy](./privacy.md)             |
+| **security@whatapull.com**  | Vulnerability reports — see [`SECURITY.md`](../SECURITY.md)                  |
 
-_Role addresses on whatapull.com (legal@, copyright@, privacy@) will replace this once the
-domain's mail is set up, including the designated agent address in section 7. Until then, the
-address above is the one that is actually read._
+Role addresses rather than a personal mailbox, because this repository is public and an
+address written here is indexed permanently.

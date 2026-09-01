@@ -103,18 +103,75 @@ export function extractText(html: string): string {
 }
 
 /**
+ * Hosts the worker is permitted to fetch, and nothing else.
+ *
+ * `acquire` follows a URL chosen by whoever created the job, and
+ * `enqueue_generation_job` is callable by any signed-in reader — so without this
+ * the worker is a fetch-anything oracle that runs inside the trust boundary,
+ * holds a service-role key, and writes what it fetched into `job_steps.output`
+ * where the requester can read it back. The blocklist below narrowed that; it
+ * could not close it, because it can only recognise addresses that are spelled
+ * out rather than resolved (see the note there).
+ *
+ * An allowlist closes it, and here it costs nothing real: every one of the 101
+ * entries in `scripts/corpus/public-domain.json` is on one of these three hosts.
+ * The capability being removed is "fetch an arbitrary URL", which no shipped
+ * screen offers — `enqueue` has no client (nothing in `apps/web` invokes it), so
+ * today the only caller is an operator seeding the library.
+ *
+ * Overridable by `SOURCE_HOST_ALLOWLIST` for a self-hoster with a different
+ * corpus. Widening it is a decision with a threat model attached: the entry
+ * should be a host you would be content for a stranger to make this worker fetch
+ * on their behalf. Setting it to `*` is refused rather than honoured — a wildcard
+ * here restores exactly the hole this exists to close, and an environment
+ * variable is not the place to make that choice silently.
+ */
+export const DEFAULT_SOURCE_HOSTS = ['en.wikisource.org', 'classics.mit.edu', 'www.gutenberg.org'];
+
+/**
+ * Parse the configured allowlist, or fall back to the corpus hosts.
+ *
+ * Takes the reader rather than touching `Deno` directly, matching `config.ts`:
+ * "reading the environment is injected so this is testable off the Edge runtime".
+ * The default argument is what production passes, so callers stay unchanged.
+ */
+export function sourceHostsFrom(get: (key: string) => string | undefined): string[] {
+  const configured = get('SOURCE_HOST_ALLOWLIST');
+  if (!configured) return DEFAULT_SOURCE_HOSTS;
+  const hosts = configured
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  if (hosts.includes('*')) {
+    throw new Error(
+      'acquire: SOURCE_HOST_ALLOWLIST="*" is refused. Name the hosts this worker may ' +
+        'fetch; a wildcard makes it an open proxy holding a service-role key.',
+    );
+  }
+  return hosts.length > 0 ? hosts : DEFAULT_SOURCE_HOSTS;
+}
+
+function configuredHosts(): string[] {
+  const deno = (globalThis as { Deno?: { env: { get(k: string): string | undefined } } }).Deno;
+  return sourceHostsFrom((key) => deno?.env.get(key));
+}
+
+/**
  * Hosts the worker must never be talked into fetching.
  *
- * What this does NOT cover, stated plainly so nobody reads it as complete: a
- * hostname that resolves to a private address. `evil.example.com` with an A
- * record of `10.0.0.1` passes every check here, because the check is on the
- * literal and the resolution happens inside `fetch`. Closing that needs the
- * address resolved before connecting and the socket pinned to it, which Deno's
- * `fetch` does not expose. Every redirect hop is re-checked, so the cheap
- * version of the attack — a public URL that 302s to a private one — is covered;
- * DNS rebinding is not. It is a real residual risk on an endpoint any signed-in
- * reader can reach, and it belongs on the roadmap rather than in a comment
- * claiming otherwise.
+ * This list cannot be complete on its own, and that is why it is no longer the
+ * only check. A hostname that resolves to a private address — `evil.example.com`
+ * with an A record of `10.0.0.1` — passes every pattern here, because the pattern
+ * is on the literal and the resolution happens inside `fetch`. Closing that would
+ * need the address resolved before connecting and the socket pinned to it, which
+ * Deno's `fetch` does not expose.
+ *
+ * So the blocklist is now the second of two checks rather than the only one, and
+ * `SOURCE_HOST_ALLOWLIST` above is the first. An allowlist is immune to rebinding
+ * by construction: `evil.example.com` never reaches DNS at all, whatever it would
+ * have resolved to. The blocklist stays because an allowlist widened carelessly by
+ * a self-hoster should still not reach loopback, and because two checks that fail
+ * independently are worth more than one that has to be right.
  *
  * `acquire` follows a URL supplied by whoever created the job, and it runs
  * server-side holding a service-role key. Without this it is a confused deputy:
@@ -196,7 +253,7 @@ function isBlockedIpv6(host: string): boolean {
   return false;
 }
 
-export function assertFetchableUrl(raw: string): URL {
+export function assertFetchableUrl(raw: string, hosts: string[] = configuredHosts()): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -209,6 +266,24 @@ export function assertFetchableUrl(raw: string): URL {
   }
   if (BLOCKED_HOST_V4.test(url.hostname) || isBlockedIpv6(url.hostname)) {
     throw new Error(`acquire: refusing to fetch a private or link-local host (${url.hostname})`);
+  }
+  /*
+   * Exact host match, not a suffix match.
+   *
+   * A suffix rule written as `.endsWith('wikisource.org')` also accepts
+   * `evilwikisource.org`, and one written as `.endsWith('.wikisource.org')`
+   * accepts every subdomain an attacker can get a record for. Neither is worth
+   * the convenience: the corpus names three hosts and a self-hoster naming a
+   * fourth can name it exactly.
+   *
+   * Called from `fetchBounded` on every redirect hop, so a permitted host that
+   * 302s to an arbitrary one is refused at the hop rather than followed.
+   */
+  if (!hosts.includes(url.hostname.toLowerCase())) {
+    throw new Error(
+      `acquire: ${url.hostname} is not in the source host allowlist. ` +
+        'Add it to SOURCE_HOST_ALLOWLIST if this worker should be able to fetch it.',
+    );
   }
   return url;
 }
@@ -257,12 +332,16 @@ export const MAX_REDIRECTS = 5;
  * streaming rather than after: a multi-gigabyte body must never be buffered
  * first and measured second.
  */
-export async function fetchBounded(url: string, doFetch: typeof fetch): Promise<string> {
+export async function fetchBounded(
+  url: string,
+  doFetch: typeof fetch,
+  hosts: string[] = configuredHosts(),
+): Promise<string> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    let target = assertFetchableUrl(url);
+    let target = assertFetchableUrl(url, hosts);
     let response: Response;
 
     // Redirects are followed by hand so every hop is checked. Letting fetch
@@ -277,7 +356,7 @@ export async function fetchBounded(url: string, doFetch: typeof fetch): Promise<
       });
       const location = response.headers.get('location');
       if (response.status >= 300 && response.status < 400 && location) {
-        target = assertFetchableUrl(new URL(location, target).toString());
+        target = assertFetchableUrl(new URL(location, target).toString(), hosts);
         continue;
       }
       break;

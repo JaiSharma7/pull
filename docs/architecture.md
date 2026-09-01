@@ -16,7 +16,7 @@
                 │ supabase-js
 ┌───────────────▼──────────────────────────────┐
 │  Supabase                                    │
-│  PostgREST ── RPCs ── Auth ── Storage        │
+│  PostgREST ── RPCs ── Auth                   │
 │                                              │
 │  Postgres 17                                 │
 │  ├── relational data                         │
@@ -96,37 +96,59 @@ mysterious blob.
 
 ## Provider abstraction
 
+The shapes in `supabase/functions/_shared/providers.ts`, as they actually are:
+
 ```ts
 interface SummaryProvider {
-  generateSummary(i: SummaryInput): Promise<CanonicalSummary>;
-}
-interface ImageProvider {
-  generateArtwork(i: ArtworkInput): Promise<Artwork>;
+  name: string;
+  generateSummary(input: SummaryInput): Promise<SummaryDraft>;
 }
 interface EmbeddingProvider {
-  embed(i: string[]): Promise<number[][]>;
+  name: string;
+  embed(texts: string[]): Promise<{ vectors: number[][]; usage: Usage }>;
 }
-interface SpeechProvider {
-  synthesize(i: SpeechInput): Promise<AudioAsset>;
+interface ImageProvider {
+  name: string;
+  generateArtwork(prompt: string): Promise<Artwork | null>;
 }
 ```
+
+There is **no `SpeechProvider`**, and there never was — this file described one for
+several rounds. Audio is `speechSynthesis` in the browser (`apps/web/src/lib/speech.ts`),
+which is what makes law 3 able to promise it free: it costs nothing per listen because
+nothing leaves the device.
 
 Selected by environment, so a self-hosted instance is never forced to reproduce our
 vendors:
 
 ```env
-SUMMARY_PROVIDER=openai       # or local
-IMAGE_PROVIDER=openai         # or disabled
-EMBEDDING_PROVIDER=local
-SPEECH_PROVIDER=device        # Web Speech — free, and the default
+SUMMARY_PROVIDER=gemini          # or anthropic, or unset for the stubs
+EMBEDDING_PROVIDER=gemini        # or unset for the stubs
+SUMMARY_FALLBACK_PROVIDER=       # anthropic, if a second is wanted
 ```
+
+No key means the stub providers, so a fresh clone runs the whole pipeline end to end and
+gets placeholder prose rather than an error — which is what makes `pnpm db:reset && pnpm
+dev` work with no setup.
+
+`IMAGE_PROVIDER` is not read by anything, deliberately: the `artwork` step is disabled in
+`pipeline.ts`, and a variable that appears to select something it cannot select is worse
+than no variable. Artwork is the first thing cut under cost pressure (law 2), and the
+product degrades to typography, which the design brief was built for anyway.
 
 ## Offline
 
 Built on the web **before** any native wrapper, so Capacitor becomes an enhancement
-rather than a rescue operation. Service worker + Cache API for the bundle, images and
-audio; IndexedDB for saved Pulls, summaries, history, progress and a pending-mutation
-queue that drains on reconnect.
+rather than a rescue operation. Service worker for the bundle, the
+stylesheet and the three self-hosted typefaces; IndexedDB for a pending-mutation queue
+that drains on reconnect, and for the last page of feed rows.
+
+Two limits, stated because "offline" is one of the five things law 3 promises and a
+vaguer sentence would be doing work it has not earned. **Nothing caches audio** — it is
+synthesised on the device by `speechSynthesis`, so there is nothing to cache and it works
+offline for free. And **only the feed writes to the cache** (`cachePulls`, called from
+`Feed.tsx`): the Library, Source, Search, Daily and History screens read through to the
+network and fail without it. Widening that is the obvious next piece of offline work.
 
 ## Why Vite and not a server framework
 

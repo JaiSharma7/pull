@@ -1,0 +1,35 @@
+{
+  "$comment": [
+    "Deno configuration for the Edge Functions, and the reason CI can lint them at all.",
+    "",
+    "eslint.config.js ignores this directory ('Deno runtime, separate lint pass') and the",
+    "package's lint script was `echo \"linted by Deno, not eslint\"`. No Deno pass existed,",
+    "so the worker — which holds the service-role key, makes the outbound fetch, and is the",
+    "SSRF surface — was the one part of the tree with no lint coverage at all. Wiring it up",
+    "immediately found a dead `deno-lint-ignore-file no-explicit-any` at the top of",
+    "worker/index.ts covering zero `any`s, which is a small thing and exactly the kind of",
+    "small thing an unlinted file accumulates.",
+    "",
+    "Tests are excluded on purpose rather than out of convenience. They run under Vitest on",
+    "Node, not on Deno: they import from 'vitest', they never touch a Deno global, and",
+    "`pnpm test` already covers them. Linting them here produced 33 require-await errors",
+    "against async interface fakes and nothing else.",
+    "",
+    "require-await is excluded for the same reason one level up. It fires on exactly three",
+    "things — stubSummaryProvider.generateSummary, stubEmbeddingProvider.embed and",
+    "disabledImageProvider.generateArtwork — all of which implement an interface whose real",
+    "implementation calls a network API. They are async because the contract is async, not",
+    "because they happen to await something; the point of the stub set is that a fresh clone",
+    "with no API key runs the same pipeline through the same shapes. Dropping `async` would",
+    "change the declared return type and `return Promise.resolve(x)` is the same thing said",
+    "less clearly. The rule targets a real mistake; here it only ever finds a deliberate",
+    "interface implementation."
+  ],
+  "exclude": ["**/*.test.ts", "node_modules", ".tsbuild"],
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": ["require-await"]
+    }
+  }
+}

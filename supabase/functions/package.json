@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "echo \"linted by Deno, not eslint\"",
+    "lint": "echo \"deno lint runs in CI (check 1); see deno.json\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },

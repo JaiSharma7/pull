@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import privacySource from '../../../../docs/privacy.md?raw';
 import termsSource from '../../../../docs/terms.md?raw';
 import { Prose } from '../components/Prose.js';
+import { LEGAL_PATHS, type LegalDoc, legalDocFor } from '../lib/legal-routes.js';
 import { parseMarkdown } from '../lib/markdown.js';
 
 /**
@@ -19,9 +20,10 @@ import { parseMarkdown } from '../lib/markdown.js';
  *    data.
  */
 
-export const LEGAL_PATHS = { '/privacy': 'privacy', '/terms': 'terms' } as const;
-
-export type LegalDoc = (typeof LEGAL_PATHS)[keyof typeof LEGAL_PATHS];
+// Re-exported so existing importers of this module keep working; the definitions now
+// live in `lib/legal-routes.ts` so `App` can ask the question without loading the text.
+export { LEGAL_PATHS, legalDocFor };
+export type { LegalDoc };
 
 const SOURCES: Record<LegalDoc, string> = { privacy: privacySource, terms: termsSource };
 
@@ -29,12 +31,6 @@ const OTHER: Record<LegalDoc, { path: string; label: string }> = {
   privacy: { path: '/terms', label: 'Terms of Service' },
   terms: { path: '/privacy', label: 'Privacy Policy' },
 };
-
-export function legalDocFor(pathname: string): LegalDoc | null {
-  // Trailing slashes are the same page; anything else is not this route.
-  const path = pathname.replace(/\/+$/, '') || '/';
-  return LEGAL_PATHS[path as keyof typeof LEGAL_PATHS] ?? null;
-}
 
 export function Legal({ doc, onNavigate }: { doc: LegalDoc; onNavigate: (to: string) => void }) {
   const { blocks } = useMemo(() => parseMarkdown(SOURCES[doc]), [doc]);

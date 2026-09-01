@@ -196,3 +196,15 @@
   gap: var(--space-3);
   margin: var(--space-2) 0 0;
 }
+
+/*
+ * The byline and the outbound link to the original, under the title.
+ *
+ * No new colour and no new weight: it is `.meta` like the kind-and-year line above the
+ * title, and the link takes the accent every other link takes. A citation should be
+ * findable and quiet, and law 1 leaves typography to do the work — a second treatment
+ * here would be the app raising its voice about its own footnote.
+ */
+.source__attribution {
+  margin-top: calc(var(--space-2) * -1);
+}

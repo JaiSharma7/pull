@@ -6,8 +6,8 @@ it.
 
 ## Round 1 — the spine ✅
 
-Monorepo with four CI checks, the agentic setup, 28 migrations across 38 tables with RLS
-everywhere, the read path (ranking · Delta · interleave), a public-domain seed, The
+Monorepo with the CI checks, the agentic setup, the first 28 migrations across 38 tables
+with RLS everywhere, the read path (ranking · Delta · interleave), a public-domain seed, The
 Archive design system, the generation step-machine skeleton, and a working app: auth →
 feed → interleaved questions → save → review → Enough.
 
@@ -287,15 +287,32 @@ not have to rediscover them.
   counting-scope decisions rather than bugs in the maths, and both predate the negation
   work; recorded because the function comment that used to assert "describes this page"
   was corrected rather than carried forward.
-- **Two hosted advisories are open and neither is code.** Leaked password protection is
-  disabled in Auth, and `artworks` carries two identical indexes
-  (`artworks_summary_idx`, `artworks_summary_readable_idx`) — a WARN each, both predating
-  any of round 2's work. The first is a dashboard toggle; the second wants a migration
-  that drops one index. Named here because the definition of done says advisors report no
-  security findings, and an undocumented WARN is indistinguishable from one nobody
-  noticed. The `enqueue_generation_job` advisory remains the one the project accepts by
-  design. Everything else the performance advisor reports is `unused_index` on a database
-  with no traffic yet, which is what an unused index looks like before launch.
+- **The duplicate `artworks` index is dropped; leaked-password protection is still a
+  dashboard toggle.** `artworks_summary_idx` and `artworks_summary_readable_idx` were
+  byte-identical — same table, same column, neither partial — and cost double on every
+  write for nothing. `20260901170000` drops the later one, and `lint.sql` check 6 now
+  fails CI on any pair of indexes with identical definitions, so the class is closed
+  rather than the instance. It had been reported by the performance advisor and named
+  here since round 1 precisely because nothing automated could see it.
+
+  Leaked-password protection remains off and cannot be fixed from this repository; it is
+  one switch in Authentication → Policies. The `enqueue_generation_job` advisory remains
+  the one the project accepts by design, and `SECURITY.md` says so publicly so nobody
+  spends a weekend rediscovering it.
+
+- **`hnsw.ef_search` is set, and the reason is worth reading before changing it.**
+  `search_catalogue` over-fetches `count(ranked) + 120` neighbours and `related_pulls`
+  asks for 200, both reasoned about carefully in 20260901080000 — which never mentions
+  that pgvector's candidate list defaults to **40**, and that an index scan therefore
+  cannot return 200 rows however many are asked for. It returns about 40, with no error.
+
+  It has not bitten, for an uncomfortable reason: at 370 pulls the planner ignores the
+  HNSW index and scans, which is exact. So the arithmetic is correct today _because the
+  optimisation it was written for is not in use_, and would have started quietly losing
+  results on the day the corpus grew enough to use it. Set to 200 on the database in
+  `20260901170000`, with a warning rather than a failure if the migration role may not
+  ALTER DATABASE.
+
 - **`packages/ranking` cannot run in a browser.** `seededUnit` needs a synchronous MD5
   and takes it from `node:crypto`. That is fine for its actual job — testing the
   placement rules over thousands of sessions without a database — but the prefetch use
@@ -310,18 +327,42 @@ not have to rediscover them.
   the reader did. Round 2 should classify permanent failures — a 404 or a 403 is not a
   500 — and drop only those. Found while reviewing my own retry path, not by either
   reviewer.
-- **`acquire` is still open to DNS rebinding.** The host blocklist rejects private
-  and link-local literals in both IPv4 and IPv6, and re-checks every redirect hop, so
-  a public URL that 302s to `169.254.169.254` is refused. What it cannot see is
-  `evil.example.com` with an A record of `10.0.0.1`: the check is on the literal, and
-  resolution happens inside `fetch`. Closing it needs the address resolved before
-  connecting and the socket pinned to it, which Deno's `fetch` does not expose —
-  realistically a small resolve-then-connect helper, or an egress proxy. It matters
-  because the worker holds a service-role key and writes what it fetched into
-  `job_steps.output`, which the requester can read, and because
-  `enqueue_generation_job` is reachable by any signed-in reader. Found by Codex
-  reviewing the IPv4-only version of the blocklist; the IPv6 half is fixed, this half
-  is not.
+- **`acquire` was open to DNS rebinding. Closed, by inverting the check.** The host
+  blocklist rejects private and link-local literals in both IPv4 and IPv6 and re-checks
+  every redirect hop, so a public URL that 302s to `169.254.169.254` was refused. What
+  it could not see was `evil.example.com` with an A record of `10.0.0.1`: the check is
+  on the literal, and resolution happens inside `fetch`. It mattered because the worker
+  holds a service-role key and writes what it fetched into `job_steps.output`, which the
+  requester can read, and because `enqueue_generation_job` is reachable by any signed-in
+  reader.
+
+  The fix that was planned here — resolve the address, then pin the socket to it — is
+  still not expressible in Deno's `fetch`, and waiting for it was the wrong move. An
+  allowlist closes the same hole from the other side and needs no new capability:
+  `evil.example.com` never reaches DNS at all, whatever it would have resolved to.
+  `DEFAULT_SOURCE_HOSTS` in `_shared/source.ts` is the three hosts the entire 101-source
+  manifest uses, overridable by `SOURCE_HOST_ALLOWLIST`, and a `*` value is refused
+  rather than honoured. Matching is exact rather than by suffix, and the blocklist stays
+  behind it so a carelessly widened allowlist still cannot reach loopback.
+
+  What this gives up is the ability to summarise an arbitrary URL. No shipped screen
+  offers that — nothing in `apps/web` invokes `enqueue` at all — so the capability lost
+  is one only an operator had, and an operator can name a host. Worth revisiting when
+  the Pull Studio makes reader-supplied URLs a real feature; at that point the
+  allowlist becomes a per-request rights and egress decision rather than a constant.
+
+- **`profiles` was a directory of everyone's email local-parts. Fixed.** `handle_new_user`
+  derived the handle from `split_part(new.email, '@', 1)` and `profiles_read_all` was
+  `for select using (true)`, so any caller holding the publishable key — which is
+  committed, correctly — could page the table and read the local part of every
+  registered address. It never mattered while the project had one account and a private
+  repository; publishing changes both. `20260901120000` makes reads self-only on
+  `profiles` and `follows`, generates handles randomly, and rewrites the rows that
+  already carried an address. Neither table is read by a single line of `apps/web` —
+  they are round 4 tables that were sitting open in a round 2 database — so nothing was
+  given up. `docs/privacy.md` described the handle as optional and opt-in; that sentence
+  was wrong on both counts and has been corrected rather than kept.
+
 - **RLS is enabled one migration after the tables are created.** Law 5 in `CLAUDE.md`
   says "in the migration that creates it", and the schema does not do that: tables land
   in `20260829124548_learning.sql` and its siblings, policies in

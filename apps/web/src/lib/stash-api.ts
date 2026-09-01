@@ -1,3 +1,4 @@
+import { pageAll } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { type Stash, shapeStashes } from './stashes.js';
 import { supabase } from './supabase.js';
@@ -17,16 +18,38 @@ import { supabase } from './supabase.js';
  */
 
 export async function fetchStashes(userId: string): Promise<Stash[]> {
-  const { data, error } = await supabase
-    .from('stashes')
-    .select('id, name, description, parent_id, position')
-    .eq('user_id', userId)
-    .order('position', { ascending: true })
-    .order('name', { ascending: true });
-  if (error) throw rpcError(error);
+  /*
+   * Paged, because law 3 says stashing is unlimited and `max_rows` is 100.
+   *
+   * A reader past a hundred collections got a hundred of them, silently — and the
+   * failure is nastier than a short list, because `shapeStashes` builds a tree: a
+   * child whose parent fell off the page has nowhere to attach, so collections
+   * disappear rather than merely stopping. The promise has to hold in the read path
+   * and not only in the table.
+   *
+   * Ordered by `id` for the walk. `position` is not unique — that is the whole point
+   * of a position within a parent — so it cannot partition the pages. `shapeStashes`
+   * applies the display order itself, which is why changing this one is safe.
+   */
+  const data = await pageAll<{
+    id: string;
+    name: string;
+    description: string | null;
+    parent_id: string | null;
+    position: number;
+  }>((from, to) =>
+    supabase
+      .from('stashes')
+      .select('id, name, description, parent_id, position')
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
 
   return shapeStashes(
-    (data ?? []).map((r) => ({
+    data.map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description,

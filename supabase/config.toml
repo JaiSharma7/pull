@@ -43,9 +43,34 @@ additional_redirect_urls = ["http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 jwt_expiry = 3600
 enable_signup = true
 
+# A one-time code is the whole credential here, so its lifetime is the window in which
+# a leaked email is a working account. Ten minutes is long enough to switch apps, find
+# the message and type six digits, and short enough that a code sitting in a synced
+# inbox stops being useful quickly. GoTrue's default is an hour.
 [auth.email]
 enable_signup = true
 enable_confirmations = false
+otp_expiry = 600
+# One code per minute per address. The sign-in screen already handles the rate-limit
+# error and opens its paste-a-link escape hatch (Auth.tsx), so hitting this is a
+# recoverable state rather than a dead end -- which is what makes it safe to set at
+# all. Without it, the send button is an open relay pointed at somebody's inbox.
+max_frequency = "60s"
+
+# Second factor. GoTrue owns enrolment, challenge and verification; the recovery half
+# -- codes that remove a lost factor -- is in 20260901150000, because Supabase does not
+# provide one and a TOTP factor with no way back is a support ticket waiting to happen.
+#
+# TOTP only. Phone is off because this product deliberately asks for an email address
+# and nothing else (docs/privacy.md), and turning on SMS would quietly make a phone
+# number collectable. WebAuthn is off because it is not implemented in the UI, and an
+# enabled factor type with no enrolment path is a way to strand an account.
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
 
 # The default template renders `{{ .ConfirmationURL }}` and nothing else, so the
 # email carries a link but no code — and `verifyOtp` has nothing to verify. The

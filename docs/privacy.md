@@ -122,7 +122,7 @@ Three, and only three:
 
 | Processor                      | What it handles                                        | Where                   |
 | ------------------------------ | ------------------------------------------------------ | ----------------------- |
-| **Supabase** (and AWS beneath) | Database, authentication, storage, server functions    | `ca-central-1`, Canada  |
+| **Supabase** (and AWS beneath) | Database, authentication, server functions             | `ca-central-1`, Canada  |
 | **Vercel**                     | Serving the web app and its static assets              | Global edge network     |
 | **Google** (Gemini API)        | Generating summaries — including a document you submit | Google's infrastructure |
 
@@ -131,6 +131,18 @@ sees your address and the code.
 
 That is the complete list. There is no analytics vendor, no session-replay tool, no crash
 reporter, no tag manager, and no advertising SDK in the app today.
+
+**There was a fourth, and we had not counted it.** Until recently the stylesheet loaded
+three typefaces from `fonts.googleapis.com`, which meant your IP address and browser
+reached Google on the first paint of every page — including this one, before you had
+read a word of it. That was a request nobody had decided to make, sitting against the
+sentence about cross-site tracking below. The fonts are now served from our own origin,
+so the request no longer happens. It is recorded here rather than quietly fixed because
+a privacy policy that has only ever been right is not evidence of anything.
+
+**If a second model provider is ever switched on**, this table changes before it does.
+The code supports one (`SUMMARY_FALLBACK_PROVIDER`), it is not enabled, and enabling it
+without amending this page would make the sentence above false.
 
 ## Where your data lives, and transfers
 
@@ -168,31 +180,47 @@ keyed to it: profile, preferences, stashes, saves, notes, highlights, history, i
 knowledge states, vectors, convictions and explanations. That is a foreign-key cascade in
 the schema, not a scheduled cleanup job.
 
-Three things survive, all of them severed from you:
+You do this yourself, from **Account → Delete this account**. It is not a request you
+send us and wait on: the deletion happens when you confirm it. Because it cannot be
+undone, it asks for a sign-in within the last ten minutes first — a token minted weeks
+ago on a device you no longer have should not be able to spend the account.
 
-- **Generation records, including any document you submitted.** `generation_jobs.requester_id`
-  is set to null, so nobody is attached to the job — but the job itself remains, and where you
-  supplied text rather than pointed at a public source, that text remains with it. The
-  submission is stored in `generation_jobs.target`, and the pipeline keeps what it acquired
-  and segmented in `job_steps.output`. **Nulling the requester does not erase the document**,
-  so deleting your account does not today remove text you submitted for generation.
-  `cost_ledger` never held a user id.
+**Documents you submitted for generation are deleted too.** This page used to say they
+were not, and that was accurate: `generation_jobs.requester_id` is `on delete set null`,
+so a foreign-key cascade alone left the job — and any text you pasted in, and whatever
+the pipeline fetched into `job_steps.output` — sitting in the database with your name
+taken off it. That is not deletion. `delete_my_account` now removes those rows outright
+before the account goes.
 
-  We would rather this were not true, and it is a schema fix rather than a wording one: the
-  source-bearing fields should be erased when the account that produced them is. Until that
-  ships, ask us and we will delete them by hand — and if you want a submitted document gone
-  with certainty, ask before deleting the account, while we can still tell which jobs were
-  yours.
+Three things survive, none of them attached to you:
 
-- **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays, so
-  deleting an account cannot erase a moderation trail.
+- **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
+  so deleting an account cannot erase a moderation trail.
+- **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
+  token count and a cost. It never held a user id, and it is how this project can state
+  what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
 
 Anything published under a future community feature is covered in the Terms.
 
 ## Your rights
 
-Whoever and wherever you are, you can ask us to **access, correct, delete, export, restrict
+Four of these you do yourself, without asking and without waiting, from
+**Account**:
+
+| Control                     | What it does                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Download everything**     | Every row stored against your account, as one JSON file. Paged, so a large library is not silently truncated at a hundred rows. |
+| **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                       |
+| **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                      |
+| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                     |
+
+A note on ending a session, because the honest version is less impressive than the
+usual claim: it stops that device getting a _new_ token. A token it already holds keeps
+working until it expires, within the hour. That is how stateless tokens work, and no
+amount of server-side deleting changes it.
+
+Beyond those, whoever and wherever you are, you can ask us to **access, correct, delete, export, restrict
 or object to** the processing of your data, and you can withdraw consent where consent is
 what we relied on. Email the address below; we answer within 30 days.
 
@@ -213,8 +241,24 @@ to our decision.
 
 ## Security
 
-- **Row-level security is on every table in the database**, with policies written in the
-  migration that creates it. CI fails the build if a table lacks one.
+- **Row-level security is on every table in the database, and every one carries a
+  policy.** CI replays every migration from zero on a real Postgres and fails the build
+  if a table has RLS disabled, has no policy, has a `SECURITY DEFINER` function with an
+  unpinned `search_path`, or has two permissive policies overlapping on reads.
+
+  This used to say the policies are "written in the migration that creates" the table.
+  That is the project's stated intent and it is not what the schema does — tables land
+  in one migration and their policies in the next, and migrations here are append-only
+  so it cannot be retrofitted. What CI asserts is the **end state**, which is what
+  protects you: no environment that finishes migrating has an unprotected table. The
+  stronger sentence was a claim about process, and it was wrong.
+
+- **This whole thing is public.** The source is on GitHub, including the schema, every
+  policy, and the URL and publishable key of the production project. That is deliberate:
+  the security of your data rests on row-level security and on the credentials the
+  repository does **not** contain, not on any of it being unreadable. If it rested on
+  secrecy, publishing would break it — and you would have no way to check any of the
+  claims on this page. See `SECURITY.md` for how to report something.
 - The browser bundle carries exactly one credential: the Supabase **publishable** key, which
   is designed to be public and which RLS — not secrecy — is what protects. Service keys and
   provider keys exist only server-side.
@@ -240,7 +284,13 @@ write about ourselves.
 
 ## Contact
 
-**jaisharmahere@gmail.com** — privacy questions, requests and complaints.
+**privacy@whatapull.com** — privacy questions, requests and complaints, and anything under
+"Your rights" above.
 
-_Role addresses on whatapull.com (privacy@, copyright@, legal@) will replace this once the
-domain's mail is set up. Until they do, the address above is the one that is actually read._
+**security@whatapull.com** — vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for
+what to expect and how quickly.
+
+Both are monitored by the operator named in the [Terms](./terms.md). They are role addresses
+rather than a personal mailbox on purpose: a privacy contact that is one person's inbox is a
+contact that stops working the moment that person is unreachable, and this repository is
+public, which makes anything written here permanently indexed.

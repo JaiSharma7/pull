@@ -372,7 +372,12 @@ export function Library({ userId }: { userId: string }) {
       </section>
     );
 
-  if (!items) return <p className="meta">Loading…</p>;
+  if (!items)
+    return (
+      <p className="meta" role="status">
+        Loading…
+      </p>
+    );
 
   /*
    * Nothing kept is not the same as nothing to take away.

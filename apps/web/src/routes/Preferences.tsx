@@ -162,7 +162,9 @@ export function Preferences({
   if (!topics || !prefs) {
     return (
       <section className="measure">
-        <p className="meta">Loading…</p>
+        <p className="meta" role="status">
+          Loading…
+        </p>
       </section>
     );
   }

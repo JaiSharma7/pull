@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
@@ -6,13 +6,43 @@ import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
 import { Explore } from './routes/Explore.js';
 import { History } from './routes/History.js';
-import { Legal, legalDocFor } from './routes/Legal.js';
+
+/*
+ * The two screens that are worth splitting out, and only those.
+ *
+ * `Legal` inlines both `docs/privacy.md` and `docs/terms.md` through `?raw`, so every
+ * visitor was downloading the full text of two policies in order to read a Pull.
+ * `Account` is signed-in only and reached deliberately, so a visitor should not carry
+ * it either.
+ *
+ * The sections — Feed, Library, Review, History, Preferences — are deliberately NOT
+ * split. They are tab state inside a shell that keeps the feed mounted on purpose (see
+ * the long comment at the render site), and lazily mounting things inside that
+ * arrangement trades a real correctness argument for a smaller first byte. These two
+ * are route-gated rather than tab-gated, which is what makes them safe to defer.
+ */
+const Legal = lazy(() => import('./routes/Legal.js').then((m) => ({ default: m.Legal })));
+const Account = lazy(() => import('./routes/Account.js').then((m) => ({ default: m.Account })));
+
+/*
+ * Shown while a split chunk arrives. Matches the shell's own loading state rather than
+ * introducing a spinner: on a fast connection it is never seen, and on a slow one it
+ * should look like the rest of the app waiting rather than like something else.
+ */
+function RouteFallback() {
+  return (
+    <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
+      Loading…
+    </p>
+  );
+}
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Library } from './routes/Library.js';
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
+import { SecondFactorGate } from './routes/SecondFactorGate.js';
 import { Topic } from './routes/Topic.js';
 import { Specimen } from './routes/Specimen.js';
 import {
@@ -22,8 +52,10 @@ import {
   readStoredFocus,
   storeFocus,
 } from './lib/focus-mode.js';
+import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
+import { isKnownPath, titleFor } from './lib/title.js';
 import { supabase } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
@@ -68,7 +100,7 @@ function readLocation(): string {
   return window.location.pathname + window.location.search;
 }
 
-const DESTINATIONS: { path: string; label: string }[] = [
+const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
   /*
@@ -81,6 +113,18 @@ const DESTINATIONS: { path: string; label: string }[] = [
    * the same shape Explore and Search already have, so it goes where they are.
    */
   { path: '/appearance', label: 'Appearance' },
+  /*
+   * The one destination a visitor must NOT see, which is why the list now carries a
+   * flag rather than being split in two.
+   *
+   * Everything else here is reachable without an account -- that is the argument
+   * Appearance makes just above. Account is the opposite: every control on it acts on
+   * a reader, so for a visitor it would be a link to a sign-in wall wearing the name
+   * of a page. Keeping it in `DESTINATIONS` with a flag preserves the property the
+   * comment above depends on and CLAUDE.md states -- this array is the authority for
+   * what has an address -- which splitting it into two arrays would quietly end.
+   */
+  { path: '/account', label: 'Account', signedIn: true },
 ];
 
 /**
@@ -111,6 +155,37 @@ export function App() {
   const [tab, setTab] = useState<Tab>('feed');
   const [stats, setStats] = useState<FeedStats | null>(null);
   /*
+   * The name of whatever is currently open, reported upward by the screen that loads it.
+   *
+   * `App` knows the *address* of a source but not its title, and the title is the half
+   * a person recognises in a tab strip or a history list. There is nothing to derive it
+   * from until a request comes back, so it has to be state.
+   *
+   * STORED WITH THE PATH IT DESCRIBES, which is the whole trick. The obvious version —
+   * a bare string plus an effect that clears it when `path` changes — is a synchronous
+   * setState inside an effect, which the lint rule rejects for the usual reason: it
+   * renders once with the stale title and again with null. Pairing the title with its
+   * address makes staleness a question the render can answer, so there is nothing to
+   * reset and no second render. A name from the previous page simply stops matching.
+   */
+  const [routeTitle, setRouteTitle] = useState<{ path: string; title: string } | null>(null);
+  /*
+   * Whether this session still owes a second factor.
+   *
+   * `null` while unknown, which matters: rendering the shell during the check would
+   * flash the reader's feed at them before the gate appears, and rendering the gate
+   * would flash a challenge at everyone who has no factor at all.
+   *
+   * Supabase does not enforce this by itself. After an email code the session is
+   * `aal1` and stays there unless the app asks for a challenge, and no policy here
+   * refuses an `aal1` token — so without this a reader who enrolled TOTP, saved their
+   * recovery codes and felt safer had exactly the protection they had before, and the
+   * app would never have told them. A control that cannot be exercised is worse than
+   * an absent one, because it is believed.
+   */
+  const [factorState, setFactorState] = useState<{ userId: string; owes: boolean } | null>(null);
+  const [factorChecks, setFactorChecks] = useState(0);
+  /*
    * Bumped when a reader saves their preferences, so the feed refetches under the
    * new weights. The feed is kept mounted (see below), so nothing else would make
    * it reconsider — and a preferences screen the feed ignores is precisely the
@@ -129,10 +204,60 @@ export function App() {
    */
   const [path, setPath] = useState(readLocation);
 
+  /*
+   * Ask on every session change, and again after a challenge is satisfied.
+   *
+   * `getAuthenticatorAssuranceLevel` returns what this session has and what the account
+   * requires; they differ exactly when a verified factor exists and has not been
+   * satisfied. Failing open on an error is deliberate and is the lesser evil: the
+   * alternative is a reader locked out of their own account by a network blip, and the
+   * factor is re-checked on the next load.
+   */
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
+    let live = true;
+    void supabase.auth.mfa
+      .getAuthenticatorAssuranceLevel()
+      .then(({ data, error }) => {
+        if (!live) return;
+        if (error) throw error;
+        setFactorState({
+          userId,
+          owes: data.nextLevel === 'aal2' && data.nextLevel !== data.currentLevel,
+        });
+      })
+      .catch(() => {
+        if (live) setFactorState({ userId, owes: false });
+      });
+    return () => {
+      live = false;
+    };
+  }, [session, factorChecks]);
+
   // The attribute is the single source of truth for the CSS; this keeps it in step.
   useEffect(() => {
     applyFocus(focus, document.documentElement);
   }, [focus]);
+
+  /*
+   * Keep the document title in step with what is showing.
+   *
+   * Set in an effect rather than during render because it is a DOM write, and React
+   * may render a component more than once for one commit. `titleFor` is pure and
+   * tested; this is only the part that touches the document.
+   */
+  useEffect(() => {
+    document.title = titleFor({
+      pathname: window.location.pathname,
+      tab,
+      // Only if it describes the address currently showing. Otherwise the tab keeps
+      // saying "On Liberty" while the next source loads, which is worse than saying
+      // "Source": confidently wrong for as long as the request takes.
+      documentTitle: routeTitle?.path === path ? routeTitle.title : null,
+      query: queryParam(path, 'q'),
+    });
+  }, [path, tab, routeTitle]);
 
   /*
    * Escape leaves fullscreen without asking the app, so the app has to listen.
@@ -268,6 +393,21 @@ export function App() {
   }
 
   /*
+   * Stable across renders, so `Source`'s load effect can depend on it honestly.
+   *
+   * An inline arrow would be a new function every render, and the effect that calls it
+   * would either re-run every render or lie in its dependency array — the lint rule
+   * that noticed is right on both counts.
+   *
+   * The address is read at call time rather than captured, so the title is filed
+   * against the page the answer actually arrived for, not the one that was showing
+   * when the callback was made.
+   */
+  const reportRouteTitle = useCallback((title: string | null) => {
+    setRouteTitle(title === null ? null : { path: readLocation(), title });
+  }, []);
+
+  /*
    * Navigate without leaving a back-stack entry.
    *
    * `/pull/:id` only ever resolves to a source, so pushing it would make Back return
@@ -305,7 +445,12 @@ export function App() {
    * session is not a policy anyone can check before handing over an address.
    */
   const legal = legalDocFor(path);
-  if (legal) return <Legal doc={legal} onNavigate={navigate} />;
+  if (legal)
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <Legal doc={legal} onNavigate={navigate} />
+      </Suspense>
+    );
 
   const sourceId = routeParam(path, '/source');
   // `?s=<summaryId>`, set by the /pull/:id redirect so the anchor resolves.
@@ -330,13 +475,45 @@ export function App() {
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
+  /*
+   * A real address rather than a seventh section, for the same reason the legal
+   * documents have one: it is a place a reader is sent to. "Delete your account" in a
+   * privacy policy, a support reply, or their own bookmarks has to resolve to
+   * something, and a tab that only exists after six clicks inside a shell cannot be
+   * linked to. Signed-in only -- unlike Appearance, every control on it acts on a
+   * reader, so there is nothing here for a visitor to see.
+   */
+  /*
+   * Stored against the user it describes, so signing out and back in cannot show the
+   * previous account's answer for a frame — and so nothing has to be reset in an
+   * effect, which is a synchronous setState the lint rule rightly refuses. `null` means
+   * "not answered for this reader yet", which is a different thing from "does not owe".
+   */
+  const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
+
+  const accountOpen = isPath(path, '/account');
   const topicSlug = routeParam(path, '/topic');
+  /*
+   * A path that matches nothing.
+   *
+   * `vercel.json` rewrites every path to the bundle and the service worker falls back
+   * to it, which is what makes `/privacy` resolve on a cold load — and also what made
+   * `/nonsense` return 200 with the app in it. Before this, a visitor on a typo'd URL
+   * got the sign-in form and a signed-in reader got the feed, both under an address
+   * that described neither.
+   *
+   * Asked of `lib/title.ts` rather than rebuilt here, so the list of what has an
+   * address exists once. Two copies of it would drift, and the failure would be a page
+   * whose title says "Not found" above content that says otherwise.
+   */
+  const notFound = !isKnownPath(window.location.pathname);
   const routeOpen =
     sourceId !== null ||
     pullId !== null ||
     searchOpen ||
     exploreOpen ||
     appearanceOpen ||
+    accountOpen ||
     topicSlug !== null;
 
   /*
@@ -377,11 +554,54 @@ export function App() {
 
   if (!ready)
     return (
-      <p className="meta" style={{ padding: 'var(--space-6)' }}>
+      <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
         Loading…
       </p>
     );
+  /*
+   * Ahead of the auth gate, deliberately. A visitor who mistypes a URL was not asking
+   * to sign in, and answering a wrong address with a sign-up wall is the least useful
+   * thing the app could say — it implies the page exists and is being withheld.
+   */
+  if (notFound)
+    return (
+      <main className="stack measure" style={{ padding: 'var(--space-6)' }}>
+        <p className="meta">404</p>
+        <h1 className="display">There is nothing at this address.</h1>
+        <p>
+          The link may be old, or mistyped. Everything that has an address of its own is reachable
+          from the feed.
+        </p>
+        <div className="stack">
+          <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
+            Go to the feed
+          </button>
+          <button type="button" className="btn" onClick={() => navigate('/explore')}>
+            Browse everything
+          </button>
+        </div>
+      </main>
+    );
+
   if (!session && !publicRoute) return <Auth onNavigate={navigate} next={next} />;
+
+  /*
+   * Ahead of everything a signed-in reader can see, and after the public routes.
+   *
+   * A visitor reading a shared Pull is unaffected — they have no account and owe no
+   * factor. A reader who does owe one gets the challenge instead of the app, not a
+   * banner over it: `/account` is behind this gate too, which is why the way back in
+   * (a recovery code) lives on the gate itself rather than in settings the locked-out
+   * reader cannot reach.
+   */
+  if (session && owesFactor === null)
+    return (
+      <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
+        Loading…
+      </p>
+    );
+  if (session && owesFactor)
+    return <SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />;
 
   const shell = (
     <div className="shell">
@@ -418,7 +638,7 @@ export function App() {
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-          {DESTINATIONS.map((d) => (
+          {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
             <button
               key={d.path}
               type="button"
@@ -505,7 +725,7 @@ export function App() {
                   {s.label}
                 </button>
               ))}
-            {DESTINATIONS.map((d) => (
+            {DESTINATIONS.filter((d) => !d.signedIn || !visitor).map((d) => (
               <button
                 key={d.path}
                 type="button"
@@ -559,6 +779,7 @@ export function App() {
                 summaryId={summaryParam ?? undefined}
                 userId={session?.user.id ?? null}
                 onNavigate={navigate}
+                onTitle={reportRouteTitle}
               />
             )}
             {pullId !== null && (
@@ -571,6 +792,11 @@ export function App() {
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
             {appearanceOpen && <Appearance />}
+            {accountOpen && session && (
+              <Suspense fallback={<RouteFallback />}>
+                <Account userId={session.user.id} email={session.user.email ?? null} />
+              </Suspense>
+            )}
             {topicSlug !== null && (
               // Keyed on the slug so moving between topics is a fresh
               // component rather than one that has to remember to reset its

@@ -15,6 +15,37 @@ if (!url || !key) {
   );
 }
 
+/*
+ * A dev server may not talk to a hosted project without saying so out loud.
+ *
+ * This repository is public, and `.env.production` carries the hosted URL and the
+ * publishable key — correctly, since both ship in the bundle every visitor already
+ * downloads. The consequence is that a contributor who copies the wrong env file, or
+ * runs `vite dev --mode production` to reproduce something, is developing against
+ * live reader data: their test saves land in someone's Library, their `record_read`
+ * calls move a stranger's knowledge states, and a stray delete is not undoable.
+ *
+ * RLS keeps them inside their own account, so this is not a confidentiality control.
+ * It is about not writing to production by accident, which no policy can prevent
+ * because every one of those writes is a thing the account is allowed to do.
+ *
+ * `import.meta.env.DEV` is true only under `vite dev`, so a production build is
+ * unaffected. The opt-out exists because pointing a dev server at a staging project
+ * is legitimate; what is not legitimate is doing it without having decided to.
+ */
+if (
+  import.meta.env.DEV &&
+  !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(url) &&
+  import.meta.env.VITE_ALLOW_REMOTE_SUPABASE !== 'true'
+) {
+  throw new Error(
+    `Refusing to start a dev server against ${url}, which is not the local stack.\n\n` +
+      'Run `pnpm db:start` and use the committed apps/web/.env.development, or set\n' +
+      'VITE_ALLOW_REMOTE_SUPABASE=true in apps/web/.env.local if you mean it. Writes from\n' +
+      'a dev server reach real readers, and RLS cannot tell them apart from real use.',
+  );
+}
+
 export const supabase: Db = createBrowserClient(url, key);
 
 /**

@@ -1,0 +1,12 @@
+# Everything, for now. This is a one-maintainer project and pretending otherwise
+# would only route reviews to nobody.
+*       @JaiSharma7
+
+# Named separately not because the owner differs but because these are the files
+# where a mistake is a data breach rather than a bug, and a review request that
+# says so is worth the two lines.
+/supabase/migrations/   @JaiSharma7
+/supabase/tests/        @JaiSharma7
+/.github/workflows/     @JaiSharma7
+/docs/privacy.md        @JaiSharma7
+/docs/terms.md          @JaiSharma7

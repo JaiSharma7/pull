@@ -236,6 +236,21 @@ export interface PipelineDb {
      */
     topics: TopicSlug[];
     /**
+     * Where a reader can open the original, and who wrote it.
+     *
+     * Both come from the job target, and both were in hand from the first step and
+     * dropped on the floor: `resolve_identity` validates the URL and returns it, and
+     * `scripts/seed-corpus.mjs` reads an author out of the manifest and deliberately
+     * did not forward it because `works` had no column for one. It does now
+     * (20260901160000).
+     *
+     * This is not decoration. "Analysis, not reproduction" (law 4) is an argument that
+     * rests on sending the reader to the source; a summary with no author credited and
+     * nothing linking to the original is the artefact that argument disclaims.
+     */
+    sourceUrl: string | null;
+    author: string | null;
+    /**
      * Null from any job that is not publishing canonically, and that is a
      * security boundary rather than a tidiness rule.
      *
@@ -433,6 +448,11 @@ interface AcquireOutput {
   /** Carried forward from `resolve_identity` so `template` writes the status that
    *  was actually validated, rather than re-deriving it from the raw target. */
   rights: RightsStatus;
+  /** The source URL, carried forward for exactly the same reason as `rights`: the
+   *  one `resolve_identity` validated, not the raw target re-read at the far end.
+   *  Empty for a job that supplied pasted text, which is a legitimate state — a
+   *  work with no URL simply renders without an outbound link. */
+  url: string;
 }
 
 function asString(value: unknown, fallback = ''): string {
@@ -593,6 +613,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         title: asString(identity.title, 'Untitled source'),
         kind: asWorkKind(identity.kind),
         rights: asRightsStatus(identity.rights),
+        url: asString(identity.url),
         truncated,
         ...(reuse ? { reuse } : {}),
       };
@@ -755,6 +776,10 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
+        // `acquired.url` is the one `resolve_identity` validated, not the raw target —
+        // the same distinction the scores below make about re-deriving from input.
+        sourceUrl: acquired.url || null,
+        author: asString(job.target.author) || null,
         // Both deterministic, both from what is already in hand: no extra call,
         // and a quarter of `get_feed`'s score stops being the 0.5 default.
         //
