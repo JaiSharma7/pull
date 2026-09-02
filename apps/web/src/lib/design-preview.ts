@@ -1,3 +1,5 @@
+import { clock } from '@wap/ui';
+
 export interface PreviewLayer {
   heading?: string;
   text: string;
@@ -37,12 +39,24 @@ export function wordCount(...parts: string[]): number {
   }, 0);
 }
 
+/**
+ * Delegated to `@wap/ui`, rather than a second copy of the same arithmetic.
+ *
+ * This file reimplemented the rule the card's dial already had — same 210wpm,
+ * same five-second granularity, same ten-second floor — and so it carried the
+ * same defect: two neighbouring stops rendering the identical label, on 27% of
+ * the hosted corpus. Fixing one copy would have left the preview quietly saying
+ * something different from the product it is a preview OF, which is the failure
+ * mode that makes a test surface worse than none.
+ *
+ * The zero case stays here because it belongs to the preview: `visibleWords`
+ * can legitimately return 0 for a stop with no text behind it, and "0 sec" is
+ * the truthful label for that. `clock` never sees zero from a real Pull, whose
+ * headline always has words.
+ */
 export function clockForWords(words: number): string {
   if (words <= 0) return '0 sec';
-  const seconds = Math.round((words / 210) * 60);
-  if (seconds < 60) return `${Math.max(10, Math.round(seconds / 5) * 5)} sec`;
-  const minutes = Math.round(seconds / 60);
-  return `${minutes} min`;
+  return clock(words);
 }
 
 export function visibleWords(pull: PreviewPull, depth: number): number {

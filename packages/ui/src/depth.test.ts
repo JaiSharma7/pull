@@ -58,22 +58,52 @@ describe('readingSeconds', () => {
 });
 
 describe('clock', () => {
-  it('rounds to five seconds, rather than implying it knows a reader to the second', () => {
+  it('keeps five-second granularity, rather than implying it knows a reader to the second', () => {
     // 105 words at 210wpm is exactly 30 seconds.
     expect(clock(105)).toBe('30 sec');
-    expect(clock(110)).toBe('30 sec');
+    expect(clock(110)).toBe('35 sec');
   });
 
-  it('never goes below ten seconds, however short the card', () => {
-    // The floor is the design's. "0 sec" or "5 sec" on a headline reads as a
-    // glitch rather than as an estimate.
-    expect(clock(0)).toBe('10 sec');
-    expect(clock(3)).toBe('10 sec');
+  it('rounds UP to the next five-second mark, not to the nearest one', () => {
+    /*
+     * Rounding down is the direction that lies, and these labels exist in order not
+     * to. 107 words is 30.6 seconds of reading, and "30 sec" is a promise the text
+     * cannot keep; four seconds of over-claim is the harmless way to be wrong.
+     *
+     * Precisely: `readingSeconds` rounds to whole seconds first, so the guarantee is
+     * against the nearest second rather than the exact fraction — it can still
+     * under-claim by up to half a second, which no reader can perceive.
+     */
+    expect(clock(107)).toBe('35 sec');
+    expect(clock(1)).toBe('5 sec');
+  });
+
+  it('floors at five seconds, not ten', () => {
+    /*
+     * The floor used to be ten, and it was what made the dial repeat itself. A
+     * headline averages 11 words and a headline plus its claim averages 52, so
+     * everything under about 44 words landed on the same "10 sec": measured against
+     * the hosted corpus, 100 of 370 pulls showed two neighbouring stops reading
+     * identically. Five takes that to 19, and rounding up as well takes it to 5.
+     */
+    expect(clock(0)).toBe('5 sec');
+    expect(clock(3)).toBe('5 sec');
+    expect(clock(20)).toBe('10 sec');
   });
 
   it('switches to whole minutes past the minute, never "1 min 20 sec"', () => {
     expect(clock(420)).toBe('2 min');
     expect(clock(1050)).toBe('5 min');
+  });
+
+  it('separates the first two stops on a card of ordinary length', () => {
+    /*
+     * The regression this exists to catch, in the shape it actually took. These are
+     * the corpus averages: an 11-word headline, and 52 words once its claim is
+     * revealed. Under the old rule both rendered "10 sec" and the dial told the
+     * reader nothing about what the next turn would cost.
+     */
+    expect(clock(11)).not.toBe(clock(52));
   });
 });
 
