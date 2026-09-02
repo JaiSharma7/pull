@@ -116,6 +116,24 @@ export function createSplitAuthStorage(
   session: KeyValueStore,
   local: KeyValueStore,
 ): KeyValueStore {
+  /*
+   * A per-tab record that THIS tab signed itself out.
+   *
+   * Needed because `removeItem` deliberately spares a reader's `localStorage` token when a
+   * guest signs out, and `getItem` falls back to that store — so without a marker the tab
+   * that just signed out immediately reads the reader back and is signed in as somebody
+   * else. Round four of the review on #48 measured the consequence: the masthead went on
+   * saying "READING AS A GUEST" while the next request left carrying the reader's JWT.
+   *
+   * It lives in `sessionStorage`, so it is scoped to the one tab that did the signing out
+   * and dies with it — a reader in another tab is untouched, which is the whole point of
+   * the exemption it complements. It survives a reload of this tab, which is correct: a
+   * tab that signed out should still be signed out afterwards.
+   *
+   * Any `setItem` clears it, so signing in again in this tab works normally.
+   */
+  const signedOutKey = (key: string) => `${key}::tab-signed-out`;
+
   /** `true` only if the value actually landed. A store that refuses throws rather than no-ops. */
   const write = (store: KeyValueStore, key: string, value: string): boolean =>
     guard(() => {
@@ -154,6 +172,10 @@ export function createSplitAuthStorage(
       const fromSession = guard(() => session.getItem(key), null);
       if (fromSession !== null) return fromSession;
 
+      // This tab signed out. It must not read a reader back out of the shared store and
+      // silently become them; see `signedOutKey`.
+      if (guard(() => session.getItem(signedOutKey(key)), null) !== null) return null;
+
       const fromLocal = guard(() => local.getItem(key), null);
       if (fromLocal === null) return null;
 
@@ -184,6 +206,8 @@ export function createSplitAuthStorage(
     },
 
     setItem: (key, value) => {
+      // Any write supersedes a previous sign-out in this tab.
+      guard(() => session.removeItem(signedOutKey(key)), undefined);
       const guest = tokenIsGuest(value);
       const [keep, clear] = guest ? [session, local] : [local, session];
 
@@ -266,8 +290,14 @@ export function createSplitAuthStorage(
 
       const guestLeaving = inSession !== null && tokenIsGuest(inSession);
       const readerStays = inLocal !== null && !tokenIsGuest(inLocal);
-      if (guestLeaving && readerStays) return;
+      if (guestLeaving && readerStays) {
+        // Spare the reader's token, and record that THIS tab is nonetheless signed out --
+        // otherwise `getItem`'s fallback hands this tab the very token it just spared.
+        guard(() => session.setItem(signedOutKey(key), '1'), undefined);
+        return;
+      }
 
+      guard(() => session.removeItem(signedOutKey(key)), undefined);
       guard(() => local.removeItem(key), undefined);
     },
   };

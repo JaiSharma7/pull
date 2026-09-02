@@ -24,8 +24,8 @@ export function createBrowserClient(
   anonKey: string,
   storage?: AuthTokenStore,
   /**
-   * Optional. Omitting it genuinely leaves supabase-js's derived default in place -- see
-   * the spread below for why that takes care. Passing the same value it would derive
+   * Optional. Omitting it genuinely leaves supabase-js's derived default in place, which
+   * takes the conditional spread below to achieve. Passing the same value it would derive
    * changes nothing about the client. `apps/web` passes it so that IT can name the key too — it has to read the
    * stored token back to tell a session this tab actually holds from one another tab
    * broadcast to it. Deriving the same string in two places without pinning it is how the

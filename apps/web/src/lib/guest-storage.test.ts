@@ -272,6 +272,58 @@ describe('createSplitAuthStorage', () => {
     expect(local.map.get(KEY)).toBe(readerToken);
   });
 
+  it('signs THIS tab out even while sparing the reader', () => {
+    /*
+     * Round four of the review on #48, found independently by two reviewers and driven in
+     * a browser by one of them: after this sign-out the masthead still said "READING AS A
+     * GUEST" while the next request left carrying the reader's JWT.
+     *
+     * Sparing the reader's token (round two) and falling back to `localStorage` on read
+     * compose badly: the tab that just signed out reads the spared token straight back and
+     * becomes somebody else. Reachable on the ORDINARY conversion path -- guest in tab A,
+     * the same person signs in by email in tab B, returns to tab A and presses the button.
+     */
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, readerToken);
+
+    const store = createSplitAuthStorage(session, local);
+    store.removeItem(KEY);
+
+    expect(local.map.get(KEY)).toBe(readerToken); // the reader is still signed in...
+    expect(store.getItem(KEY)).toBe(null); // ...and this tab is not them.
+  });
+
+  it('lets this tab sign in again after signing out', () => {
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, readerToken);
+
+    const store = createSplitAuthStorage(session, local);
+    store.removeItem(KEY);
+    expect(store.getItem(KEY)).toBe(null);
+
+    // Any write supersedes the sign-out, or the tab could never be used again.
+    store.setItem(KEY, readerToken);
+    expect(store.getItem(KEY)).toBe(readerToken);
+  });
+
+  it('does not mark a tab signed out when it clears both stores', () => {
+    // A lone guest, or a reader, signing out is an ordinary sign-out: nothing is spared,
+    // so nothing needs marking, and a later reader token in localStorage is readable.
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+
+    const store = createSplitAuthStorage(session, local);
+    store.removeItem(KEY);
+
+    local.map.set(KEY, readerToken);
+    expect(store.getItem(KEY)).toBe(readerToken);
+  });
+
   it('a guest signing out still clears an older guest copy', () => {
     // Only a NON-guest token is protected: the upgrade path must still be cleaned up.
     const session = fake();
