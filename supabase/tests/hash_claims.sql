@@ -70,13 +70,19 @@ begin
 
   -- ------------------------------------------------ 8. waiting spends no retry
   -- The delivered message is archived and a fresh, delayed one carries the count.
+  -- Seeded and inspected as the owner: `service_role` has no rights on the pgmq
+  -- schema, which is exactly why the worker goes through `security definer`
+  -- functions -- and the one under test is called as the worker would call it.
   declare
     old_id bigint;
     new_id bigint;
     body   jsonb;
   begin
+    perform set_config('role', 'postgres', true);
     old_id := pgmq.send('generation', jsonb_build_object('jobId', job_b, 'step', 'synthesize'), 0);
+    perform set_config('role', 'service_role', true);
     new_id := public.requeue_generation_message(old_id, job_b, 'synthesize', 60, 3);
+    perform set_config('role', 'postgres', true);
     if new_id = old_id then raise exception 'requeue returned the same message'; end if;
     if exists (select 1 from pgmq.q_generation where msg_id = old_id) then
       raise exception 'the delivered message was not archived';
@@ -89,6 +95,7 @@ begin
     if (select vt from pgmq.q_generation where msg_id = new_id) <= now() + interval '30 seconds' then
       raise exception 'the fresh message is not delayed';
     end if;
+    perform set_config('role', 'service_role', true);
   end;
 
   -- ------------------------------------------------ 9. the floor
