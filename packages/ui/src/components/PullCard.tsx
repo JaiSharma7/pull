@@ -211,54 +211,6 @@ export function PullCard({
       <hr className="pull-card__rule" />
 
       <div className="pull-card__spread">
-        {/*
-          The dial sits in the margin beside the idea, not under it: it is an
-          instrument you turn while reading, and putting it at the foot would make
-          it something you go and find. It falls back to a row at the foot only
-          where the window cannot hold the measure and the margin both — the
-          reading column is what gives way last.
-
-          Rendered at all only when there is somewhere to go. A dial with one stop
-          is furniture.
-        */}
-        {levels.length > 1 && (
-          <div className="pull-card__dial" role="radiogroup" aria-labelledby={dialId}>
-            <p className="pull-card__dial-label" id={dialId}>
-              Depth
-            </p>
-            {levels.map((level, i) => (
-              <button
-                key={level.key}
-                type="button"
-                role="radio"
-                className="btn btn--plain pull-card__stop-btn"
-                aria-checked={i === depth}
-                aria-controls={panelId}
-                // The visible label is a duration, and "35 sec" announced on its
-                // own says nothing about which way the dial is being turned.
-                aria-label={level.aria}
-                // One tab stop for the group; the arrows move within it.
-                tabIndex={i === depth ? 0 : -1}
-                onClick={() => setDepth(i)}
-                onKeyDown={onStopKey}
-              >
-                <span
-                  className="pull-card__tick"
-                  style={{ width: level.tick }}
-                  aria-hidden="true"
-                />
-                <span className="pull-card__stop-label">{level.label}</span>
-              </button>
-            ))}
-            {/*
-              The words behind the clock. A duration is a claim about the reader;
-              a word count is a fact about the card, and showing both is what
-              stops the first from drifting.
-            */}
-            <p className="pull-card__dial-words">{levels[depth]?.words ?? 0} words</p>
-          </div>
-        )}
-
         <div className="pull-card__reading">
           {/*
             The headline scales down as the dial turns out, so the card reads as
@@ -323,6 +275,63 @@ export function PullCard({
             {shown.has('why') && children}
           </div>
         </div>
+
+        {/*
+          The dial follows the idea in the DOM, and is placed back into the margin
+          beside it by the grid where there is room.
+
+          Written this way round because the narrow layout is the one that cannot
+          cheat: with no margin to put the dial in it has to go somewhere in the
+          flow, and above the headline it pushed the idea 212px down a phone screen
+          — a reader scrolling past a control to reach the thing it controls. The
+          design session said as much ("the dial drops to a foot row"); the canvas
+          it shipped with put the dial first and I followed the code rather than
+          the sentence. The sentence was right.
+
+          Content-then-control is also the honest source order for a screen reader
+          and for the tab sequence, and `aria-controls` carries the relationship
+          that the position no longer implies.
+
+          Rendered at all only when there is somewhere to go. A dial with one stop
+          is furniture.
+        */}
+        {levels.length > 1 && (
+          <div className="pull-card__dial" role="radiogroup" aria-labelledby={dialId}>
+            <p className="pull-card__dial-label" id={dialId}>
+              Depth
+            </p>
+            {levels.map((level, i) => (
+              <button
+                key={level.key}
+                type="button"
+                role="radio"
+                className="btn btn--plain pull-card__stop-btn"
+                aria-checked={i === depth}
+                aria-controls={panelId}
+                // The visible label is a duration, and "35 sec" announced on its
+                // own says nothing about which way the dial is being turned.
+                aria-label={level.aria}
+                // One tab stop for the group; the arrows move within it.
+                tabIndex={i === depth ? 0 : -1}
+                onClick={() => setDepth(i)}
+                onKeyDown={onStopKey}
+              >
+                <span
+                  className="pull-card__tick"
+                  style={{ width: level.tick }}
+                  aria-hidden="true"
+                />
+                <span className="pull-card__stop-label">{level.label}</span>
+              </button>
+            ))}
+            {/*
+              The words behind the clock. A duration is a claim about the reader;
+              a word count is a fact about the card, and showing both is what
+              stops the first from drifting.
+            */}
+            <p className="pull-card__dial-words">{levels[depth]?.words ?? 0} words</p>
+          </div>
+        )}
       </div>
 
       <div className="pull-card__footer">

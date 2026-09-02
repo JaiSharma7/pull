@@ -215,6 +215,110 @@ describe('The Archive design laws', () => {
     }
   });
 
+  /**
+   * A reading control has to grow with the reading.
+   *
+   * Focus mode raises the reading steps and deliberately leaves `--step--1` alone,
+   * so the chrome does not grow with the prose and reclaim the room the setting
+   * just freed. That is right for a chip and wrong for the Depth Dial, which is set
+   * in the same mono face but is the control the reader turns most: measured before
+   * this was fixed, focus mode took body copy from 16.96px to 22.88px and left the
+   * dial at 13px, so asking for bigger reading made the control relatively smaller.
+   *
+   * Pinned as a derivation rather than a pair of values, because that is what makes
+   * it hold for every future mode as well — anything that moves `--step-0` moves the
+   * dial with it, and nothing has to remember to.
+   */
+  it('sizes the depth dial from the reading step, so focus mode carries it', () => {
+    const tokens = read('tokens.css');
+    const defs = [...tokens.matchAll(/--step-dial:\s*([^;]+);/g)].map((m) => m[1]!.trim());
+    expect(defs.length, '--step-dial should be defined exactly once, as a derivation').toBe(1);
+    expect(
+      defs[0],
+      `--step-dial is "${defs[0]}" — a constant here refreezes the dial the moment a ` +
+        `mode changes --step-0, which is the bug this replaced.`,
+    ).toMatch(/var\(--step-0\)/);
+    /*
+     * And a floor at the furniture step, for the same fault pointing the other way.
+     * Large text raises `--step--1` further than `--step-0`, so a bare ratio put the
+     * dial at 15.2px beside a 16px chip — the control smaller than the metadata
+     * around it.
+     */
+    expect(
+      defs[0],
+      `--step-dial is "${defs[0]}" — without a max(var(--step--1), …) floor, a mode ` +
+        `that raises the metadata step further than the body step leaves the dial ` +
+        `smaller than the chip beside it.`,
+    ).toMatch(/max\(\s*var\(--step--1\)/);
+
+    /*
+     * Every rule that names the stop, not just the first. `.match` returned the
+     * grouped `font-size: var(--step-dial)` declaration and stopped there — so a
+     * later standalone rule could set `font-size: var(--step--1)`, refreeze the dial,
+     * win the cascade on source order, and leave this assertion green.
+     */
+    const dialRules = [
+      ...read('components.css').matchAll(/([^{}]*\.pull-card__stop-btn[^{}]*)\{([^}]*)\}/g),
+    ];
+    expect(dialRules.length, 'no .pull-card__stop-btn rule found').toBeGreaterThan(0);
+    for (const [, selector, body] of dialRules) {
+      expect(body, `${selector!.trim()} sizes the dial from the furniture step again`).not.toMatch(
+        /font-size:\s*var\(--step--1\)/,
+      );
+    }
+  });
+
+  /**
+   * A finger needs 44px; a cursor does not.
+   *
+   * Both platforms publish 44px as the floor, and the dial's stops were 31px — the
+   * smallest controls in the product and the ones a reader taps most.
+   *
+   * The gate is asserted as well as the number, and specifically `any-pointer`. A
+   * width query would miss a touch laptop and inflate a narrow desktop window; but so
+   * does plain `pointer: coarse`, which describes only the PRIMARY input — a 2-in-1
+   * with a trackpad reports `pointer: fine` and kept 31px targets under a finger.
+   * `any-pointer: coarse` is true when any available input is coarse, which is the
+   * question the rule means to ask.
+   */
+  it('gives the dial a real touch target where the pointer is coarse', () => {
+    const css = read('components.css');
+    const coarse = [...css.matchAll(/@media \(any-pointer: coarse\)\s*\{[\s\S]*?\n\}/g)]
+      .map((m) => m[0])
+      .filter((b) => b.includes('.pull-card__stop-btn'));
+    expect(coarse.length, 'no (any-pointer: coarse) rule sizes the dial stops').toBe(1);
+
+    const rem = Number(coarse[0]!.match(/min-height:\s*([\d.]+)rem/)?.[1]);
+    expect(
+      rem * 16,
+      `the dial's touch target is ${rem * 16}px — below the 44px both platforms publish`,
+    ).toBeGreaterThanOrEqual(44);
+  });
+
+  /**
+   * The dial's stacked position is a rule, not an accident of source order.
+   *
+   * Worth pinning because it already went missing once: an edit removed the
+   * `.pull-card__spread` rule entirely and the card still *looked* fine — the div
+   * fell back to block layout and the children stacked in DOM order — so the dial
+   * sat under the argument on every desktop with nothing failing. A layout that
+   * degrades into something plausible is exactly the kind that needs an assertion
+   * rather than an eye.
+   */
+  it('lifts the dial above the idea on anything wider than a phone', () => {
+    const css = read('components.css');
+    expect(css, 'no .pull-card__spread rule — the stack is falling back to block layout').toMatch(
+      /\.pull-card__spread\s*\{[^}]*flex-direction:\s*column/,
+    );
+
+    const lift = css.match(/@media \(min-width: [\d.]+rem\)\s*\{\s*\.pull-card__dial\s*\{[^}]*\}/);
+    expect(
+      lift?.[0],
+      'nothing lifts the dial above the reading column, so a reader at the deepest ' +
+        'stop scrolls past the whole argument to reach the control that shortens it',
+    ).toMatch(/order:\s*-1/);
+  });
+
   it('respects prefers-reduced-motion', () => {
     const all = cssFiles.map(read).join('\n');
     expect(all).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
@@ -412,9 +516,18 @@ describe('The Archive viewport laws', () => {
     ].map((m) => Number(m[1]));
     expect(hidesNavAt.length, 'no rule hides the masthead navigation').toBe(1);
 
+    /*
+     * `(?!@media)` matters, and it is the same flaw `ownRule` above is written to
+     * avoid — noted there for selectors and missed here for media blocks. A plain
+     * `[\s\S]*?` walks straight out of one `@media` and into the next, so the moment
+     * ANY min-width query was added to the stylesheet ahead of the rail's, this
+     * matched from that unrelated query down to `.shell__rail { display: block }` and
+     * reported its width as the rail's. Adding a 34rem query for the Depth Dial made
+     * it read 34rem and fail a law that was not being broken.
+     */
     const showsRailAt = [
       ...all.matchAll(
-        /@media \(min-width: ([\d.]+)rem\)\s*\{[\s\S]*?\.shell__rail\s*\{[^}]*display:\s*block/g,
+        /@media \(min-width: ([\d.]+)rem\)\s*\{(?:(?!@media)[\s\S])*?\.shell__rail\s*\{[^}]*display:\s*block/g,
       ),
     ].map((m) => Number(m[1]));
     expect(showsRailAt.length, 'no rule shows the navigation rail').toBe(1);

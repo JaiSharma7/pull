@@ -172,6 +172,19 @@ describe('the depth dial', () => {
     expect(scale(shortest)).toBeGreaterThan(scale(longest));
   });
 
+  it('puts the idea before the dial, so a phone does not lead with the control', () => {
+    /*
+     * Source order is the narrow layout, and the narrow layout is the one that
+     * cannot cheat: with no margin to hold the dial it goes wherever the flow puts
+     * it. Above the headline it pushed the idea 212px down a 393px screen — a
+     * reader scrolling past a control to reach the thing it controls. The grid puts
+     * it back in the margin where there is room, so this order costs the wide
+     * layout nothing and is also the honest tab and screen-reader sequence.
+     */
+    const html = renderToStaticMarkup(createElement(PullCard, deep));
+    expect(html.indexOf('pull-card__reading')).toBeLessThan(html.indexOf('pull-card__dial'));
+  });
+
   it('never renders a scroller inside the card', () => {
     /*
      * The bug in one assertion. The card grows into the page; the moment it is
