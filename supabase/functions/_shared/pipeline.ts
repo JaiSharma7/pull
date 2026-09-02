@@ -456,8 +456,13 @@ interface AcquireOutput {
   /** The source URL, carried forward for exactly the same reason as `rights`: the
    *  one `resolve_identity` validated, not the raw target re-read at the far end.
    *  Empty for a job that supplied pasted text, which is a legitimate state — a
-   *  work with no URL simply renders without an outbound link. */
-  url: string;
+   *  work with no URL simply renders without an outbound link.
+   *
+   *  Optional because a stored output can predate the property: a job that ran
+   *  `acquire` before this field existed resumes with no `url` key at all, and
+   *  `template` falls back to the target for exactly that case. The type says so
+   *  rather than letting `??` on a required string pass as a habit. */
+  url?: string;
 }
 
 function asString(value: unknown, fallback = ''): string {
