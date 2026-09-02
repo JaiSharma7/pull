@@ -91,7 +91,11 @@ class CanonicalSummary {
 /// never a condensed retelling that could stand in for the original. See
 /// docs/content-policy.md.
 function WriteCanonicalSummary(workTitle: string, kind: string, context: string) -> CanonicalSummary {
-  client SummaryChain
+  // One client, never `SummaryChain`. The worker meters every attempt and decides
+  // whether a failure is safe to retry elsewhere; BAML's fallback provider would
+  // make that decision here, without a ledger, and lose a billed failure. See the
+  // note on `SummaryChain` in clients.baml and law 7 in CLAUDE.md.
+  client GeminiFlash
   prompt #"
     You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.
 

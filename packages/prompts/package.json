@@ -15,7 +15,9 @@
     "test": "vitest run",
     "baml:check": "baml-cli check --from baml_src",
     "baml:generate": "baml-cli generate --from baml_src",
-    "baml:test": "baml-cli test --from baml_src"
+    "baml:test": "baml-cli test --from baml_src",
+    "sidecar:build": "tsc -p tsconfig.server.json && echo '{\"type\":\"commonjs\"}' > dist-cjs/package.json",
+    "sidecar": "pnpm sidecar:build && node dist-cjs/src/sidecar-main.js"
   },
   "dependencies": {
     "@boundaryml/baml": "0.226.2"

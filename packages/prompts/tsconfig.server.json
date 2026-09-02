@@ -1,0 +1,28 @@
+{
+  // The sidecar runs under plain Node, and the generated client's imports are
+  // extensionless -- which Vitest resolves and Node's ESM loader refuses. A
+  // CommonJS emit resolves them the old way. `verbatimModuleSyntax` is off here
+  // only because it forbids ESM syntax in a CommonJS emit; the source is unchanged.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    // TS 6 deprecates node10 resolution; it is the only one that resolves the
+    // generated client's extensionless imports into a CommonJS emit. The WASM track
+    // in docs/plans/2026-09-02-fable-5.1.md is what removes this build entirely.
+    "ignoreDeprecations": "6.0",
+    "verbatimModuleSyntax": false,
+    "outDir": "dist-cjs",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/server.ts",
+    "src/sidecar-main.ts",
+    "src/clients.ts",
+    "src/topics.ts",
+    "baml_client/**/*"
+  ]
+}

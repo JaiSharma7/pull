@@ -55,6 +55,13 @@ misconfigured must not mean public.
 Locally, set `WORKER_DISPATCH_TOKEN` in `supabase/.env` (gitignored) so you are not
 re-seeding Vault after every `db:reset`.
 
+## The BAML sidecar
+
+When `SUMMARY_PROVIDER=baml`, the canonical summary is written by `packages/prompts`
+running in its own Node process, reached at `BAML_SIDECAR_URL` with a token from
+`BAML_SIDECAR_TOKEN` or Vault's `baml_sidecar_token`. The worker meters what the
+sidecar reports; the sidecar holds the provider key. `docs/baml.md` has the setup.
+
 ## Hosted configuration the repo cannot set
 
 Almost everything about this project is in git. These are the exceptions, and they are

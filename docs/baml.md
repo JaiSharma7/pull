@@ -70,6 +70,40 @@ call metered by the worker. Getting BAML into the Edge Function properly — (3)
 a WASM build of the schema engine — is a separate, timeboxed track; if it lands, the
 sidecar and the two law rows go.
 
+## Running the sidecar
+
+`packages/prompts/src/server.ts` is the process. It is not `baml-cli serve`: that
+command's `/call/<Function>` returns the parsed result and nothing else (verified
+against its own OpenAPI document), so a worker behind it could not write `cost_ledger`.
+This one answers with the result, the usage summed over every attempt BAML made, the
+client that answered and the model it pins — and a failure after a billed attempt is a
+`502` with `billed: true` and the same usage, which the worker turns into the same
+`BilledProviderError` it raises for any other vendor.
+
+```bash
+# in the database, once (returns the token; it is not shown again)
+select public.mint_baml_sidecar_token();
+
+# where the sidecar runs
+export BAML_SIDECAR_TOKEN='<the token>'    # refuses to start without one
+export GOOGLE_AI_API_KEY='<provider key>'  # read by BAML; the worker never sees it
+pnpm --filter @wap/prompts sidecar         # CommonJS build, then node on :2024
+
+# on the worker (Edge Function secrets)
+SUMMARY_PROVIDER=baml
+BAML_SIDECAR_URL=https://<where it runs>
+# BAML_SIDECAR_TOKEN is optional here: unset, the worker reads Vault's baml_sidecar_token
+```
+
+Everything but `GET /_debug/ping` requires `x-baml-sidecar-token`. Rotation is
+`mint_baml_sidecar_token()` again, then redeploy the sidecar with the new value; the
+worker picks it up within its sixty-second provider cache.
+
+The CommonJS build exists because the generated client's imports are extensionless,
+which Vitest resolves and Node's ESM loader refuses. `pnpm --filter @wap/prompts test`
+exercises the door and the ledger accounting over a real socket with injected handlers;
+the provider is never called in tests.
+
 ## Enum members are not slugs
 
 The generated `TopicSlug.ArtsAndLetters` has the _value_ `"ArtsAndLetters"`. The

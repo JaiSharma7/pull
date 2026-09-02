@@ -30,6 +30,7 @@ import {
   DEFAULT_SUMMARY_MODELS,
   type GeminiConfig,
 } from './gemini.ts';
+import { createBamlSummaryProvider } from './baml.ts';
 
 export interface ProviderSet {
   summary: SummaryProvider;
@@ -164,6 +165,45 @@ export async function resolveProviders(
   const gemini = apiKey ? geminiConfigFrom(env, apiKey) : null;
 
   /*
+   * The BAML sidecar, when this deployment runs its prompts there.
+   *
+   * `SUMMARY_PROVIDER=baml` says the canonical summary is produced by
+   * `packages/prompts` running in its own process (docs/baml.md), reached at
+   * `BAML_SIDECAR_URL` with the token in `BAML_SIDECAR_TOKEN` or Vault's
+   * `baml_sidecar_token`. Both are required, for the same reason the Gemini key is:
+   * a sidecar quietly not configured would serve stub prose, and under
+   * `REQUIRE_REAL_PROVIDERS` that is a throw here rather than a silent fallback.
+   *
+   * Prices come from the Gemini variables because the sidecar's client pins a Gemini
+   * model (`clients.baml`); the sidecar reports tokens and this deployment prices them.
+   */
+  let baml: ReturnType<typeof createBamlSummaryProvider> | null = null;
+  if (wantSummary === 'baml') {
+    const url = env.get('BAML_SIDECAR_URL');
+    const token = env.get('BAML_SIDECAR_TOKEN') ?? (await getSecret('baml_sidecar_token'));
+    if ((!url || !token) && isTruthy(env.get('REQUIRE_REAL_PROVIDERS'))) {
+      throw new Error(
+        'REQUIRE_REAL_PROVIDERS is set and SUMMARY_PROVIDER=baml, but ' +
+          (url ? 'no sidecar token resolved' : 'BAML_SIDECAR_URL is unset') +
+          '. Set BAML_SIDECAR_URL, and BAML_SIDECAR_TOKEN or Vault `baml_sidecar_token`. ' +
+          'Refusing to fall back to stub providers.',
+      );
+    }
+    if (url && token) {
+      baml = createBamlSummaryProvider({
+        url,
+        token,
+        inputUsdPerMTok: numberFrom(env, 'GEMINI_INPUT_USD_PER_MTOK', DEFAULT_INPUT_USD_PER_MTOK),
+        outputUsdPerMTok: numberFrom(
+          env,
+          'GEMINI_OUTPUT_USD_PER_MTOK',
+          DEFAULT_OUTPUT_USD_PER_MTOK,
+        ),
+      });
+    }
+  }
+
+  /*
    * The fallback, when there is one.
    *
    * Opt-in and off by default, because a second provider is a second bill. Gemini's
@@ -184,8 +224,11 @@ export async function resolveProviders(
       ? (env.get('ANTHROPIC_API_KEY') ?? (await getSecret('anthropic_api_key')))
       : null;
 
-  const primarySummary =
-    wantSummary === 'gemini' && gemini ? createGeminiSummaryProvider(gemini) : stubSummaryProvider;
+  const primarySummary = baml
+    ? baml
+    : wantSummary === 'gemini' && gemini
+      ? createGeminiSummaryProvider(gemini)
+      : stubSummaryProvider;
 
   return {
     summary: anthropicKey

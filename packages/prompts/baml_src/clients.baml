@@ -41,14 +41,16 @@ client<llm> AnthropicHaiku {
   }
 }
 
-/// What generation functions should name.
+/// The intended order, as documentation. NOT for a function to name.
 ///
-/// The order mirrors `createFallbackSummaryProvider`: exhaust the Gemini model
-/// chain before paying a second vendor. It is not identical, and the difference
-/// matters — that function falls through only on `ProviderUnavailableError`,
-/// because a billed failure must reach `cost_ledger` rather than be retried
-/// elsewhere. BAML's fallback has no such notion, so anything routed through
-/// here still has to meter each attempt itself. See docs/baml.md.
+/// It mirrors `createFallbackSummaryProvider`: exhaust the Gemini model chain
+/// before paying a second vendor. That function falls through only on
+/// `ProviderUnavailableError`, because a billed failure must reach `cost_ledger`
+/// rather than be retried elsewhere. BAML's fallback has no such notion -- a
+/// function routed through it would retry a billed failure on the next client
+/// and the sidecar could not tell the worker what the first one cost. So each
+/// function names a single client, and the chain lives in the worker, where
+/// the ledger is. `clients.test.ts` asserts no function names this.
 client<llm> SummaryChain {
   provider fallback
   options {

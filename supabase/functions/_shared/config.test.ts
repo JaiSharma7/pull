@@ -52,7 +52,12 @@ const noVault = () => vaultWith({});
  * adds a `getSecret` call for a fourth name, this list is what refuses it until
  * a migration says otherwise.
  */
-const ALLOWED_VAULT_SECRETS = ['google_ai_api_key', 'anthropic_api_key', 'worker_dispatch_token'];
+const ALLOWED_VAULT_SECRETS = [
+  'google_ai_api_key',
+  'anthropic_api_key',
+  'worker_dispatch_token',
+  'baml_sidecar_token',
+];
 
 /**
  * A Vault that refuses like the real one.
@@ -375,5 +380,38 @@ describe('resolveProviders — the paid fallback', () => {
     );
 
     expect(providers.summary.name).toBe('gemini');
+  });
+});
+
+describe('SUMMARY_PROVIDER=baml', () => {
+  it('selects the sidecar when a URL and a token resolve, with the token from Vault', async () => {
+    // The refusing Vault, deliberately: it is what proves `baml_sidecar_token` is on
+    // the allowlist the migration widened, rather than merely asked for.
+    const vault = refusingVault({ baml_sidecar_token: 'tok', google_ai_api_key: 'g' });
+    const set = await resolveProviders(
+      envOf({ SUMMARY_PROVIDER: 'baml', BAML_SIDECAR_URL: 'http://sidecar:2024' }),
+      vault.getSecret,
+    );
+    expect(set.summary.name).toBe('baml');
+    expect(vault.asked).toContain('baml_sidecar_token');
+    // Embeddings still come from Gemini; the sidecar only writes summaries.
+    expect(set.embedding.name).toMatch(/^gemini/);
+  });
+
+  it('falls to the stub, silently, when the sidecar is not configured', async () => {
+    const set = await resolveProviders(envOf({ SUMMARY_PROVIDER: 'baml' }), noVault().getSecret);
+    expect(set.summary.name).toBe('stub');
+  });
+
+  it('refuses to serve stubs under REQUIRE_REAL_PROVIDERS', async () => {
+    // A Gemini key is supplied so the embedding gate passes and the sidecar gate is
+    // the one under test; without it the Gemini check throws first, correctly.
+    const base = { SUMMARY_PROVIDER: 'baml', REQUIRE_REAL_PROVIDERS: '1', GOOGLE_AI_API_KEY: 'g' };
+    await expect(
+      resolveProviders(envOf({ ...base, BAML_SIDECAR_URL: 'http://x' }), noVault().getSecret),
+    ).rejects.toThrow(/no sidecar token resolved/);
+    await expect(
+      resolveProviders(envOf({ ...base, BAML_SIDECAR_TOKEN: 't' }), noVault().getSecret),
+    ).rejects.toThrow(/BAML_SIDECAR_URL is unset/);
   });
 });
