@@ -19,6 +19,7 @@ import {
   sourceHostsFrom,
 } from './source.ts';
 import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
+import { NEEDS, nextStep, STEPS, type Step } from './steps.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
 const SYNTHESIZED = {
@@ -556,6 +557,55 @@ describe('reuse skips the paid work', () => {
     const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
     expect(acquired.jumpTo).toBe('publish');
+  });
+
+  /*
+   * NEEDS is complete, proven by starvation.
+   *
+   * The worker now hands each step only the outputs `NEEDS` declares for it. A step
+   * that reads something undeclared does not fail loudly -- `priorOutputs.foo` is
+   * simply undefined -- so it would surface in production as "template: missing
+   * acquire or synthesize output" on a job that had both. This walks the whole
+   * pipeline the way the worker does, keeping every output but giving each step
+   * exactly its declared slice, and asserts the job still concludes.
+   */
+  async function walk(deps: ReturnType<typeof harness>['deps']) {
+    const outputs: Record<string, unknown> = {};
+    let step: Step | null = 'resolve_identity';
+    let last: Awaited<ReturnType<typeof runPipelineStep>> | undefined;
+    while (step) {
+      const priorOutputs = Object.fromEntries(
+        NEEDS[step].filter((s) => s in outputs).map((s) => [s, outputs[s]]),
+      );
+      last = await runPipelineStep(step, { ...deps, priorOutputs } as never);
+      if (last.output !== undefined) outputs[step] = last.output;
+      step = last.jumpTo ?? nextStep(step);
+    }
+    return { outputs, last };
+  }
+
+  it('concludes a new source when every step gets only what it declared', async () => {
+    const { deps, calls } = harness(null);
+
+    const { outputs, last } = await walk(deps);
+
+    expect(Object.keys(outputs)).toEqual([...STEPS]);
+    expect(last?.output).toMatchObject({ published: true, summaryId: 's1' });
+    expect(calls.summary).toBe(1);
+    expect(calls.embedding).toBe(1);
+    expect(calls.insertPulls).toBe(1);
+  });
+
+  it('concludes a reused source the same way', async () => {
+    const { deps, calls } = harness({ workId: 'w9', summaryId: 's9' });
+
+    const { outputs, last } = await walk(deps);
+
+    // acquire jumps to publish, and publish reads the reuse marker off acquire.
+    expect(Object.keys(outputs)).toEqual(['resolve_identity', 'acquire', 'publish']);
+    expect(last?.output).toMatchObject({ published: false, reason: 'reused' });
+    expect(calls.summary).toBe(0);
+    expect(calls.createSummary).toBe(0);
   });
 
   /*
