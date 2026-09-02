@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { InterruptKind, Stance } from '@wap/schemas';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
+import { recognitionSupported, startRecognition } from '../lib/speech.js';
 import type { FeedRow } from '../lib/types.js';
 
 /** What the reader gave back. Every field is optional — a conviction answer
@@ -29,6 +30,29 @@ export interface InterruptProps {
 export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   const [revealed, setRevealed] = useState(false);
   const [explanation, setExplanation] = useState('');
+  const [listening, setListening] = useState(false);
+  const stopListeningRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      stopListeningRef.current?.();
+    };
+  }, []);
+
+  const toggleListening = () => {
+    if (listening) {
+      stopListeningRef.current?.();
+      setListening(false);
+    } else {
+      const teardown = startRecognition({
+        onResult: (text) => setExplanation((prev) => (prev ? prev + ' ' + text : text)),
+        onEnd: () => setListening(false),
+        onError: () => setListening(false),
+      });
+      stopListeningRef.current = teardown;
+      setListening(true);
+    }
+  };
 
   const shell = (label: string, children: React.ReactNode) => (
     <section
@@ -90,7 +114,25 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
           {pull.headline}
         </h2>
         <label className="field">
-          <span className="field__label">In your own words</span>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'baseline',
+            }}
+          >
+            <span className="field__label">In your own words</span>
+            {recognitionSupported() && (
+              <button
+                type="button"
+                className="btn btn--plain meta"
+                style={{ padding: 0, textDecoration: 'underline' }}
+                onClick={toggleListening}
+              >
+                {listening ? '● Listening (click to stop)' : '🎤 Dictate'}
+              </button>
+            )}
+          </div>
           <textarea
             className="field__textarea"
             value={explanation}
@@ -98,16 +140,25 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             placeholder="What does this actually claim, and why would it matter?"
           />
         </label>
-        {/*
-          Revealing and submitting are two steps on purpose. The whole point of
-          this variant is seeing your own words next to the card's, so the card
-          has to stay on screen after the comparison — submitting here would
-          retire the question before the reader had read the thing they asked for.
-        */}
         {revealed ? (
           <>
             <p className="meta">The card said</p>
             <p className="pull-card__body">{pull.body}</p>
+            <div
+              style={{
+                marginTop: 'var(--space-2)',
+                marginBottom: 'var(--space-3)',
+                padding: 'var(--space-2)',
+                borderLeft: '2px solid var(--accent)',
+              }}
+            >
+              <p className="meta" style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                Socratic Self-Audit
+              </p>
+              <p className="meta">
+                Did your formulation identify the boundary condition where this idea fails?
+              </p>
+            </div>
             <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
               {RECALL_GRADES.map((g: RecallGrade) => (
                 <button
@@ -127,7 +178,13 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
               type="button"
               className="btn btn--primary"
               disabled={explanation.trim().length < 10}
-              onClick={() => setRevealed(true)}
+              onClick={() => {
+                if (listening) {
+                  stopListeningRef.current?.();
+                  setListening(false);
+                }
+                setRevealed(true);
+              }}
             >
               Compare with the card
             </button>
