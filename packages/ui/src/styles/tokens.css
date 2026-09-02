@@ -90,9 +90,17 @@
    * Derived from the body step rather than restated, for the reason the focus block
    * below gives about `--measure`: two literals drift the moment either is tuned,
    * and the ratio is the thing being held. 0.8 is the ratio `--step--1` already had
-   * to `--step-0`, so the default size is unchanged and only its behaviour is.
+   * to `--step-0`, so the size barely moves by default (13.0px -> 13.6px at 1280px)
+   * and it is the behaviour that changes.
+   *
+   * The `max()` is the other half, and it fixes the same fault pointing the other
+   * way. Large text raises `--step--1` to 1rem but `--step-0` only to 1.1875rem, so a
+   * bare 0.8 ratio put the dial at 15.2px BESIDE a 16px chip — the control smaller
+   * than the metadata around it, which is the inversion this token exists to prevent.
+   * A floor at `--step--1` states the rule plainly: the dial is never smaller than
+   * the furniture, whatever any mode does to either scale.
    */
-  --step-dial: calc(var(--step-0) * 0.8);
+  --step-dial: max(var(--step--1), calc(var(--step-0) * 0.8));
 
   /*
    * A second, wider column for reference documents — the policies and the terms.

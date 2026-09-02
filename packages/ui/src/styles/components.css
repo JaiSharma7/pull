@@ -9,7 +9,6 @@
   border-radius: var(--radius);
   padding: var(--space-6) var(--space-5) var(--space-4);
   max-width: 40rem;
-  container-type: inline-size;
 }
 
 .pull-card__chip {
@@ -137,45 +136,58 @@
  */
 
 /*
- * The dial sits in the margin beside the idea, and the margin is what gives way.
+ * The dial stacks. It does not sit in the margin, and that is a correction.
  *
- * `--measure` is the one dimension that must not respond (docs/design.md, and the
- * viewport laws in design-laws.test.ts). So the two-column form is asked for only
- * where the window can hold the measure AND the 5.5rem margin AND the card's own
- * padding — below that the dial becomes a row at the foot rather than the column
- * narrowing. A dial squeezed into 3rem is unreadable; a dial at the foot is
- * merely further away.
+ * The design canvas draws it in the margin beside the idea, and #50 implemented that
+ * with `@container (min-width: 34rem)` on the card. Measured inside the real
+ * `.shell__column` — rather than on the specimen page, which is wider and is what I
+ * checked at the time — the two-column form is unreachable in the default app: the
+ * column is capped at `--measure` (34rem), the card's own padding takes 3rem, so the
+ * queried content box is 30.9rem at every viewport and every root font size. It
+ * matched only in focus mode, where `--measure` grows.
+ *
+ * And where it did match it was wrong anyway, in two ways that share a cause. The
+ * fixed 5.5rem track was 35px too narrow for stops whose type now scales, so the dial
+ * bled through its 2rem gutter into the prose; and every pixel the dial took came out
+ * of the reading line, because the whole card lives inside a column that IS the
+ * measure. The canvas is explicit that "padding, rails and the dial all sit OUTSIDE"
+ * the measure — so a margin dial wants the shell to hand the card room beyond
+ * `.shell__column`, which law 7 pins at `--measure` and this PR is not the place to
+ * renegotiate. Faking it inside the card is just spending the reading line on chrome.
+ *
+ * Stacked costs the look and keeps the measure, has one code path instead of two, and
+ * is what the default app has always actually rendered.
  */
 .pull-card__spread {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--space-4);
-}
-
-/*
- * Wide enough for both: the dial goes back into the margin, to the LEFT of an idea
- * that follows it in the source. Explicit placement rather than `order`, because
- * the two need to share a row and the grid is the thing that knows the row exists.
- */
-@container (min-width: 34rem) {
-  .pull-card__spread {
-    grid-template-columns: 5.5rem minmax(0, 1fr);
-    gap: var(--space-6);
-  }
-
-  .pull-card__dial {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .pull-card__reading {
-    grid-column: 2;
-    grid-row: 1;
-  }
 }
 
 .pull-card__reading {
   min-width: 0;
+}
+
+/*
+ * Below the idea on a phone, above it everywhere else.
+ *
+ * Source order is content-then-control, which is the phone layout and the honest tab
+ * and screen-reader sequence. Above a phone the dial goes back on top, because a
+ * stacked dial UNDER the card means a reader at the deepest stop scrolls past the
+ * whole argument to reach the control that shortens it — the same "walk past the
+ * control to use it" fault as the phone case, pointed the other way. On a phone the
+ * dial is three wrapped rows and the argument is the thing worth seeing first; above
+ * a phone it is one row and costs almost nothing to put on top.
+ *
+ * A viewport query rather than a container one: the question really is "is this a
+ * phone", and the card is capped at the measure, so as a container it gives the same
+ * answer at every width — which is exactly how the margin form above came to be
+ * unreachable.
+ */
+@media (min-width: 34rem) {
+  .pull-card__dial {
+    order: -1;
+  }
 }
 
 .pull-card__dial {
@@ -184,16 +196,6 @@
   align-items: center;
   gap: var(--space-3);
   align-self: start;
-}
-
-@container (min-width: 34rem) {
-  .pull-card__dial {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-2);
-    /* Optically level with the headline's first line rather than its box. */
-    padding-top: var(--space-2);
-  }
 }
 
 .pull-card__dial-label,
@@ -244,15 +246,22 @@
  *
  * Measured on a 393px viewport, the stops were 31px tall — the smallest controls in
  * the product, below the 44px floor both platforms publish, and the ones a reader
- * taps most often. Gated on `pointer: coarse` rather than on width because it is the
- * input that makes the demand, not the screen: a touch laptop needs the room and a
- * narrow desktop window does not.
+ * taps most often. Gated on the pointer rather than on width because it is the input
+ * that makes the demand, not the screen: a touch laptop needs the room and a narrow
+ * desktop window does not.
+ *
+ * `any-pointer`, not `pointer`. `pointer` describes only the PRIMARY input, so a
+ * Windows 2-in-1 with a trackpad reports `pointer: fine` and kept 31px targets under
+ * a finger — the exact device the sentence above claims to cover. `any-pointer:
+ * coarse` is true if ANY available input is coarse, which is the question being
+ * asked. The cost is a desk machine with a touchscreen nobody uses getting slightly
+ * larger stops, which is the harmless direction to be wrong in.
  *
  * `rem`, so a reader who has raised their browser font size gets a target that grows
  * with it, and padding rather than font-size so the dial does not become louder than
  * the idea in the process.
  */
-@media (pointer: coarse) {
+@media (any-pointer: coarse) {
   .pull-card__stop-btn {
     min-height: 2.75rem;
     padding-inline: var(--space-3);
