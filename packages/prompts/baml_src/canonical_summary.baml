@@ -107,7 +107,9 @@ function WriteCanonicalSummary(workTitle: string, kind: string, context: string)
     phrase itself is the point, and keep quotations short.
 
     Each pull must be one atomic idea that stands on its own out of context, in plain
-    language, with a headline that states the idea rather than teasing it.
+    language, with a headline that states the idea rather than teasing it. Its
+    "whyItMatters" should say what changes if the reader believes it -- not restate
+    the body.
 
     File this work under one to four topics, most central first. Choose the narrowest
     that genuinely fit. A parent topic is the right answer only when no child of it
