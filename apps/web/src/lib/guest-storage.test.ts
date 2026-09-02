@@ -295,6 +295,30 @@ describe('createSplitAuthStorage', () => {
     expect(store.getItem(KEY)).toBe(null); // ...and this tab is not them.
   });
 
+  it('still spares the reader on a SECOND sign-out from the same tab', () => {
+    /*
+     * Round five of the review on #48. The marker made `sessionStorage` empty, so the
+     * second `removeItem` no longer saw a guest token, decided this was an ordinary
+     * sign-out, and wiped the reader -- the exact bug round two fixed, re-opened by round
+     * four's fix for round three's fix.
+     *
+     * Reachable through ordinary UI: sign out, then paste a spent magic link into the
+     * "having trouble?" box the sign-in screen offers. auth-js's refresh fails, it decides
+     * the session is dead, and calls `_removeSession()` a second time.
+     */
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, readerToken);
+
+    const store = createSplitAuthStorage(session, local);
+    store.removeItem(KEY);
+    store.removeItem(KEY);
+
+    expect(local.map.get(KEY)).toBe(readerToken);
+    expect(store.getItem(KEY)).toBe(null);
+  });
+
   it('lets this tab sign in again after signing out', () => {
     const session = fake();
     const local = fake();

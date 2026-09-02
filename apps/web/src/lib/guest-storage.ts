@@ -288,7 +288,24 @@ export function createSplitAuthStorage(
       const inLocal = guard(() => local.getItem(key), null);
       guard(() => session.removeItem(key), undefined);
 
-      const guestLeaving = inSession !== null && tokenIsGuest(inSession);
+      /*
+       * The marker counts as evidence a guest was here, and that is not a nicety.
+       *
+       * `inSession` is gone the moment the first `removeItem` succeeds, so a SECOND one
+       * for the same key computed `guestLeaving === false`, fell through, and wiped the
+       * reader's token -- re-opening the round-two bug this branch exists to have fixed.
+       * The marker caused it by design: making `getItem` return null removes the evidence
+       * auth-js uses to decide a stored session is worth preserving.
+       *
+       * Round five of the review on #48 reproduced it in the real app through ordinary UI,
+       * on the very screen the sign-out lands you on: sign out, then paste a spent link
+       * into the "having trouble?" box the sign-in screen offers. `refreshSession` 400s,
+       * auth-js concludes the session is dead and calls `_removeSession()` again, and the
+       * reader on that machine loses their persistence. It also arrives with nobody
+       * pressing anything, by the sweep path the comment above already names.
+       */
+      const markedOut = guard(() => session.getItem(signedOutKey(key)), null) !== null;
+      const guestLeaving = markedOut || (inSession !== null && tokenIsGuest(inSession));
       const readerStays = inLocal !== null && !tokenIsGuest(inLocal);
       if (guestLeaving && readerStays) {
         // Spare the reader's token, and record that THIS tab is nonetheless signed out --
