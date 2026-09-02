@@ -61,8 +61,14 @@ There are three ways across, and they are not equally good:
    JSON schema that the existing Deno providers already consume. No runtime dependency
    crosses the boundary at all.
 
-(3) is the cheapest and buys most of the benefit; (2) is where the graph-shaped pipeline
-wants to end up. Neither is decided here — see the Fable 5.1 plan.
+**Decided (Fable 5.1): (1), the sidecar, for now.** It is the only one of the three that
+works today without a spike. What it costs is a deployment, a network hop inside the
+generation path, and a new place for a provider key to live — which is why law 7 in
+`CLAUDE.md` carries two rows for it and the three conditions under which that is
+acceptable: not publicly reachable, key held in the sidecar's environment only, every
+call metered by the worker. Getting BAML into the Edge Function properly — (3), through
+a WASM build of the schema engine — is a separate, timeboxed track; if it lands, the
+sidecar and the two law rows go.
 
 ## Enum members are not slugs
 
