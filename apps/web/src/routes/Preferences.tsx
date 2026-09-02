@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { WORK_KINDS, type WorkKind } from '@wap/schemas';
+import { KnowledgeCensus } from '../components/KnowledgeCensus.js';
+import { OnboardingDemo } from '../components/OnboardingDemo.js';
 import {
   fetchAvailableMediaKinds,
   fetchPreferences,
@@ -327,6 +329,7 @@ export function OnboardingGate({
   children: React.ReactNode;
 }) {
   const [needed, setNeeded] = useState<boolean | null>(null);
+  const [stage, setStage] = useState<'preferences' | 'census' | 'demo'>('preferences');
 
   useEffect(() => {
     let live = true;
@@ -345,22 +348,18 @@ export function OnboardingGate({
   // Undecided renders the app, not a spinner: the gate is worth showing once, and
   // never worth making someone wait to find out whether they will see it.
   if (needed !== true) return <>{children}</>;
-  /*
-   * Wrapped, because this replaces the shell rather than rendering inside it.
-   *
-   * `App.tsx` puts every other screen in `<main className="shell__main"><div
-   * className="shell__column">`, which is where the page padding and the centring of the
-   * reading column actually live. Returning `<Preferences>` bare skipped both: the picker
-   * sat hard against the left edge of the window, its first character on x=0, clipped on
-   * a phone and stranded beside an empty half-screen on a monitor.
-   *
-   * `main` rather than a `div` for the same reason the shell uses one -- this is the
-   * whole page while it is on screen, and it was the only screen in the app with no
-   * landmark at all.
-   */
+
   return (
     <main className="gate">
-      <Preferences userId={userId} mode="onboarding" onDone={() => setNeeded(false)} />
+      {stage === 'preferences' && (
+        <Preferences userId={userId} mode="onboarding" onDone={() => setStage('census')} />
+      )}
+      {stage === 'census' && (
+        <KnowledgeCensus onComplete={() => setStage('demo')} onSkip={() => setStage('demo')} />
+      )}
+      {stage === 'demo' && (
+        <OnboardingDemo onComplete={() => setNeeded(false)} onSkip={() => setNeeded(false)} />
+      )}
     </main>
   );
 }
