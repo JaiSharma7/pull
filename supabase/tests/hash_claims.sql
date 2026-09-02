@@ -104,9 +104,13 @@ begin
   -- archive and must send nothing: two live messages for one step would both be
   -- granted the claim, being the same job, and both would pay.
   declare
-    missing_id bigint := (select coalesce(max(msg_id), 0) + 1000000 from pgmq.q_generation);
-    before     int    := (select count(*) from pgmq.q_generation q where q.message ->> 'jobId' = job_b::text);
+    missing_id bigint;
+    before     int;
   begin
+    perform set_config('role', 'postgres', true);
+    missing_id := (select coalesce(max(msg_id), 0) + 1000000 from pgmq.q_generation);
+    before     := (select count(*) from pgmq.q_generation q where q.message ->> 'jobId' = job_b::text);
+    perform set_config('role', 'service_role', true);
     if public.requeue_generation_message(missing_id, job_b, 'synthesize', 60, 2) is not null then
       raise exception 'requeueing a message that is not in the queue sent a new one';
     end if;
