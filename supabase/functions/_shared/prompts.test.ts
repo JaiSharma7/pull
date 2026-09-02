@@ -43,6 +43,17 @@ describe('the exported prompt', () => {
     expect(without).toContain('(no additional context supplied)');
   });
 
+  it('keeps the product-level instructions the hand-written prompt carried', () => {
+    // A `///` comment on a BAML field never reaches the model; only the prompt
+    // text does. These sentences were instructions in `buildSummaryPrompt` and
+    // must stay instructions -- the schema is satisfied without them, which is
+    // exactly how they would be lost silently. Found by Codex.
+    const text = summary.messages.map((m) => m.text).join('\n');
+    expect(text).toContain('what changes if the reader believes it');
+    expect(text).toContain('states the idea rather than teasing it');
+    expect(text).toContain('Do not retell the work section by section');
+  });
+
   it('leaves an unknown placeholder alone rather than blanking it', () => {
     expect(renderPrompt('a {{b}} c', {})).toBe('a {{b}} c');
   });

@@ -175,17 +175,19 @@ async function exportFunction(fn) {
       .map((p) => p.as_text())
       .join(''),
   }));
-  // Sentinels back to placeholders, and a refusal if one did not survive intact.
-  for (const m of messages) {
-    for (const n of names) {
-      const count = m.text.split(SENTINEL(n)).length - 1;
-      if (count === 0 && messages.length === 1) {
-        throw new Error(
-          `${fn.name}: argument ${n} does not appear verbatim in the rendered prompt; a transformed argument cannot be exported as a template`,
-        );
-      }
-      m.text = m.text.split(SENTINEL(n)).join(`{{${n}}}`);
+  // Sentinels back to placeholders, and a refusal if one did not survive intact
+  // anywhere in the prompt. Counted across every message, not per message: an
+  // argument may legitimately appear in one message and not another, but one that
+  // appears in none was transformed, conditioned on, or unused -- and `promptFor`
+  // would then demand a value the provider silently ignores.
+  for (const n of names) {
+    const total = messages.reduce((sum, m) => sum + (m.text.split(SENTINEL(n)).length - 1), 0);
+    if (total === 0) {
+      throw new Error(
+        `${fn.name}: argument ${n} does not appear verbatim in the rendered prompt; a transformed argument cannot be exported as a template`,
+      );
     }
+    for (const m of messages) m.text = m.text.split(SENTINEL(n)).join(`{{${n}}}`);
   }
   const client = prompt.client_name;
   if (!models[client]) {
