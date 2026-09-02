@@ -152,10 +152,25 @@
   gap: var(--space-4);
 }
 
+/*
+ * Wide enough for both: the dial goes back into the margin, to the LEFT of an idea
+ * that follows it in the source. Explicit placement rather than `order`, because
+ * the two need to share a row and the grid is the thing that knows the row exists.
+ */
 @container (min-width: 34rem) {
   .pull-card__spread {
     grid-template-columns: 5.5rem minmax(0, 1fr);
     gap: var(--space-6);
+  }
+
+  .pull-card__dial {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .pull-card__reading {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 
@@ -182,9 +197,16 @@
 }
 
 .pull-card__dial-label,
+.pull-card__dial-words,
+.pull-card__stop-btn {
+  /* `--step-dial`, not `--step--1`: see tokens.css. The dial is a reading control,
+     so it grows with the reading in focus mode instead of staying frozen. */
+  font-size: var(--step-dial);
+}
+
+.pull-card__dial-label,
 .pull-card__dial-words {
   font-family: var(--font-mono);
-  font-size: var(--step--1);
   color: var(--text-muted);
   margin: 0;
 }
@@ -215,6 +237,26 @@
   padding: var(--space-1) var(--space-2);
   text-align: left;
   transition: color var(--transition);
+}
+
+/*
+ * A finger needs 44px; a cursor does not.
+ *
+ * Measured on a 393px viewport, the stops were 31px tall — the smallest controls in
+ * the product, below the 44px floor both platforms publish, and the ones a reader
+ * taps most often. Gated on `pointer: coarse` rather than on width because it is the
+ * input that makes the demand, not the screen: a touch laptop needs the room and a
+ * narrow desktop window does not.
+ *
+ * `rem`, so a reader who has raised their browser font size gets a target that grows
+ * with it, and padding rather than font-size so the dial does not become louder than
+ * the idea in the process.
+ */
+@media (pointer: coarse) {
+  .pull-card__stop-btn {
+    min-height: 2.75rem;
+    padding-inline: var(--space-3);
+  }
 }
 
 .pull-card__tick {

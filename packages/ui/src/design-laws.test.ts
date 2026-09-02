@@ -215,6 +215,60 @@ describe('The Archive design laws', () => {
     }
   });
 
+  /**
+   * A reading control has to grow with the reading.
+   *
+   * Focus mode raises the reading steps and deliberately leaves `--step--1` alone,
+   * so the chrome does not grow with the prose and reclaim the room the setting
+   * just freed. That is right for a chip and wrong for the Depth Dial, which is set
+   * in the same mono face but is the control the reader turns most: measured before
+   * this was fixed, focus mode took body copy from 16.96px to 22.88px and left the
+   * dial at 13px, so asking for bigger reading made the control relatively smaller.
+   *
+   * Pinned as a derivation rather than a pair of values, because that is what makes
+   * it hold for every future mode as well — anything that moves `--step-0` moves the
+   * dial with it, and nothing has to remember to.
+   */
+  it('sizes the depth dial from the reading step, so focus mode carries it', () => {
+    const tokens = read('tokens.css');
+    const defs = [...tokens.matchAll(/--step-dial:\s*([^;]+);/g)].map((m) => m[1]!.trim());
+    expect(defs.length, '--step-dial should be defined exactly once, as a derivation').toBe(1);
+    expect(
+      defs[0],
+      `--step-dial is "${defs[0]}" — a constant here refreezes the dial the moment a ` +
+        `mode changes --step-0, which is the bug this replaced.`,
+    ).toMatch(/var\(--step-0\)/);
+
+    const dialRule = read('components.css').match(/\.pull-card__stop-btn\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(dialRule, 'no .pull-card__stop-btn rule found').not.toBe('');
+    expect(dialRule, 'the dial is sized from the furniture step again').not.toMatch(
+      /font-size:\s*var\(--step--1\)/,
+    );
+  });
+
+  /**
+   * A finger needs 44px; a cursor does not.
+   *
+   * Both platforms publish 44px as the floor, and the dial's stops were 31px — the
+   * smallest controls in the product and the ones a reader taps most. The rule is
+   * gated on `pointer: coarse` because it is the input that makes the demand rather
+   * than the screen, so this checks the gate as well as the number: a width media
+   * query would miss a touch laptop and inflate a narrow desktop window.
+   */
+  it('gives the dial a real touch target where the pointer is coarse', () => {
+    const css = read('components.css');
+    const coarse = [...css.matchAll(/@media \(pointer: coarse\)\s*\{[\s\S]*?\n\}/g)]
+      .map((m) => m[0])
+      .filter((b) => b.includes('.pull-card__stop-btn'));
+    expect(coarse.length, 'no (pointer: coarse) rule sizes the dial stops').toBe(1);
+
+    const rem = Number(coarse[0]!.match(/min-height:\s*([\d.]+)rem/)?.[1]);
+    expect(
+      rem * 16,
+      `the dial's touch target is ${rem * 16}px — below the 44px both platforms publish`,
+    ).toBeGreaterThanOrEqual(44);
+  });
+
   it('respects prefers-reduced-motion', () => {
     const all = cssFiles.map(read).join('\n');
     expect(all).toMatch(/@media \(prefers-reduced-motion: reduce\)/);

@@ -77,6 +77,24 @@
   --measure: 34rem; /* ~66 characters: the comfortable reading column */
 
   /*
+   * The Depth Dial's own step, and the reason it is not `--step--1`.
+   *
+   * The dial is set in the mono metadata face and looks like furniture, so it was
+   * sized with the furniture — which focus mode deliberately freezes, to stop the
+   * chrome growing with the prose and reclaiming the room the setting just freed.
+   * That is right for a chip or a trail and wrong for this: measured in focus mode,
+   * body copy went 16.96px -> 22.88px and the dial stayed at 13px, so a reader who
+   * asked for bigger reading got a *relatively smaller* control at the exact moment
+   * they said things were too small.
+   *
+   * Derived from the body step rather than restated, for the reason the focus block
+   * below gives about `--measure`: two literals drift the moment either is tuned,
+   * and the ratio is the thing being held. 0.8 is the ratio `--step--1` already had
+   * to `--step-0`, so the default size is unchanged and only its behaviour is.
+   */
+  --step-dial: calc(var(--step-0) * 0.8);
+
+  /*
    * A second, wider column for reference documents — the policies and the terms.
    * Not a relaxation of law 7: the reading column is pinned because a longer line
    * makes a *card* worse, while a document of tables and cross-references is worse
