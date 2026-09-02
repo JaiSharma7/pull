@@ -8,6 +8,36 @@
  * No gradient, no shadow, no second accent. See law 1 and docs/design.md.
  */
 
+/*
+ * The onboarding screen stands outside the shell, and therefore outside its layout.
+ *
+ * `OnboardingGate` renders the picker INSTEAD of `children` -- the whole app shell -- and
+ * that is right: a first question deserves the screen to itself, the way the sign-in page
+ * takes it. What came with it was silent. `.shell__main` is what supplies the page
+ * padding and `.shell__column` is what centres the reading column; a screen that replaces
+ * the shell inherits neither, and `.measure` sets `max-width` and nothing else. So the
+ * picker rendered flush against the left edge of the viewport with its first character on
+ * x=0 -- clipped on a phone, and marooned in a field of whitespace on anything wide.
+ *
+ * Horizontal centring only, which is where this parts company with `.titlepage`. That can
+ * centre on both axes because it holds one short form; this list is as long as the topic
+ * catalogue, and centring a scrolling page vertically only pushes its heading off the top
+ * of a short window.
+ */
+.gate {
+  padding: var(--space-6) var(--space-5);
+}
+
+/*
+ * The same two declarations as `.shell__column`, rather than a shared class, because the
+ * two are the same measurement for different reasons: one is a column inside a three-pane
+ * shell, this is a page with no shell at all. Reusing `.shell__*` here would say the
+ * onboarding screen is part of a shell it deliberately replaces.
+ */
+.gate > .measure {
+  margin-inline: auto;
+}
+
 .prefs__group {
   margin-top: var(--space-6);
   margin-bottom: var(--space-2);

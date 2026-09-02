@@ -50,16 +50,29 @@ with no address, no name and nothing that identifies you.
 
 It behaves like an account because it is one, technically — the topics you pick, what you
 read and what you stash are stored the same way, under an identifier that exists only in
-your browser. Three things are different, and all three are consequences of there being no
-address:
+your browser. Four things are different — three because there is no address, and one
+because the session lives in the tab rather than in the browser:
 
+- **It ends with the tab.** A guest session is held in `sessionStorage`, which is how a
+  private window behaves: close the tab and it is gone. Duplicating the tab carries it
+  across, and a browser set to reopen your last tabs on start-up may bring it back with
+  them; an ordinary new tab does not get it, and neither does a link you open in one. This
+  is deliberate — a guest account is an identity nobody can prove they own, and on a shared
+  or public computer "stay signed in" would mean handing the next person one reader's
+  stashes, notes and history with no sign-in wall in the way.
 - **It cannot be recovered.** Clear the browser's storage, or open the product on another
   device, and the session is gone with no way back in. There is nothing to send a code to.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
   need an account we can attribute the request to. (The first two are not yet exposed in
   the app for anyone; the limit is in the database, so it holds whenever they are.)
-- **We delete it for you.** A guest session that has not been used for 30 days is removed
-  outright, along with everything keyed to it. You do not have to ask.
+- **We delete it for you.** A guest session that has not been used for a day is removed
+  **from our database**, along with everything keyed to it, by a sweep that runs every
+  hour — so the account goes a little over a day after you last had it open, and never
+  while you are still reading. A day is short on purpose: a guest account is an identity
+  nobody can prove they own, holding a reader's stashes, notes and history, so the shorter
+  it exists the less there is to lose. Plan on a day, not on a weekend. What that does not
+  reach is the copy your own browser keeps for offline reading; clearing the site's data
+  removes that, and we are working on clearing it for you when a session ends.
 
 Signing in afterwards starts a fresh account. A guest session is not carried over — there is
 no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
@@ -225,12 +238,21 @@ Three things survive, none of them attached to you:
   what generation costs. Nothing in it identifies you.
 - **Backups**, for up to 30 days, after which they roll off.
 
-**A guest session is deleted for you.** Unused for 30 days, it is removed outright —
-account row, preferences, history, everything keyed to it — by a scheduled sweep
-(`sweep_guest_accounts`). This is the one place where the "while your account exists,
-your data exists" rule above does not hold, and deliberately: a guest session has no
-address, so nobody can come back to it and nobody can ask us to delete it. Keeping it
+**A guest session is deleted for you.** Unused for a day, it is removed outright from the
+database — account row, preferences, history, everything keyed to it — by a scheduled
+sweep (`sweep_guest_accounts`). This is the one place where the "while your account
+exists, your data exists" rule above does not hold, and deliberately: a guest session has
+no address, so nobody can come back to it and nobody can ask us to delete it. Keeping it
 indefinitely would be hoarding reading history belonging to people we cannot contact.
+
+The sweep reaches our database and not your device. The offline copy the app keeps in your
+browser — the Pulls it cached to read without a connection, and anything you wrote while
+offline that had not yet been sent — is not cleared when the session ends, and it is not
+scoped to one reader, so on a shared computer an offline load can show the previous
+person's cached feed. That is a gap we are closing rather than a design decision, and it is
+recorded here because a policy that said "everything" while that was true would be the
+kind of claim this document exists not to make. Clearing the site's data in your browser
+removes it today.
 
 Anything published under a future community feature is covered in the Terms.
 

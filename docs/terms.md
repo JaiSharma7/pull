@@ -51,10 +51,14 @@ Sign-in is a code or link sent to your email, so **keeping access to that mailbo
 keeps you in control of your account**. There is no password to recover.
 
 You can also look around as a **guest**, without giving us an address. A guest session is
-covered by these Terms exactly as an account is, with two differences that follow from
+covered by these Terms exactly as an account is, with three differences. Two follow from
 there being no address: we cannot restore it to you if it is lost, and it is deleted
-automatically after 30 days of disuse. Requesting a generation, publishing a summary and
-filing a report all need an account.
+automatically after a day of disuse. A day is measured from when you last used it, not
+from when it was created, so a guest session does not end underneath somebody who is
+still reading. The third follows from where the session is kept: it ends when you close
+the tab, the way a private window does, though duplicating the tab carries it across and
+a browser that reopens your last tabs may bring it back. Requesting a generation,
+publishing a summary and filing a report all need an account.
 
 You can delete your account at any time. We can suspend or terminate one for a clear breach
 of section 5, for conduct that puts other readers or the service at risk, or where the law

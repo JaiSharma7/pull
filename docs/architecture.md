@@ -152,10 +152,52 @@ that they have to be listed somewhere, which is here.
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
 
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
-deletes anonymous accounts after 30 days, and that retention promise is load-bearing:
-`docs/privacy.md` states it to readers, and it is half the argument for letting a guest
-write to the personal tables at all (`20260901190000`). Unscheduled, `auth.users` only
-grows, and the policy says something the database is not doing.
+deletes anonymous accounts after a day of disuse, and that retention promise is
+load-bearing: `docs/privacy.md` states it to readers, the sign-in screen prints it before
+anybody presses the button, and it is half the argument for letting a guest write to the
+personal tables at all (`20260901190000`). Unscheduled, `auth.users` only grows, and all
+three of those say something the database is not doing.
+
+Its schedule is part of the promise rather than an operator's taste. `enable_guest_sweep`
+defaults to hourly (`20260901220000`) because a nightly job and a one-day lifetime do not
+compose: a guest who stops reading just after the sweep runs survives nearly two days, and
+"a day" is then wrong by a factor of two in the one document a reader is most likely to
+hold us to. An operator passing their own cron expression is choosing the accuracy of that
+sentence, not just a time.
+
+**Two auth settings live only in the dashboard, and one of them breaks everything.**
+`supabase/config.toml` configures the local stack and nothing else, so `[auth]
+enable_anonymous_sign_ins` has no effect on the hosted project — the guest button fails
+there with `anonymous_provider_disabled` until somebody flips the same switch under
+Authentication → Sign In / Providers.
+
+The trap is what the dashboard recommends alongside it. Supabase's anonymous sign-ins
+documentation advises enabling CAPTCHA protection in the same breath, and that setting is
+on a different page (Project Settings → Authentication → Bot and Abuse Protection). This
+app renders no CAPTCHA widget and sends no `captchaToken`, and Supabase's CAPTCHA covers
+sign-in, sign-up and password reset alike — so switching it on does not merely fail to
+help, it rejects **every** authentication request with `captcha_failed`, the email route
+included. On 2026-09-01 that is exactly what happened: the auth logs cross one config
+reload and go straight from `anonymous_provider_disabled` to `captcha_failed`, with no
+working sign-in in between. `lib/auth-errors.ts` names the setting in the console for
+whoever is running the deployment, because the reader-facing error cannot.
+
+**Expect the advisor to light up once anonymous sign-ins are on.** Supabase's security
+advisor emits an `auth_allow_anonymous_sign_ins` WARN for every table whose policies are
+written `to authenticated`, because an anonymous user holds that role — around forty of
+them here, where before the toggle there were eight. None of it is new exposure and none
+of it is an ERROR: it is the advisor restating the premise `20260901190000` is built on,
+and the four doors that premise closes (generation, authorship, reports, publishing) do
+not appear in the policy lists it prints, because those policies now exclude guests. The
+number is worth knowing in advance so nobody reads it as a regression at the wrong moment.
+
+What guards guest abuse here instead of a CAPTCHA: an IP rate limit of 30 anonymous
+sign-ins an hour, the money door shut in the database (`enqueue_generation_job` refuses a
+guest outright — a per-requester ceiling means nothing against an identity that is free to
+mint), length caps on every guest-writable column, and the hourly sweep with a one-day
+lifetime. Supabase's own documentation says automatic cleanup of anonymous users is not
+available and suggests deleting them manually after thirty days; `20260901220000` is
+tighter than that by a factor of thirty.
 
 **The frontend deploys itself and the database does not.** Vercel redeploys `apps/web`
 from git on every push to `main`; migrations reach the hosted project only when somebody

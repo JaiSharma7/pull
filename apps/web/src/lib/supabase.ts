@@ -1,4 +1,5 @@
 import { createBrowserClient, type Db } from '@wap/db';
+import { browserAuthStorage, shouldAdoptSession } from './guest-storage.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -46,7 +47,44 @@ if (
   );
 }
 
-export const supabase: Db = createBrowserClient(url, key);
+/*
+ * A guest's token goes to `sessionStorage` and everybody else's to `localStorage`, so a
+ * guest session ends with the browser the way an incognito window does. The reasoning,
+ * and what it costs, are in `guest-storage.ts`.
+ *
+ * `browserAuthStorage()` reaches for the accessors lazily rather than taking them as
+ * arguments here. That is not style: in a browser with site data blocked, naming
+ * `globalThis.localStorage` throws, and this line runs at module scope before anything
+ * has rendered.
+ */
+/*
+ * The same string supabase-js derives for itself
+ * (`sb-${new URL(url).hostname.split('.')[0]}-auth-token`, SupabaseClient.js), pinned here
+ * and passed in so both sides are reading one constant rather than two copies of a rule.
+ */
+export const AUTH_STORAGE_KEY = `sb-${new URL(url).hostname.split('.')[0]}-auth-token`;
+
+const authStorage = browserAuthStorage();
+
+export const supabase: Db = createBrowserClient(url, key, authStorage, AUTH_STORAGE_KEY);
+
+/**
+ * Whether this tab should adopt a session auth-js just handed it.
+ *
+ * auth-js writes the session before it notifies on every local path -- `_saveSession` then
+ * `_notifyAllSubscribers`, checked across all fourteen of them -- but its cross-tab
+ * BroadcastChannel handler notifies with a session it never wrote here. That asymmetry was
+ * invisible while every tab shared one `localStorage`. With a guest's token in per-tab
+ * `sessionStorage` it is not: a guest tab told "SIGNED_IN" by another tab would render the
+ * reader's account while every request it made still carried the guest's JWT, so the
+ * reader's stashes would land in an anonymous account the sweep deletes a day later.
+ *
+ * So `App.tsx` asks this before adopting a session. A local sign-in always matches,
+ * because the write came first; a broadcast from another tab does not.
+ */
+export function tabAdopts(sessionUserId: string | null): boolean {
+  return shouldAdoptSession(authStorage.getItem(AUTH_STORAGE_KEY), sessionUserId);
+}
 
 /**
  * Who is signed in right now, tracked at module scope rather than in component
@@ -76,7 +114,20 @@ void supabase.auth
   });
 
 supabase.auth.onAuthStateChange((_event, session) => {
-  currentUserId = session?.user.id ?? null;
+  /*
+   * The same guard `App.tsx` applies, and it belongs here at least as much.
+   *
+   * Round three of the review on #48 found this listener unguarded while the rendering one
+   * was fixed — and the comment in `App.tsx` had already named this as the worse half
+   * without closing it. `getCurrentUserId()` is what `queueMutation` tags an offline write
+   * with. Left to a cross-tab broadcast, a guest tab would stamp the reader's id onto the
+   * guest's queued grade, and `runDrain` filters on exactly that id — so the next time the
+   * reader drained on that device, somebody else's grade would be applied to their
+   * knowledge state. The rendering bug showed the wrong name; this one corrupts data.
+   */
+  const id = session?.user.id ?? null;
+  if (!tabAdopts(id)) return;
+  currentUserId = id;
 });
 
 export function getCurrentUserId(): string | null {

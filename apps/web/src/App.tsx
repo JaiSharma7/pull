@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Mark } from '@wap/ui';
 import { Appearance } from './routes/Appearance.js';
@@ -58,7 +58,7 @@ import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
 import { isKnownPath, titleFor } from './lib/title.js';
-import { supabase } from './lib/supabase.js';
+import { supabase, tabAdopts } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
 
@@ -197,10 +197,53 @@ export function App() {
   /*
    * Whether a guest has asked to leave, and is being asked to mean it.
    *
+   * A plain boolean, cleared on navigation by the adjustment beside `confirmationPath`
+   * below — read that one for why it is shaped the way it is. This component never
+   * unmounts, so left to itself the flag is sticky: a guest who presses "End this guest
+   * session", thinks better of it, goes to Explore and comes back meets the panel already
+   * asking "Yes — end it and sign in" as its primary button, with no memory of having
+   * asked for it. A two-press confirmation whose first press can be days old and on
+   * another screen is a one-press confirmation.
+   *
    * Lives here rather than in the panel because the panel is inline JSX in this
-   * component; if it ever becomes its own route it should take this with it.
+   * component; if it ever becomes its own route it should take this and its reset with it.
    */
   const [guestLeaving, setGuestLeaving] = useState(false);
+  /*
+   * Where keyboard focus goes when that flag flips, and why this is a ref rather than an
+   * effect keyed on `guestLeaving`.
+   *
+   * Pressing either control unmounts the button that was pressed and mounts a different
+   * one, so focus falls to `<body>` — a keyboard reader is dropped at the top of the
+   * document with no announcement, in the middle of a confirmation they are halfway
+   * through. The fix has to move focus, and it has to move it only on that transition:
+   * an effect keyed on `guestLeaving` alone also fires when the panel first mounts, which
+   * would steal focus from whatever a reader was doing and land it on a button that ends
+   * their session. So the handlers say where focus should go, and the effect below spends
+   * that intent exactly once.
+   *
+   * Entering the confirmation focuses the SAFE control, not the destructive one. Space
+   * or Enter pressed twice in a row is the misclick this pair exists to catch, and
+   * focusing "Yes" would make the second press land on it.
+   */
+  const guestWantsFocus = useRef<'end' | 'keep' | null>(null);
+  const guestEndRef = useRef<HTMLButtonElement>(null);
+  const guestKeepRef = useRef<HTMLButtonElement>(null);
+  /*
+   * Spends that intent, once, after the render that swapped the buttons over.
+   *
+   * No dependency array on purpose: a ref is not reactive, so there is nothing React
+   * could key this on, and the guard makes it a no-op on every render but the one that
+   * matters. Declared up here with the rest of the hooks rather than beside the panel it
+   * serves, because this component returns early for the specimen and legal routes and a
+   * hook below those runs in some renders and not others.
+   */
+  useEffect(() => {
+    const want = guestWantsFocus.current;
+    if (want === null) return;
+    guestWantsFocus.current = null;
+    (want === 'keep' ? guestKeepRef : guestEndRef).current?.focus();
+  });
   /*
    * The only routed thing in the app.
    *
@@ -212,6 +255,32 @@ export function App() {
    * so /privacy resolves on a cold load and offline as well as from a link.
    */
   const [path, setPath] = useState(readLocation);
+  /*
+   * The address the guest confirmation was last reconciled against, and the reconciliation
+   * itself. Both live here, beside `path`, and the placement is the whole point.
+   *
+   * Any navigation puts the confirmation back in its box — including coming back. This is
+   * React's documented "adjust state during render when something changes" pattern, which
+   * is the right shape because the two wrong ones are already ruled out: a sticky boolean
+   * was the original bug, and an effect whose body calls `setState` is a cascading render
+   * that this repo's lint rejects. Keyed on the path CHANGING rather than on its value, so
+   * a return trip is a different visit and starts from the safe state.
+   *
+   * It sits ABOVE the early returns for the specimen and legal routes rather than beside
+   * the panel it serves, and that is not tidiness — it is the third time this exact
+   * defect has been fixed. Below them, a render that returns early never reaches the
+   * comparison, so `confirmationPath` never advances: open the confirmation on /account,
+   * follow the Privacy link in the colophon (which renders below the guest panel, so both
+   * are on screen together), press Back, and `/account === /account` means no reset. The
+   * destructive button is primary again on a first press that was never made. A hook
+   * below an early return is a lint error and gets caught; a plain `if` below one is
+   * silent, which is why this comment is longer than the code.
+   */
+  const [confirmationPath, setConfirmationPath] = useState(path);
+  if (confirmationPath !== path) {
+    setConfirmationPath(path);
+    setGuestLeaving(false);
+  }
 
   /*
    * Ask on every session change, and again after a challenge is satisfied.
@@ -322,6 +391,32 @@ export function App() {
      * return to wherever the reader came from rather than to it.
      */
     const arrive = (s: Session | null) => {
+      /*
+       * Only adopt a session this tab's storage actually holds.
+       *
+       * auth-js broadcasts auth events across tabs on a `BroadcastChannel`, and its
+       * receiving handler notifies with a session it never wrote to this tab's storage
+       * (`GoTrueClient.js`, the handler around line 276). Every LOCAL path saves first and
+       * notifies second, all fourteen of them, so this costs a real sign-in nothing.
+       *
+       * It costs a guest tab a great deal. A guest's token is in per-tab `sessionStorage`,
+       * so when another tab signs in with an email the broadcast would make this tab render
+       * that reader -- their name, their Library, `/account` -- while every request it sent
+       * still carried the guest's JWT. The reader would stash and grade into an anonymous
+       * account the sweep deletes a day later, and the offline drain's own guard would pass
+       * because it compares the id this listener set. Measured in Chromium against a real
+       * supabase-js client in round two of the review on #48.
+       *
+       * Ignoring it leaves this tab as the guest it still is, which is the one description
+       * of it that matches what the network sees.
+       *
+       * SIGNED_OUT is guarded too, and exempting it was a bug of its own: a guest tab
+       * pressing "Yes — end it and sign in", or simply outliving the sweep and failing a
+       * refresh, broadcasts SIGNED_OUT and threw every other tab on the machine to the
+       * sign-in screen mid-read. A local sign-out clears storage before it notifies, so
+       * null-on-both-sides still adopts and a real sign-out is unaffected.
+       */
+      if (!tabAdopts(s?.user.id ?? null)) return;
       setSession(s);
       if (!s) return;
       /*
@@ -501,6 +596,7 @@ export function App() {
   const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
 
   const accountOpen = isPath(path, '/account');
+
   const topicSlug = routeParam(path, '/topic');
   /*
    * A path that matches nothing.
@@ -920,6 +1016,20 @@ export function App() {
                   what you have read and stashed as a guest stays behind.
                 </p>
                 {/*
+                  The expiry, said here as well as on the sign-in screen.
+
+                  A guest reads the sign-in screen once, before they have anything to lose, and
+                  this screen only once they do. Saying it in one place would mean the sentence
+                  that matters — everything here goes in a day — is only ever shown to somebody
+                  who has not yet made anything worth keeping.
+                */}
+                <p>
+                  This session also ends on its own. Closing this tab ends it here, the way a
+                  private window does, and the account behind it is deleted a day after you last use
+                  it, along with everything keyed to it. Signing in with an email address is what
+                  makes any of it stay.
+                </p>
+                {/*
                   Two presses, which is the shape every irreversible action on the real
                   Account screen already takes: "make them do something that could not be a
                   misclick". This one has less recoverability than any of them — no address,
@@ -927,7 +1037,32 @@ export function App() {
                   bookmark, primed to hit the primary button because they came to sign in.
                   Oxblood is not what makes it safe; the second press is.
                 */}
-                <div className="stack">
+                {/*
+                  `.shell__confirm`, not `.stack`, and the difference is visible rather than
+                  pedantic. `.stack` separates children with `margin-block-start` alone,
+                  which does nothing useful between two `<button>`s: they are
+                  `inline-block`, so they flow onto one line and the margin lands above
+                  the pair. This confirmation rendered as "YES — END IT AND SIGN IN"
+                  butted against "KEEP READING AS A GUEST" with a text node's worth of
+                  space between them, destructive option first.
+                */}
+                {/*
+                  Announced, because focus alone does not say what happened.
+                  Pressing the trigger swaps it for two different buttons and moves focus
+                  to the safe one, so a screen reader says "Keep reading as a guest,
+                  button" and nothing else -- no indication that a confirmation opened, or
+                  that the destructive option is now one press away and sits BEFORE this
+                  button in the DOM. A live region that is always present and changes its
+                  text is what gets announced; rendering the region itself conditionally
+                  is the version that stays silent.
+                */}
+                <p className="sr-only" role="status">
+                  {guestLeaving
+                    ? 'Confirm ending this guest session. This cannot be undone. Two choices ' +
+                      'follow: end it and sign in, or keep reading as a guest.'
+                    : ''}
+                </p>
+                <div className="shell__confirm">
                   {guestLeaving ? (
                     <>
                       <button
@@ -947,8 +1082,14 @@ export function App() {
                       </button>
                       <button
                         type="button"
+                        ref={guestKeepRef}
                         className="btn btn--plain"
-                        onClick={() => setGuestLeaving(false)}
+                        onClick={() => {
+                          // Focus returns to the control that opened the confirmation,
+                          // which is where a keyboard reader was before they asked.
+                          guestWantsFocus.current = 'end';
+                          setGuestLeaving(false);
+                        }}
                       >
                         Keep reading as a guest
                       </button>
@@ -956,9 +1097,13 @@ export function App() {
                   ) : (
                     <button
                       type="button"
+                      ref={guestEndRef}
                       className="btn btn--primary"
                       aria-describedby="guest-consequence"
-                      onClick={() => setGuestLeaving(true)}
+                      onClick={() => {
+                        guestWantsFocus.current = 'keep';
+                        setGuestLeaving(true);
+                      }}
                     >
                       End this guest session and sign in
                     </button>

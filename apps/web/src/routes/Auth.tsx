@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeInput } from '../components/CodeInput.js';
-import { isAnonymousSignInDisabled, isEmailRateLimited } from '../lib/auth-errors.js';
+import {
+  isAnonymousSignInDisabled,
+  isCaptchaRequired,
+  isEmailRateLimited,
+} from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { rememberDestination } from '../lib/pending-destination.js';
@@ -117,6 +121,30 @@ function readUrlToken(): { tokenHash: string; type: 'signup' | 'magiclink' } | n
   // something TypeScript would accept and GoTrue would reject.
   return { tokenHash, type: raw === 'signup' ? 'signup' : 'magiclink' };
 }
+
+/*
+ * Said once, because CAPTCHA closes both routes and the two handlers below would
+ * otherwise print two different accounts of the same single cause.
+ *
+ * Two audiences, two channels, the same split `isAnonymousSignInDisabled` already makes:
+ * the operator's half names the switch and goes to the console where an operator looks,
+ * and the reader is told the one thing that is true for them -- that this is not theirs
+ * to fix and there is no other route to try. Every other failure on this screen leaves
+ * the reader something to do; this is the one that does not, so it must not imply
+ * otherwise.
+ */
+const CAPTCHA_OPERATOR_WARNING =
+  'This Supabase project has CAPTCHA protection switched on, and this app sends no ' +
+  'captcha token -- so every sign-in is rejected, the email route and the guest button ' +
+  'alike. Turn it off under Settings -> Authentication -> Bot and Abuse Protection -> ' +
+  'Enable CAPTCHA protection, or add a captcha widget and pass options.captchaToken on ' +
+  'both signInWithOtp and signInAnonymously. Enabling anonymous sign-ins is what usually ' +
+  'brings this on: the dashboard recommends CAPTCHA in the same breath.';
+
+const CAPTCHA_READER_MESSAGE =
+  'Sign-in is misconfigured for this deployment, so neither the email route nor the ' +
+  'guest button can complete. That is on us rather than on you, and trying again will ' +
+  'not help until it is fixed.';
 
 export function Auth({
   onNavigate,
@@ -252,7 +280,10 @@ export function Auth({
          * than only the problem. This is the one failure where "try again" is the
          * wrong advice, so it is the one failure that must not offer it.
          */
-        if (isEmailRateLimited(error)) {
+        if (isCaptchaRequired(error)) {
+          console.warn(CAPTCHA_OPERATOR_WARNING);
+          setError(CAPTCHA_READER_MESSAGE);
+        } else if (isEmailRateLimited(error)) {
           setShowPaste(true);
           setError(
             'Too many sign-in emails have been requested, so the next one will not arrive ' +
@@ -455,7 +486,13 @@ export function Auth({
       // is not an AuthError, and a bare await would leave the button disabled for ever.
       const { error } = await supabase.auth.signInAnonymously();
       if (error) {
-        if (isAnonymousSignInDisabled(error)) {
+        if (isCaptchaRequired(error)) {
+          // Ahead of the disabled check: with CAPTCHA on, the guest button fails for a
+          // reason that has nothing to do with whether anonymous sign-ins are enabled,
+          // and "use the email route above" would be advice to a door that is also shut.
+          console.warn(CAPTCHA_OPERATOR_WARNING);
+          setGuestError(CAPTCHA_READER_MESSAGE);
+        } else if (isAnonymousSignInDisabled(error)) {
           /*
            * Two audiences, two channels, and they want opposite things.
            *
@@ -677,9 +714,9 @@ export function Auth({
             `guestError` is set, because that block splits the inline run.
           */}
           <p className="titlepage__promise">
-            No email needed. A guest session is only reachable from this browser: it cannot be
-            recovered on another device, it does not carry over when you sign in, and it is deleted
-            after 30 days unused.
+            No email needed. A guest session works like a private window: it ends when you close
+            this tab, it cannot be recovered on another device, it does not carry over when you sign
+            in, and the account behind it is deleted a day after you last use it.
           </p>
         </div>
 

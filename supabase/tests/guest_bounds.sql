@@ -22,6 +22,10 @@
 --     replace` on a fixed signature makes those easy to revert by accident, and every
 --     other assertion here would still pass if they were gone
 --   * the sweep deletes a stale guest and leaves the reader alone
+--   * the sweep's DEFAULT is one day, and one day is measured from disuse -- a guest
+--     who refreshed two hours ago survives it and one who refreshed twenty-five hours
+--     ago does not. Asserted against the default rather than an explicit interval,
+--     because the default is the only value pg_cron ever passes
 --
 -- Run as the roles that actually reach these paths (`authenticated`, with and without
 -- the `is_anonymous` claim), because RLS is invisible to an owner-role query and this
@@ -46,6 +50,8 @@ do $$
 declare
   guest        uuid := extensions.gen_random_uuid();
   regular      uuid := extensions.gen_random_uuid();
+  lapsed       uuid := extensions.gen_random_uuid();
+  fresh        uuid := extensions.gen_random_uuid();
   reader       uuid := extensions.gen_random_uuid();
   some_work    uuid;
   refused      boolean;
@@ -58,6 +64,9 @@ declare
   guest_left   int;
   reader_left  int;
   regular_left int;
+  lapsed_left  int;
+  fresh_left   int;
+  cron_args    text;
 begin
   -- Both accounts are created through the real trigger rather than by inserting into
   -- `profiles` directly: `handle_new_user` is what gives a guest the preference row the
@@ -102,17 +111,63 @@ begin
           '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
   -- Every column on this row is aged EXCEPT `refreshed_at`, and that is the whole
-  -- design of the fixture. The sweep reads
-  -- `coalesce(refreshed_at at time zone 'utc', updated_at, created_at)`, so a session
-  -- row with a fresh `updated_at` is spared by the second arm and the first is never
-  -- consulted — which means this assertion would pass against a sweep that had
-  -- `refreshed_at` deleted from it outright, and the commit that added it exists
-  -- precisely because `refreshed_at` is the only column that moves on a refresh.
-  -- Isolating it is what makes this a test rather than a decoration.
+  -- design of the fixture. The sweep takes the GREATEST of
+  -- `refreshed_at at time zone 'utc'`, `updated_at` and `created_at` (20260901230000),
+  -- so with the other two aged ninety days, only `refreshed_at` can spare this row.
+  -- Delete that term from the function and the maximum falls back to ninety days, this
+  -- guest is swept, and the assertion below fails. Isolating it is what makes this a
+  -- test rather than a decoration.
+  --
+  -- It read `coalesce` until 20260901230000, which returns the first non-null rather than
+  -- the newest — so a set-but-stale `refreshed_at` outranked a fresher `updated_at`, in
+  -- the one arm whose job is to notice recent use. `greatest` cannot pick the stale one.
   insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
   values (extensions.gen_random_uuid(), regular,
           now() - interval '90 days', now() - interval '90 days',
           (now() at time zone 'utc') - interval '2 hours');
+
+  -- A third guest, identical to `regular` in every way except that their last token
+  -- refresh was twenty-five hours ago rather than two.
+  --
+  -- This fixture is what pins the number. `guest` above has been idle for ninety days,
+  -- so it is deleted by a sweep defaulting to one day, thirty days or ninety -- which
+  -- means the pair of them proves the sweep distinguishes use from disuse and says
+  -- nothing at all about where the line is. 20260901220000 moved that line from thirty
+  -- days to one, and the sign-in screen, docs/privacy.md and docs/terms.md now all print
+  -- "a day"; without this row, putting it back to thirty is a green build.
+  --
+  -- Twenty-five hours rather than twenty-four and a minute, so the assertion does not
+  -- start failing on a slow test run that crosses the boundary while it executes.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (lapsed, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '90 days', now() - interval '90 days',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
+
+  insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at)
+  values (extensions.gen_random_uuid(), lapsed,
+          now() - interval '90 days', now() - interval '90 days',
+          (now() at time zone 'utc') - interval '25 hours');
+
+  -- A fourth guest, created five minutes ago, with NO `auth.sessions` row.
+  --
+  -- This is the fixture for the OUTER arm, and without it that arm is decoration. The
+  -- 90-day `guest` above satisfies both arms at once -- it is old AND sessionless -- while
+  -- `regular` and `lapsed` both have session rows, so deleting the
+  -- `greatest(created_at, last_sign_in_at, updated_at) < now() - p_older_than` condition
+  -- outright leaves every other assertion in this file green. The function that results
+  -- sweeps a guest created a minute ago whose session row happens to be absent, which is
+  -- reachable: `revoke_other_sessions`, an expired session already cleaned up, or a
+  -- sign-in that wrote the user row and then failed.
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data, is_anonymous)
+  values (fresh, '00000000-0000-0000-0000-000000000000',
+          'authenticated', 'authenticated', null, '',
+          now() - interval '5 minutes', now() - interval '5 minutes',
+          '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb, true);
 
   -- Any work from the seeded corpus. A summary needs one, and which one is irrelevant.
   select w.id into some_work from public.works w limit 1;
@@ -348,11 +403,57 @@ begin
   perform set_config('role', 'postgres', true);
   perform set_config('request.jwt.claims', '', true);
 
-  perform public.sweep_guest_accounts(interval '30 days');
+  -- Called with NO argument, which is the assertion. pg_cron runs
+  -- `select public.sweep_guest_accounts();` (see `enable_guest_sweep`), so the default is
+  -- the only value that ever reaches this function in production; passing an explicit
+  -- interval here would test an interval nothing uses and leave the default free to
+  -- drift back to thirty days unnoticed.
+  perform public.sweep_guest_accounts();
+
+  -- The floor guard, which stopped being theoretical when the default landed on it.
+  -- Below one day this refuses rather than deleting everyone who signed in this minute.
+  begin
+    perform public.sweep_guest_accounts(interval '1 hour');
+    raise exception
+      'sweep_guest_accounts accepted an age below one day. The floor is what stands '
+      'between a mistyped interval and every guest session in the product, and the '
+      'default now sits directly on it.';
+  exception
+    when check_violation then null;
+  end;
+
+  -- THE MONTH-BEARING CASE IS DELIBERATELY NOT ASSERTED HERE, and that is worth a note so
+  -- the next person does not think it was forgotten.
+  --
+  -- 20260901230000 moved this guard from comparing the argument to evaluating the cutoff,
+  -- because an interval comparison normalises a month to thirty days while the predicate
+  -- below uses calendar arithmetic. `interval '1 mon -29 days'` is the demonstration: it
+  -- compares as one day (so the old guard passed it), and on 2026-03-29 its cutoff is
+  -- 2026-03-29 itself -- every guest in the product, deleted mid-session.
+  --
+  -- But the divergence only exists when the month being stepped back over is shorter than
+  -- thirty days, or when the day-of-month clamps. Checked against Postgres: that same
+  -- interval yields a cutoff of one day ago on 2026-07-15, and today it does not trip the
+  -- guard at all. So an assertion written with a literal interval passes or fails
+  -- depending on the date CI happens to run, which is a flaky test rather than a
+  -- regression test, and a flaky test in a suite this size costs more than the coverage
+  -- is worth. The guard is written on the cutoff for the reason the migration states; this
+  -- comment is the record that the gap is known and unasserted.
+
+  -- Null, which was safe only by accident before: every downstream comparison went
+  -- null so nothing was selected. An irreversible delete should not rely on that.
+  begin
+    perform public.sweep_guest_accounts(null::interval);
+    raise exception 'sweep_guest_accounts accepted a null interval rather than refusing it.';
+  exception
+    when check_violation then null;
+  end;
 
   select count(*) into guest_left   from auth.users u where u.id = guest;
   select count(*) into reader_left  from auth.users u where u.id = reader;
   select count(*) into regular_left from auth.users u where u.id = regular;
+  select count(*) into lapsed_left  from auth.users u where u.id = lapsed;
+  select count(*) into fresh_left   from auth.users u where u.id = fresh;
 
   if guest_left <> 0 then
     raise exception
@@ -367,9 +468,47 @@ begin
   if regular_left <> 1 then
     raise exception
       'the sweep deleted a guest who refreshed their session two hours ago. It is keyed '
-      'on disuse, not on age: docs/privacy.md promises "has not been used for 30 days", '
+      'on disuse, not on age: docs/privacy.md promises "has not been used for a day", '
       'and deleting somebody mid-session takes their stashes and knowledge states with '
       'no address to recover through.';
+  end if;
+  if fresh_left <> 1 then
+    raise exception
+      'the sweep deleted a guest created five minutes ago that has no session row. Age is '
+      'measured from disuse, and a missing session is not disuse -- a session can be '
+      'revoked or expire while the account is minutes old.';
+  end if;
+  if lapsed_left <> 0 then
+    raise exception
+      'the sweep spared a guest whose last token refresh was 25 hours ago. The default '
+      'is one day (20260901220000), and the sign-in screen, docs/privacy.md and '
+      'docs/terms.md all print that number -- a longer one makes those three untrue.';
+  end if;
+  -- ------------------------------------------------ 5. the schedule
+  --
+  -- Read out of the catalogue rather than by scheduling anything. The migration keeps
+  -- `cron.schedule` out of itself so a from-zero replay never depends on pg_cron running
+  -- as a background worker, and that argument does not extend to reading a default.
+  --
+  -- Asserted because it is half the change and was the unguarded half: `sweep_guest_
+  -- accounts` is driven directly by everything above, so reverting `enable_guest_sweep`
+  -- to the old nightly `'41 4 * * *'` passed every assertion in this file. A nightly job
+  -- and a one-day lifetime do not compose -- a guest who stops reading just after the
+  -- sweep runs survives 47h41m -- while the sign-in screen, docs/privacy.md and
+  -- docs/terms.md all print "a day". The schedule is what makes that sentence true.
+  select pg_get_function_arguments(p.oid) into cron_args
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'enable_guest_sweep';
+
+  if cron_args is null then
+    raise exception 'enable_guest_sweep is missing, so the sweep can never be scheduled.';
+  end if;
+  if cron_args not like '%41 * * * *%' then
+    raise exception
+      'enable_guest_sweep no longer defaults to an hourly schedule (got %). A daily sweep '
+      'cannot honour the one-day lifetime that this file, the sign-in screen, '
+      'docs/privacy.md and docs/terms.md all state.', cron_args;
   end if;
 end $$;
 

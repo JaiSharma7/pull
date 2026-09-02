@@ -345,5 +345,22 @@ export function OnboardingGate({
   // Undecided renders the app, not a spinner: the gate is worth showing once, and
   // never worth making someone wait to find out whether they will see it.
   if (needed !== true) return <>{children}</>;
-  return <Preferences userId={userId} mode="onboarding" onDone={() => setNeeded(false)} />;
+  /*
+   * Wrapped, because this replaces the shell rather than rendering inside it.
+   *
+   * `App.tsx` puts every other screen in `<main className="shell__main"><div
+   * className="shell__column">`, which is where the page padding and the centring of the
+   * reading column actually live. Returning `<Preferences>` bare skipped both: the picker
+   * sat hard against the left edge of the window, its first character on x=0, clipped on
+   * a phone and stranded beside an empty half-screen on a monitor.
+   *
+   * `main` rather than a `div` for the same reason the shell uses one -- this is the
+   * whole page while it is on screen, and it was the only screen in the app with no
+   * landmark at all.
+   */
+  return (
+    <main className="gate">
+      <Preferences userId={userId} mode="onboarding" onDone={() => setNeeded(false)} />
+    </main>
+  );
 }
