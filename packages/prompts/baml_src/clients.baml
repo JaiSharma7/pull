@@ -48,7 +48,8 @@ client<llm> AnthropicHaiku {
 /// `ProviderUnavailableError`, because a billed failure must reach `cost_ledger`
 /// rather than be retried elsewhere. BAML's fallback has no such notion, so the
 /// chain lives in the worker, where the ledger is, and each function names one
-/// pinned client. `pnpm baml:export` refuses anything else.
+/// pinned client. `pnpm baml:test` against a chain would pay for attempts no
+/// ledger ever hears about, which is the point Codex made on the first pass.
 client<llm> SummaryChain {
   provider fallback
   options {

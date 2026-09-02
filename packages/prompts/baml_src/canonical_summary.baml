@@ -93,8 +93,7 @@ class CanonicalSummary {
 function WriteCanonicalSummary(workTitle: string, kind: string, context: string) -> CanonicalSummary {
   // One client, never `SummaryChain`. The worker meters every attempt and decides
   // whether a failure is safe to retry elsewhere; a fallback chosen here would make
-  // that decision without a ledger. The exporter refuses a function whose client is
-  // not a single pinned model, so this is enforced rather than asked.
+  // that decision without a ledger. See the note on `SummaryChain` in clients.baml.
   client GeminiFlash
   prompt #"
     You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.

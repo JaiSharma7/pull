@@ -74,17 +74,22 @@ jobs:
       # than a clear error.
       - name: BAML sources are valid
         run: pnpm baml:check
+      # Staged before the diff, deliberately: `git diff` ignores untracked files, so a
+      # BAML edit that makes the generator emit a NEW file would pass a plain diff with
+      # the client incomplete. Staging makes an added file a difference like any other.
       - name: Generated BAML client is in sync with baml_src
         run: |
           pnpm baml:generate
-          git diff --exit-code -- packages/prompts/baml_client \
+          git add -A -- packages/prompts/baml_client
+          git diff --cached --exit-code -- packages/prompts/baml_client \
             || { echo "::error::Generated BAML client is stale. Run 'pnpm baml:generate' and commit the result."; exit 1; }
       # The prompts and schemas the Edge Functions run are exported from the same
       # sources at build time (docs/baml.md). Same rule, same reason.
       - name: Exported prompts are in sync with baml_src
         run: |
           pnpm baml:export
-          git diff --exit-code -- supabase/functions/_shared/generated \
+          git add -A -- supabase/functions/_shared/generated
+          git diff --cached --exit-code -- supabase/functions/_shared/generated \
             || { echo "::error::Exported prompts are stale. Run 'pnpm baml:export' and commit the result."; exit 1; }
 
   # Check 3 of 6 — the signature mechanics must not change behaviour silently.
