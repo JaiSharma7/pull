@@ -235,9 +235,10 @@ describe('createSplitAuthStorage', () => {
   });
 
   it('signs out of both stores', () => {
+    // The ordinary case: one person, one session, wherever it happened to be written.
     const session = fake();
     const local = fake();
-    session.map.set(KEY, guestToken);
+    session.map.set(KEY, readerToken);
     local.map.set(KEY, readerToken);
 
     const store = createSplitAuthStorage(session, local);
@@ -246,6 +247,40 @@ describe('createSplitAuthStorage', () => {
     expect(session.map.size).toBe(0);
     expect(local.map.size).toBe(0);
     expect(store.getItem(KEY)).toBe(null);
+  });
+
+  it('a guest signing out does not sign out a reader on the same machine', () => {
+    /*
+     * Round two of the review on #48, and this file asserted the opposite before it.
+     *
+     * `removeItem` cleared both stores unconditionally, so a guest pressing "Yes -- end it
+     * and sign in" wiped the `localStorage` token of anyone signed in on that machine --
+     * as did auth-js calling `_removeSession()` on its own when a guest tab outlived the
+     * one-day sweep and its refresh failed. The one-day sweep is what turns the second
+     * path from rare into routine.
+     */
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, readerToken);
+
+    createSplitAuthStorage(session, local).removeItem(KEY);
+
+    expect(session.map.has(KEY)).toBe(false);
+    expect(local.map.get(KEY)).toBe(readerToken);
+  });
+
+  it('a guest signing out still clears an older guest copy', () => {
+    // Only a NON-guest token is protected: the upgrade path must still be cleaned up.
+    const session = fake();
+    const local = fake();
+    session.map.set(KEY, guestToken);
+    local.map.set(KEY, guestToken);
+
+    createSplitAuthStorage(session, local).removeItem(KEY);
+
+    expect(session.map.size).toBe(0);
+    expect(local.map.size).toBe(0);
   });
 
   it('survives a browser that throws on every storage access', () => {

@@ -28,6 +28,15 @@
  * source or Pull) still render, so the common case degrades to what a stranger sees
  * rather than to an error. A reader with an address is unaffected in every case.
  *
+ * Two openings DO inherit a copy, and it is worth naming them precisely because the review
+ * of #48 got this wrong in both directions before measuring it properly: duplicating the
+ * tab, and `window.open`. Ordinary links do not — ctrl-click, middle-click and
+ * `target="_blank"` are all noopener by default in current browsers, and were measured
+ * returning an empty store in Chromium. This app calls `window.open` nowhere and sets
+ * `rel="opener"` nowhere, so in practice a second tab is a signed-out visitor. Browser
+ * session restore can also bring a tab's storage back. `docs/privacy.md` says all of this
+ * to readers in one sentence rather than three.
+ *
  * The decision reads the value being written rather than any state this module holds,
  * which is what makes it correct across a conversion. When a guest signs in with an
  * address the new token is not anonymous, so it is written to `localStorage` and the
@@ -162,9 +171,10 @@ export function createSplitAuthStorage(
        * Found live in the review of #48.
        *
        * The eviction is unconditional even when the `sessionStorage` write fails, because
-       * `localStorage` is the one place this token must not be. A guest whose browser
-       * refuses `sessionStorage` keeps the session in memory for as long as the page lives,
-       * which is what the sign-in screen already promises.
+       * `localStorage` is the one place this token must not be. The cost is that such a
+       * guest is signed out at the next `getSession()` rather than at tab close: auth-js
+       * keeps no in-memory session and re-reads storage every time. Losing a guest session
+       * on a browser that refuses per-tab storage is the right side of that trade.
        */
       if (tokenIsGuest(fromLocal)) {
         write(session, key, fromLocal);
@@ -189,8 +199,10 @@ export function createSplitAuthStorage(
          * does NOT, and that asymmetry is the feature rather than an oversight —
          * `localStorage` is the one place a guest token must never be, so the fallback that
          * would rescue this session is the fallback that breaks the promise the sign-in
-         * screen makes. A guest whose browser refuses `sessionStorage` keeps the session
-         * in memory for as long as the page lives, and no longer.
+         * screen makes. A guest whose browser refuses `sessionStorage` is signed out at the
+         * next `getSession()` — auth-js keeps NO in-memory copy and re-reads storage on
+         * every call, so "in memory until the page closes", which this comment used to
+         * claim, describes a client that does not exist.
          */
         if (!guest) {
           write(clear, key, value);
@@ -230,9 +242,32 @@ export function createSplitAuthStorage(
       guard(() => clear.removeItem(key), undefined);
     },
 
-    // Both, always. Signing out has to mean signed out wherever the token happened to be.
+    /*
+     * Both, except that a guest signing out must not sign a READER out.
+     *
+     * This cleared both unconditionally, and the comment on `getItem` claimed the
+     * converted reader's persistence was safe because `setItem` protects it. That was true
+     * of `setItem` and false here — round two of the review on #48 measured it. Two ways in:
+     * a guest presses "Yes — end it and sign in", or a guest tab left open past the sweep
+     * gets a non-retryable refresh failure and auth-js calls `_removeSession()` itself.
+     * Either way `localStorage` was wiped, so a reader signed in on that machine lost their
+     * persisted session and got a `SIGNED_OUT` broadcast they never asked for. The one-day
+     * sweep is what turns the second path from rare into routine.
+     *
+     * The guard is the mirror of the one in `setItem`: the two stores are only left
+     * disagreeing when the tab doing the work is a guest and the shared store holds
+     * somebody with an address. Every other combination still clears both, so an ordinary
+     * sign-out still means signed out wherever the token happened to be.
+     */
     removeItem: (key) => {
+      const inSession = guard(() => session.getItem(key), null);
+      const inLocal = guard(() => local.getItem(key), null);
       guard(() => session.removeItem(key), undefined);
+
+      const guestLeaving = inSession !== null && tokenIsGuest(inSession);
+      const readerStays = inLocal !== null && !tokenIsGuest(inLocal);
+      if (guestLeaving && readerStays) return;
+
       guard(() => local.removeItem(key), undefined);
     },
   };
