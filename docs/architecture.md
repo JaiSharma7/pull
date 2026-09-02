@@ -150,6 +150,7 @@ that they have to be listed somewhere, which is here.
 | `enable_knowledge_vector_refresh()`         | Knowledge centroids go stale, so the Delta slowly stops filtering |
 | `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out      |
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
+| `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever              |
 
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
 deletes anonymous accounts after a day of disuse, and that retention promise is
