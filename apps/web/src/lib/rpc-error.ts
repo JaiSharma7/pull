@@ -118,3 +118,43 @@ export function isSchemaMismatch(error: unknown): boolean {
   const e = (error ?? {}) as RpcErrorShape;
   return typeof e.code === 'string' && SCHEMA_MISMATCH_CODES.includes(e.code);
 }
+
+/**
+ * Can this write ever succeed as written?
+ *
+ * The offline queue retries a failed write until it lands, and for a network
+ * failure or an unwell server that is right. It is wrong for a write the server
+ * has looked at and refused for a reason that will not change: a save for a pull
+ * that was deleted while the reader was offline, a patch to a row they no longer
+ * own. Those kept `hasPending` true and the retry timer alive for the life of the
+ * tab -- one IndexedDB read and one request every five minutes, forever -- and
+ * the roadmap carried it as a known gap because the obvious bound, "give up after
+ * N attempts", trades it for the worse failure of silently discarding something
+ * the reader did.
+ *
+ * So the classification is conservative and by SQLSTATE, not by count. A write is
+ * dropped only when Postgres itself said the request cannot be satisfied:
+ *
+ *   23503  foreign key -- the row this write points at is gone
+ *   23514  check violation -- the value can never be accepted
+ *   22P02  invalid text representation -- an id that is not a uuid at all
+ *   42501  insufficient privilege -- RLS refused it for this account, and will again
+ *
+ * Everything else stays queued: transport failures, 5xx, a rate limit, an expired
+ * token (refreshed on the next attempt), and a schema mismatch -- which
+ * `isSchemaMismatch` recognises and which a pending migration or a reload resolves.
+ * Not knowing is the same as transient; the cost of a wrong "permanent" is a lost
+ * write, and the cost of a wrong "transient" is a retry.
+ */
+const PERMANENT_CODES = ['23503', '23514', '22P02', '42501'];
+
+export function isPermanentFailure(error: unknown): boolean {
+  let code: string | undefined;
+  if (error instanceof Error) {
+    code = /^PostgrestError (.+)$/.exec(error.name)?.[1];
+  } else {
+    const e = (error ?? {}) as RpcErrorShape;
+    code = typeof e.code === 'string' ? e.code : undefined;
+  }
+  return code !== undefined && PERMANENT_CODES.includes(code);
+}

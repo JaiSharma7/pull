@@ -129,6 +129,63 @@ describe('pending mutation queue', () => {
   });
 });
 
+describe('a write the server refused for good', () => {
+  const permanently = () => {
+    // The shape `rpcError` produces for a foreign-key violation: the pull this
+    // save points at no longer exists.
+    const e = new Error('insert or update on table "saved_items" violates foreign key constraint');
+    e.name = 'PostgrestError 23503';
+    return e;
+  };
+
+  it('is dropped rather than kept, so the queue can empty', async () => {
+    await queueMutation(USER_A, { kind: 'save', pullId: 'gone' });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, { kind: 'save', pullId: 'fine' });
+
+    const drained = await drainPending(USER_A, async (m) => {
+      if (pullOf(m) === 'gone') throw permanently();
+    });
+    expect(drained).toBe(1);
+
+    // Nothing left: the refused write is gone, not waiting for a retry that
+    // would fail the same way every five minutes for the life of the tab.
+    const retried: string[] = [];
+    await drainPending(USER_A, async (m) => {
+      retried.push(`${m.kind}:${pullOf(m)}`);
+    });
+    expect(retried).toEqual([]);
+  });
+
+  it('does not block the subject, so its later writes are judged on their own', async () => {
+    await queueMutation(USER_A, { kind: 'save', pullId: 'gone' });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, { kind: 'unsave', pullId: 'gone' });
+
+    const attempted: string[] = [];
+    await drainPending(USER_A, async (m) => {
+      attempted.push(`${m.kind}:${pullOf(m)}`);
+      throw permanently();
+    });
+    // Both were tried and both dropped -- a save-then-unsave of a pull that no
+    // longer exists has nothing left to say.
+    expect(attempted).toEqual(['save:gone', 'unsave:gone']);
+    expect(await hasPending(USER_A)).toBe(false);
+  });
+
+  it('keeps a write the server merely failed to handle', async () => {
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p1' });
+    const e = new Error('canceling statement due to statement timeout');
+    e.name = 'PostgrestError 57014'; // transient: the server was unwell, not the write
+    await drainPending(USER_A, async () => {
+      throw e;
+    });
+    expect(await hasPending(USER_A)).toBe(true);
+    // Leave the queue as it was found: the tests share one IndexedDB.
+    await drainPending(USER_A, async () => undefined);
+  });
+});
+
 describe('queued learning writes', () => {
   it('carries an explanation’s text and mutation id through the queue', async () => {
     // An explanation is several sentences the reader composed. Unlike an

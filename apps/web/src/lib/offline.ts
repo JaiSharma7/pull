@@ -1,7 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
-import { TRANSPORT_ERROR } from './rpc-error.js';
+import { isPermanentFailure, TRANSPORT_ERROR } from './rpc-error.js';
 import type { SavePatch } from './stash-api.js';
 import type { FeedRow } from './types.js';
 
@@ -361,9 +361,24 @@ async function runDrain(
       if (blocked.has(scope)) continue;
       try {
         await apply(write);
-      } catch {
-        // Keep it queued and skip the rest of this subject's writes, preserving
-        // their relative order for the next attempt.
+      } catch (error) {
+        // A refusal that will not change on a retry -- the row is gone, the
+        // account may not -- is dropped rather than kept: kept, it holds
+        // `hasPending` true and the retry timer alive for the life of the tab.
+        // The subject is not blocked, so a later write for it is judged on its
+        // own; it will most likely be dropped for the same reason, which is the
+        // right outcome for a save-then-unsave of a pull that no longer exists.
+        // Everything else is kept, and the rest of this subject's writes are
+        // skipped to preserve their relative order for the next attempt.
+        if (isPermanentFailure(error)) {
+          console.warn('[offline] dropping a queued write the server refused for good', {
+            kind: write.kind,
+            scope,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (item.id !== undefined) await database.delete('pending', item.id);
+          continue;
+        }
         blocked.add(scope);
         continue;
       }
