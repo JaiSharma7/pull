@@ -383,8 +383,13 @@ export function qualityFromDraft(summary: {
 
   // Eight to fourteen ideas is what a source page needs for the Delta to say
   // anything ("4 of 18 are new to you" needs an 18). Fewer is thin; more is
-  // usually the model padding.
-  const count = Math.min(1, pulls.length / 8);
+  // usually the model padding -- and until now that sentence was a comment
+  // rather than a term: `min(1, n / 8)` saturated at eight and treated forty
+  // Pulls as ideal. A band, then: full marks from eight to fourteen, falling
+  // off linearly on either side and reaching zero at forty, the same slope
+  // out as in.
+  const n = pulls.length;
+  const count = n < 8 ? n / 8 : n <= 14 ? 1 : Math.max(0, 1 - (n - 14) / 26);
 
   const lengths = pulls.map((p) => (p.body ?? '').trim().length);
   const inBand = lengths.filter((n) => n >= 200 && n <= 900).length / pulls.length;
@@ -789,7 +794,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
         trustScore:
           job.visibility === 'public'
-            ? trustFromProvenance(acquired.rights, asString(job.target.url) || null)
+            ? trustFromProvenance(acquired.rights, acquired.url || null)
             : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
