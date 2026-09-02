@@ -387,13 +387,18 @@ describe('segment', () => {
  * content would not catch a regression here — only counting the calls does.
  */
 describe('reuse skips the paid work', () => {
-  function harness(reuse: { workId: string; summaryId: string } | null) {
+  function harness(
+    reuse: { workId: string; summaryId: string } | null,
+    claim: 'claimed' | 'held' = 'claimed',
+  ) {
     const calls = {
       summary: 0,
       embedding: 0,
       createSummary: 0,
       insertPulls: 0,
       insertQuizQuestions: 0,
+      claim: 0,
+      release: 0,
     };
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
@@ -507,6 +512,13 @@ describe('reuse skips the paid work', () => {
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,
         attachSummaryToJob: async () => undefined,
+        claimSourceHash: async () => {
+          calls.claim++;
+          return claim;
+        },
+        releaseSourceHash: async () => {
+          calls.release++;
+        },
       },
     };
     return { deps, calls, received };
@@ -538,6 +550,43 @@ describe('reuse skips the paid work', () => {
     } as never);
 
     expect(calls.summary).toBe(1);
+  });
+
+  /*
+   * The lease. One source, one payer at a time.
+   *
+   * A `held` answer must stop the provider call and cost nothing: the error is a
+   * plain one, so the worker records an unbilled attempt and the queue redelivers
+   * the message later -- by which time the holder has usually published and the
+   * re-check adopts its summary. Asserted by counting, as everything in this
+   * block is: the claim was asked, the provider was not.
+   */
+  it('does not pay for a source another job is synthesising', async () => {
+    const { deps, calls } = harness(null, 'held');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    await expect(attempt).rejects.toThrow(/another job is synthesising/);
+    const err = await attempt.catch((e) => e);
+    // Unbilled: nothing was sent, so this must not be a BilledStepError.
+    expect(err).not.toBeInstanceOf(BilledStepError);
+    expect(calls.claim).toBe(1);
+    expect(calls.summary).toBe(0);
+  });
+
+  it('releases the source once the summary is published', async () => {
+    const { deps, calls } = harness(null);
+
+    await runPipelineStep('publish', {
+      ...deps,
+      priorOutputs: { template: { summaryId: 's1', reused: false } },
+    } as never);
+
+    expect(calls.release).toBe(1);
   });
 
   /*
@@ -730,7 +779,9 @@ describe('reuse skips the paid work', () => {
    * `acquire` and `synthesize` are separate invocations minutes apart, so the reuse
    * answer can go stale between them and two jobs can both pay for the same source.
    * The re-check narrows that window; it does not close it. See the comment in
-   * `synthesize` for why reserving the fingerprint is deferred rather than half-built.
+   * `synthesize` for the claim that now sits behind it: the re-check catches a
+   * source published while this job was queued, and the claim catches the one still
+   * being written.
    */
   /** Misses on the first lookup and hits on the second — the race, deterministically. */
   function racingHarness() {
@@ -777,6 +828,8 @@ describe('reuse skips the paid work', () => {
         attachSummaryToJob: async (jobId: string, summaryId: string, workId: string) => {
           attached.push({ jobId, summaryId, workId });
         },
+        claimSourceHash: async () => 'claimed' as const,
+        releaseSourceHash: async () => undefined,
       },
     };
     return { deps, calls, attached };
