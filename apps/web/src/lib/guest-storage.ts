@@ -296,6 +296,25 @@ export function tokenUserId(value: string): string | null {
 }
 
 /**
+ * Whether a session handed to us by auth-js is one this tab actually holds.
+ *
+ * Pure, and separated from the storage read on purpose: this is the whole of the rule that
+ * two listeners depend on, and round three of the review on #48 found it applied to only
+ * one of them. A rule living in one `if` inside a React component is a rule the next
+ * caller does not know exists.
+ *
+ * Null on both sides means "signed out, and this tab agrees" — a local sign-out clears
+ * storage before it notifies, so that adopts. Null on one side only is a cross-tab
+ * broadcast about somebody else, and is ignored.
+ */
+export function shouldAdoptSession(
+  storedToken: string | null,
+  sessionUserId: string | null,
+): boolean {
+  return (storedToken === null ? null : tokenUserId(storedToken)) === sessionUserId;
+}
+
+/**
  * Lazily reached, because naming a storage accessor is itself the thing that throws.
  *
  * A browser configured to block site data does not hand back an empty `Storage` — reading

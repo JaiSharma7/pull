@@ -1,5 +1,5 @@
 import { createBrowserClient, type Db } from '@wap/db';
-import { browserAuthStorage, tokenUserId } from './guest-storage.js';
+import { browserAuthStorage, shouldAdoptSession } from './guest-storage.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -69,7 +69,7 @@ const authStorage = browserAuthStorage();
 export const supabase: Db = createBrowserClient(url, key, authStorage, AUTH_STORAGE_KEY);
 
 /**
- * Which account THIS tab's storage actually holds a token for.
+ * Whether this tab should adopt a session auth-js just handed it.
  *
  * auth-js writes the session before it notifies on every local path -- `_saveSession` then
  * `_notifyAllSubscribers`, checked across all fourteen of them -- but its cross-tab
@@ -82,9 +82,8 @@ export const supabase: Db = createBrowserClient(url, key, authStorage, AUTH_STOR
  * So `App.tsx` asks this before adopting a session. A local sign-in always matches,
  * because the write came first; a broadcast from another tab does not.
  */
-export function tabSessionUserId(): string | null {
-  const raw = authStorage.getItem(AUTH_STORAGE_KEY);
-  return raw === null ? null : tokenUserId(raw);
+export function tabAdopts(sessionUserId: string | null): boolean {
+  return shouldAdoptSession(authStorage.getItem(AUTH_STORAGE_KEY), sessionUserId);
 }
 
 /**
@@ -115,7 +114,20 @@ void supabase.auth
   });
 
 supabase.auth.onAuthStateChange((_event, session) => {
-  currentUserId = session?.user.id ?? null;
+  /*
+   * The same guard `App.tsx` applies, and it belongs here at least as much.
+   *
+   * Round three of the review on #48 found this listener unguarded while the rendering one
+   * was fixed — and the comment in `App.tsx` had already named this as the worse half
+   * without closing it. `getCurrentUserId()` is what `queueMutation` tags an offline write
+   * with. Left to a cross-tab broadcast, a guest tab would stamp the reader's id onto the
+   * guest's queued grade, and `runDrain` filters on exactly that id — so the next time the
+   * reader drained on that device, somebody else's grade would be applied to their
+   * knowledge state. The rendering bug showed the wrong name; this one corrupts data.
+   */
+  const id = session?.user.id ?? null;
+  if (!tabAdopts(id)) return;
+  currentUserId = id;
 });
 
 export function getCurrentUserId(): string | null {

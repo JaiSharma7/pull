@@ -24,8 +24,9 @@ export function createBrowserClient(
   anonKey: string,
   storage?: AuthTokenStore,
   /**
-   * Optional, and passing the same value supabase-js would derive changes nothing about
-   * the client. `apps/web` passes it so that IT can name the key too — it has to read the
+   * Optional. Omitting it genuinely leaves supabase-js's derived default in place -- see
+   * the spread below for why that takes care. Passing the same value it would derive
+   * changes nothing about the client. `apps/web` passes it so that IT can name the key too — it has to read the
    * stored token back to tell a session this tab actually holds from one another tab
    * broadcast to it. Deriving the same string in two places without pinning it is how the
    * two quietly stop agreeing.
@@ -38,7 +39,16 @@ export function createBrowserClient(
       autoRefreshToken: true,
       detectSessionInUrl: true,
       storage,
-      storageKey,
+      /*
+       * Spread rather than named, because `applySettingDefaults` merges by object spread
+       * and an explicit `undefined` WINS over supabase-js's derived default -- so writing
+       * `storageKey` unconditionally would destroy `sb-<ref>-auth-token` for any caller
+       * that omitted it, leaving the key empty and silently disabling the cross-tab
+       * BroadcastChannel, which requires a truthy one. `storage` above is safe named
+       * because auth-js guards it with a truthiness check instead. Measured in round three
+       * of the review on #48.
+       */
+      ...(storageKey === undefined ? {} : { storageKey }),
     },
   });
 }

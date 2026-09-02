@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   browserAuthStorage,
   createSplitAuthStorage,
+  shouldAdoptSession,
   tokenIsGuest,
   tokenUserId,
   type KeyValueStore,
@@ -416,5 +417,50 @@ describe('tokenUserId', () => {
     ]) {
       expect(tokenUserId(value), value).toBe(null);
     }
+  });
+});
+
+describe('shouldAdoptSession', () => {
+  /*
+   * The rule two listeners share -- `App.tsx`'s render state and `supabase.ts`'s
+   * `currentUserId`. Round three of the review on #48 found it written into one of them
+   * only, and the one it missed is what `queueMutation` stamps an offline write with: a
+   * guest tab told about a reader by cross-tab broadcast would tag the guest's queued grade
+   * with the reader's id, and the drain filters on exactly that. Extracted and tested here
+   * so the next caller inherits the rule instead of having to know it exists.
+   */
+  it('adopts a session this tab actually holds', () => {
+    expect(shouldAdoptSession(guestToken, 'u')).toBe(true);
+    expect(shouldAdoptSession(readerToken, 'u')).toBe(true);
+  });
+
+  it('ignores a session broadcast from another tab', () => {
+    // The guest tab holds its own token; another tab signed in as somebody else.
+    expect(shouldAdoptSession(guestToken, 'someone-else')).toBe(false);
+  });
+
+  it('adopts a sign-out this tab agrees with', () => {
+    // A local sign-out clears storage BEFORE it notifies, so both sides are null.
+    expect(shouldAdoptSession(null, null)).toBe(true);
+  });
+
+  it('ignores a sign-out broadcast while this tab still holds a token', () => {
+    /*
+     * The half the first version exempted. A guest tab pressing "Yes -- end it and sign in",
+     * or simply outliving the sweep and failing a refresh, broadcasts SIGNED_OUT -- which
+     * threw every other tab on the machine to the sign-in screen mid-read.
+     */
+    expect(shouldAdoptSession(readerToken, null)).toBe(false);
+  });
+
+  it('ignores a session arriving at a tab that holds nothing', () => {
+    expect(shouldAdoptSession(null, 'u')).toBe(false);
+  });
+
+  it('ignores anything whose stored token cannot be read', () => {
+    // Unreadable answers null and so matches only a sign-out this tab agrees with.
+    expect(shouldAdoptSession('not json', 'u')).toBe(false);
+    expect(shouldAdoptSession('{}', 'u')).toBe(false);
+    expect(shouldAdoptSession('not json', null)).toBe(true);
   });
 });

@@ -58,7 +58,7 @@ import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
 import { isKnownPath, titleFor } from './lib/title.js';
-import { supabase, tabSessionUserId } from './lib/supabase.js';
+import { supabase, tabAdopts } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
 
@@ -409,8 +409,14 @@ export function App() {
        *
        * Ignoring it leaves this tab as the guest it still is, which is the one description
        * of it that matches what the network sees.
+       *
+       * SIGNED_OUT is guarded too, and exempting it was a bug of its own: a guest tab
+       * pressing "Yes — end it and sign in", or simply outliving the sweep and failing a
+       * refresh, broadcasts SIGNED_OUT and threw every other tab on the machine to the
+       * sign-in screen mid-read. A local sign-out clears storage before it notifies, so
+       * null-on-both-sides still adopts and a real sign-out is unaffected.
        */
-      if (s !== null && tabSessionUserId() !== s.user.id) return;
+      if (!tabAdopts(s?.user.id ?? null)) return;
       setSession(s);
       if (!s) return;
       /*
