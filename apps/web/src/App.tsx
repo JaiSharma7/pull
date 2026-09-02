@@ -40,7 +40,9 @@ function RouteFallback() {
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
+import { Graph } from './routes/Graph.js';
 import { Library } from './routes/Library.js';
+
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
 import { SecondFactorGate } from './routes/SecondFactorGate.js';
@@ -105,8 +107,11 @@ function readLocation(): string {
 const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
+  { path: '/graph', label: 'Graph' },
+
   /*
    * A destination rather than a seventh section, and last of the three.
+
    *
    * The sections are the reader's own material — a feed, a library, a history —
    * and every one of them is a row keyed to a user, which is why `SECTIONS` is
@@ -579,6 +584,7 @@ export function App() {
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
+  const graphOpen = isPath(path, '/graph');
   /*
    * A real address rather than a seventh section, for the same reason the legal
    * documents have one: it is a place a reader is sent to. "Delete your account" in a
@@ -618,6 +624,7 @@ export function App() {
     searchOpen ||
     exploreOpen ||
     appearanceOpen ||
+    graphOpen ||
     accountOpen ||
     topicSlug !== null;
 
@@ -971,7 +978,14 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
+            {graphOpen && (
+              <Graph
+                userId={session?.user.id ?? null}
+                onOpenSource={(id) => navigate(`/source/${id}`)}
+              />
+            )}
             {appearanceOpen && <Appearance />}
+
             {accountOpen && session && !guest && (
               <Suspense fallback={<RouteFallback />}>
                 <Account userId={session.user.id} email={session.user.email ?? null} />
@@ -1175,10 +1189,12 @@ export function App() {
           */}
             <div className="shell__group">
               <p className="meta">The Delta</p>
+
               <div className="shell__stat">
                 <span>Already knew</span>
                 <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
               </div>
+
               <div className="shell__stat">
                 <span>Time saved</span>
                 <span className="shell__stat-value shell__stat-value--accent">
