@@ -776,14 +776,20 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
 
+      // The URL `resolve_identity` validated, not the raw target. A job whose
+      // `acquire` output predates the `url` field has no such value at all -- the
+      // property is absent, not empty -- and for that job the target is the only
+      // record; an intentionally empty string (pasted text, no URL) stays empty.
+      // Both `sourceUrl` and the trust score below read this one value, so the
+      // work is linked to and scored on the same URL.
+      const sourceUrl = (acquired.url ?? asString(job.target.url)) || null;
+
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
-        // `acquired.url` is the one `resolve_identity` validated, not the raw target —
-        // the same distinction the scores below make about re-deriving from input.
-        sourceUrl: acquired.url || null,
+        sourceUrl,
         author: asString(job.target.author) || null,
         // Both deterministic, both from what is already in hand: no extra call,
         // and a quarter of `get_feed`'s score stops being the 0.5 default.
@@ -793,9 +799,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         // a source are allowed to move a shared row's ranking.
         qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
         trustScore:
-          job.visibility === 'public'
-            ? trustFromProvenance(acquired.rights, acquired.url || null)
-            : null,
+          job.visibility === 'public' ? trustFromProvenance(acquired.rights, sourceUrl) : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
         // `rights` already get. A job queued before this field existed replays with

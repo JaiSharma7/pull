@@ -528,6 +528,46 @@ describe('reuse skips the paid work', () => {
     expect(templated.output).toMatchObject({ summaryId: 's9', reused: true });
   });
 
+  it('scores a pre-upgrade acquire output on the target URL it validated', async () => {
+    // An `acquire` output stored before the `url` field existed has no such
+    // property. The job's target still carries the URL that step validated, and a
+    // public-domain Gutenberg job must not be rescored from 0.9 to 0.7 -- and have
+    // that lower score persisted on the shared work -- because it was queued a day
+    // early. Found by Codex.
+    const { deps, received } = harness(null);
+    const legacy = {
+      ...deps,
+      job: {
+        ...deps.job,
+        visibility: 'public',
+        target: {
+          ...deps.job.target,
+          url: 'https://www.gutenberg.org/files/2680/2680-0.txt',
+          rights_status: 'public_domain',
+        },
+      },
+    };
+    const identity = await runPipelineStep('resolve_identity', {
+      ...legacy,
+      priorOutputs: {},
+    } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...legacy,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+    const { url: _dropped, ...withoutUrl } = acquired.output as { url: string };
+
+    await runPipelineStep('template', {
+      ...legacy,
+      priorOutputs: { acquire: withoutUrl, synthesize: SYNTHESIZED },
+    } as never);
+
+    expect(received.upsertWork).toMatchObject({
+      sourceUrl: 'https://www.gutenberg.org/files/2680/2680-0.txt',
+      trustScore: 0.9,
+    });
+  });
+
   it('does call the provider when the source is new', async () => {
     const { deps, calls } = harness(null);
 
