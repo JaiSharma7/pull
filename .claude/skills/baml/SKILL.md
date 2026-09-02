@@ -11,9 +11,10 @@ repo-local stand-in. `docs/baml.md` holds the architecture; this holds the workf
 
 ## Rules
 
-1. **Regenerate and commit.** `pnpm baml:generate` after any `.baml` edit. The client in
-   `packages/prompts/baml_client` is committed and CI check 2 diffs it byte-for-byte.
-   Never hand-edit it.
+1. **Regenerate, export, and commit.** `pnpm baml:generate && pnpm baml:export` after any
+   `.baml` edit. The client in `packages/prompts/baml_client` and the export in
+   `supabase/functions/_shared/generated` are both committed and CI check 2 diffs them
+   byte-for-byte. Never hand-edit either.
 2. **`pnpm baml:check` before generating.** A `.baml` file that does not parse produces a
    confusing diff instead of a clear error.
 3. **Nothing in `supabase/functions` imports BAML.** The runtime is a native Node addon
@@ -35,6 +36,7 @@ repo-local stand-in. `docs/baml.md` holds the architecture; this holds the workf
 ```bash
 pnpm baml:check       # parse and typecheck baml_src
 pnpm baml:generate    # rewrite packages/prompts/baml_client
+pnpm baml:export      # rewrite supabase/functions/_shared/generated/prompts.ts
 pnpm --filter @wap/prompts test   # parity tests, no API key needed
 pnpm baml:test        # runs the `test` blocks against real providers — costs money
 ```

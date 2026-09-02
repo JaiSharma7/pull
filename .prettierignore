@@ -8,3 +8,4 @@ packages/db/src/database.types.ts
 supabase/.temp/
 supabase/migrations/
 packages/prompts/baml_client/
+supabase/functions/_shared/generated/

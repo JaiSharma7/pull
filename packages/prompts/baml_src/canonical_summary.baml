@@ -91,7 +91,11 @@ class CanonicalSummary {
 /// never a condensed retelling that could stand in for the original. See
 /// docs/content-policy.md.
 function WriteCanonicalSummary(workTitle: string, kind: string, context: string) -> CanonicalSummary {
-  client SummaryChain
+  // One client, never `SummaryChain`. The worker meters every attempt and decides
+  // whether a failure is safe to retry elsewhere; a fallback chosen here would make
+  // that decision without a ledger. The exporter refuses a function whose client is
+  // not a single pinned model, so this is enforced rather than asked.
+  client GeminiFlash
   prompt #"
     You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.
 

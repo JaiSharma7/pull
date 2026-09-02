@@ -7,6 +7,8 @@
  * round 2 swaps in real providers without touching the pipeline.
  */
 
+import { promptFor } from './prompts.ts';
+
 export interface SummaryInput {
   workTitle: string;
   kind: string;
@@ -306,36 +308,19 @@ export function createFallbackSummaryProvider(
 }
 
 /**
- * The prompt is analysis, not reproduction (law 4). It asks for claims, arguments and
- * consequences the reader can act on — never a condensed retelling that could stand in
- * for the original. See docs/content-policy.md.
+ * The prompt is analysis, not reproduction (law 4).
+ *
+ * It lives in `packages/prompts/baml_src/canonical_summary.baml` and arrives here
+ * through `pnpm baml:export` as a template; this renders it. The one thing the
+ * template cannot carry is a conditional on an argument's value -- the exporter
+ * refuses a transformed argument, because a placeholder has to be the argument
+ * verbatim -- so the fallback for an empty context is applied here rather than in
+ * the prompt. See docs/baml.md and docs/content-policy.md.
  */
 export function buildSummaryPrompt(input: SummaryInput): string {
-  return [
-    `You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.`,
-    ``,
-    `Source: ${input.workTitle}`,
-    `Medium: ${input.kind}`,
-    ``,
-    `Write an original analysis of the ideas in this work: its claims, the arguments`,
-    `behind them, and what follows from them. Do not retell the work section by section,`,
-    `and do not produce anything that could substitute for reading it. Quote only where a`,
-    `phrase itself is the point, and keep quotations short.`,
-    ``,
-    `Each pull must be one atomic idea that stands on its own out of context, in plain`,
-    `language, with a headline that states the idea rather than teasing it. "whyItMatters"`,
-    `should say what changes if the reader believes it — not restate the body.`,
-    ``,
-    // Without this the schema is still satisfied by an empty array, and the whole
-    // classification feature no-ops silently: the work is filed under nothing,
-    // topic_affinity returns 0.0, and no reader's stated interests ever reach it.
-    `Also file this work under one to four topics from this list, most central first:`,
-    TOPIC_SLUGS.join(', '),
-    `Choose the narrowest that genuinely fit. A parent topic is the right answer only`,
-    `when no child of it does — filing a work under a topic it merely touches is worse`,
-    `than filing it under fewer.`,
-    ``,
-    `Context:`,
-    input.context || '(no additional context supplied)',
-  ].join('\n');
+  return promptFor('WriteCanonicalSummary', {
+    workTitle: input.workTitle,
+    kind: input.kind,
+    context: input.context || '(no additional context supplied)',
+  });
 }

@@ -119,6 +119,7 @@ pnpm db:lint        # the schema invariants CI check 4 runs
 pnpm db:test        # read-path behaviour, as a real reader under RLS
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
 pnpm baml:generate  # regenerate packages/prompts/baml_client — never hand-edit
+pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/generated — never hand-edit
 ```
 
 ## Conventions
@@ -147,14 +148,16 @@ pnpm baml:generate  # regenerate packages/prompts/baml_client — never hand-edi
   `docs/contributing-map.md`.
 
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
-  from `pnpm db:types`, and `packages/prompts/baml_client` from `pnpm baml:generate`. CI
-  fails if either is stale.
+  from `pnpm db:types`, `packages/prompts/baml_client` from `pnpm baml:generate`, and
+  `supabase/functions/_shared/generated` from `pnpm baml:export`. CI fails if any is
+  stale.
 
 - **Prompts and their output schemas live in BAML.** `packages/prompts/baml_src` is where
-  a model call's prompt, its schema and its tests are written together, so the four
-  hand-kept copies of one contract in `supabase/functions/_shared` stop drifting. Nothing
-  in `supabase/functions` imports the generated client — BAML's runtime is a native Node
-  addon and Edge Functions are Deno. See `docs/baml.md`.
+  a model call's prompt, its schema and its tests are written together, and
+  `pnpm baml:export` renders them into plain TypeScript under
+  `supabase/functions/_shared/generated` for the Edge Functions to import. Nothing in
+  `supabase/functions` runs BAML — its runtime is a native Node addon and Edge Functions
+  are Deno; what crosses is text and a schema, at build time. See `docs/baml.md`.
 
 ## Definition of done
 
