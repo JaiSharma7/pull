@@ -33,6 +33,15 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        /*
+         * Source Serif 4 belongs to `/design-preview` alone, and the glob above takes
+         * every woff2 in the build regardless of which route references it. Precaching
+         * it would put 122KB of a preview's reading face into every reader's service
+         * worker install — the exact cost `fonts.css` names three latin files by hand
+         * to avoid. A preview opened offline falls back to a system serif; law 3's
+         * offline promise covers the app, not a test surface.
+         */
+        globIgnores: ['**/source-serif-4-*.woff2'],
         navigateFallback: '/index.html',
       },
     }),
