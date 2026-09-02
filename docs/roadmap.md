@@ -331,8 +331,12 @@ not have to rediscover them.
   discarding something the reader did, which is why it stayed open. The fix is by
   SQLSTATE rather than by count: `isPermanentFailure` drops a write only when Postgres
   itself said the request cannot be satisfied (a foreign key to a row that is gone, a
-  check violation, a malformed id, an RLS refusal), and everything it does not
-  recognise stays queued. Not knowing is the same as transient.
+  check violation, a malformed id), and everything it does not recognise stays queued.
+  Not knowing is the same as transient. Two refinements the first cut got wrong: an RLS
+  refusal is _not_ on the list, because a request whose session refresh failed goes out
+  as `anon` and is refused with the same code; and a foreign key or check failure is
+  judged per write, since a collection can point at a collection still in the queue and
+  a check on text the reader typed is something to show them rather than discard.
 - **`acquire` was open to DNS rebinding. Closed, by inverting the check.** The host
   blocklist rejects private and link-local literals in both IPv4 and IPv6 and re-checks
   every redirect hop, so a public URL that 302s to `169.254.169.254` was refused. What

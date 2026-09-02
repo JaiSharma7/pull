@@ -184,6 +184,122 @@ describe('a write the server refused for good', () => {
     // Leave the queue as it was found: the tests share one IndexedDB.
     await drainPending(USER_A, async () => undefined);
   });
+
+  it('keeps a write RLS refused, because the refusal may be about the session', async () => {
+    // A failed token refresh sends the request as `anon`, and RLS says 42501 to
+    // that exactly as it would to an account that may never write here. A queue
+    // built offline and drained in the minute the refresh is failing would be
+    // emptied for good; instead every entry waits for the session to come back.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p1' });
+    const denied = new Error('new row violates row-level security policy for table "saved_items"');
+    denied.name = 'PostgrestError 42501';
+    await drainPending(USER_A, async () => {
+      throw denied;
+    });
+    expect(await hasPending(USER_A)).toBe(true);
+    await drainPending(USER_A, async () => undefined);
+  });
+
+  it('keeps a collection write whose target is a collection still in the queue', async () => {
+    // Offline, the reader creates "Stoics", then "Marcus" inside it, then moves a
+    // save in. The parent fails transiently on the first pass; only its scope is
+    // blocked, so the child and the move are attempted and refused on the
+    // foreign key. That refusal is the parent's absence, not theirs.
+    await queueMutation(USER_A, {
+      kind: 'stash-create',
+      stashId: 'parent',
+      name: 'Stoics',
+      parentId: null,
+    });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, {
+      kind: 'stash-create',
+      stashId: 'child',
+      name: 'Marcus',
+      parentId: 'parent',
+    });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, { kind: 'organise', saveId: 'sv', patch: { stashId: 'parent' } });
+
+    const fk = new Error('insert or update on table "stashes" violates foreign key constraint');
+    fk.name = 'PostgrestError 23503';
+    const unwell = new Error('canceling statement due to statement timeout');
+    unwell.name = 'PostgrestError 57014';
+
+    await drainPending(USER_A, async (m) => {
+      if (m.kind === 'stash-create' && m.stashId === 'parent') throw unwell;
+      throw fk;
+    });
+    expect(await hasPending(USER_A)).toBe(true);
+
+    // The next pass lands the parent, and the writes that depend on it follow.
+    const landed: string[] = [];
+    await drainPending(USER_A, async (m) => {
+      landed.push(
+        m.kind === 'organise'
+          ? `organise:${m.saveId}`
+          : `${m.kind}:${'stashId' in m ? m.stashId : ''}`,
+      );
+    });
+    expect(landed).toEqual(['stash-create:parent', 'stash-create:child', 'organise:sv']);
+    expect(await hasPending(USER_A)).toBe(false);
+  });
+
+  it('drops a collection write whose target is nowhere', async () => {
+    // Nothing queued creates "gone", and the server does not have it either: the
+    // move can never land, and keeping it would hold the timer alive forever.
+    await queueMutation(USER_A, { kind: 'organise', saveId: 'sv2', patch: { stashId: 'gone' } });
+    const fk = new Error('insert or update on table "saved_items" violates foreign key constraint');
+    fk.name = 'PostgrestError 23503';
+    await drainPending(USER_A, async () => {
+      throw fk;
+    });
+    expect(await hasPending(USER_A)).toBe(false);
+  });
+
+  it('keeps text the reader composed that a check constraint refused', async () => {
+    // An explanation over the column's limit is refused by Postgres, and the
+    // client has no bound of its own to have stopped it. Losing several sentences
+    // the reader wrote is worse than a retry that fails visibly on reload.
+    await queueMutation(USER_A, {
+      kind: 'explain',
+      pullId: 'p1',
+      text: 'x'.repeat(30),
+      mutationId: 'm1',
+    });
+    const check = new Error(
+      'new row for relation "explanations" violates check constraint "explanations_text_length"',
+    );
+    check.name = 'PostgrestError 23514';
+    await drainPending(USER_A, async () => {
+      throw check;
+    });
+    expect(await hasPending(USER_A)).toBe(true);
+    await drainPending(USER_A, async () => undefined);
+  });
+
+  it('defers dropping while an earlier write in the pass was held back', async () => {
+    // Two subjects. The first fails transiently and is blocked; the second is
+    // refused for good. It is not dropped in this pass -- it might depend on the
+    // first -- and is dropped in the next, where nothing is held back.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'slow' });
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, { kind: 'save', pullId: 'gone' });
+    const unwell = new Error('canceling statement due to statement timeout');
+    unwell.name = 'PostgrestError 57014';
+
+    await drainPending(USER_A, async (m) => {
+      if (pullOf(m) === 'slow') throw unwell;
+      throw permanently();
+    });
+    const remaining: string[] = [];
+    await drainPending(USER_A, async (m) => {
+      remaining.push(pullOf(m) ?? '');
+      if (pullOf(m) === 'gone') throw permanently();
+    });
+    expect(remaining).toEqual(['slow', 'gone']);
+    expect(await hasPending(USER_A)).toBe(false);
+  });
 });
 
 describe('queued learning writes', () => {

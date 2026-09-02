@@ -1,7 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
-import { isPermanentFailure, TRANSPORT_ERROR } from './rpc-error.js';
+import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
 import type { SavePatch } from './stash-api.js';
 import type { FeedRow } from './types.js';
 
@@ -349,6 +349,11 @@ async function runDrain(
       // Only this account's writes. Another user's stay queued for them.
       .filter((item) => item.userId === userId)
       .sort((a, b) => a.at - b.at);
+    // Collections this pass may still create. A write that points at one of them
+    // can fail its foreign key today and succeed tomorrow -- see `refusedForGood`.
+    const queuedStashes = new Set(
+      items.flatMap((item) => (item.kind === 'stash-create' ? [item.stashId] : [])),
+    );
     for (const item of items) {
       // Re-check between every item, not just at the start: signing out
       // mid-drain must stop the remaining writes rather than attribute them to
@@ -362,15 +367,20 @@ async function runDrain(
       try {
         await apply(write);
       } catch (error) {
-        // A refusal that will not change on a retry -- the row is gone, the
-        // account may not -- is dropped rather than kept: kept, it holds
-        // `hasPending` true and the retry timer alive for the life of the tab.
-        // The subject is not blocked, so a later write for it is judged on its
-        // own; it will most likely be dropped for the same reason, which is the
-        // right outcome for a save-then-unsave of a pull that no longer exists.
-        // Everything else is kept, and the rest of this subject's writes are
-        // skipped to preserve their relative order for the next attempt.
-        if (isPermanentFailure(error)) {
+        // A refusal that will not change on a retry -- the row is gone -- is
+        // dropped rather than kept: kept, it holds `hasPending` true and the retry
+        // timer alive for the life of the tab. The subject is not blocked, so a
+        // later write for it is judged on its own; it will most likely be dropped
+        // for the same reason, which is the right outcome for a save-then-unsave
+        // of a pull that no longer exists. Everything else is kept, and the rest
+        // of this subject's writes are skipped to preserve their relative order
+        // for the next attempt.
+        //
+        // Only in a pass where nothing was held back. A write blocked earlier in
+        // this drain may be the one this write depends on -- the collection it
+        // moves a save into, say -- and a foreign key it fails today is one it
+        // passes once that lands. Dropping is deferred to a pass that can tell.
+        if (blocked.size === 0 && refusedForGood(error, write, queuedStashes)) {
           console.warn('[offline] dropping a queued write the server refused for good', {
             kind: write.kind,
             scope,
@@ -389,6 +399,49 @@ async function runDrain(
     /* IndexedDB itself is unavailable — nothing to drain */
   }
   return drained;
+}
+
+/**
+ * Is this refusal final for this write?
+ *
+ * `isPermanentFailure` says whether the SQLSTATE is one Postgres uses for a
+ * request it can never satisfy. Whether that is true of *this* request depends on
+ * what the request was, and two kinds of write can carry one of those codes
+ * transiently:
+ *
+ *   23503 on a collection write. `stash-create` names a parent and `organise` a
+ *   destination, and either may be a collection this same drain is still about
+ *   to create -- the parent was queued first and the drain runs oldest first, but
+ *   a transport failure on the parent blocks only the parent's scope, so the child
+ *   is attempted anyway and refused. It stays queued while its target is queued,
+ *   and is dropped only when the target is nowhere: not queued, and not on the
+ *   server.
+ *
+ *   23514 on text the reader composed. A collection name over 200 characters or an
+ *   explanation over 20,000 is refused by a check constraint the client does not
+ *   mirror, and the reader would rather be told than have it vanish. Kept, so it
+ *   fails visibly on the next reload rather than silently now. Bounding the inputs
+ *   is the real fix, and lives in the components.
+ *
+ * Everything about a pull is what the codes were listed for: a pull that is gone
+ * is gone, and no later pass brings it back.
+ */
+function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
+  if (!isPermanentFailure(error)) return false;
+  const code = sqlState(error);
+  if (code === '23503') {
+    if (write.kind === 'stash-create') {
+      return write.parentId === null || !queuedStashes.has(write.parentId);
+    }
+    if (write.kind === 'organise') {
+      const target = write.patch.stashId;
+      return typeof target !== 'string' || !queuedStashes.has(target);
+    }
+  }
+  if (code === '23514') {
+    return write.kind !== 'explain' && write.kind !== 'organise' && write.kind !== 'stash-create';
+  }
+  return true;
 }
 
 export function onReconnect(handler: () => void): () => void {

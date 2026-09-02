@@ -190,10 +190,19 @@ describe('isSchemaMismatch', () => {
 
 describe('isPermanentFailure', () => {
   it('recognises a refusal that a retry cannot change', () => {
-    for (const code of ['23503', '23514', '22P02', '42501']) {
+    for (const code of ['23503', '23514', '22P02']) {
       expect(isPermanentFailure({ code, message: 'refused' })).toBe(true);
       expect(isPermanentFailure(rpcError({ code, message: 'refused' }))).toBe(true);
     }
+  });
+
+  it('does not treat an RLS refusal as permanent, because anon gets one too', () => {
+    // A request whose session refresh failed goes out with only the publishable
+    // key, and RLS answers 42501 exactly as it would for an account that may never
+    // do this. The code cannot tell those apart, so a queue drained in that minute
+    // would be emptied for good. Kept, it lands once the session is back.
+    expect(isPermanentFailure({ code: '42501', message: 'permission denied' })).toBe(false);
+    expect(isPermanentFailure(rpcError({ code: '42501', message: 'denied' }))).toBe(false);
   });
 
   it('treats everything it does not know as transient', () => {
