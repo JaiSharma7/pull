@@ -274,6 +274,28 @@ export function createSplitAuthStorage(
 }
 
 /**
+ * Which account a stored token belongs to, or null if the value does not say.
+ *
+ * Exists because `sessionStorage` is per-tab and auth-js's cross-tab `BroadcastChannel`
+ * is not: its broadcast handler calls `_notifyAllSubscribers` with a session it never
+ * wrote to this tab's storage. With one shared `localStorage` that distinction never
+ * mattered. With this module it does, so `App.tsx` needs to ask what THIS tab actually
+ * holds rather than trusting the session it was handed.
+ */
+export function tokenUserId(value: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const user = (parsed as { user?: unknown }).user;
+    if (typeof user !== 'object' || user === null) return null;
+    const id = (user as { id?: unknown }).id;
+    return typeof id === 'string' ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Lazily reached, because naming a storage accessor is itself the thing that throws.
  *
  * A browser configured to block site data does not hand back an empty `Storage` — reading

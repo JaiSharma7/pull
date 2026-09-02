@@ -58,7 +58,7 @@ import { legalDocFor } from './lib/legal-routes.js';
 import { decodeSegment, isPath, queryParam, routeParam } from './lib/routes.js';
 import { takeDestination } from './lib/pending-destination.js';
 import { isKnownPath, titleFor } from './lib/title.js';
-import { supabase } from './lib/supabase.js';
+import { supabase, tabSessionUserId } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
 
@@ -391,6 +391,26 @@ export function App() {
      * return to wherever the reader came from rather than to it.
      */
     const arrive = (s: Session | null) => {
+      /*
+       * Only adopt a session this tab's storage actually holds.
+       *
+       * auth-js broadcasts auth events across tabs on a `BroadcastChannel`, and its
+       * receiving handler notifies with a session it never wrote to this tab's storage
+       * (`GoTrueClient.js`, the handler around line 276). Every LOCAL path saves first and
+       * notifies second, all fourteen of them, so this costs a real sign-in nothing.
+       *
+       * It costs a guest tab a great deal. A guest's token is in per-tab `sessionStorage`,
+       * so when another tab signs in with an email the broadcast would make this tab render
+       * that reader -- their name, their Library, `/account` -- while every request it sent
+       * still carried the guest's JWT. The reader would stash and grade into an anonymous
+       * account the sweep deletes a day later, and the offline drain's own guard would pass
+       * because it compares the id this listener set. Measured in Chromium against a real
+       * supabase-js client in round two of the review on #48.
+       *
+       * Ignoring it leaves this tab as the guest it still is, which is the one description
+       * of it that matches what the network sees.
+       */
+      if (s !== null && tabSessionUserId() !== s.user.id) return;
       setSession(s);
       if (!s) return;
       /*

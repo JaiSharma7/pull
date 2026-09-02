@@ -1,5 +1,5 @@
 import { createBrowserClient, type Db } from '@wap/db';
-import { browserAuthStorage } from './guest-storage.js';
+import { browserAuthStorage, tokenUserId } from './guest-storage.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -57,7 +57,35 @@ if (
  * `globalThis.localStorage` throws, and this line runs at module scope before anything
  * has rendered.
  */
-export const supabase: Db = createBrowserClient(url, key, browserAuthStorage());
+/*
+ * The same string supabase-js derives for itself
+ * (`sb-${new URL(url).hostname.split('.')[0]}-auth-token`, SupabaseClient.js), pinned here
+ * and passed in so both sides are reading one constant rather than two copies of a rule.
+ */
+export const AUTH_STORAGE_KEY = `sb-${new URL(url).hostname.split('.')[0]}-auth-token`;
+
+const authStorage = browserAuthStorage();
+
+export const supabase: Db = createBrowserClient(url, key, authStorage, AUTH_STORAGE_KEY);
+
+/**
+ * Which account THIS tab's storage actually holds a token for.
+ *
+ * auth-js writes the session before it notifies on every local path -- `_saveSession` then
+ * `_notifyAllSubscribers`, checked across all fourteen of them -- but its cross-tab
+ * BroadcastChannel handler notifies with a session it never wrote here. That asymmetry was
+ * invisible while every tab shared one `localStorage`. With a guest's token in per-tab
+ * `sessionStorage` it is not: a guest tab told "SIGNED_IN" by another tab would render the
+ * reader's account while every request it made still carried the guest's JWT, so the
+ * reader's stashes would land in an anonymous account the sweep deletes a day later.
+ *
+ * So `App.tsx` asks this before adopting a session. A local sign-in always matches,
+ * because the write came first; a broadcast from another tab does not.
+ */
+export function tabSessionUserId(): string | null {
+  const raw = authStorage.getItem(AUTH_STORAGE_KEY);
+  return raw === null ? null : tokenUserId(raw);
+}
 
 /**
  * Who is signed in right now, tracked at module scope rather than in component

@@ -3,6 +3,7 @@ import {
   browserAuthStorage,
   createSplitAuthStorage,
   tokenIsGuest,
+  tokenUserId,
   type KeyValueStore,
 } from './guest-storage.js';
 
@@ -385,5 +386,35 @@ describe('createSplitAuthStorage when a store refuses a write', () => {
 
     expect(local.map.has(KEY)).toBe(false);
     expect(session.map.has(KEY)).toBe(false);
+  });
+});
+
+describe('tokenUserId', () => {
+  it('reads the account a stored token belongs to', () => {
+    expect(tokenUserId(guestToken)).toBe('u');
+    expect(tokenUserId(readerToken)).toBe('u');
+    expect(tokenUserId(JSON.stringify({ user: { id: 'other' } }))).toBe('other');
+  });
+
+  it('is null for anything that does not name one', () => {
+    /*
+     * `App.tsx` compares this against the session auth-js hands it, and adopts only on a
+     * match. Returning a WRONG id would be the dangerous direction -- a guest tab adopting
+     * a reader broadcast from another tab, rendering that account while its requests still
+     * carried the guest's JWT -- so everything unreadable answers null and matches nothing.
+     */
+    for (const value of [
+      '',
+      'not json',
+      'null',
+      '[]',
+      '{}',
+      '{"user":null}',
+      '"a-code-verifier"',
+      JSON.stringify({ user: { id: 42 } }),
+      JSON.stringify({ access_token: 'a' }),
+    ]) {
+      expect(tokenUserId(value), value).toBe(null);
+    }
   });
 });

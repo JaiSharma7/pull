@@ -19,9 +19,27 @@ export interface AuthTokenStore {
   removeItem(key: string): void;
 }
 
-export function createBrowserClient(url: string, anonKey: string, storage?: AuthTokenStore): Db {
+export function createBrowserClient(
+  url: string,
+  anonKey: string,
+  storage?: AuthTokenStore,
+  /**
+   * Optional, and passing the same value supabase-js would derive changes nothing about
+   * the client. `apps/web` passes it so that IT can name the key too — it has to read the
+   * stored token back to tell a session this tab actually holds from one another tab
+   * broadcast to it. Deriving the same string in two places without pinning it is how the
+   * two quietly stop agreeing.
+   */
+  storageKey?: string,
+): Db {
   return createClient<Database>(url, anonKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storage },
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage,
+      storageKey,
+    },
   });
 }
 
