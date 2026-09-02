@@ -134,7 +134,14 @@ as $$
 declare
   new_id bigint;
 begin
-  perform pgmq.archive('generation', p_msg_id);
+  -- The archive is the guard. A delivery that outlived its visibility timeout is
+  -- redelivered under the same msg_id, and both deliveries can reach `held`; the
+  -- second finds nothing to archive and must send nothing, or the job has two
+  -- live messages for one step -- and both would be granted the claim (same job)
+  -- and both would pay. Null tells the worker the wait is already queued.
+  if not pgmq.archive('generation', p_msg_id) then
+    return null;
+  end if;
   select pgmq.send('generation',
                    jsonb_build_object('jobId', p_job_id, 'step', p_step, 'waits', p_waits),
                    greatest(coalesce(p_delay_seconds, 0), 0))
@@ -144,7 +151,7 @@ end;
 $$;
 
 comment on function public.requeue_generation_message(bigint, uuid, text, int, int) is
-  'Archive a delivered message and re-send its step with a delay and a wait count, so a job can wait on a source claim without consuming its retry budget. Service role only.';
+  'Archive a delivered message and re-send its step with a delay and a wait count, so a job can wait on a source claim without consuming its retry budget. Null when the message was already gone, in which case nothing is sent. Service role only.';
 
 revoke all on function public.requeue_generation_message(bigint, uuid, text, int, int)
   from public, anon, authenticated;

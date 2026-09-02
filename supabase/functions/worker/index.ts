@@ -422,7 +422,10 @@ Deno.serve(async (req) => {
         const waits = (msg.message.waits ?? 0) + 1;
         if (waits <= MAX_WAITS) {
           try {
-            must(
+            // Null means the message was already gone: a delivery that outlived
+            // its visibility timeout was redelivered, and the other delivery has
+            // archived and re-sent it. Nothing to do -- the wait is queued once.
+            const requeued = must(
               await supabase.rpc('requeue_generation_message', {
                 p_msg_id: msg.msg_id,
                 p_job_id: jobId,
@@ -431,8 +434,13 @@ Deno.serve(async (req) => {
                 p_waits: waits,
               }),
               'requeue waiting step',
-            );
-            processed.push({ jobId, step, waiting: waits });
+            ) as number | null;
+            processed.push({
+              jobId,
+              step,
+              waiting: waits,
+              ...(requeued === null ? { alreadyQueued: true } : {}),
+            });
           } catch (requeueError) {
             // The message was left unarchived, so the visibility timeout redelivers
             // it; that costs a read_ct, which is the lesser evil next to losing it.

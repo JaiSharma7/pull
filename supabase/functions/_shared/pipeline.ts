@@ -41,8 +41,13 @@ export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 }
  * `read_ct` -- and bounds the number of waits itself.
  */
 export class SourceHeldError extends Error {
-  constructor(contentHash: string) {
-    super(`synthesize: another job holds ${contentHash.slice(0, 12)}…; will ask again`);
+  constructor() {
+    // Deliberately says nothing about who holds the source. When the wait runs out
+    // this text lands in `job_steps.error`, which the requester can read, and
+    // "another job holds this" would confirm that a different account submitted
+    // the same document in the last half hour -- the membership question the
+    // `works.content_hash` revoke exists to keep unanswerable.
+    super('synthesize: the source is being summarised; will ask again');
     this.name = 'SourceHeldError';
   }
 }
@@ -716,7 +721,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       // re-check above so a job that finds the summary already published never
       // contends for the claim at all.
       if ((await db.claimSourceHash(job.id, acquired.hash)) === 'held') {
-        throw new SourceHeldError(acquired.hash);
+        throw new SourceHeldError();
       }
 
       /*

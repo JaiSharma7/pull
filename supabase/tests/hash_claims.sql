@@ -98,6 +98,25 @@ begin
     perform set_config('role', 'service_role', true);
   end;
 
+  -- ------------------------------------------------ 8b. a wait is queued once
+  -- A delivery that outlived its visibility timeout is redelivered under the same
+  -- msg_id, and both deliveries can reach `held`. The second finds nothing to
+  -- archive and must send nothing: two live messages for one step would both be
+  -- granted the claim, being the same job, and both would pay.
+  declare
+    missing_id bigint := (select coalesce(max(msg_id), 0) + 1000000 from pgmq.q_generation);
+    before     int    := (select count(*) from pgmq.q_generation q where q.message ->> 'jobId' = job_b::text);
+  begin
+    if public.requeue_generation_message(missing_id, job_b, 'synthesize', 60, 2) is not null then
+      raise exception 'requeueing a message that is not in the queue sent a new one';
+    end if;
+    perform set_config('role', 'postgres', true);
+    if (select count(*) from pgmq.q_generation q where q.message ->> 'jobId' = job_b::text) <> before then
+      raise exception 'a requeue of a missing message changed the queue';
+    end if;
+    perform set_config('role', 'service_role', true);
+  end;
+
   -- ------------------------------------------------ 9. the floor
   begin
     perform public.claim_source_hash(job_b, 'hash-3', interval '30 seconds');
@@ -124,6 +143,13 @@ begin
     refused := true;
   end;
   if not refused then raise exception 'a reader could requeue a message.'; end if;
+  refused := false;
+  begin
+    perform public.release_source_hash(job_b);
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then raise exception 'a reader could release a claim.'; end if;
   if exists (select 1 from public.generation_hash_claims) then
     raise exception 'a reader can see generation_hash_claims.';
   end if;
