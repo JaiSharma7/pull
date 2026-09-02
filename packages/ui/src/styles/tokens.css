@@ -202,9 +202,20 @@
  * the furniture does not grow with the prose and reclaim the room this just freed.
  */
 :root[data-focus='on'] {
-  --step-0: clamp(1.0625rem, 0.95rem + 0.6vw, 1.625rem);
-  --step-1: clamp(1.25rem, 1.1rem + 0.75vw, 1.9375rem);
-  --step-2: clamp(1.5rem, 1.25rem + 1.2vw, 2.5rem);
+  /*
+   * The three contested steps name their value once, here, and the combined block
+   * below refers to it. Written out twice instead, the combined block goes stale the
+   * first time either of these is tuned and the collision quietly returns — verified:
+   * changing large text's `--step-0` to 1.375rem reproduces the original bug at 375px
+   * with every test still green.
+   */
+  --step-0-focus: clamp(1.0625rem, 0.95rem + 0.6vw, 1.625rem);
+  --step-1-focus: clamp(1.25rem, 1.1rem + 0.75vw, 1.9375rem);
+  --step-2-focus: clamp(1.5rem, 1.25rem + 1.2vw, 2.5rem);
+
+  --step-0: var(--step-0-focus);
+  --step-1: var(--step-1-focus);
+  --step-2: var(--step-2-focus);
   --step-3: clamp(1.9531rem, 1.5rem + 2vw, 3.25rem);
   --step-4: clamp(2.4414rem, 1.85rem + 2.9vw, 4.125rem);
   --step-5: clamp(3.0518rem, 2.2rem + 4vw, 5.25rem);
@@ -217,8 +228,48 @@
 }
 
 :root[data-text='large'] {
-  --step-0: 1.1875rem;
+  /* Named once, for the reason the focus block above gives. */
+  --step-0-large: 1.1875rem;
+  --step-1-large: 1.4375rem;
+  --step-2-large: 1.75rem;
+
+  --step-0: var(--step-0-large);
   --step--1: 1rem;
-  --step-1: 1.4375rem;
-  --step-2: 1.75rem;
+  --step-1: var(--step-1-large);
+  --step-2: var(--step-2-large);
+}
+
+/*
+ * Two settings that both mean "bigger", composed instead of fighting.
+ *
+ * Focus and large text are independent switches, and three steps are set by both.
+ * They carry equal specificity and `[data-text='large']` is written second, so it
+ * simply won — which meant that on a 1280px screen in focus mode, turning LARGE
+ * TEXT ON MADE THE TEXT SMALLER: 22.88px to 19px, a 17% cut, from a control whose
+ * entire promise is the opposite. The measure went with it, since focus derives
+ * `--measure` from `--step-0`, so the column narrowed too; and because large text
+ * does not set `--step-3` and above, the headline stayed at its focus size while
+ * the body shrank underneath it, pulling the scale out of proportion as well.
+ *
+ * `max()` is the whole fix, and it is not a tie-break — it is what each setting
+ * actually means. Large text is a FLOOR: a reader who asked for it does not want
+ * it shrinking again on a small screen, which is why its values are fixed rather
+ * than fluid. Focus is a fluid CEILING that buys physical size from a large
+ * window. Whichever is larger at a given width is the one that honours both, so
+ * neither switch can now take size away from the other.
+ *
+ * Measured: at 1280px the pair gives 22.88px (focus wins, large no longer cuts
+ * it); at 375px it gives 19px (large wins, the floor survives a phone). Both are
+ * >= what either setting produces alone, which is the invariant
+ * `design-laws.test.ts` pins.
+ *
+ * Every operand is a `var()` and none is a literal, deliberately. Copying the two
+ * source values in here would make this block correct exactly until somebody tuned
+ * one of them, and the test would go on passing: composing with `max()` is only half
+ * the guarantee, composing the CURRENT values is the other half.
+ */
+:root[data-focus='on'][data-text='large'] {
+  --step-0: max(var(--step-0-large), var(--step-0-focus));
+  --step-1: max(var(--step-1-large), var(--step-1-focus));
+  --step-2: max(var(--step-2-large), var(--step-2-focus));
 }
