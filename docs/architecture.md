@@ -182,6 +182,15 @@ reload and go straight from `anonymous_provider_disabled` to `captcha_failed`, w
 working sign-in in between. `lib/auth-errors.ts` names the setting in the console for
 whoever is running the deployment, because the reader-facing error cannot.
 
+**Expect the advisor to light up once anonymous sign-ins are on.** Supabase's security
+advisor emits an `auth_allow_anonymous_sign_ins` WARN for every table whose policies are
+written `to authenticated`, because an anonymous user holds that role — around forty of
+them here, where before the toggle there were eight. None of it is new exposure and none
+of it is an ERROR: it is the advisor restating the premise `20260901190000` is built on,
+and the four doors that premise closes (generation, authorship, reports, publishing) do
+not appear in the policy lists it prints, because those policies now exclude guests. The
+number is worth knowing in advance so nobody reads it as a regression at the wrong moment.
+
 What guards guest abuse here instead of a CAPTCHA: an IP rate limit of 30 anonymous
 sign-ins an hour, the money door shut in the database (`enqueue_generation_job` refuses a
 guest outright — a per-requester ceiling means nothing against an identity that is free to
