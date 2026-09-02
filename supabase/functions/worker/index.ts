@@ -4,6 +4,7 @@ import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
   BilledStepError,
+  jumpFor,
   runPipelineStep,
   type JobRow,
   type StepResult,
@@ -233,15 +234,19 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
   const targets = jumpTo ? [jumpTo] : successorsOf(step);
 
   if (targets.length === 0) {
-    must(
+    const closed = must(
       await supabase.rpc('advance_generation_job', {
         p_job_id: jobId,
         p_from_step: step,
         p_to_step: null,
       }),
       'close job',
-    );
-    return { closed: step };
+    ) as boolean;
+    // `false` is the compare-and-set finding `current_step` elsewhere. It is not
+    // an error -- a redelivered close after a successful one lands here -- but a
+    // job that stays `running` after its sink ran is worth a line in the log.
+    if (!closed) console.warn(`[worker] job ${jobId}: close from ${step} matched nothing`);
+    return { closed: closed ? step : `not-closed:${step}` };
   }
 
   const verdicts: Record<string, string> = {};
@@ -336,14 +341,18 @@ Deno.serve(async (req) => {
     // work. `advance` is idempotent, so repeating it is safe.
     if (last?.status === 'succeeded') {
       try {
-        // No `jumpTo` here: the result that would have carried it belongs to an
-        // invocation that has already ended. Both outcomes are correct. If that
-        // invocation dispatched before dying, every dispatch here answers `already`
-        // and changes nothing; if it died first, the job takes the long way round and
-        // every intermediate step no-ops on the reuse that `acquire` recorded. The
-        // cost of the rare case is invocations, not correctness, which is the right
-        // direction for a path that only runs after a crash.
-        const dispatched = await advance(jobId, step);
+        // The result that carried `jumpTo` belongs to an invocation that has ended,
+        // so the jump is read back from the output that invocation persisted. That
+        // is not optional: resuming a reused `acquire` down the normal path would
+        // dispatch `chunk` beside the `publish` it had already sent, overwrite
+        // `current_step`, and strand the job -- see `jumpFor`. With the jump in
+        // hand every dispatch here answers `already` if the dying invocation got
+        // that far, and sends exactly what it would have if it did not.
+        const own = (must(
+          await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [step] }),
+          'read resumed step output',
+        ) ?? {}) as Record<string, unknown>;
+        const dispatched = await advance(jobId, step, jumpFor(step, own[step]));
         must(await archive(msg.msg_id), 'archive resumed message');
         processed.push({ jobId, step, resumed: true, dispatched });
       } catch (e) {

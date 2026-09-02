@@ -3,6 +3,7 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  jumpFor,
   narrowTopics,
   NO_USAGE,
   RIGHTS_STATUSES,
@@ -594,6 +595,26 @@ describe('reuse skips the paid work', () => {
     }
     return { outputs, done };
   }
+
+  it('recovers the jump a step took from the output it persisted', async () => {
+    // What the resume path relies on: the result is gone with the invocation
+    // that produced it, and the persisted output must say the same thing.
+    const { deps } = harness({ workId: 'w9', summaryId: 's9' });
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    expect(acquired.jumpTo).toBe('publish');
+    expect(jumpFor('acquire', acquired.output)).toBe('publish');
+
+    const fresh = harness(null);
+    const plain = await runPipelineStep('acquire', { ...fresh.deps, priorOutputs: {} } as never);
+    expect(plain.jumpTo).toBeUndefined();
+    expect(jumpFor('acquire', plain.output)).toBeUndefined();
+
+    // Only the two steps that can jump ever answer; a reuse marker on any other
+    // step's output is not a jump.
+    expect(jumpFor('template', { reuse: { summaryId: 's9' } })).toBeUndefined();
+    expect(jumpFor('synthesize', { reuse: { workId: 'w7', summaryId: 's7' } })).toBe('publish');
+    expect(jumpFor('synthesize', null)).toBeUndefined();
+  });
 
   it('concludes a new source when every step gets only what it declared', async () => {
     const { deps, calls } = harness(null);
