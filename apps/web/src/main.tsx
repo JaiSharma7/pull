@@ -45,12 +45,41 @@ const render = (children: ReactNode) => {
 };
 
 void (async () => {
-  if (bootstrapTarget(window.location.pathname) === 'design-preview') {
-    const { DesignPreview } = await import('./routes/DesignPreview.js');
-    render(<DesignPreview />);
-    return;
-  }
+  try {
+    if (bootstrapTarget(window.location.pathname) === 'design-preview') {
+      const { DesignPreview } = await import('./routes/DesignPreview.js');
+      render(<DesignPreview />);
+      return;
+    }
 
-  const { App } = await import('./App.js');
-  render(<App />);
+    const { App } = await import('./App.js');
+    render(<App />);
+  } catch (cause) {
+    /*
+     * A chunk that never arrives is the one failure `ErrorBoundary` cannot catch.
+     *
+     * It is mounted BY `render`, so a rejected `import()` throws before there is any
+     * boundary to catch it — an unhandled rejection, and `#root` left empty. Neither
+     * import is hypothetical: a first visit over a dropped connection, or a returning
+     * reader whose cached `index.html` points at a filename the last deploy replaced,
+     * both land here. The old static import could not fail this way, so making the
+     * bootstrap dynamic is what introduced the gap and it is fixed in the same file.
+     *
+     * Reload rather than a message alone, because the stale-asset case is fixed by
+     * exactly that, and it is the likelier of the two.
+     */
+    console.error('Bootstrap failed', cause);
+    root.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'meta';
+    p.style.padding = '2rem';
+    p.textContent = 'This did not load. Reload the page to try again.';
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'btn';
+    again.textContent = 'Reload';
+    again.addEventListener('click', () => window.location.reload());
+    p.append(document.createElement('br'), again);
+    root.append(p);
+  }
 })();
