@@ -47,7 +47,20 @@ describe('preview reading time', () => {
     expect(visibleWords(pull, 0)).toBe(7);
     expect(visibleWords(pull, 2)).toBe(21);
     expect(visibleWords(pull, 4)).toBe(35);
-    expect(depthLabels(pull)).toEqual(['10 sec', '10 sec', '10 sec', '10 sec', 'Source']);
+    /*
+     * This asserted ['10 sec', '10 sec', '10 sec', '10 sec', 'Source'] — the
+     * duplication, pinned as correct. Four stops that read identically are not a
+     * dial; the fixture is short, but the old ten-second floor made the same thing
+     * happen on 27% of the real corpus.
+     */
+    expect(depthLabels(pull)).toEqual(['5 sec', '5 sec', '10 sec', '10 sec', 'Source']);
+  });
+
+  it('does not render every stop with the same label', () => {
+    // The property behind the expectation above: a dial whose stops all read alike
+    // tells the reader nothing about what the next turn costs.
+    const durations = depthLabels(pull).filter((l) => l !== 'Source');
+    expect(new Set(durations).size).toBeGreaterThan(1);
   });
 
   it('derives a sitting total from the default visible depth of every dealt Pull', () => {
