@@ -18,75 +18,75 @@ $fn$;
 
 do $$
 declare
-  job_id  uuid;
+  the_job uuid;
   verdict text;
   refused boolean := false;
 begin
   insert into public.generation_jobs (target, status, current_step)
   values ('{"text":"x"}'::jsonb, 'running', 'cards')
-  returning id into job_id;
+  returning id into the_job;
 
   -- ------------------------------------------- 1. one of two predecessors: wait
   insert into public.job_steps (job_id, step, attempt, status, output)
-  values (job_id, 'artwork', 1, 'succeeded', '{"generated":false}'::jsonb);
+  values (the_job, 'artwork', 1, 'succeeded', '{"generated":false}'::jsonb);
 
-  verdict := public.dispatch_generation_step(job_id, 'moderate', array['artwork', 'embed']);
+  verdict := public.dispatch_generation_step(the_job, 'moderate', array['artwork', 'embed']);
   if verdict <> 'waiting' then
     raise exception 'expected waiting with embed unfinished, got %', verdict;
   end if;
-  if pg_temp.queued_for(job_id, 'moderate') <> 0 then
+  if pg_temp.queued_for(the_job, 'moderate') <> 0 then
     raise exception 'a waiting dispatch sent a message';
   end if;
-  if exists (select 1 from public.generation_dispatches where job_id = job_id and step = 'moderate') then
+  if exists (select 1 from public.generation_dispatches d where d.job_id = the_job and d.step = 'moderate') then
     raise exception 'a waiting dispatch left a dispatch row behind, which would block the real one';
   end if;
 
   -- A failed attempt is not a succeeded predecessor.
   insert into public.job_steps (job_id, step, attempt, status, error)
-  values (job_id, 'embed', 1, 'failed', 'provider returned 3 vectors for 4 pulls');
-  verdict := public.dispatch_generation_step(job_id, 'moderate', array['artwork', 'embed']);
+  values (the_job, 'embed', 1, 'failed', 'provider returned 3 vectors for 4 pulls');
+  verdict := public.dispatch_generation_step(the_job, 'moderate', array['artwork', 'embed']);
   if verdict <> 'waiting' then
     raise exception 'a failed predecessor counted as succeeded: %', verdict;
   end if;
 
   -- ------------------------------------------- 2. both predecessors: send once
   insert into public.job_steps (job_id, step, attempt, status, output)
-  values (job_id, 'embed', 2, 'succeeded', '{"embedded":4}'::jsonb);
+  values (the_job, 'embed', 2, 'succeeded', '{"embedded":4}'::jsonb);
 
-  verdict := public.dispatch_generation_step(job_id, 'moderate', array['artwork', 'embed']);
+  verdict := public.dispatch_generation_step(the_job, 'moderate', array['artwork', 'embed']);
   if verdict <> 'sent' then
     raise exception 'expected sent with both predecessors done, got %', verdict;
   end if;
-  if pg_temp.queued_for(job_id, 'moderate') <> 1 then
-    raise exception 'expected exactly one moderate message, found %', pg_temp.queued_for(job_id, 'moderate');
+  if pg_temp.queued_for(the_job, 'moderate') <> 1 then
+    raise exception 'expected exactly one moderate message, found %', pg_temp.queued_for(the_job, 'moderate');
   end if;
-  if (select current_step from public.generation_jobs where id = job_id) <> 'moderate' then
+  if (select current_step from public.generation_jobs where id = the_job) <> 'moderate' then
     raise exception 'current_step was not advanced to the dispatched node';
   end if;
 
   -- ------------------------------------------- 3. the other predecessor asks too
   -- This is the race, replayed in series: the sibling that finished a moment later
   -- also sees both rows and also asks. The unique key answers it.
-  verdict := public.dispatch_generation_step(job_id, 'moderate', array['artwork', 'embed']);
+  verdict := public.dispatch_generation_step(the_job, 'moderate', array['artwork', 'embed']);
   if verdict <> 'already' then
     raise exception 'expected already on the second dispatch, got %', verdict;
   end if;
-  if pg_temp.queued_for(job_id, 'moderate') <> 1 then
+  if pg_temp.queued_for(the_job, 'moderate') <> 1 then
     raise exception 'a second dispatch sent a second message';
   end if;
 
   -- ------------------------------------------- 4. a redelivered message replays
   -- The resume path re-dispatches successors without a step result to read. Same
   -- answer, same single message.
-  verdict := public.dispatch_generation_step(job_id, 'moderate', array['artwork', 'embed']);
-  if verdict <> 'already' or pg_temp.queued_for(job_id, 'moderate') <> 1 then
+  verdict := public.dispatch_generation_step(the_job, 'moderate', array['artwork', 'embed']);
+  if verdict <> 'already' or pg_temp.queued_for(the_job, 'moderate') <> 1 then
     raise exception 'a replayed dispatch was not idempotent';
   end if;
 
   -- ------------------------------------------- 5. a node with no predecessors
   -- `after` empty means ready. Nothing dispatches the root this way today, but the
   -- function must not treat an empty list as "waiting on nothing forever".
-  verdict := public.dispatch_generation_step(job_id, 'resolve_identity', '{}'::text[]);
+  verdict := public.dispatch_generation_step(the_job, 'resolve_identity', '{}'::text[]);
   if verdict <> 'sent' then
     raise exception 'an empty after-list did not dispatch: %', verdict;
   end if;
@@ -97,7 +97,7 @@ begin
                      json_build_object('role', 'authenticated', 'sub', extensions.gen_random_uuid())::text,
                      true);
   begin
-    perform public.dispatch_generation_step(job_id, 'publish', '{}'::text[]);
+    perform public.dispatch_generation_step(the_job, 'publish', '{}'::text[]);
   exception when insufficient_privilege then
     refused := true;
   end;
