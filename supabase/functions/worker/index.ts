@@ -1,5 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { MAX_ATTEMPTS, NEEDS, nextStep, type Step } from '../_shared/steps.ts';
+import { MAX_ATTEMPTS, NEEDS, NODES, successorsOf, type Step } from '../_shared/graph.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
@@ -211,29 +211,51 @@ async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why
 }
 
 /**
- * Move the job on and enqueue its successor.
+ * Move the job on: dispatch every successor this node unblocks, or close the job.
  *
- * Both writes happen inside one Postgres transaction (`pgmq.send` is itself a
- * SQL function), so the pair is atomic. Previously they were separate round
- * trips: a crash between them left the job advanced with nothing queued, which
- * — with no sweeper — is a permanent stall rather than a recoverable one.
+ * The pipeline is a graph (`_shared/graph.ts`), so "next" is a set. Each successor
+ * is dispatched through `dispatch_generation_step`, which reads the successor's
+ * `after` list, verifies every one of those nodes has a SUCCEEDED row, and guards
+ * the send with a unique index on (job, step). So a join is sent by whichever
+ * predecessor commits last, exactly once, and a redelivered message cannot send a
+ * successor twice -- the dispatch row from the first attempt is still there. The
+ * verdicts are returned so the invocation log says which of those happened.
  *
- * The compare-and-set lives inside that same transaction, so a redelivered
- * message cannot enqueue the successor twice.
+ * `jumpTo` is still a step's own decision -- a reused job goes straight to
+ * `publish` -- and it is dispatched with an empty `after`, because the step that
+ * chose the jump has already established that nothing else needs to run.
+ *
+ * `publish` has no successors, so completing it closes the job. That still goes
+ * through `advance_generation_job(…, null)` and its compare-and-set on
+ * `current_step`, which the dispatch has just set to `publish`.
  */
-async function advance(jobId: string, step: Step, jumpTo?: Step) {
-  must(
-    await supabase.rpc('advance_generation_job', {
-      p_job_id: jobId,
-      p_from_step: step,
-      // A step may name where the job goes next — currently only `acquire`, which
-      // sends a job that adopted an existing summary straight to `publish` rather
-      // than through nine steps that would each do nothing. `nextStep` remains the
-      // default, so the pipeline is still a straight line unless a step says otherwise.
-      p_to_step: jumpTo ?? nextStep(step),
-    }),
-    'advance job',
-  );
+async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record<string, string>> {
+  const targets = jumpTo ? [jumpTo] : successorsOf(step);
+
+  if (targets.length === 0) {
+    must(
+      await supabase.rpc('advance_generation_job', {
+        p_job_id: jobId,
+        p_from_step: step,
+        p_to_step: null,
+      }),
+      'close job',
+    );
+    return { closed: step };
+  }
+
+  const verdicts: Record<string, string> = {};
+  for (const to of targets) {
+    verdicts[to] = must(
+      await supabase.rpc('dispatch_generation_step', {
+        p_job_id: jobId,
+        p_to_step: to,
+        p_after: jumpTo ? [] : [...NODES[to].after],
+      }),
+      `dispatch ${to}`,
+    ) as string;
+  }
+  return verdicts;
 }
 
 Deno.serve(async (req) => {
@@ -316,14 +338,14 @@ Deno.serve(async (req) => {
       try {
         // No `jumpTo` here: the result that would have carried it belongs to an
         // invocation that has already ended. Both outcomes are correct. If that
-        // invocation advanced before dying, this compare-and-set matches nothing and
-        // changes nothing; if it died first, the job takes the long way round and
+        // invocation dispatched before dying, every dispatch here answers `already`
+        // and changes nothing; if it died first, the job takes the long way round and
         // every intermediate step no-ops on the reuse that `acquire` recorded. The
         // cost of the rare case is invocations, not correctness, which is the right
         // direction for a path that only runs after a crash.
-        await advance(jobId, step);
+        const dispatched = await advance(jobId, step);
         must(await archive(msg.msg_id), 'archive resumed message');
-        processed.push({ jobId, step, resumed: true });
+        processed.push({ jobId, step, resumed: true, dispatched });
       } catch (e) {
         processed.push({ jobId, step, resumed: false, error: String(e) });
       }
@@ -397,12 +419,12 @@ Deno.serve(async (req) => {
         'record step and cost',
       );
 
-      await advance(jobId, step, result.jumpTo);
+      const dispatched = await advance(jobId, step, result.jumpTo);
 
       // Only archive once every write above has been confirmed. Archiving
       // earlier would drop the message with the job's state unpersisted.
       must(await archive(msg.msg_id), 'archive message');
-      processed.push({ jobId, step, attempt, ok: true });
+      processed.push({ jobId, step, attempt, ok: true, dispatched });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       // A failure that happened *after* the provider was billed. The tokens are
