@@ -216,6 +216,77 @@ describe('The Archive design laws', () => {
   });
 
   /**
+   * Two settings that both mean "bigger" must never subtract from each other.
+   *
+   * Focus and large text are independent switches that both raise the reading
+   * scale, and they set three of the same custom properties. Equal specificity,
+   * `[data-text='large']` written second — so it won outright, and on a 1280px
+   * screen in focus mode turning large text ON cut the body from 22.88px to 19px.
+   * A control whose entire promise is "bigger" made things smaller, and nothing
+   * here noticed because every assertion in this file reads one block at a time.
+   *
+   * Pinned as a relationship rather than as a list of values: any property BOTH
+   * blocks set has to be composed in the combined block, so adding `--step-3` to
+   * large text later fails here until it is composed too. `max()` is required
+   * specifically because it is the only composition that cannot take size away —
+   * large text is a floor, focus is a fluid ceiling, and the larger of the two is
+   * what honours both.
+   */
+  it('composes focus mode and large text instead of letting one cancel the other', () => {
+    const tokens = read('tokens.css');
+    const block = (selector: string) =>
+      tokens.match(new RegExp(`${selector}\\s*\\{[\\s\\S]*?\\n\\}`))?.[0] ?? '';
+    const props = (b: string) => new Set([...b.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!));
+
+    const focus = block(":root\\[data-focus='on'\\]");
+    const large = block(":root\\[data-text='large'\\]");
+    const both = block(":root\\[data-focus='on'\\]\\[data-text='large'\\]");
+    expect(focus, 'no [data-focus=on] block').not.toBe('');
+    expect(large, 'no [data-text=large] block').not.toBe('');
+
+    const contested = [...props(focus)].filter((n) => props(large).has(n));
+    expect(
+      contested.length,
+      'the two blocks no longer overlap — if that is deliberate, delete this test',
+    ).toBeGreaterThan(0);
+
+    expect(
+      both,
+      `${contested.join(', ')} are set by both focus mode and large text, and there is no ` +
+        `combined block — so whichever is written last silently wins and one setting undoes ` +
+        `the other.`,
+    ).not.toBe('');
+
+    const composed = props(both);
+    for (const name of contested) {
+      expect(
+        composed.has(name),
+        `${name} is set by both settings but not composed in the combined block, so turning ` +
+          `one on can shrink what the other grew.`,
+      ).toBe(true);
+      const value = both.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1] ?? '';
+      expect(
+        value,
+        `${name} composes to "${value}" — use max(), the only combination that cannot make ` +
+          `either setting smaller than it is on its own.`,
+      ).toMatch(/^max\(/);
+      /*
+       * And composed from the live values, not copies of them. `max()` of two stale
+       * literals is still `max()`, and it passes the assertion above while the bug is
+       * back: verified by changing large text's `--step-0` to 1.375rem, which
+       * reproduces the original shrink at 375px with every test green. Referencing
+       * the operands makes the combined block impossible to leave behind.
+       */
+      expect(
+        value,
+        `${name} composes from a literal — "${value}". Copy the two settings' values in ` +
+          `here and this block is correct only until one of them is tuned, silently. ` +
+          `Name each value once in its own block and compose the var()s.`,
+      ).not.toMatch(/\d+(\.\d+)?(rem|px|em)/);
+    }
+  });
+
+  /**
    * A reading control has to grow with the reading.
    *
    * Focus mode raises the reading steps and deliberately leaves `--step--1` alone,
