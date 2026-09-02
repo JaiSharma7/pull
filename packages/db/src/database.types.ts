@@ -1848,7 +1848,9 @@ export type Database = {
         }
       }
       is_guest: { Args: never; Returns: boolean }
-      job_step_outputs: { Args: { p_job_id: string }; Returns: Json }
+      job_step_outputs:
+        | { Args: { p_job_id: string }; Returns: Json }
+        | { Args: { p_job_id: string; p_steps: string[] }; Returns: Json }
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
