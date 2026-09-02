@@ -62,15 +62,39 @@ and reviewers should reject it on that basis alone.
    Everything else is server-only and must never appear in `apps/web/`, in a `VITE_*`
    variable, in client-reachable code, or in any committed file:
 
-   | Credential                            | Lives only in                                                                       |
-   | ------------------------------------- | ----------------------------------------------------------------------------------- |
-   | `sb_secret_…` / `service_role`        | Edge Function env (`SUPABASE_SERVICE_ROLE_KEY`), injected by the platform           |
-   | `GOOGLE_AI_API_KEY`, any provider key | Edge Function secrets, or Vault read by the worker through a `security definer` RPC |
-   | Storage S3 access/secret pair         | Server-side callers only                                                            |
-   | The generation dispatch token         | Vault                                                                               |
+   | Credential                            | Lives only in                                                                           |
+   | ------------------------------------- | --------------------------------------------------------------------------------------- |
+   | `sb_secret_…` / `service_role`        | Edge Function env (`SUPABASE_SERVICE_ROLE_KEY`), injected by the platform               |
+   | `GOOGLE_AI_API_KEY`, any provider key | Edge Function secrets, or Vault read by the worker through a `security definer` RPC     |
+   | Storage S3 access/secret pair         | Server-side callers only                                                                |
+   | The generation dispatch token         | Vault                                                                                   |
+   | The BAML sidecar's provider key       | The sidecar's own environment, and nowhere the worker can read it back                  |
+   | The BAML sidecar's shared token       | Vault, read by the worker through the same `security definer` RPC as the dispatch token |
 
    A key that reaches a commit is **rotated**, not quietly removed from the diff — git
    history keeps it, and so does every clone.
+
+   **The sidecar rows are an amendment, and the reason is worth keeping with the law.**
+   BAML's TypeScript runtime is a native Node addon and Edge Functions are Deno isolates
+   that cannot load one, so the prompts in `packages/prompts` run in a separate process
+   the worker calls over HTTP. That process needs a provider key, and the two places this
+   table allowed did not cover it. Three conditions make the new location acceptable
+   rather than a fourth copy of the same secret lying around:
+
+   - The sidecar is **not publicly reachable**. It fails closed on a missing or wrong
+     token, exactly as `worker/index.ts`'s `authorised()` does — an open BAML endpoint is
+     an open proxy to paid model calls, and "misconfigured" must never mean "public".
+   - The provider key lives in the sidecar's environment **only**. It is not mirrored into
+     Edge Function secrets or Vault, so there is one place to rotate it and one place a
+     leak can come from. The worker never sees it; the worker sees the sidecar's token.
+   - Every call the sidecar makes is **metered by the caller**. Law 2 counts every model
+     call, and the sidecar has no `cost_ledger`. So each BAML function names a single
+     client — never BAML's `fallback` provider, which would retry a billed failure
+     elsewhere and lose the charge — and retry and fallback stay in the worker, where the
+     ledger is. See `docs/baml.md`.
+
+   If a way is found to run BAML inside the Edge Function, these two rows are deleted and
+   the table goes back to what it was. That is the preferred end state, not this.
 
    **Local-stack keys are never production credentials.** `supabase start` prints a
    publishable and a secret key for `127.0.0.1:54321`. The publishable one is committed
