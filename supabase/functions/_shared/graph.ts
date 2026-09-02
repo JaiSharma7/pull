@@ -140,10 +140,11 @@ export function ancestorsOf(step: Step): Set<Step> {
 /**
  * The line, for anything that still wants one.
  *
- * Kept because a job queued before the graph existed is mid-walk along `STEPS`, and
- * because the resume path has no step result to read a `jumpTo` off. It is no longer
- * how the worker advances: that is `successorsOf`, and a node with one successor in
- * the graph gets the same answer here it always did.
+ * Kept because a job queued before the graph existed is mid-walk along `STEPS`: the
+ * old worker advanced it one step at a time and wrote no dispatch rows, so the
+ * graph's readiness check alone would leave it waiting on a sibling nobody sent.
+ * `advance` in the worker therefore asks for this successor as well as the graph's,
+ * which for a job that started on the graph answers `already` and costs nothing.
  */
 export function nextStep(current: Step): Step | null {
   const i = STEPS.indexOf(current);

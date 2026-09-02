@@ -1,5 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { MAX_ATTEMPTS, NEEDS, NODES, successorsOf, type Step } from '../_shared/graph.ts';
+import { MAX_ATTEMPTS, NEEDS, nextStep, NODES, successorsOf, type Step } from '../_shared/graph.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
@@ -135,11 +135,20 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
   const job = must(
     await supabase
       .from('generation_jobs')
-      .select('id, kind, target, work_id, summary_id, visibility, requester_id')
+      .select('id, kind, target, work_id, summary_id, visibility, requester_id, status')
       .eq('id', jobId)
       .single(),
     'read job',
-  ) as JobRow;
+  ) as JobRow & { status: string };
+
+  // A message can outlive its job. With the fan-out, one branch can exhaust its
+  // attempts and fail the job while a sibling's message is still queued; running
+  // that sibling would pay a provider for a job nobody will publish, and
+  // `dispatch_generation_step` would then refuse its successors anyway. Stop here,
+  // before anything is spent, and let the caller archive the message.
+  if (job.status !== 'queued' && job.status !== 'running') {
+    throw new JobClosedError(jobId, job.status);
+  }
 
   // Only the outputs this step declares it reads. The one-argument form returned
   // every succeeded step's output -- source text included, twice -- on every
@@ -160,6 +169,16 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
 }
 
 const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
+
+/** The job this message belongs to is already failed or done; there is nothing to run. */
+class JobClosedError extends Error {
+  constructor(jobId: string, status: string) {
+    super(
+      `job ${jobId} is ${status}; its ${status === 'failed' ? 'remaining' : 'stale'} message is dropped`,
+    );
+    this.name = 'JobClosedError';
+  }
+}
 
 /** Length-independent comparison, so a wrong token leaks nothing through timing. */
 function secureEquals(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -231,7 +250,17 @@ async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why
  * `current_step`, which the dispatch has just set to `publish`.
  */
 async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record<string, string>> {
-  const targets = jumpTo ? [jumpTo] : successorsOf(step);
+  // The line's successor is asked for as well as the graph's. A job queued before
+  // the graph existed was advanced along `STEPS` by the old worker, which never
+  // wrote a dispatch row -- so at `extract_evidence` nothing has sent `synthesize`,
+  // and at `artwork` nothing has sent `embed`; the graph alone would leave both
+  // waiting on a sibling that never runs. Asking for `nextStep` too is free for a
+  // job that started on the graph: its successor already has a dispatch row and
+  // answers `already`. This is what lets the graph deploy under a live queue.
+  const next = nextStep(step);
+  const targets = jumpTo
+    ? [jumpTo]
+    : [...new Set([...successorsOf(step), ...(next ? [next] : [])])];
 
   if (targets.length === 0) {
     const closed = must(
@@ -435,6 +464,21 @@ Deno.serve(async (req) => {
       must(await archive(msg.msg_id), 'archive message');
       processed.push({ jobId, step, attempt, ok: true, dispatched });
     } catch (e) {
+      // Not a failed attempt: the job was closed by another branch before this
+      // step ran, nothing was spent, and recording a failure against a job that is
+      // already failed would only make its history lie. Archive and move on.
+      if (e instanceof JobClosedError) {
+        const { error: archiveError } = await archive(msg.msg_id);
+        processed.push({
+          jobId,
+          step,
+          ok: false,
+          closed: true,
+          ...(archiveError ? { archiveError: archiveError.message } : {}),
+        });
+        continue;
+      }
+
       const message = e instanceof Error ? e.message : String(e);
       // A failure that happened *after* the provider was billed. The tokens are
       // spent either way, so the ledger has to hear about it: law 2 counts every

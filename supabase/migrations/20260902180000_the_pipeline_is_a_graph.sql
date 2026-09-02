@@ -91,9 +91,24 @@ begin
   -- column holds one member of it, the most recently dispatched. It is kept because
   -- `advance_generation_job(…, null)` still closes the job under a CAS on it, and
   -- because a reader looking at a job row deserves a step name rather than a null.
+  --
+  -- Guarded on liveness, and that guard exists because of the fan-out. On the line
+  -- a job could not be failed and still have a step running; with two branches it
+  -- can: `extract_evidence` exhausts its attempts and the worker marks the job
+  -- failed while `synthesize` is still queued, succeeds a moment later, and asks
+  -- for `template`. An unconditional update would flip the job back to `running`
+  -- with `error` and `finished_at` still set, and then pay for `artwork` and
+  -- `embed` on a job the requester was already told had failed. The dispatch row
+  -- stays either way, so a replayed message still answers `already` rather than
+  -- trying again.
   update public.generation_jobs
      set current_step = p_to_step, status = 'running'
-   where id = p_job_id;
+   where id = p_job_id
+     and status in ('queued', 'running');
+
+  if not found then
+    return 'closed';
+  end if;
 
   perform pgmq.send('generation',
                     jsonb_build_object('jobId', p_job_id, 'step', p_to_step),
@@ -103,7 +118,7 @@ end;
 $$;
 
 comment on function public.dispatch_generation_step(uuid, text, text[]) is
-  'Enqueues a job''s next node once every node in p_after has succeeded, exactly once per (job, step). Returns waiting | already | sent.';
+  'Enqueues a job''s next node once every node in p_after has succeeded, exactly once per (job, step), and only while the job is queued or running. Returns waiting | already | closed | sent.';
 
 revoke all on function public.dispatch_generation_step(uuid, text, text[])
   from public, anon, authenticated;

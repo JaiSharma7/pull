@@ -91,7 +91,38 @@ begin
     raise exception 'an empty after-list did not dispatch: %', verdict;
   end if;
 
-  -- ------------------------------------------- 6. not for readers
+  -- ------------------------------------------- 6. a failed job stays failed
+  -- The fan-out's own hazard: one branch exhausts its attempts and the worker
+  -- fails the job while the other branch is still queued. When that branch finishes
+  -- and asks for its successor, the answer is no -- not a revived job that goes on
+  -- to pay for two provider nodes and then strands at the join.
+  update public.generation_jobs
+     set status = 'failed', error = 'step extract_evidence exhausted retries', finished_at = now()
+   where id = the_job;
+  insert into public.job_steps (job_id, step, attempt, status, output)
+  values (the_job, 'synthesize', 1, 'succeeded', '{"title":"t","pulls":[]}'::jsonb);
+
+  verdict := public.dispatch_generation_step(the_job, 'template', array['synthesize']);
+  if verdict <> 'closed' then
+    raise exception 'expected closed on a failed job, got %', verdict;
+  end if;
+  if pg_temp.queued_for(the_job, 'template') <> 0 then
+    raise exception 'a closed dispatch sent a message';
+  end if;
+  if (select status from public.generation_jobs where id = the_job) <> 'failed' then
+    raise exception 'a dispatch revived a failed job';
+  end if;
+  -- And a replay of that dispatch is still `already`: the row was taken, so the
+  -- job cannot be revived by asking twice either.
+  verdict := public.dispatch_generation_step(the_job, 'template', array['synthesize']);
+  if verdict <> 'already' then
+    raise exception 'expected already on a replayed closed dispatch, got %', verdict;
+  end if;
+
+  update public.generation_jobs set status = 'running', error = null, finished_at = null
+   where id = the_job;
+
+  -- ------------------------------------------- 7. not for readers
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims',
                      json_build_object('role', 'authenticated', 'sub', extensions.gen_random_uuid())::text,
