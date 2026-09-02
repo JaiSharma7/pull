@@ -44,6 +44,7 @@ import { Graph } from './routes/Graph.js';
 import { Library } from './routes/Library.js';
 import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
 import { OnboardingDemo } from './components/OnboardingDemo.js';
+import { Ingestion } from './routes/Ingestion.js';
 import { Paths } from './routes/Paths.js';
 
 import { Review } from './routes/Review.js';
@@ -112,6 +113,7 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/search', label: 'Search' },
   { path: '/graph', label: 'Graph' },
   { path: '/paths', label: 'Paths' },
+  { path: '/import', label: 'Import' },
   { path: '/metacognition', label: 'ROI' },
   { path: '/demo', label: 'Demo' },
 
@@ -592,6 +594,7 @@ export function App() {
   const appearanceOpen = isPath(path, '/appearance');
   const graphOpen = isPath(path, '/graph');
   const pathsOpen = isPath(path, '/paths');
+  const importOpen = isPath(path, '/import');
   const demoOpen = isPath(path, '/demo');
   const metacognitionOpen = isPath(path, '/metacognition');
   /*
@@ -635,6 +638,7 @@ export function App() {
     appearanceOpen ||
     graphOpen ||
     pathsOpen ||
+    importOpen ||
     demoOpen ||
     metacognitionOpen ||
     accountOpen ||
@@ -997,6 +1001,7 @@ export function App() {
               />
             )}
             {pathsOpen && <Paths onOpenPull={(id) => navigate(`/source/${id}`)} />}
+            {importOpen && <Ingestion onComplete={() => navigate('/metacognition')} />}
 
             {demoOpen && (
               <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
