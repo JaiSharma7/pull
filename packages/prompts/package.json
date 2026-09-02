@@ -1,0 +1,29 @@
+{
+  "name": "@wap/prompts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "baml:check": "baml-cli check --from baml_src",
+    "baml:generate": "baml-cli generate --from baml_src",
+    "baml:test": "baml-cli test --from baml_src"
+  },
+  "dependencies": {
+    "@boundaryml/baml": "0.226.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@wap/config": "workspace:*",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

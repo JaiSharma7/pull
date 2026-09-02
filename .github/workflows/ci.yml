@@ -67,6 +67,19 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
+      # The BAML client is generated from `packages/prompts/baml_src` and committed,
+      # for the reason `packages/db/src/database.types.ts` is: a generated file nobody
+      # can see is a generated file nobody notices going stale. `baml check` first,
+      # because a `.baml` file that does not parse produces a confusing diff rather
+      # than a clear error.
+      - name: BAML sources are valid
+        run: pnpm baml:check
+      - name: Generated BAML client is in sync with baml_src
+        run: |
+          pnpm baml:generate
+          git diff --exit-code -- packages/prompts/baml_client \
+            || { echo "::error::Generated BAML client is stale. Run 'pnpm baml:generate' and commit the result."; exit 1; }
+
   # Check 3 of 6 — the signature mechanics must not change behaviour silently.
   test:
     name: test
