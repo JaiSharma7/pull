@@ -48,9 +48,11 @@ reason. CI never runs it.
 - Put the shape in a `class`, the taxonomy in an `enum`, and the constraints in
   `@assert` — not in a comment and not in a downstream narrowing pass. An assert that
   BAML can check is worth more than a paragraph explaining what the model should not do.
-- Name a `client` from `clients.baml`. Do not inline `provider/model` strings: the model
-  names there are mirrored from `_shared/gemini.ts` and `_shared/anthropic.ts` and are
-  meant to move together.
+- Name ONE pinned `client` from `clients.baml` — never `SummaryChain` or any fallback or
+  round-robin client. Retry and fallback live in the worker, where the ledger is; a
+  chain chosen in BAML would pay for attempts `cost_ledger` never hears about. Do not
+  inline `provider/model` strings either: the model names there are mirrored from
+  `_shared/gemini.ts` and `_shared/anthropic.ts` and are meant to move together.
 - Every function gets at least one `test` block with a **public-domain** fixture. Law 4:
   no copyrighted source text in this repository, including in test args.
 - `@@assert` in a test block checks the parsed result. Reference enum members by their
