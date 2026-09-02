@@ -64,6 +64,12 @@ export const TOPIC_SLUGS = [
   'history',
   'biography',
   'revolutions',
+  'mathematics',
+  'computation',
+  'architecture',
+  'world-philosophy',
+  'strategy',
+  'ecology',
 ] as const;
 export type TopicSlug = (typeof TOPIC_SLUGS)[number];
 
@@ -75,6 +81,10 @@ export interface CanonicalSummary {
     headline: string;
     body: string;
     whyItMatters: string;
+    /** Concrete grounding: case study, demonstration, or thought experiment. */
+    example?: string;
+    /** The deep-dive breakdown for readers choosing the full/long depth stop. */
+    explanation?: string;
     /**
      * A recall question about this idea, produced by the same call.
      *

@@ -33,7 +33,7 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,7 +44,7 @@ const OUT_FILE = resolve(here, '../../../supabase/functions/_shared/generated/pr
 // --- the runtime ----------------------------------------------------------------
 // wasm-bindgen's "web" target expects fetch(); instantiate from bytes instead.
 const distDir = dirname(require.resolve('@gloo-ai/baml-schema-wasm-web'));
-const bg = await import(join(distDir, 'baml_schema_build_bg.js'));
+const bg = await import(pathToFileURL(join(distDir, 'baml_schema_build_bg.js')).href);
 const wasm = readFileSync(join(distDir, 'baml_schema_build_bg.wasm'));
 const { instance } = await WebAssembly.instantiate(wasm, { './baml_schema_build_bg.js': bg });
 bg.__wbg_set_wasm(instance.exports);

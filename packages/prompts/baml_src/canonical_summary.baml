@@ -44,6 +44,12 @@ enum TopicSlug {
   History @alias("history")
   Biography @alias("biography")
   Revolutions @alias("revolutions")
+  Mathematics @alias("mathematics")
+  Computation @alias("computation")
+  Architecture @alias("architecture")
+  WorldPhilosophy @alias("world-philosophy")
+  Strategy @alias("strategy")
+  Ecology @alias("ecology")
 }
 
 /// One recall question, produced by the same call that produced the idea.
@@ -58,13 +64,18 @@ class RecallQuestion {
   distractors string[] @assert(exactly_three, {{ this|length == 3 }})
 }
 
-/// One atomic idea that stands on its own out of context.
+/// One atomic idea that stands on its own out of context, structured for progressive depth.
 class Pull {
-  /// States the idea rather than teasing it.
+  /// Shortest stop: states the idea rather than teasing it.
   headline string
+  /// Short stop: the core claim and reasoning in 1-3 sentences.
   body string
-  /// What changes if the reader believes it — not a restatement of the body.
+  /// Medium stop (impact): what changes if the reader believes it — not a restatement of the body.
   whyItMatters string
+  /// Medium stop (concrete grounding): a real case study, historical instance, demonstration, or thought experiment.
+  example string?
+  /// Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
+  explanation string?
   /// Omitted rather than invented when the source is too thin to support a fair
   /// question. `get_due_reviews` already copes with a pull that has none.
   question RecallQuestion?
@@ -109,7 +120,9 @@ function WriteCanonicalSummary(workTitle: string, kind: string, context: string)
     Each pull must be one atomic idea that stands on its own out of context, in plain
     language, with a headline that states the idea rather than teasing it. Its
     "whyItMatters" should say what changes if the reader believes it -- not restate
-    the body.
+    the body. Provide a concrete "example" to ground the claim in a real case or demonstration,
+    and an "explanation" unpacking the full depth, underlying causal mechanism, or nuance for readers
+    who choose the deep dive stop.
 
     File this work under one to four topics, most central first. Choose the narrowest
     that genuinely fit. A parent topic is the right answer only when no child of it

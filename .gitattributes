@@ -14,6 +14,8 @@
 
 # Generated, and diffed byte-for-byte by CI check 4.
 packages/db/src/database.types.ts text eol=lf
+packages/prompts/baml_client/** -text
+supabase/functions/_shared/generated/** text eol=lf
 
 # Never transform these.
 *.png binary
