@@ -1800,6 +1800,7 @@ export type Database = {
         Args: { p_project_url: string; p_seconds?: number }
         Returns: string
       }
+      enable_generation_sweeper: { Args: { p_cron?: string }; Returns: number }
       enable_guest_sweep: { Args: { p_cron?: string }; Returns: number }
       enable_knowledge_vector_refresh: {
         Args: { p_batch?: number; p_cron?: string }
@@ -2007,6 +2008,10 @@ export type Database = {
         Returns: boolean
       }
       sweep_guest_accounts: { Args: { p_older_than?: string }; Returns: number }
+      sweep_stranded_generation_jobs: {
+        Args: { p_limit?: number; p_older_than?: string }
+        Returns: number
+      }
       synthetic_embedding: { Args: { p_axes: Json }; Returns: string }
       topic_affinity: {
         Args: { p_weights: Json; p_work_id: string }
