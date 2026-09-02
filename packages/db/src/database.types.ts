@@ -1984,6 +1984,16 @@ export type Database = {
         Returns: Json
       }
       release_source_hash: { Args: { p_job_id: string }; Returns: number }
+      requeue_generation_message: {
+        Args: {
+          p_delay_seconds: number
+          p_job_id: string
+          p_msg_id: number
+          p_step: string
+          p_waits: number
+        }
+        Returns: number
+      }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
