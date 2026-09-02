@@ -4,6 +4,7 @@ import {
   asWorkKind,
   BilledStepError,
   narrowTopics,
+  SourceHeldError,
   NO_USAGE,
   RIGHTS_STATUSES,
   runPipelineStep,
@@ -570,12 +571,25 @@ describe('reuse skips the paid work', () => {
       priorOutputs: { acquire: acquired.output },
     } as never);
 
-    await expect(attempt).rejects.toThrow(/another job is synthesising/);
     const err = await attempt.catch((e) => e);
-    // Unbilled: nothing was sent, so this must not be a BilledStepError.
+    // A wait, not a failure: the worker re-sends the step rather than recording
+    // an attempt, and nothing was sent, so this is not a BilledStepError either.
+    expect(err).toBeInstanceOf(SourceHeldError);
     expect(err).not.toBeInstanceOf(BilledStepError);
     expect(calls.claim).toBe(1);
     expect(calls.summary).toBe(0);
+  });
+
+  it('renews the claim once the summary is committed', async () => {
+    // The nodes between template and publish can outlast a short lease; the
+    // renewal here is what keeps a live holder's claim its own until publish.
+    const { deps, calls } = harness(null);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('template', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+    expect(calls.claim).toBe(1);
   });
 
   it('releases the source once the summary is published', async () => {

@@ -13,18 +13,29 @@
 -- claim would block every later request for the same source, turning a duplicated
 -- bill into a stalled queue, which is the worse failure. So the claim expires, and
 -- three things can take it over: the same job (renewal), a claim past its lease, or
--- a claim whose job is no longer queued or running. The waiter needs no new
--- machinery at all -- it throws an unbilled error, its message stays in the queue,
--- and pgmq redelivers it at the 180 s visibility timeout. Three deliveries at 180 s
--- is nine minutes, and a five-minute lease is three times the 100 s synthesis
--- budget, so by the third delivery a dead holder's claim is takeable and a live
--- holder has long since published -- in which case the re-check in `synthesize`
--- adopts its summary and no provider is called at all.
+-- a claim whose job is no longer queued or running.
+--
+-- The waiter does not spend a retry to wait. The first draft let a `held` job throw
+-- and be redelivered at the 180 s visibility timeout, which is bounded by the same
+-- `MAX_ATTEMPTS`/`read_ct` guard as a real failure -- so a holder retrying a slow
+-- provider could make the waiter fail terminally after nine minutes of doing nothing
+-- wrong. Instead `requeue_generation_message` archives the delivered message and sends
+-- a fresh one with a delay and a `waits` counter: no `job_steps` row, no `read_ct`,
+-- one cheap invocation a minute, and the worker bounds the count of waits itself.
+--
+-- The lease is thirty minutes, and it is not what protects against a dead holder.
+-- A job that is `failed` -- by the worker's retry guard or by the stranded-job
+-- sweeper -- loses its claim by the status rule at once, whatever the lease says.
+-- The lease exists for a holder that is *alive* but slow: a summary is not reusable
+-- until `publish`, and the six nodes between `synthesize` and `publish` can spend
+-- more than five minutes in a queue, so a five-minute lease let a second job take
+-- the claim and pay for the same source (Codex, on the first pass). `template`
+-- renews the claim once the summary is committed, and thirty minutes covers the
+-- rest of a live pipeline with room to spare.
 --
 -- The claim is taken in `synthesize`, not `acquire`, because that is where the money
 -- is spent and the window that matters is the one in front of the call. Released at
--- `publish`; a failed job's claim is takeable by the status rule above, and the lease
--- is the net under both.
+-- `publish`.
 create table public.generation_hash_claims (
   content_hash text primary key,
   job_id       uuid not null references public.generation_jobs (id) on delete cascade,
@@ -48,7 +59,7 @@ comment on table public.generation_hash_claims is
 create or replace function public.claim_source_hash(
   p_job_id uuid,
   p_hash   text,
-  p_lease  interval default interval '5 minutes'
+  p_lease  interval default interval '30 minutes'
 )
 returns text
 language plpgsql
@@ -104,6 +115,40 @@ $$;
 
 comment on function public.release_source_hash(uuid) is
   'Release every claim a job holds. Called at publish; a failed job''s claim is takeable without this.';
+
+-- Wait without spending a retry: archive the delivered message and send a fresh one,
+-- delayed, carrying how many times this step has waited. One statement, so the queue
+-- never holds both or neither.
+create or replace function public.requeue_generation_message(
+  p_msg_id        bigint,
+  p_job_id        uuid,
+  p_step          text,
+  p_delay_seconds int,
+  p_waits         int
+)
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_id bigint;
+begin
+  perform pgmq.archive('generation', p_msg_id);
+  select pgmq.send('generation',
+                   jsonb_build_object('jobId', p_job_id, 'step', p_step, 'waits', p_waits),
+                   greatest(coalesce(p_delay_seconds, 0), 0))
+    into new_id;
+  return new_id;
+end;
+$$;
+
+comment on function public.requeue_generation_message(bigint, uuid, text, int, int) is
+  'Archive a delivered message and re-send its step with a delay and a wait count, so a job can wait on a source claim without consuming its retry budget. Service role only.';
+
+revoke all on function public.requeue_generation_message(bigint, uuid, text, int, int)
+  from public, anon, authenticated;
+grant execute on function public.requeue_generation_message(bigint, uuid, text, int, int) to service_role;
 
 revoke all on function public.claim_source_hash(uuid, text, interval) from public, anon, authenticated;
 revoke all on function public.release_source_hash(uuid) from public, anon, authenticated;

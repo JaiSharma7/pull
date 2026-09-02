@@ -201,18 +201,19 @@ adopt-on-`23505` in `createSummary` stopped that ending in a crash; what remaine
 duplicated bill, a law 2 failure whether or not anything throws.
 
 `20260902200000` closes it by reserving the fingerprint: `synthesize` takes a
-`generation_hash_claims` row after the re-check and before the call, and a job told
-`held` throws an unbilled error and lets the queue redeliver its message at the
-visibility timeout — by which time the holder has usually published and the re-check
-adopts its summary, so no provider is called at all.
+`generation_hash_claims` row after the re-check and before the call. A job told `held`
+waits without spending a retry — the worker archives its message and re-sends the step
+a minute later with a wait count, bounded at thirty — by which time the holder has
+usually published and the re-check adopts its summary, so no provider is called at all.
 
-The lease was the reason this was deferred, and it is what makes it safe: a claim
-expires after five minutes (three times the synthesis budget), and a claim whose job is
-no longer queued or running is takeable regardless. Three redeliveries at 180 s is nine
-minutes, so a dead holder's claim is takeable by the third. A crashed job therefore
-costs the next request for that source a few minutes, not a stalled queue.
-`hash_claims.sql` asserts each of those takeovers and that a live holder is never
-displaced.
+The lease was the reason this was deferred, and two things make it safe. A claim whose
+job is no longer queued or running is takeable at once, whatever the lease says, and
+that — with the stranded-job sweeper — is what handles a dead holder. The lease itself
+is for a holder that is alive but slow: a summary is not reusable until `publish`, and
+the nodes between `synthesize` and `publish` can sit in a queue, so the lease is thirty
+minutes and `template` renews it once the summary is committed. `hash_claims.sql`
+asserts each takeover, that a live holder is never displaced, and that waiting archives
+the delivered message and sends a delayed one.
 
 ### Still to do
 

@@ -68,7 +68,30 @@ begin
   verdict := public.claim_source_hash(job_b, 'hash-1');
   if verdict <> 'claimed' then raise exception 'a released source was not free: %', verdict; end if;
 
-  -- ------------------------------------------------ 8. the floor
+  -- ------------------------------------------------ 8. waiting spends no retry
+  -- The delivered message is archived and a fresh, delayed one carries the count.
+  declare
+    old_id bigint;
+    new_id bigint;
+    body   jsonb;
+  begin
+    old_id := pgmq.send('generation', jsonb_build_object('jobId', job_b, 'step', 'synthesize'), 0);
+    new_id := public.requeue_generation_message(old_id, job_b, 'synthesize', 60, 3);
+    if new_id = old_id then raise exception 'requeue returned the same message'; end if;
+    if exists (select 1 from pgmq.q_generation where msg_id = old_id) then
+      raise exception 'the delivered message was not archived';
+    end if;
+    select q.message into body from pgmq.q_generation q where q.msg_id = new_id;
+    if body is null then raise exception 'no fresh message was sent'; end if;
+    if (body ->> 'waits')::int <> 3 or body ->> 'step' <> 'synthesize' then
+      raise exception 'the fresh message does not carry the step and wait count: %', body;
+    end if;
+    if (select vt from pgmq.q_generation where msg_id = new_id) <= now() + interval '30 seconds' then
+      raise exception 'the fresh message is not delayed';
+    end if;
+  end;
+
+  -- ------------------------------------------------ 9. the floor
   begin
     perform public.claim_source_hash(job_b, 'hash-3', interval '30 seconds');
   exception when others then
@@ -76,7 +99,7 @@ begin
   end;
   if not floored then raise exception 'a lease under the synthesis budget was accepted'; end if;
 
-  -- ------------------------------------------------ 9. not for readers
+  -- ------------------------------------------------ 10. not for readers
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims',
                      json_build_object('role', 'authenticated', 'sub', extensions.gen_random_uuid())::text,
@@ -87,6 +110,13 @@ begin
     refused := true;
   end;
   if not refused then raise exception 'a reader could claim a source.'; end if;
+  refused := false;
+  begin
+    perform public.requeue_generation_message(1, job_b, 'synthesize', 60, 1);
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then raise exception 'a reader could requeue a message.'; end if;
   if exists (select 1 from public.generation_hash_claims) then
     raise exception 'a reader can see generation_hash_claims.';
   end if;

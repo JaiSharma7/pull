@@ -32,6 +32,22 @@ import { contentHash, extractText, fetchBounded, MAX_SOURCE_CHARS, segment } fro
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
 /**
+ * Another job is synthesising this source; ask again later.
+ *
+ * Not a failure, and the worker must not record it as one: a failed attempt
+ * counts against `MAX_ATTEMPTS`, and a holder retrying a slow provider could
+ * otherwise make the waiter fail terminally for doing nothing wrong. The worker
+ * answers this by re-sending the step with a delay -- no `job_steps` row, no
+ * `read_ct` -- and bounds the number of waits itself.
+ */
+export class SourceHeldError extends Error {
+  constructor(contentHash: string) {
+    super(`synthesize: another job holds ${contentHash.slice(0, 12)}…; will ask again`);
+    this.name = 'SourceHeldError';
+  }
+}
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -695,14 +711,12 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         };
       }
 
-      // Unbilled, deliberately: nothing has been sent to a provider, so this is a
-      // plain error and the retry costs one queue redelivery. It is also why this
-      // sits AFTER the re-check above -- a job that finds the summary already
-      // published never contends for the claim at all.
+      // A wait, not a failure: nothing has been sent to a provider, and the worker
+      // re-sends this step later without spending a retry. It sits AFTER the
+      // re-check above so a job that finds the summary already published never
+      // contends for the claim at all.
       if ((await db.claimSourceHash(job.id, acquired.hash)) === 'held') {
-        throw new Error(
-          'synthesize: another job is synthesising this source; will retry once it has published',
-        );
+        throw new SourceHeldError(acquired.hash);
       }
 
       /*
@@ -787,6 +801,12 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
           }
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
+
+      // Renew the claim now that there is a summary to protect. A second job cannot
+      // adopt it until `publish`, and the nodes between here and there can sit in
+      // a queue for longer than a short lease -- so the lease is long, and this
+      // renewal is what keeps a live holder's claim its own until then.
+      await db.claimSourceHash(job.id, acquired.hash);
 
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
