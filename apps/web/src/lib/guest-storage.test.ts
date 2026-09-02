@@ -464,6 +464,49 @@ describe('createSplitAuthStorage when a store refuses a write', () => {
     expect(local.map.has(KEY)).toBe(false);
     expect(session.map.has(KEY)).toBe(false);
   });
+
+  it('still signs THIS tab out when the marker itself cannot be written', () => {
+    /*
+     * The marker is what makes a guest sign-out stick in a tab whose reader token has to
+     * be spared, and it was written through `guard` into the same store that just proved
+     * it refuses writes. A refused marker read back as "this tab never signed out", which
+     * is precisely the state the marker exists to deny -- so the tab fell through to the
+     * reader in `localStorage` and rendered them, masthead and access token both. Holding
+     * it in memory as well as in storage is what closes that; found by review on #53.
+     */
+    const session = fullQuota();
+    session.map.set(KEY, guestToken);
+    const local = fake();
+    local.map.set(KEY, readerToken);
+    const store = createSplitAuthStorage(session, local);
+
+    store.removeItem(KEY);
+
+    expect(store.getItem(KEY)).toBe(null);
+    // ...and the reader is still spared, on this sign-out and the next one.
+    expect(local.map.get(KEY)).toBe(readerToken);
+    store.removeItem(KEY);
+    expect(local.map.get(KEY)).toBe(readerToken);
+    expect(store.getItem(KEY)).toBe(null);
+  });
+
+  it('does not hand a guest the reader when the guest write is refused', () => {
+    /*
+     * Same hole, entered from the other side. A guest whose token could not be stored has
+     * no session -- but until the failed write marked the tab, `getItem` answered the very
+     * next call with whoever `localStorage` held, so a refused guest sign-in silently
+     * became the reader on that machine instead of failing.
+     */
+    const session = fullQuota();
+    const local = fake();
+    local.map.set(KEY, readerToken);
+    const store = createSplitAuthStorage(session, local);
+
+    store.setItem(KEY, guestToken);
+
+    expect(store.getItem(KEY)).toBe(null);
+    expect(local.map.get(KEY)).toBe(readerToken);
+  });
 });
 
 describe('tokenUserId', () => {

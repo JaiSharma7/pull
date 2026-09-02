@@ -134,6 +134,36 @@ export function createSplitAuthStorage(
    */
   const signedOutKey = (key: string) => `${key}::tab-signed-out`;
 
+  /*
+   * The marker is held in memory AS WELL AS in `sessionStorage`, and the memory half is
+   * not redundancy.
+   *
+   * Every write here goes through `guard`, so a store that refuses one — a full quota, a
+   * privacy extension stubbing `setItem` to a no-op — fails silently. A marker that failed
+   * to write reads back as "this tab never signed out", which re-opens both bugs it exists
+   * to close: `getItem` hands the tab the reader's token, and the next `removeItem` sees no
+   * guest and wipes it. The whole point of the marker is to be the evidence a store can no
+   * longer supply, so making it depend on that same store being writable was circular.
+   *
+   * The `Set` lives as long as the page, which is the window that matters: a reload that
+   * loses it also re-reads storage from scratch. Found by review on #53, reproduced against
+   * the real module with a `setItem` that throws.
+   *
+   * Both readers go through `isMarked`, so the two can no longer disagree about what counts
+   * as marked — which is the same class of divergence this module keeps being bitten by.
+   */
+  const markedOut = new Set<string>();
+  const isMarked = (key: string) =>
+    markedOut.has(key) || guard(() => session.getItem(signedOutKey(key)), null) !== null;
+  const mark = (key: string) => {
+    markedOut.add(key);
+    guard(() => session.setItem(signedOutKey(key), '1'), undefined);
+  };
+  const unmark = (key: string) => {
+    markedOut.delete(key);
+    guard(() => session.removeItem(signedOutKey(key)), undefined);
+  };
+
   /** `true` only if the value actually landed. A store that refuses throws rather than no-ops. */
   const write = (store: KeyValueStore, key: string, value: string): boolean =>
     guard(() => {
@@ -174,7 +204,7 @@ export function createSplitAuthStorage(
 
       // This tab signed out. It must not read a reader back out of the shared store and
       // silently become them; see `signedOutKey`.
-      if (guard(() => session.getItem(signedOutKey(key)), null) !== null) return null;
+      if (isMarked(key)) return null;
 
       const fromLocal = guard(() => local.getItem(key), null);
       if (fromLocal === null) return null;
@@ -206,8 +236,6 @@ export function createSplitAuthStorage(
     },
 
     setItem: (key, value) => {
-      // Any write supersedes a previous sign-out in this tab.
-      guard(() => session.removeItem(signedOutKey(key)), undefined);
       const guest = tokenIsGuest(value);
       const [keep, clear] = guest ? [session, local] : [local, session];
 
@@ -245,6 +273,17 @@ export function createSplitAuthStorage(
         if (stranded !== null && tokenIsGuest(stranded)) {
           guard(() => clear.removeItem(key), undefined);
         }
+        /*
+         * And mark the tab, because a guest whose session could not be stored must not
+         * quietly become whoever is in `localStorage`.
+         *
+         * This clearing the marker up front was the other half of the same mistake: a
+         * refused guest write left the tab with no session AND no marker, so `getItem`
+         * fell straight through to the reader on the machine and the guest was rendered
+         * and authenticated as them. The comment above says such a guest is "signed out
+         * at the next getSession()" — this is what makes that true rather than aspirational.
+         */
+        mark(key);
         return;
       }
 
@@ -259,6 +298,9 @@ export function createSplitAuthStorage(
        * reader write always clears the guest copy, and a guest write clears an older guest
        * copy (the upgrade path above).
        */
+      // Only now, with a session actually stored, does a write supersede a sign-out.
+      unmark(key);
+
       if (guest) {
         const displaced = guard(() => clear.getItem(key), null);
         if (displaced !== null && !tokenIsGuest(displaced)) return;
@@ -304,17 +346,16 @@ export function createSplitAuthStorage(
        * reader on that machine loses their persistence. It also arrives with nobody
        * pressing anything, by the sweep path the comment above already names.
        */
-      const markedOut = guard(() => session.getItem(signedOutKey(key)), null) !== null;
-      const guestLeaving = markedOut || (inSession !== null && tokenIsGuest(inSession));
+      const guestLeaving = isMarked(key) || (inSession !== null && tokenIsGuest(inSession));
       const readerStays = inLocal !== null && !tokenIsGuest(inLocal);
       if (guestLeaving && readerStays) {
         // Spare the reader's token, and record that THIS tab is nonetheless signed out --
         // otherwise `getItem`'s fallback hands this tab the very token it just spared.
-        guard(() => session.setItem(signedOutKey(key), '1'), undefined);
+        mark(key);
         return;
       }
 
-      guard(() => session.removeItem(signedOutKey(key)), undefined);
+      unmark(key);
       guard(() => local.removeItem(key), undefined);
     },
   };
