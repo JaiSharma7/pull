@@ -1852,6 +1852,7 @@ export type Database = {
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
+      mint_baml_sidecar_token: { Args: never; Returns: string }
       my_sessions: {
         Args: never
         Returns: {
