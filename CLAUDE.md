@@ -98,10 +98,19 @@ and reviewers should reject it on that basis alone.
 Routing is `history.pushState` and a `popstate` listener in `apps/web/src/App.tsx`, over
 path helpers in `apps/web/src/lib/routes.ts` that are pure and unit-tested. Reading is tab
 state on purpose — a Pull is not a page — so a real address belongs only to what someone
-could send: `/explore`, `/search`, `/appearance`, `/source/:id`, `/pull/:id`, `/topic/:slug`,
-`/privacy` and `/terms`. `DESTINATIONS` in `App.tsx` is the authority for the first three;
-the sections beside them stay tab state because each is keyed to a reader, which is also why
-a signed-out visitor is shown destinations and not sections. Data is fetched by `supabase-js`
+could send, or to a screen a reader would bookmark: `/explore`, `/search`, `/appearance`,
+`/source/:id`, `/pull/:id`, `/topic/:slug`, `/privacy` and `/terms`, plus `/graph`,
+`/import` and `/metacognition`, and `/demo`, which is reachable by address but is not a
+destination. `DESTINATIONS` in `App.tsx` is the authority for which of these appear in the
+navigation; the sections beside them stay tab state because each is keyed to a reader,
+which is also why a signed-out visitor is shown destinations and not sections.
+
+The four added last are signed-in only, and that is a rule with two halves rather than one
+flag. A destination withheld from a visitor or a guest must also be withheld by the route,
+because a URL is still a URL: adding the flag alone left a guest arriving by bookmark on a
+titled, empty page, since `routeOpen` hides the feed and `isKnownPath` matches, so the 404
+branch never fires. `/account` had solved this already, and the three new ones now share
+its answer. Data is fetched by `supabase-js`
 in the component that needs it; the offline copy lives in IndexedDB via `lib/offline.ts`, not
 in a query cache.
 
