@@ -135,15 +135,20 @@ cat <<'SQL'
     select public.enable_knowledge_vector_refresh();
     select public.enable_log_retention();
     select public.enable_guest_sweep();
+    select public.enable_generation_sweeper();
 
   None of these is applied by a migration, and that is deliberate: CI check 4 replays
   every migration from zero, and a migration that calls cron.schedule makes that replay
   depend on pg_cron running as a background worker inside a test container. The cost is
   that they are a deploy step, which is why they are written down here.
 
-  The last one is the newest and it fails quietly. Without it, guest accounts accumulate
-  for ever — and docs/privacy.md tells readers, as a fact, that a guest session unused
-  for 30 days is deleted. That sentence is only true once this has been run.
+  The guest sweep fails quietly. Without it, guest accounts accumulate for ever — and
+  docs/privacy.md tells readers, as a fact, that a guest session unused for 30 days is
+  deleted. That sentence is only true once this has been run.
+
+  The generation sweeper fails more quietly still. Without it a job whose queue message
+  is gone sits at `running` for ever, invisible to the dispatcher, and once the pipeline
+  is a graph a join whose predecessor failed is stranded by design. Nothing else notices.
 
   Guest sessions also need Authentication → Sign In / Providers → "Allow anonymous
   sign-ins" turned on in the dashboard. supabase/config.toml configures the local stack
