@@ -90,8 +90,9 @@ function summaryTool() {
     name: 'emit_summary',
     description: 'Return the canonical summary of the source, and file it under topics.',
     // Plain JSON Schema, as exported from `packages/prompts/baml_src` -- the same
-    // source `gemini.ts` converts to its own dialect. The topic enum and the array
-    // bounds arrive from the BAML aliases and asserts, so this copy cannot drift.
+    // source `gemini.ts` converts to its own dialect, so this copy cannot drift.
+    // The topic enum arrives from the BAML aliases; the array bounds arrive from
+    // `BOUNDS` in the exporter, not from `@assert`, which BAML v1 parses and ignores.
     input_schema: PROMPTS.WriteCanonicalSummary.schema,
   };
 }
