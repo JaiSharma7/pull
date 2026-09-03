@@ -93,10 +93,20 @@ step "2/6  Push the migrations"
 # it is deliberately not something a deploy script should do for you at 2am.
 #
 # So a refusal here must not take the rest of the deploy with it. Under `set -e` it would:
-# the worker deploy, REQUIRE_REAL_PROVIDERS and both SQL blocks are the reason this file
-# exists, they do not depend on the schema being current, and they are precisely what
-# nothing else does. The failure is recorded, the remaining steps run, and the script
-# exits non-zero at the end so it cannot be mistaken for a clean deploy.
+# REQUIRE_REAL_PROVIDERS and both SQL blocks are the reason this file exists, they do not
+# depend on the schema being current, and they are precisely what nothing else does. The
+# failure is recorded, the remaining steps run, and the script exits non-zero at the end
+# so it cannot be mistaken for a clean deploy.
+#
+# The worker is the exception, and it was not always one. This paragraph used to include
+# it in "they do not depend on the schema being current", which was true when it was
+# written and stopped being true when the pipeline grew a graph: the worker now calls
+# `job_step_outputs(uuid, text[])`, `dispatch_generation_step`, `claim_source_hash` and
+# `requeue_generation_message`, none of which exists on a remote that has not taken these
+# migrations. Deploying it over an old schema is worse than not deploying it — PostgREST
+# resolves the overload by named arguments and rejects the call, the worker records a
+# failed attempt, and every queued job burns its retries and is marked exhausted. A stale
+# worker leaves the queue where it is; a new worker on an old schema destroys it.
 migrations_pushed=1
 if ! npx --yes supabase db push --project-ref "$PROJECT_REF" --yes \
      ${SUPABASE_DB_PASSWORD:+--password "$SUPABASE_DB_PASSWORD"}; then
@@ -111,12 +121,23 @@ if ! npx --yes supabase db push --project-ref "$PROJECT_REF" --yes \
 fi
 
 step "3/6  Deploy the worker"
-# --no-verify-jwt because the worker authenticates the dispatcher itself against a
-# Vault token; the platform cannot do it, since pg_net is not a signed-in user.
-# Dropping this would make every dispatcher tick 401 and the queue would never drain.
-npx --yes supabase functions deploy worker \
-  --project-ref "$PROJECT_REF" \
-  --no-verify-jwt
+# Gated on the push above, for the reason set out there: this worker requires functions
+# that only these migrations create, so shipping it onto an unmigrated remote turns a
+# deferred deploy into a drained queue.
+if [ "$migrations_pushed" -eq 0 ]; then
+  echo "  SKIPPED — the schema was not pushed." >&2
+  echo "  This worker calls job_step_outputs(uuid, text[]), dispatch_generation_step," >&2
+  echo "  claim_source_hash and requeue_generation_message. On a remote without them," >&2
+  echo "  every job would fail through its retries and be marked exhausted." >&2
+  echo "  Push the migrations, then re-run this script." >&2
+else
+  # --no-verify-jwt because the worker authenticates the dispatcher itself against a
+  # Vault token; the platform cannot do it, since pg_net is not a signed-in user.
+  # Dropping this would make every dispatcher tick 401 and the queue would never drain.
+  npx --yes supabase functions deploy worker \
+    --project-ref "$PROJECT_REF" \
+    --no-verify-jwt
+fi
 
 step "4/6  Require real providers"
 # Without this, a rotated or quota-exhausted key silently falls back to stub summaries:
@@ -179,10 +200,11 @@ cat <<'SQL'
 SQL
 
 if [ "$migrations_pushed" -eq 0 ]; then
-  step "Done, except the migrations"
-  echo "Everything else ran. The schema was NOT pushed — see step 2 above." >&2
-  echo "Until it is, apps/web can ask the database for columns it does not have," >&2
-  echo "and source pages answer with an error rather than a source." >&2
+  step "Done, except the migrations — and the worker"
+  echo "The schema was NOT pushed, so the worker was NOT deployed — see step 2." >&2
+  echo "Until the schema is pushed, apps/web can ask the database for columns it does" >&2
+  echo "not have, and source pages answer with an error rather than a source." >&2
+  echo "The worker in production is whatever was there before; the queue is intact." >&2
   exit 1
 fi
 
