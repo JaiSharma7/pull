@@ -74,18 +74,35 @@ export function Ingestion({ onComplete }: IngestionProps) {
           Choose your file or paste clippings
         </h2>
         <div style={{ margin: 'var(--space-3) 0' }}>
+          {/*
+            A real label, a focusable input, and no emoji.
+
+            This was a `<label className="btn">` with `border: '1px dashed var(--border)'`
+            wrapping a `display: none` file input. Three things wrong with that: `--border`
+            is defined nowhere in this repository, so the shorthand was invalid at
+            computed-value time and unset the border entirely — the dashed dropzone had no
+            border at all; a `<label>` is not focusable and has no keyboard activation, so
+            with the input hidden there was no way to upload a file without a pointer; and
+            `📁` is ornament in a design system whose brief is that typography is the
+            ornament.
+
+            `sr-only` keeps the input reachable by keyboard and screen reader while the
+            styled label still works as the click target.
+          */}
           <label
             className="btn btn--plain"
-            style={{ cursor: 'pointer', border: '1px dashed var(--border)' }}
+            htmlFor="clippings-file"
+            style={{ cursor: 'pointer', borderStyle: 'dashed' }}
           >
-            <span>📁 Upload My Clippings.txt or CSV</span>
-            <input
-              type="file"
-              accept=".txt,.csv"
-              style={{ display: 'none' }}
-              onChange={handleFileUpload}
-            />
+            Upload My Clippings.txt or a CSV
           </label>
+          <input
+            id="clippings-file"
+            type="file"
+            accept=".txt,.csv"
+            className="sr-only"
+            onChange={handleFileUpload}
+          />
         </div>
 
         <label className="field">

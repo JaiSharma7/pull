@@ -20,6 +20,18 @@ declare
   -- graph. A parameter that cannot do what its name says is one a caller eventually
   -- believes, so it is gone rather than ignored.
   uid uuid := (select auth.uid());
+  /*
+   * Bounded here rather than trusted from the caller.
+   *
+   * The personal branch used `limit p_limit` bare while the seed branch used
+   * `least(p_limit, 40)`, so the two disagreed on a null: `least` ignores nulls and
+   * yields 40, but `limit null` is no limit at all. A caller posting `{"p_limit": null}`
+   * to this `anon`-callable endpoint got every one of their knowledge states, with full
+   * headline and body, aggregated into a single jsonb; `-1` raised `LIMIT must not be
+   * negative` and returned a 500. Own data either way, so this is response size and
+   * availability rather than confidentiality — but neither is the caller's to choose.
+   */
+  lim int := greatest(least(coalesce(p_limit, 150), 500), 1);
   nodes_json jsonb;
   edges_json jsonb;
   -- Which graph the caller is actually looking at. Without this the seed fallback is
@@ -51,7 +63,7 @@ begin
       join public.works w on w.id = s.work_id
       where ks.user_id = uid and s.status = 'published'
       order by ks.last_seen_at desc
-      limit p_limit
+      limit lim
     ),
     active_pull_ids as (
       select pull_id from user_nodes
@@ -120,7 +132,7 @@ begin
       join public.works w on w.id = s.work_id
       where s.status = 'published'
       order by p.created_at desc
-      limit least(p_limit, 40)
+      limit least(lim, 40)
     ),
     seed_pull_ids as (
       select pull_id from seed_nodes
@@ -179,4 +191,10 @@ $$;
 comment on function public.get_user_knowledge_graph is
   'Returns the nodes and edges of a user knowledge graph with real-time retrievability values, plus a source of personal or seed. A caller that reports counts to a reader must check source: seed is the published corpus, not their history.';
 
+-- Revoked from PUBLIC first, like every other function here. Postgres grants EXECUTE to
+-- PUBLIC on a new function by default, which is the gap 20260829124835_function_hardening
+-- exists to close and which a bare `grant` silently reopens. Harmless in this one case —
+-- the function is `security invoker`, so PUBLIC execute buys a caller nothing RLS would
+-- not already allow — but the convention is the thing that makes the next one safe.
+revoke all on function public.get_user_knowledge_graph(int) from public, anon, authenticated;
 grant execute on function public.get_user_knowledge_graph(int) to anon, authenticated;

@@ -291,7 +291,9 @@ export function Preferences({
           disabled={saving}
           onClick={() => void save()}
         >
-          {saving ? 'Saving…' : mode === 'onboarding' ? 'Start reading' : 'Save'}
+          {/* "Continue", not "Start reading": onboarding now has two more steps after
+              this one, so the button named an action it no longer performs. */}
+          {saving ? 'Saving…' : mode === 'onboarding' ? 'Continue' : 'Save'}
         </button>
         {mode === 'onboarding' ? (
           <button
@@ -337,12 +339,20 @@ type OnboardingStage = 'preferences' | 'census' | 'demo';
  * of a one-time tour, not a fact about the reader. A reader who onboards on their phone
  * and reloads on their laptop is finished either way — `onboarded_at` still governs
  * that, and this can only ever extend the gate within the session it started in.
+ *
+ * `sessionStorage`, not `localStorage`, and the difference is the reason `guest-storage.ts`
+ * exists: "`localStorage` is the one place a guest token must never be". This gate runs for
+ * guests too, so a `localStorage` key named after `auth.uid()` would outlive the tab, the
+ * guest sweep and the browser restart — leaving a UUID identifying a person on a shared
+ * machine, readable by nobody but present forever. The cost is that closing the tab
+ * mid-tour loses the position; a reload, which is the case this was written for, still
+ * resumes.
  */
 const STAGE_KEY_PREFIX = 'wap_onboarding_stage_';
 
 function readStage(userId: string): OnboardingStage | null {
   try {
-    const raw = localStorage.getItem(`${STAGE_KEY_PREFIX}${userId}`);
+    const raw = sessionStorage.getItem(`${STAGE_KEY_PREFIX}${userId}`);
     return raw === 'census' || raw === 'demo' ? raw : null;
   } catch {
     return null;
@@ -352,8 +362,8 @@ function readStage(userId: string): OnboardingStage | null {
 function writeStage(userId: string, stage: OnboardingStage | null): void {
   try {
     const key = `${STAGE_KEY_PREFIX}${userId}`;
-    if (stage === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, stage);
+    if (stage === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, stage);
   } catch {
     // Private browsing, or a full quota. The gate then behaves as it did before: the
     // reader keeps their preferences and misses the rest of the tour, which is a

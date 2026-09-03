@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { computeGraphStats, graphAbsence, personalGraph } from '../lib/graph.js';
+import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
 
@@ -144,7 +144,7 @@ export function MetacognitiveDashboard({
                   margin: 'var(--space-2) 0',
                 }}
               >
-                {measured?.edges.length ?? 0}
+                {measured ? undirectedEdges(measured.edges).length : 0}
               </div>
               <p className="meta">{stats.opposesCount} dialectical tensions</p>
             </div>
@@ -256,8 +256,13 @@ export function MetacognitiveDashboard({
             </button>
 
             {onGoToReview && stats.fadingCount > 0 && (
+              /* No number on this button. `fadingCount` is retrievability < 0.6 across up
+                 to 150 graph nodes; Review's queue is `get_due_reviews`, which selects on
+                 `next_due_at <= now()` and caps at 20. Different predicate, different cap,
+                 so "Review 34 Fading Ideas" led to a screen showing 20 — or to "everything
+                 you have saved is still solid", on the very next click. */
               <button type="button" className="btn btn--plain" onClick={onGoToReview}>
-                Review {stats.fadingCount} Fading Ideas
+                Go to review
               </button>
             )}
           </div>

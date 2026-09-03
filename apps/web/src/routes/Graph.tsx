@@ -5,6 +5,7 @@ import {
   formatRetrievabilityLabel,
   graphAbsence,
   personalGraph,
+  undirectedEdges,
 } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
@@ -103,7 +104,7 @@ export function Graph({
         <section className="stack" style={{ gap: 'var(--space-4)' }}>
           <SynapseMap
             nodes={data.nodes}
-            edges={data.edges}
+            edges={undirectedEdges(data.edges)}
             selectedNodeId={selectedNode?.pullId}
             onSelectNode={setSelectedNode}
             filter={filter}

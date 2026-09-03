@@ -1008,7 +1008,11 @@ export function App() {
                 onOpenSource={(id) => navigate(`/source/${id}`)}
               />
             )}
-            {importOpen && <Ingestion onComplete={() => navigate('/metacognition')} />}
+            {/* No `onComplete` destination. It used to navigate to /metacognition, which
+                re-implies by navigation the thing the import does not do: nothing here
+                reaches the Delta, so landing the reader on the ROI dashboard afterwards
+                suggests it did. */}
+            {importOpen && <Ingestion />}
 
             {demoOpen && (
               <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />

@@ -178,10 +178,34 @@ export function filterConnectedEdges(edges: GraphEdge[], activeNodeIds: Set<stri
 }
 
 /**
+ * One edge per pair of ideas, rather than one per stored row.
+ *
+ * `pull_relations` stores both directions of a relationship — the Epictetus/Marcus lineage
+ * is inserted as `descendant` and again as `ancestor`, the Mill/Thoreau tension as
+ * `opposes` twice (`20260829131109_seed_relations_and_daily.sql`). Counting rows therefore
+ * reported one debate as "2 dialectical tensions" and one lineage link as two connections,
+ * under a header promising that nothing is estimated. It also made the canvas stroke the
+ * same segment twice, so those edges rendered darker than the alpha intends.
+ */
+export function undirectedEdges(edges: readonly GraphEdge[]): GraphEdge[] {
+  const seen = new Set<string>();
+  const out: GraphEdge[] = [];
+  for (const e of edges) {
+    const key = [e.fromPullId, e.toPullId].sort().join('\u0000');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
+/**
  * Compute aggregate statistics for the user's knowledge graph.
  */
 export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): GraphStats {
   const totalNodes = nodes.length;
+  // Pairs, not rows — see `undirectedEdges`.
+  const links = undirectedEdges(edges);
   if (totalNodes === 0) {
     return {
       totalNodes: 0,
@@ -209,7 +233,7 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
   let ancestorCount = 0;
   let elaboratesCount = 0;
 
-  for (const e of edges) {
+  for (const e of links) {
     if (e.kind === 'opposes') opposesCount++;
     else if (e.kind === 'ancestor' || e.kind === 'descendant') ancestorCount++;
     else if (e.kind === 'elaborates') elaboratesCount++;
@@ -255,12 +279,45 @@ export function narrowGraph(data: unknown): KnowledgeGraphData | null {
   if (typeof data !== 'object' || data === null) return null;
   const res = data as { nodes?: unknown; edges?: unknown; source?: unknown };
   if (!Array.isArray(res.nodes) || res.nodes.length === 0) return null;
+
+  /*
+   * The node shape is checked, not asserted.
+   *
+   * `source` decides whether these numbers may be called the reader's; `retrievability`
+   * decides what the numbers are. A cast let a drifted payload through silently and
+   * wrongly rather than loudly: a node missing `retrievability` makes every threshold
+   * comparison in `computeGraphStats` false, so it counts as fading, "Retention Health"
+   * prints `0%` as a measured figure, and `formatRetrievabilityLabel` renders
+   * `NaN% · Fading`. On the screens whose whole point is not showing unmeasured numbers,
+   * a wrong number is the one failure mode worth spending a type guard on.
+   */
+  const nodes = res.nodes.filter(isGraphNode);
+  if (nodes.length === 0) return null;
+
   const source: GraphSource = res.source === 'personal' ? 'personal' : 'seed';
   return {
-    nodes: res.nodes as GraphNode[],
-    edges: Array.isArray(res.edges) ? (res.edges as GraphEdge[]) : [],
+    nodes,
+    edges: Array.isArray(res.edges) ? res.edges.filter(isGraphEdge) : [],
     source,
   };
+}
+
+function isGraphNode(n: unknown): n is GraphNode {
+  if (typeof n !== 'object' || n === null) return false;
+  const c = n as Record<string, unknown>;
+  return (
+    typeof c.pullId === 'string' &&
+    typeof c.workId === 'string' &&
+    typeof c.retrievability === 'number' &&
+    Number.isFinite(c.retrievability) &&
+    typeof c.stability === 'number'
+  );
+}
+
+function isGraphEdge(e: unknown): e is GraphEdge {
+  if (typeof e !== 'object' || e === null) return false;
+  const c = e as Record<string, unknown>;
+  return typeof c.fromPullId === 'string' && typeof c.toPullId === 'string';
 }
 
 /**

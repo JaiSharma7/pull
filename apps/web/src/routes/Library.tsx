@@ -5,7 +5,7 @@ import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
-import { graphAbsence, personalGraph } from '../lib/graph.js';
+import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
@@ -237,7 +237,7 @@ export function Library({ userId }: { userId: string }) {
   const graphEdges = useMemo(() => {
     if (!graph) return [];
     const ids = new Set(graphNodes.map((n) => n.pullId));
-    return graph.edges.filter((e) => ids.has(e.fromPullId) && ids.has(e.toPullId));
+    return undirectedEdges(graph.edges.filter((e) => ids.has(e.fromPullId) && ids.has(e.toPullId)));
   }, [graph, graphNodes]);
 
   /** Saved ideas with no knowledge state yet — read nothing into their absence. */

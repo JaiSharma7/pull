@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api.js';
 import { gradeForLevel, type KnowledgeLevel } from '../lib/calibration.js';
+import { isOfflineFailure, queueMutation } from '../lib/offline.js';
+import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
 
 export type { KnowledgeLevel };
@@ -78,15 +80,33 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
     setSaving(true);
     setError(null);
     const recorded: string[] = [];
+    const lost: string[] = [];
+    const userId = getCurrentUserId();
+
     for (const [pullId, grade] of claimed) {
       try {
         await api.gradeRecall(pullId, grade);
         recorded.push(pullId);
       } catch (e) {
-        // Reported, not swallowed. The previous version could not fail because it never
-        // wrote; this one can, and a reader told "calibrated" over a failed write is back
-        // to the problem this screen was rebuilt to fix.
+        /*
+         * Queued when the request provably never left, dropped otherwise — the same rule
+         * `Review.tsx` applies to this same RPC, and for the same reason: `grade_recall`
+         * is not replay-safe, so a write that may already have applied must not be
+         * retried. This screen is offered exactly once, and it is the only thing that
+         * seeds a knowledge model, so losing it to a tunnel is not a small matter; law 3
+         * puts offline among the five that stay free.
+         */
+        if (userId && isOfflineFailure(e)) {
+          try {
+            await queueMutation(userId, { kind: 'recall', pullId, grade });
+            recorded.push(pullId);
+            continue;
+          } catch (queueError) {
+            console.error('Could not queue calibration for', pullId, queueError);
+          }
+        }
         console.error('Could not record calibration for', pullId, e);
+        lost.push(pullId);
       }
     }
     setSaving(false);
@@ -95,13 +115,25 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       setError('Could not save your calibration just now. You can skip and do this later.');
       return;
     }
+    if (lost.length > 0) {
+      /*
+       * A partial failure used to advance silently. Mark six, have five fail and one
+       * land, and the reader was moved on having been told nothing — which is the exact
+       * thing this screen was rebuilt to stop doing.
+       */
+      setError(
+        `Saved ${recorded.length} of ${claimed.length}. The rest could not be recorded — ` +
+          'you can continue, or try again.',
+      );
+      return;
+    }
     onComplete(recorded);
   };
 
   return (
     <div className="stack" style={{ gap: 'var(--space-5)' }}>
       <header>
-        <p className="meta">Step 1 of 2 · Prior Knowledge Calibration</p>
+        <p className="meta">Step 2 of 3 · Prior knowledge</p>
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
           What do you already know?
         </h1>
@@ -210,17 +242,19 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
           gap: 'var(--space-3)',
         }}
       >
-        <button type="button" className="btn btn--plain" onClick={onSkip} disabled={saving}>
+        {/* Not disabled while saving. Six sequential RPCs with no timeout can hang for a
+            long time on a bad connection, and that is precisely when a reader wants out. */}
+        <button type="button" className="btn btn--plain" onClick={onSkip}>
           Skip calibration
         </button>
 
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => void handleFinish()}
+          onClick={() => (error ? onComplete([]) : void handleFinish())}
           disabled={saving || items === null}
         >
-          {saving ? 'Recording…' : 'Continue →'}
+          {saving ? 'Recording…' : error ? 'Continue anyway' : 'Continue'}
         </button>
       </footer>
     </div>

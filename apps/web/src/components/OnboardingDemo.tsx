@@ -24,8 +24,11 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             gap: 'var(--space-2)',
           }}
         >
+          {/* The gate is preferences → census → demo. These counters used to read
+              "Step 1 of 2" then "Step 1 of 3", so a reader saw three screens described by
+              two disagreeing scales. */}
           <p className="meta" style={{ color: 'var(--accent)' }}>
-            Quick Demo · Step {step} of 3
+            Step 3 of 3 · A quick tour ({step} of 3)
           </p>
           <button type="button" className="btn btn--plain" onClick={onSkip ?? onComplete}>
             Skip demo
@@ -39,9 +42,9 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
         </h1>
         <p className="meta">
           {step === 1 &&
-            'Control reading compression. Scale reading time from 20 seconds to deep analysis.'}
+            'Control how much of an idea you get. The dial moves from the claim itself to the mechanism and the evidence behind it.'}
           {step === 2 &&
-            'Never re-read ideas you already know. Skip the redundant 80% across books.'}
+            'Ideas repeat across books. The Delta leaves out the ones your reading already shows you hold.'}
           {step === 3 &&
             'Your thoughts form an enduring lattice. Active recall fires only as memory fades.'}
         </p>
@@ -106,8 +109,8 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               Interactive Try-It · Toggle your prior knowledge:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
-              Standard microlearning apps make you read 15 minutes of filler every time. The Delta
-              removes what you already know.
+              The same idea turns up in book after book. The Delta leaves out the ones you have
+              already met, so what is left is what is new to you.
             </p>
           </div>
 
@@ -141,7 +144,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                 worked example of how the Delta reads, not a measurement of anything: this
                 screen runs before the reader has a knowledge model to measure. The source
                 is a seeded public-domain work for the same reason the card above is. */}
-            <p className="meta">Worked example · Walden (12 ideas) — illustration, not your data</p>
+            <p className="meta">Worked example · illustration, not your data</p>
             <div
               style={{
                 display: 'flex',
@@ -153,7 +156,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             >
               <div>
                 <span style={{ fontSize: 'var(--step-3)', fontFamily: 'var(--font-mono)' }}>
-                  {simulatedPriorKnowledge ? '3' : '12'}
+                  {simulatedPriorKnowledge ? '1' : '3'}
                 </span>
                 <span className="meta"> ideas to read</span>
               </div>
@@ -165,7 +168,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                     color: 'var(--accent)',
                   }}
                 >
-                  {simulatedPriorKnowledge ? '9' : '0'}
+                  {simulatedPriorKnowledge ? '2' : '0'}
                 </span>
                 <span className="meta"> ideas already held</span>
               </div>
@@ -177,7 +180,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                     color: 'var(--accent)',
                   }}
                 >
-                  {simulatedPriorKnowledge ? '35m' : '0m'}
+                  {simulatedPriorKnowledge ? '~1m' : '0m'}
                 </span>
                 <span className="meta"> reading time spared</span>
               </div>
@@ -185,8 +188,8 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
 
             <p style={{ color: 'var(--text-soft)', margin: 0 }}>
               {simulatedPriorKnowledge
-                ? 'With nine of these ideas already in your knowledge model, the Delta shows the three that are new to you.'
-                : 'Without a knowledge model, all twelve are shown in order, including the ones you already hold.'}
+                ? 'With two of these three already in your knowledge model, the Delta shows the one that is new to you.'
+                : 'Without a knowledge model, all three are shown in order, including the ones you already hold.'}
             </p>
           </div>
         </div>
