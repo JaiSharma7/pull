@@ -417,14 +417,12 @@ async function runDrain(
  *   and is dropped only when the target is nowhere: not queued, and not on the
  *   server.
  *
- *   23514 on text the reader composed. A collection name over 200 characters or an
- *   explanation over 20,000 is refused by a check constraint the client does not
- *   mirror, and the reader would rather be told than have it vanish. Kept, so it
- *   fails visibly on the next reload rather than silently now. Bounding the inputs
- *   is the real fix, and lives in the components.
- *
- * Everything about a pull is what the codes were listed for: a pull that is gone
- * is gone, and no later pass brings it back.
+ * Everything else is what the codes were listed for: a pull that is gone is gone,
+ * and no later pass brings it back. A check violation is dropped too, and on text
+ * the reader composed that is a loss -- but a kept write blocks its scope on every
+ * pass and holds the timer alive for the life of the tab, which is the failure this
+ * whole classification exists to end. The honest fix is not to let the text get
+ * that long: the inputs are bounded to the columns' limits in the components.
  */
 function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
   if (!isPermanentFailure(error)) return false;
@@ -437,9 +435,6 @@ function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<
       const target = write.patch.stashId;
       return typeof target !== 'string' || !queuedStashes.has(target);
     }
-  }
-  if (code === '23514') {
-    return write.kind !== 'explain' && write.kind !== 'organise' && write.kind !== 'stash-create';
   }
   return true;
 }

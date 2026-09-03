@@ -335,8 +335,9 @@ not have to rediscover them.
   Not knowing is the same as transient. Two refinements the first cut got wrong: an RLS
   refusal is _not_ on the list, because a request whose session refresh failed goes out
   as `anon` and is refused with the same code; and a foreign key or check failure is
-  judged per write, since a collection can point at a collection still in the queue and
-  a check on text the reader typed is something to show them rather than discard.
+  judged per write, since a collection can point at a collection still in the queue.
+  Text the reader composed is bounded in the inputs to the columns' limits instead,
+  because a check violation kept in the queue would block its subject forever.
 - **`acquire` was open to DNS rebinding. Closed, by inverting the check.** The host
   blocklist rejects private and link-local literals in both IPv4 and IPv6 and re-checks
   every redirect hop, so a public URL that 302s to `169.254.169.254` was refused. What

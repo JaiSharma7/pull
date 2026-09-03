@@ -257,27 +257,6 @@ describe('a write the server refused for good', () => {
     expect(await hasPending(USER_A)).toBe(false);
   });
 
-  it('keeps text the reader composed that a check constraint refused', async () => {
-    // An explanation over the column's limit is refused by Postgres, and the
-    // client has no bound of its own to have stopped it. Losing several sentences
-    // the reader wrote is worse than a retry that fails visibly on reload.
-    await queueMutation(USER_A, {
-      kind: 'explain',
-      pullId: 'p1',
-      text: 'x'.repeat(30),
-      mutationId: 'm1',
-    });
-    const check = new Error(
-      'new row for relation "explanations" violates check constraint "explanations_text_length"',
-    );
-    check.name = 'PostgrestError 23514';
-    await drainPending(USER_A, async () => {
-      throw check;
-    });
-    expect(await hasPending(USER_A)).toBe(true);
-    await drainPending(USER_A, async () => undefined);
-  });
-
   it('defers dropping while an earlier write in the pass was held back', async () => {
     // Two subjects. The first fails transiently and is blocked; the second is
     // refused for good. It is not dropped in this pass -- it might depend on the
