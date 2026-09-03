@@ -5,6 +5,7 @@ import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
+import { graphAbsence, personalGraph } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
@@ -26,7 +27,6 @@ import {
   newStashId,
   withoutStashes,
 } from '../lib/stashes.js';
-import { getCurrentUserId } from '../lib/supabase.js';
 import type { KnowledgeGraphData, LibraryItem, SourceDelta } from '../lib/types.js';
 
 /**
@@ -185,13 +185,13 @@ export function Library({ userId }: { userId: string }) {
   useEffect(() => {
     if (viewMode !== 'graph' || graph !== null) return;
     let cancelled = false;
-    void fetchKnowledgeGraph(getCurrentUserId()).then((g) => {
+    void fetchKnowledgeGraph(userId).then((g) => {
       if (!cancelled) setGraph(g);
     });
     return () => {
       cancelled = true;
     };
-  }, [viewMode, graph]);
+  }, [viewMode, graph, userId]);
 
   /* Derived rather than a second piece of state: the effect above starts the moment the
      reader opens the graph, and `fetchKnowledgeGraph` resolves either way — it answers a
@@ -215,9 +215,10 @@ export function Library({ userId }: { userId: string }) {
    * demonstration; a view labelled "your library" may not.
    */
   const graphNodes: SynapseNode[] = useMemo(() => {
-    if (!graph || graph.source !== 'personal') return [];
+    const measured = personalGraph(graph);
+    if (!measured) return [];
     const savedPullIds = new Set((visible ?? []).map((item) => item.id));
-    return graph.nodes
+    return measured.nodes
       .filter((n) => savedPullIds.has(n.pullId))
       .map((n) => ({
         pullId: n.pullId,
@@ -619,6 +620,11 @@ export function Library({ userId }: { userId: string }) {
       {viewMode === 'graph' ? (
         graphLoading ? (
           <p className="measure">Reading your knowledge graph…</p>
+        ) : graphAbsence(graph) === 'unreachable' ? (
+          <p className="measure">
+            Could not reach your reading history just now, so there is nothing to plot. This view is
+            built from it.
+          </p>
         ) : graphNodes.length === 0 ? (
           <p className="measure">
             Nothing to plot yet. This view maps saved ideas you have read against how well you are
@@ -639,8 +645,8 @@ export function Library({ userId }: { userId: string }) {
                 list branch — so in graph mode it produced nothing visible at all. The
                 selection is shown here, next to the graph the reader clicked in. */}
             {selectedNode ? (
-              <div className="library__selection measure">
-                <p className="text-muted">
+              <div className="measure" style={{ marginTop: 'var(--space-3)' }}>
+                <p className="meta">
                   {selectedNode.workTitle} · {selectedNode.status} ·{' '}
                   {Math.round(selectedNode.retrievability * 100)}% retrievable
                 </p>
@@ -658,7 +664,7 @@ export function Library({ userId }: { userId: string }) {
               </div>
             ) : null}
             {graphMissing > 0 ? (
-              <p className="measure text-muted">
+              <p className="measure meta">
                 {graphMissing} more saved {graphMissing === 1 ? 'idea has' : 'ideas have'} not been
                 read yet, so {graphMissing === 1 ? 'it is' : 'they are'} not plotted.
               </p>

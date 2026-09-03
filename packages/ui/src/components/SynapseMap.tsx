@@ -77,6 +77,31 @@ function resolveTokens(element: HTMLElement | null): ResolvedTokens {
   };
 }
 
+/**
+ * The selected node and everything one edge from it, or null for "no focus".
+ *
+ * Pure and exported so the rule can be tested — it had no coverage at all, and its
+ * failure is the kind that looks like a rendering glitch: a selection the current filter
+ * has removed is not a focus, and treating it as one produced a non-null set containing
+ * only the absent id, so every node still on screen was drawn dimmed around a node that
+ * was no longer in the graph.
+ */
+export function neighborsOf(
+  selectedNodeId: string | null,
+  activePullIds: ReadonlySet<string>,
+  edges: readonly SynapseEdge[],
+): Set<string> | null {
+  if (!selectedNodeId) return null;
+  if (!activePullIds.has(selectedNodeId)) return null;
+  const s = new Set<string>();
+  s.add(selectedNodeId);
+  for (const e of edges) {
+    if (e.fromPullId === selectedNodeId) s.add(e.toPullId);
+    if (e.toPullId === selectedNodeId) s.add(e.fromPullId);
+  }
+  return s;
+}
+
 export function SynapseMap({
   nodes,
   edges,
@@ -116,21 +141,10 @@ export function SynapseMap({
   );
 
   // Direct neighbors of selected node (for highlight focus)
-  const neighborSet = useMemo(() => {
-    if (!selectedNodeId) return null;
-    // A selection the current filter has removed is not a focus. Without this the set
-    // is non-null and holds only the absent id, so nothing matches it and every node
-    // still on screen is drawn dimmed — select a fading node, switch to Solid, and the
-    // whole graph greys out around a node that is no longer in it.
-    if (!activePullIds.has(selectedNodeId)) return null;
-    const s = new Set<string>();
-    s.add(selectedNodeId);
-    for (const e of filteredEdges) {
-      if (e.fromPullId === selectedNodeId) s.add(e.toPullId);
-      if (e.toPullId === selectedNodeId) s.add(e.fromPullId);
-    }
-    return s;
-  }, [selectedNodeId, filteredEdges, activePullIds]);
+  const neighborSet = useMemo(
+    () => neighborsOf(selectedNodeId, activePullIds, filteredEdges),
+    [selectedNodeId, activePullIds, filteredEdges],
+  );
 
   // Simulation state maintained across renders
   const simNodesRef = useRef<SimulationNode[]>([]);

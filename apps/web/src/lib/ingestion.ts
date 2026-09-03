@@ -106,6 +106,18 @@ function parseCsvRecords(input: string): string[][] {
   let field = '';
   let record: string[] = [];
   let inQuotes = false;
+  /*
+   * A quote only opens a quoted field at the *start* of a field.
+   *
+   * Treating `"` as an opener anywhere is how a lenient-looking scanner becomes far more
+   * destructive than the line-splitter it replaced. A highlight containing an inch mark
+   * — `We got 6" of snow` — would open quote mode mid-field, then swallow every comma and
+   * newline after it until the next `"` somewhere later in the file. One stray character
+   * took the whole import to zero records, and `Ingestion.tsx` renders that as a blank
+   * screen with no error. Excel and Papa Parse both honour the quote only at field start;
+   * anywhere else it is just a character in the text.
+   */
+  let atFieldStart = true;
 
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
@@ -116,6 +128,8 @@ function parseCsvRecords(input: string): string[][] {
           field += '"';
           i++;
         } else {
+          // Closing quote. Anything before the next delimiter is appended literally,
+          // which is what a spreadsheet does with `"a"b`.
           inQuotes = false;
         }
       } else {
@@ -124,11 +138,13 @@ function parseCsvRecords(input: string): string[][] {
       continue;
     }
 
-    if (ch === '"') {
+    if (ch === '"' && atFieldStart) {
       inQuotes = true;
+      atFieldStart = false;
     } else if (ch === ',') {
       record.push(field);
       field = '';
+      atFieldStart = true;
     } else if (ch === '\n' || ch === '\r') {
       // A bare CR, or the CR of a CRLF: end the record once, not twice.
       if (ch === '\r' && input[i + 1] === '\n') i++;
@@ -136,8 +152,10 @@ function parseCsvRecords(input: string): string[][] {
       records.push(record);
       record = [];
       field = '';
+      atFieldStart = true;
     } else {
       field += ch;
+      atFieldStart = false;
     }
   }
 

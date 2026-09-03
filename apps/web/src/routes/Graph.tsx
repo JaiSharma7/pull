@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PullCard, SynapseMap, type SynapseNode } from '@wap/ui';
-import { computeGraphStats, formatRetrievabilityLabel } from '../lib/graph.js';
+import {
+  computeGraphStats,
+  formatRetrievabilityLabel,
+  graphAbsence,
+  personalGraph,
+} from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
 
@@ -38,10 +43,22 @@ export function Graph({
     };
   }, [userId]);
 
+  /*
+   * Only the reader's own graph is counted under a heading that says "Your".
+   *
+   * This screen took whatever `fetchKnowledgeGraph` returned and counted it. The RPC
+   * serves the published seed corpus to a reader with no knowledge states — every row at
+   * `retrievability 1.0` and `status 'solid'` — so someone who had just signed up and read
+   * nothing was told "21 ideas connected · 21 solid (100% retention)". Offline it was
+   * `SAMPLE_GRAPH`, seven typed-in constants, reported the same way.
+   */
+  const measured = personalGraph(data);
+  const absence = graphAbsence(data);
+
   const stats = useMemo(() => {
-    if (!data) return null;
-    return computeGraphStats(data.nodes, data.edges);
-  }, [data]);
+    if (!measured) return null;
+    return computeGraphStats(measured.nodes, measured.edges);
+  }, [measured]);
 
   return (
     <div className="stack" style={{ gap: 'var(--space-4)' }}>
@@ -50,6 +67,16 @@ export function Graph({
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
           Your Mental Landscape
         </h1>
+        {absence === 'unreachable' ? (
+          <p className="meta">
+            Could not reach your history just now — showing an example map instead.
+          </p>
+        ) : absence === 'nothing-yet' ? (
+          <p className="meta">
+            An example map, until you have read something. Your own ideas appear here once you have
+            read them.
+          </p>
+        ) : null}
         {stats && (
           <p className="meta">
             {stats.totalNodes} {stats.totalNodes === 1 ? 'idea' : 'ideas'} connected ·{' '}

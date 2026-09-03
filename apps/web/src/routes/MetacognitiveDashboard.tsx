@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { computeGraphStats } from '../lib/graph.js';
+import { computeGraphStats, graphAbsence, personalGraph } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
 
@@ -43,7 +43,8 @@ export function MetacognitiveDashboard({
    * computed over rows they had never seen. A dashboard that reports the corpus back as
    * personal progress is worse than no dashboard, and this one is named for measurement.
    */
-  const measured = graphData?.source === 'personal' ? graphData : null;
+  const measured = personalGraph(graphData);
+  const absence = graphAbsence(graphData);
 
   const stats = useMemo(() => {
     if (!measured) return null;
@@ -70,6 +71,14 @@ export function MetacognitiveDashboard({
       ) : !graphData ? (
         <p className="meta" role="status">
           Calculating retention metrics…
+        </p>
+      ) : absence === 'unreachable' ? (
+        /* Not the same sentence as "nothing yet", and that distinction is the point of
+           `source`. Telling a reader with two years of history that they have read nothing,
+           because their train went into a tunnel, is worse than telling them nothing. */
+        <p className="meta" role="status">
+          Could not reach your reading history just now. These numbers come from it, so there is
+          nothing to show until the connection is back.
         </p>
       ) : !stats ? (
         <p className="meta" role="status">

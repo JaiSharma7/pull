@@ -115,3 +115,65 @@ describe('startRecognition transcript handling', () => {
     clearRecognition();
   });
 });
+
+describe('startRecognition hardening', () => {
+  /*
+   * The fallback that failed toward the bug. `resultIndex` is what makes the read
+   * incremental; an engine that omits it sent the loop back to zero, so every finalised
+   * segment was re-emitted on every event — the original duplication, reintroduced by
+   * the fix's own defensive default.
+   */
+  it('does not re-emit finalised segments when resultIndex never advances', () => {
+    const instance = fakeRecognition();
+    const kept: string[] = [];
+    const teardown = startRecognition({ onResult: (t) => kept.push(t) });
+
+    emit(instance, 0, [{ isFinal: true, 0: { transcript: 'one' } }]);
+    emit(instance, 0, [
+      { isFinal: true, 0: { transcript: 'one' } },
+      { isFinal: true, 0: { transcript: ' two' } },
+    ]);
+
+    expect(kept).toEqual(['one', ' two']);
+    teardown();
+    clearRecognition();
+  });
+
+  it('delivers nothing after teardown', () => {
+    const instance = fakeRecognition();
+    const kept: string[] = [];
+    const teardown = startRecognition({ onResult: (t) => kept.push(t) });
+
+    emit(instance, 0, [{ isFinal: true, 0: { transcript: 'kept' } }]);
+    teardown();
+    // `stop()` still delivers a trailing final result per spec; a teardown that only
+    // stopped left the handler attached, so this landed in an unmounted component.
+    emit(instance, 1, [
+      { isFinal: true, 0: { transcript: 'kept' } },
+      { isFinal: true, 0: { transcript: ' after teardown' } },
+    ]);
+
+    expect(kept).toEqual(['kept']);
+    clearRecognition();
+  });
+
+  it('handles one event carrying a finalised and an interim segment', () => {
+    const instance = fakeRecognition();
+    const kept: string[] = [];
+    const interim: string[] = [];
+    const teardown = startRecognition({
+      onResult: (t) => kept.push(t),
+      onInterim: (t) => interim.push(t),
+    });
+
+    emit(instance, 0, [
+      { isFinal: true, 0: { transcript: 'done' } },
+      { isFinal: false, 0: { transcript: ' still going' } },
+    ]);
+
+    expect(kept).toEqual(['done']);
+    expect(interim).toEqual([' still going']);
+    teardown();
+    clearRecognition();
+  });
+});

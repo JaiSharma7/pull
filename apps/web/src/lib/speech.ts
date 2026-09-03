@@ -1,9 +1,17 @@
 /**
- * Read-aloud, free forever (CLAUDE.md law 3).
+ * Read-aloud, free forever (CLAUDE.md law 3) — and dictation, which is not the same thing.
  *
- * The Web Speech API is on the device, so audio costs nothing per user and
- * needs no server. Deepstash puts playback behind Pro; here it is affordable
- * precisely because of where it runs.
+ * `speechSynthesis` is on the device, so read-aloud costs nothing per user and needs no
+ * server. Deepstash puts playback behind Pro; here it is affordable precisely because of
+ * where it runs.
+ *
+ * `SpeechRecognition` is **not** the same bargain, and this header used to vouch for both.
+ * In Chrome and Edge it streams the captured audio to Google's speech service, and in
+ * Safari to Apple's; only a few configurations run it locally. It still costs us nothing
+ * and calls no model of ours — law 2 is untouched — but "on the device" is false for it,
+ * and a reader pressing Dictate is sending their voice to their browser's vendor. That is
+ * their call to make, so `docs/privacy.md` says so and the control says so beside itself.
+ * Nothing here records, stores or transmits audio to us.
  */
 export interface SpeechState {
   supported: boolean;
@@ -128,17 +136,34 @@ export function startRecognition(options: RecognitionOptions): () => void {
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
+  /*
+   * How much of `results` has already been handed over as final.
+   *
+   * `resultIndex` alone is not enough to rely on. It is the only thing that makes the
+   * loop below correct, and an engine that omits it would send the read back to zero and
+   * re-emit every finalised segment on every event — which is exactly the bug this
+   * rewrite fixed, reintroduced by its own fallback. Tracking the high-water mark here
+   * means a missing or rewound `resultIndex` degrades to "emit nothing twice" rather than
+   * "emit everything again".
+   */
+  let finalisedThrough = 0;
+
   recognition.onresult = (event: SpeechRecognitionEventLike) => {
     let settled = '';
     let pending = '';
     // From `resultIndex`, not from zero: everything before it was delivered by an
     // earlier event and has not changed.
-    for (let i = event.resultIndex ?? 0; i < event.results.length; i++) {
+    const start = Math.max(event.resultIndex ?? 0, finalisedThrough);
+    for (let i = start; i < event.results.length; i++) {
       const res = event.results[i];
       const text = res?.[0]?.transcript;
       if (!text) continue;
-      if (res.isFinal) settled += text;
-      else pending += text;
+      if (res.isFinal) {
+        settled += text;
+        finalisedThrough = i + 1;
+      } else {
+        pending += text;
+      }
     }
     if (settled) options.onResult(settled);
     options.onInterim?.(pending);
@@ -159,10 +184,23 @@ export function startRecognition(options: RecognitionOptions): () => void {
   }
 
   return () => {
+    /*
+     * Detach first, then abort.
+     *
+     * `stop()` alone asks the engine to finish, and per spec it still delivers a final
+     * result for what it had already captured — with the handlers still attached. So a
+     * caller that had torn down, or a component that had unmounted, received one more
+     * segment and appended it to state that was no longer on screen. Nulling the
+     * handlers before aborting means the teardown is actually a teardown, and `abort()`
+     * discards the pending audio rather than transcribing it on the way out.
+     */
+    recognition.onresult = null;
+    recognition.onend = null;
+    recognition.onerror = null;
     try {
-      recognition.stop();
+      recognition.abort();
     } catch {
-      // safe no-op if already stopped
+      // safe no-op if it never started or is already finished
     }
   };
 }

@@ -207,6 +207,14 @@ Read-aloud uses your browser's built-in speech synthesis. **No audio is recorded
 sent to us.** Some browsers fetch higher-quality voices from their own vendor's servers; that
 is between your browser and its vendor, and we neither see nor control it.
 
+Dictation — the **Dictate** button on "say it back" — is different, and the difference is
+worth stating plainly rather than leaving inside the same sentence. It uses your browser's
+speech recognition, and in most browsers that is **not** on your device: Chrome and Edge send
+the captured audio to Google, Safari to Apple. **We never receive it**, we store no recording,
+and nothing is sent to any model of ours — but your voice does leave your machine, to your
+browser's vendor, under their privacy policy and not ours. The button is opt-in, per answer,
+and typing the same answer sends no audio at all.
+
 ## How long we keep things
 
 While your account exists, your data exists — unlimited history is one of the five things

@@ -101,3 +101,43 @@ Realize this, and you will find strength.",Meditations,Marcus Aurelius
     expect(summary.distinctBooks.length).toBe(2);
   });
 });
+
+/*
+ * The regression that made the scanner worse than what it replaced.
+ *
+ * An inch mark, or any other bare `"` inside an unquoted field, used to open quote mode
+ * mid-field and then swallow commas and newlines until the next `"` — so one stray
+ * character took an entire import to zero records, rendered as a blank screen. The
+ * line-splitting parser it replaced corrupted only the line it was on.
+ */
+describe('CSV quoting is only special at the start of a field', () => {
+  const csv = `Highlight,Book Title,Book Author
+We got 6" of snow that winter and it mattered,Walden,Thoreau
+"A perfectly normal highlight number two.",Meditations,Marcus Aurelius
+"A perfectly normal highlight number three.",The Enchiridion,Epictetus
+`;
+
+  it('keeps every record when a field contains a bare quote', () => {
+    const highlights = parseCsvHighlights(csv);
+    expect(highlights.length).toBe(3);
+    expect(highlights.map((h) => h.bookTitle)).toEqual([
+      'Walden',
+      'Meditations',
+      'The Enchiridion',
+    ]);
+  });
+
+  it('keeps the bare quote in the text rather than eating it', () => {
+    expect(parseCsvHighlights(csv)[0]?.text).toBe('We got 6" of snow that winter and it mattered');
+  });
+
+  it('still treats a leading quote as a quoted field', () => {
+    const quoted = `Highlight,Book Title,Book Author
+"One, with a comma inside",Walden,Thoreau
+`;
+    const h = parseCsvHighlights(quoted);
+    expect(h.length).toBe(1);
+    expect(h[0]?.text).toBe('One, with a comma inside');
+    expect(h[0]?.bookTitle).toBe('Walden');
+  });
+});

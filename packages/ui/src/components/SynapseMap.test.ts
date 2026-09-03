@@ -1,89 +1,98 @@
 import { describe, expect, it } from 'vitest';
-import type { SynapseEdge, SynapseNode } from './SynapseMap.js';
+import { neighborsOf, type SynapseEdge, type SynapseNode } from './SynapseMap.js';
 
-describe('SynapseMap data contract', () => {
-  const sampleNodes: SynapseNode[] = [
-    {
-      pullId: 'pull-1',
-      workId: 'work-1',
-      workTitle: 'Thinking, Fast and Slow',
-      workKind: 'book',
-      headline: 'System 1 is fast and intuitive; System 2 is slow and deliberate',
-      body: 'Cognitive operations divide into autonomous heuristics and controlled reasoning.',
-      retrievability: 0.95,
-      stability: 14.5,
-      status: 'solid',
-    },
-    {
-      pullId: 'pull-2',
-      workId: 'work-2',
-      workTitle: 'Antifragile',
-      workKind: 'book',
-      headline: 'Antifragility goes beyond resilience or robustness',
-      body: 'The resilient resists shocks and stays the same; the antifragile gets better.',
-      retrievability: 0.45,
-      stability: 1.2,
-      status: 'fading',
-    },
-    {
-      pullId: 'pull-3',
-      workId: 'work-3',
-      workTitle: 'The Black Swan',
-      workKind: 'book',
-      headline: 'Extreme impact events are retrospectively rationalized',
-      body: 'Humans concoct explanations for severe outliers after they occur.',
-      retrievability: 0.72,
-      stability: 4.0,
-      status: 'refreshing',
-    },
-  ];
+/*
+ * The fixture is public-domain, and that is not incidental.
+ *
+ * It used to be invented prose attributed to *Thinking, Fast and Slow*, *Antifragile* and
+ * *The Black Swan* — headlines, bodies and edge rationales, all written here and none of
+ * them anyone's words. Law 4 governs what is committed to this repository, and a test
+ * fixture is committed. The same mistake was removed from `SAMPLE_GRAPH`, the onboarding
+ * demo and the ingestion fixtures; it survived here because nothing checked this file.
+ *
+ * These are real seeded Pulls from `20260829131035_seed_pulls.sql`.
+ */
+const nodes: SynapseNode[] = [
+  {
+    pullId: 'pull-enchiridion',
+    workId: 'work-enchiridion',
+    workTitle: 'The Enchiridion',
+    workKind: 'book',
+    headline: 'You are disturbed by your judgement, not by the event.',
+    body: 'Events arrive without commentary. The distress comes from the verdict you attach to them.',
+    retrievability: 0.95,
+    stability: 14.5,
+    status: 'solid',
+  },
+  {
+    pullId: 'pull-meditations',
+    workId: 'work-meditations',
+    workTitle: 'Meditations',
+    workKind: 'book',
+    headline: 'It is your opinion of the thing that wounds you, and you can revoke it.',
+    body: 'The pain is attached to the verdict rather than the event.',
+    retrievability: 0.45,
+    stability: 1.2,
+    status: 'fading',
+  },
+  {
+    pullId: 'pull-walden',
+    workId: 'work-walden',
+    workTitle: 'Walden',
+    workKind: 'book',
+    headline: 'The cost of a thing is the amount of life you exchange for it.',
+    body: 'Not the price. The hours required to earn the price.',
+    retrievability: 0.72,
+    stability: 4.0,
+    status: 'refreshing',
+  },
+];
 
-  const sampleEdges: SynapseEdge[] = [
-    {
-      fromPullId: 'pull-2',
-      toPullId: 'pull-3',
-      kind: 'elaborates',
-      weight: 0.8,
-      rationale: 'Antifragility builds upon the vulnerability exposed by Black Swan events.',
-    },
-    {
-      fromPullId: 'pull-1',
-      toPullId: 'pull-2',
-      kind: 'opposes',
-      weight: 0.6,
-      rationale: 'Heuristic reliance under stress contrasts with deliberate antifragile design.',
-    },
-  ];
+const edges: SynapseEdge[] = [
+  {
+    fromPullId: 'pull-enchiridion',
+    toPullId: 'pull-meditations',
+    kind: 'descendant',
+    weight: 0.9,
+    rationale: 'Marcus was a reader of Epictetus; this is the same claim, restated.',
+  },
+  {
+    fromPullId: 'pull-walden',
+    toPullId: 'pull-meditations',
+    kind: 'related',
+    weight: 0.6,
+    rationale: 'Both treat attention as the scarce resource.',
+  },
+];
 
-  it('correctly categorizes nodes by retrievability', () => {
-    const solid = sampleNodes.filter((n) => n.retrievability >= 0.8);
-    const fading = sampleNodes.filter((n) => n.retrievability < 0.6);
-    const refreshing = sampleNodes.filter((n) => n.retrievability >= 0.6 && n.retrievability < 0.8);
+const allActive = new Set(nodes.map((n) => n.pullId));
 
-    expect(solid.length).toBe(1);
-    expect(solid[0]!.pullId).toBe('pull-1');
-
-    expect(fading.length).toBe(1);
-    expect(fading[0]!.pullId).toBe('pull-2');
-
-    expect(refreshing.length).toBe(1);
-    expect(refreshing[0]!.pullId).toBe('pull-3');
+describe('neighborsOf', () => {
+  it('has no focus when nothing is selected', () => {
+    expect(neighborsOf(null, allActive, edges)).toBeNull();
   });
 
-  it('filters edges to match active node subsets', () => {
-    const activePullIds = new Set(['pull-2', 'pull-3']);
-    const activeEdges = sampleEdges.filter(
-      (e) => activePullIds.has(e.fromPullId) && activePullIds.has(e.toPullId),
+  it('collects the selection and its neighbours in both directions', () => {
+    expect(neighborsOf('pull-meditations', allActive, edges)).toEqual(
+      new Set(['pull-meditations', 'pull-enchiridion', 'pull-walden']),
     );
-
-    expect(activeEdges.length).toBe(1);
-    expect(activeEdges[0]!.kind).toBe('elaborates');
+    expect(neighborsOf('pull-enchiridion', allActive, edges)).toEqual(
+      new Set(['pull-enchiridion', 'pull-meditations']),
+    );
   });
 
-  it('identifies dialectical tension edges correctly', () => {
-    const debateEdges = sampleEdges.filter((e) => e.kind === 'opposes');
-    expect(debateEdges.length).toBe(1);
-    expect(debateEdges[0]!.fromPullId).toBe('pull-1');
-    expect(debateEdges[0]!.toPullId).toBe('pull-2');
+  it('includes a selected node that has no edges', () => {
+    expect(neighborsOf('pull-walden', allActive, [])).toEqual(new Set(['pull-walden']));
+  });
+
+  /*
+   * The regression this exists for. Select a fading node, switch the filter to Solid, and
+   * the selection is no longer in the graph. Returning a set containing only that absent
+   * id is not "no focus" — every remaining node fails the membership test and is drawn at
+   * 22% opacity, so the whole map greys out around nothing.
+   */
+  it('drops focus when the filter has removed the selection', () => {
+    const solidOnly = new Set(['pull-enchiridion']);
+    expect(neighborsOf('pull-meditations', solidOnly, edges)).toBeNull();
   });
 });

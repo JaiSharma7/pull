@@ -275,3 +275,33 @@ export function narrowGraph(data: unknown): KnowledgeGraphData | null {
 export function mayServeCache(userId: string | null): userId is string {
   return typeof userId === 'string' && userId.length > 0;
 }
+
+/**
+ * The reader's own graph, or null.
+ *
+ * Every screen that turns graph nodes into a number shown to a reader has to make this
+ * check, and the point of putting it here is that they cannot make it differently.
+ * `MetacognitiveDashboard` made it inline and `Graph` — the destination whose heading is
+ * "Your Mental Landscape" — did not make it at all, so a reader who had read nothing was
+ * shown the published seed corpus as "21 ideas connected, 100% retention".
+ */
+export function personalGraph(graph: KnowledgeGraphData | null): KnowledgeGraphData | null {
+  return graph?.source === 'personal' ? graph : null;
+}
+
+/**
+ * Why there is nothing of the reader's to show, when there is nothing.
+ *
+ * The two cases must not be told the same way, and telling them apart is the whole reason
+ * `sample` and `seed` are separate values. `seed` means the reader genuinely has no
+ * knowledge states yet. `sample` means the RPC could not be reached, so we know nothing
+ * about their history — and saying "nothing measured yet, go and read something" to a
+ * reader with two years of it, because their train went into a tunnel, is worse than
+ * saying nothing.
+ */
+export function graphAbsence(
+  graph: KnowledgeGraphData | null,
+): 'unreachable' | 'nothing-yet' | null {
+  if (graph === null || graph.source === 'personal') return null;
+  return graph.source === 'sample' ? 'unreachable' : 'nothing-yet';
+}
