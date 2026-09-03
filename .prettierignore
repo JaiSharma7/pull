@@ -8,4 +8,9 @@ packages/db/src/database.types.ts
 supabase/.temp/
 supabase/migrations/
 packages/prompts/baml_sdk/
+# Vendored by `baml agent install`, which writes both copies and formats them its
+# own way. Formatting them ours makes every refresh a format:check failure, and
+# fixing that diverges them from upstream again.
+.agents/skills/baml-core/
+.claude/skills/baml-core/
 supabase/functions/_shared/generated/

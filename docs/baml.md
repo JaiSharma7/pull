@@ -168,16 +168,32 @@ runtime bindings for generated code in `packages/prompts/baml_sdk`. Code generat
 configured in `packages/prompts/baml.toml`.
 
 `baml agent install` refreshes the vendored `baml-core` reference skill, and **it cannot
-run from the Claude Code environment this repository is worked on from**: it fetches
-`https://codeload.github.com/BoundaryML/baml-skill/tar.gz/main`, which the egress policy
-refuses with a 403 (checked today, while `pkg.boundaryml.com` and GitHub release assets
-both answer 200 — so the toolchain installs fine and only this command is blocked).
-Consequently the skill is committed twice, byte-identical, at
-`.agents/skills/baml-core/SKILL.md` and `.claude/skills/baml-core/SKILL.md`, and which
-one the CLI actually owns is unverified — running the command is what would establish it.
-Do not delete either on a guess: the `.claude/` copy is what Claude Code discovers, and
-the `.agents/` copy is what `.claude/skills/baml/SKILL.md` points readers at. Allowlisting
-`codeload.github.com` would settle it.
+reach its default source from the Claude Code environment this repository is worked on
+from**: it fetches `https://codeload.github.com/BoundaryML/baml-skill/tar.gz/main`, which
+the egress policy refuses with a 403. `pkg.boundaryml.com` and GitHub release assets both
+answer 200, so the toolchain itself installs fine and only this one command is affected.
+The way round it is the CLI's own `--source`, against a clone the session's git proxy
+serves anonymously:
+
+```bash
+git clone --depth 1 https://github.com/BoundaryML/baml-skill /tmp/baml-skill
+baml agent install --source /tmp/baml-skill
+```
+
+**The skill is committed twice on purpose, and neither copy should be deleted.** That
+command writes both `.claude/skills/baml-core/SKILL.md` and
+`.agents/skills/baml-core/SKILL.md` — one for Claude Code, one for the generic `.agents`
+convention — and it renames the skill on the way in, upstream's `core` becoming
+`baml-core` "to avoid registry collisions". So the duplication is the tool's, not an
+oversight, and removing either copy is undone by the next refresh. Upstream ships the
+same content as a Claude Code plugin (`plugins/baml/skills/core/SKILL.md`, plugin version
+0.11.1); the committed copies match it.
+
+Both are in `.prettierignore`, and that is load-bearing rather than tidy: the CLI writes
+its own formatting, `prettier` wants the repository's, and formatting them ours turns
+every refresh into a `format:check` failure whose fix diverges them from upstream again.
+The repository's own hand-written `.claude/skills/baml/SKILL.md` is still formatted
+normally.
 
 `baml_sdk` is generator output and committed whole, which is why it is 4.8 MB and carries
 vendored `openai`, `aws`, `vercel` and `claude_code` clients alongside the `google` and
