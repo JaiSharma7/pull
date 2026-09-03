@@ -89,11 +89,23 @@ jobs:
       # Staged before the diff, deliberately: `git diff` ignores untracked files, so a
       # BAML edit that makes the generator emit a NEW file would pass a plain diff with
       # the client incomplete. Staging makes an added file a difference like any other.
+      #
+      # `_inlinedbaml.ts` is excluded, and the generator manifest with it, because it
+      # records that file's sha256. It is 3.3 MB of compiled bytecode and it is not
+      # reproducible across machines: the same pinned `0.17.0` over the same sources
+      # emits different bytes here than on a contributor's box, while the other 66
+      # generated files -- the types and client bindings anyone actually reads -- come
+      # out byte-identical. Diffing it therefore reports the machine, not staleness.
+      # What it would have caught is covered: a type change moves `_typemap.ts` and the
+      # rest, which are still diffed, and a prompt, client or schema change moves
+      # `generated/prompts.ts` in the export gate below, which is plain rendered text.
       - name: Generated BAML client is in sync with baml_src
         run: |
           pnpm baml:generate
           git add -A -- packages/prompts/baml_sdk
           git diff --cached --exit-code -- packages/prompts/baml_sdk \
+            ':(exclude)packages/prompts/baml_sdk/_inlinedbaml.ts' \
+            ':(exclude)packages/prompts/baml_sdk/.baml-generator-output.json' \
             || { echo "::error::Generated BAML client is stale. Run 'pnpm baml:generate' and commit the result."; exit 1; }
       # The prompts and schemas the Edge Functions run are exported from the same
       # sources at build time (docs/baml.md). Same rule, same reason.
