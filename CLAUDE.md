@@ -118,7 +118,7 @@ pnpm db:types       # regenerate packages/db/src/database.types.ts — never han
 pnpm db:lint        # the schema invariants CI check 4 runs
 pnpm db:test        # read-path behaviour, as a real reader under RLS
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
-pnpm baml:generate  # regenerate packages/prompts/baml_client — never hand-edit
+pnpm baml:generate  # regenerate packages/prompts/baml_sdk — never hand-edit
 pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/generated — never hand-edit
 ```
 
@@ -148,7 +148,7 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
   `docs/contributing-map.md`.
 
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
-  from `pnpm db:types`, `packages/prompts/baml_client` from `pnpm baml:generate`, and
+  from `pnpm db:types`, `packages/prompts/baml_sdk` from `pnpm baml:generate`, and
   `supabase/functions/_shared/generated` from `pnpm baml:export`. CI fails if any is
   stale.
 

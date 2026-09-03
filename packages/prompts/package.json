@@ -13,20 +13,16 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run",
-    "baml:check": "baml-cli check --from baml_src",
-    "baml:generate": "baml-cli generate --from baml_src",
-    "baml:test": "baml-cli test --from baml_src",
+    "baml:check": "baml check",
+    "baml:generate": "baml generate && node -e \"const {existsSync,unlinkSync}=require('node:fs');const p='baml_sdk/.gitignore';if(existsSync(p))unlinkSync(p);if(existsSync(p))throw new Error('baml_sdk/.gitignore survived removal; it would hide the generated SDK from git')\"",
+    "baml:test": "baml test",
     "baml:export": "node scripts/export.mjs"
   },
-  "dependencies": {
-    "@boundaryml/baml": "0.226.2"
-  },
   "devDependencies": {
-    "@gloo-ai/baml-schema-wasm-web": "0.89.1",
+    "@boundaryml/baml-bridge": "0.17.0",
     "@types/node": "^26.4.0",
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11",
-    "yaml": "^2.9.0"
+    "vitest": "^4.1.11"
   }
 }

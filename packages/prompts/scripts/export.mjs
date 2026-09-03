@@ -4,51 +4,59 @@
  *
  * BAML's TypeScript runtime is a native Node addon and Edge Functions are Deno
  * isolates that cannot load one. This script is the other way across: it runs the
- * BAML runtime's WASM build HERE, at build time, and writes what the Deno providers
- * need -- the rendered prompt as a template, the client and model, and a JSON
- * schema for the return type -- into `supabase/functions/_shared/generated/`.
+ * BAML v1 CLI to render prompts with placeholders and to lower each function's
+ * declared return type to JSON Schema, writing into
+ * `supabase/functions/_shared/generated/`.
  * Nothing BAML crosses the boundary at run time; the providers keep making the
  * calls they already make, with the prompt and schema they used to hand-write.
  *
- * Two facts established on 2026-09-02, so the next reader does not re-derive them:
- * `@gloo-ai/baml-schema-wasm-web` is the playground runtime, not a formatter, and
- * its 0.89 parser accepts this repository's 0.226 sources with zero diagnostics.
- *
- * How the template is made. `render_prompt_for_test` renders for a TEST CASE's
- * arguments, so a synthetic test is injected in memory with a sentinel string per
- * argument, the prompt is rendered, and the sentinels are turned back into
- * `{{name}}` placeholders. The Deno side substitutes with `renderPrompt`. A prompt
- * that transforms an argument (a filter, a conditional on its value) would not
- * survive this, which is why `canonical_summary.baml`'s `context` conditional moved
- * into the provider and this script refuses a template whose sentinel did not
- * survive intact.
- *
- * How the schema is made. BAML's `rest/openapi` generator emits the return types as
- * OpenAPI components; `$ref`s are inlined and the OpenAPI-only keys dropped so the
- * result is ordinary JSON Schema. The Gemini dialect (`OBJECT`, `STRING`) is derived
- * from that at load time in `gemini.ts`, so there is one schema here and not two.
- *
  * Run by `pnpm baml:export`; CI check 2 regenerates and diffs the output.
  */
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
-const SRC_DIR = resolve(here, '../baml_src');
+const PROMPTS_DIR = resolve(here, '..');
+const SRC_DIR = resolve(PROMPTS_DIR, 'baml_src');
 const OUT_FILE = resolve(here, '../../../supabase/functions/_shared/generated/prompts.ts');
 
-// --- the runtime ----------------------------------------------------------------
-// wasm-bindgen's "web" target expects fetch(); instantiate from bytes instead.
-const distDir = dirname(require.resolve('@gloo-ai/baml-schema-wasm-web'));
-const bg = await import(pathToFileURL(join(distDir, 'baml_schema_build_bg.js')).href);
-const wasm = readFileSync(join(distDir, 'baml_schema_build_bg.wasm'));
-const { instance } = await WebAssembly.instantiate(wasm, { './baml_schema_build_bg.js': bg });
-bg.__wbg_set_wasm(instance.exports);
-bg.on_wasm_init?.();
+function findBaml() {
+  const ext = process.platform === 'win32' ? '.exe' : '';
+  const homeBaml = join(homedir(), '.baml', 'bin', `baml${ext}`);
+  if (existsSync(homeBaml)) return homeBaml;
+  return 'baml';
+}
+
+const bamlBin = findBaml();
+
+/**
+ * Refuse a toolchain CI does not use.
+ *
+ * `baml generate` embeds compiled bytecode, and `_inlinedbaml.ts` does not even
+ * reproduce across machines on one build -- so a *different* build is worse than
+ * useless here. v0 got this for free: `generators.baml` carried a `version` field
+ * and BAML itself refused a mismatched CLI. `baml.toml` has no equivalent, so the
+ * check lives here, against the same `.baml-version` the CI installer reads.
+ */
+function assertPinnedToolchain() {
+  const want = readFileSync(resolve(PROMPTS_DIR, '.baml-version'), 'utf8').trim();
+  const reported = execFileSync(bamlBin, ['--version'], { encoding: 'utf8' });
+  const got = /baml toolchain\s+(\S+)/.exec(reported);
+  if (!got) {
+    throw new Error(`could not read a toolchain version from \`baml --version\`:\n${reported}`);
+  }
+  if (got[1] !== want) {
+    throw new Error(
+      `BAML toolchain ${got[1]} is installed but this project pins ${want} ` +
+        `(packages/prompts/.baml-version). Install it with:\n` +
+        `  curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --version ${want}`,
+    );
+  }
+}
+assertPinnedToolchain();
 
 // --- the sources ----------------------------------------------------------------
 const files = {};
@@ -56,219 +64,263 @@ for (const name of readdirSync(SRC_DIR)) {
   if (name.endsWith('.baml')) files[`baml_src/${name}`] = readFileSync(join(SRC_DIR, name), 'utf8');
 }
 
-/** Models pinned by `client<llm>` blocks, so the export names a model and not a label. */
+/** Models pinned by client declarations in clients.baml. */
 function pinnedModels(source) {
   const out = {};
-  for (const m of source.matchAll(/client<llm>\s+(\w+)\s*\{[^}]*?model\s+"([^"]+)"/gs))
+  for (const m of source.matchAll(
+    /client\s+(\w+)\s*=\s*[\w.]+\.new\([^)]*model\s*=\s*"([^"]+)"/gs,
+  )) {
     out[m[1]] = m[2];
+  }
   return out;
 }
 const models = pinnedModels(files['baml_src/clients.baml'] ?? '');
 
-/**
- * Enum members → their `@alias`, where one is declared.
- *
- * The OpenAPI generator emits member NAMES (`Philosophy`); the prompt's output-format
- * block and BAML's own parser use the ALIASES (`philosophy`), and so does every
- * `topics.slug` in the database. A schema that made a JSON-mode model answer with
- * the name would have `narrowTopics` drop every topic, silently.
- */
-function enumAliases(sources) {
-  const out = {};
-  for (const src of sources) {
-    for (const block of src.matchAll(/^enum\s+(\w+)\s*\{\n([\s\S]*?)\n\}/gm)) {
-      const map = {};
-      for (const m of block[2].matchAll(/^\s*(\w+)\s+@alias\("([^"]+)"\)/gm)) map[m[1]] = m[2];
-      out[block[1]] = map;
-    }
-  }
-  return out;
-}
-const aliases = enumAliases(Object.values(files));
-
-/**
- * Array bounds, read from the `@assert`s on class fields.
- *
- * `topics TopicSlug[] @assert(one_to_four, {{ this|length >= 1 and this|length <= 4 }})`
- * is the source of truth for "one to four topics". BAML enforces it in its own
- * runtime; the Deno providers run JSON mode against a schema, and a schema without
- * `minItems` accepts an empty array -- which is the exact silent failure the assert
- * was written against. So the bounds are lifted into the schema here, from the same
- * line, rather than kept as a second copy in the provider. Only the three shapes
- * used are recognised; anything else stays an assert BAML alone enforces.
- */
-function fieldBounds(sources) {
-  const out = {};
-  for (const src of sources) {
-    // A class body ends at the first line that is exactly `}` -- not at the first
-    // `}` character, which is the one closing an assert's own `{{ … }}`.
-    for (const cls of src.matchAll(/^class\s+(\w+)\s*\{\n([\s\S]*?)\n\}/gm)) {
-      const fields = {};
-      for (const line of cls[2].split('\n')) {
-        const m = /^\s*(\w+)\s+[^@]+@assert\([^,]+,\s*\{\{(.*)\}\}\s*\)/.exec(line);
-        if (!m) continue;
-        const b = {};
-        for (const ge of m[2].matchAll(/this\|length\s*>=\s*(\d+)/g)) b.minItems = Number(ge[1]);
-        for (const le of m[2].matchAll(/this\|length\s*<=\s*(\d+)/g)) b.maxItems = Number(le[1]);
-        for (const eq of m[2].matchAll(/this\|length\s*==\s*(\d+)/g)) {
-          b.minItems = Number(eq[1]);
-          b.maxItems = Number(eq[1]);
-        }
-        if (Object.keys(b).length > 0) fields[m[1]] = b;
-      }
-      if (Object.keys(fields).length > 0) out[cls[1]] = fields;
-    }
-  }
-  return out;
-}
-const bounds = fieldBounds(Object.values(files));
-
-function runtimeFor(extraFiles) {
-  const project = bg.WasmProject.new('baml_src', { ...files, ...extraFiles });
-  let rt;
-  try {
-    rt = project.runtime({});
-  } catch (e) {
-    const messages = [];
-    try {
-      for (const err of e.errors()) messages.push(err.message ?? String(err));
-    } catch {
-      messages.push(String(e));
-    }
-    throw new Error(`baml_src does not compile:\n${messages.join('\n')}`);
-  }
-  const diag = project.diagnostics(rt);
-  const errors = diag.errors();
-  if (errors.length > 0) {
-    throw new Error(
-      `baml_src has ${errors.length} diagnostic(s):\n${errors.map((e) => e.message).join('\n')}`,
-    );
-  }
-  return { project, rt };
+// --- running the BAML CLI -------------------------------------------------------
+/** Evaluate one BAML expression against this project and parse its JSON result. */
+function runBaml(expr) {
+  const bamlPath = dirname(bamlBin);
+  const pathSep = process.platform === 'win32' ? ';' : ':';
+  const out = execFileSync(
+    bamlBin,
+    ['run', '--project', PROMPTS_DIR, '-e', expr, '--output-format', 'json'],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}` },
+    },
+  );
+  return JSON.parse(out);
 }
 
-// --- prompts --------------------------------------------------------------------
+// --- prompt rendering via BAML CLI ----------------------------------------------
 const SENTINEL = (name) => `__WAP_ARG_${name}__`;
 
-async function exportFunction(fn) {
-  // `signature` is the playground's test snippet -- `(name #"hello world"#, …) -> T` --
-  // so the parameter names are the identifiers in front of each placeholder value.
-  const sig = String(fn.signature ?? '');
-  const names = [...sig.matchAll(/(\w+)\s+#"/g)].map((m) => m[1]);
-  if (names.length === 0) {
-    throw new Error(
-      `${fn.name}: could not read string parameters from signature ${JSON.stringify(sig)}`,
-    );
-  }
-  const argLines = names.map((n) => `    ${n} ${JSON.stringify(SENTINEL(n))}`).join('\n');
-  const testSrc = `test export_sentinels {\n  functions [${fn.name}]\n  args {\n${argLines}\n  }\n}\n`;
-  const { rt } = runtimeFor({ 'baml_src/export_sentinels.baml': testSrc });
-  const f = rt.list_functions().find((x) => x.name === fn.name);
-  const ctx = bg.WasmCallContext.new ? bg.WasmCallContext.new() : new bg.WasmCallContext();
-  const prompt = await f.render_prompt_for_test(rt, 'export_sentinels', ctx, () => files, {});
-  const chat = prompt.as_chat();
-  if (!chat) throw new Error(`${fn.name}: only chat prompts are exported`);
-  const messages = chat.map((m) => ({
-    role: m.role,
-    text: m.parts
-      .filter((p) => p.is_text())
-      .map((p) => p.as_text())
-      .join(''),
-  }));
-  // Sentinels back to placeholders, and a refusal if one did not survive intact
-  // anywhere in the prompt. Counted across every message, not per message: an
-  // argument may legitimately appear in one message and not another, but one that
-  // appears in none was transformed, conditioned on, or unused -- and `promptFor`
-  // would then demand a value the provider silently ignores.
-  for (const n of names) {
-    const total = messages.reduce((sum, m) => sum + (m.text.split(SENTINEL(n)).length - 1), 0);
-    if (total === 0) {
+/** Render one function's prompt with `valueOf(param)` substituted for each argument. */
+function renderWith(fnName, paramNames, valueOf) {
+  const argExprs = paramNames.map((n) => `\"${valueOf(n)}\"`).join(', ');
+  const expr = `${fnName}$render_prompt(${argExprs}).messages().map((m) -> { { \"role\": m.role, \"text\": m.content } })`;
+  return runBaml(expr).map((m, i) => {
+    if (typeof m.text !== 'string') {
       throw new Error(
-        `${fn.name}: argument ${n} does not appear verbatim in the rendered prompt; a transformed argument cannot be exported as a template`,
+        `${fnName}: message ${i} did not render to text (media, a tool block, or a nested ` +
+          'content shape); only text prompts can be exported as templates',
       );
     }
-    for (const m of messages) m.text = m.text.split(SENTINEL(n)).join(`{{${n}}}`);
+    return { role: m.role ? m.role : 'user', text: m.text };
+  });
+}
+
+/**
+ * The prompt as a template, with `{{name}}` where each argument went.
+ *
+ * Two things have to hold for that to be honest, and both are checked rather than
+ * assumed. Each argument must survive rendering verbatim, or there is nothing to
+ * put a placeholder around. And rendering must *commute* with substitution: the
+ * prompt a reader gets by filling in the template has to be the prompt BAML would
+ * have rendered from the same values. A conditional on an argument's value breaks
+ * the second without breaking the first -- `if (context != "")` keeps the sentinel
+ * intact on the branch it happens to take, and quietly drops the other branch from
+ * the export. So the prompt is rendered a second time with empty arguments and
+ * compared against the template with its placeholders emptied.
+ */
+function renderPromptWithCli(fnName, paramNames) {
+  const messages = renderWith(fnName, paramNames, SENTINEL);
+
+  for (const n of paramNames) {
+    const sentinel = SENTINEL(n);
+    const total = messages.reduce((sum, m) => sum + (m.text.split(sentinel).length - 1), 0);
+    if (total === 0) {
+      throw new Error(
+        `${fnName}: argument ${n} does not appear verbatim in the rendered prompt; a transformed argument cannot be exported as a template`,
+      );
+    }
+    for (const m of messages) {
+      m.text = m.text.split(sentinel).join(`{{${n}}}`);
+    }
   }
-  const client = prompt.client_name;
-  if (!models[client]) {
+
+  const fill = (text, value) =>
+    paramNames.reduce((acc, n) => acc.split(`{{${n}}}`).join(value), text);
+  const emptied = renderWith(fnName, paramNames, () => '');
+  if (emptied.length !== messages.length) {
     throw new Error(
-      `${fn.name}: client ${JSON.stringify(client)} is not a single pinned model. ` +
-        'Each function names one client<llm> with a model; retry and fallback live in the worker, where the ledger is.',
+      `${fnName}: the prompt changes shape with its arguments (${messages.length} message(s) ` +
+        `rendered, ${emptied.length} with empty arguments); it cannot be exported as a template`,
     );
   }
-  return { name: fn.name, params: names, client, model: models[client], messages };
-}
-
-// --- schemas --------------------------------------------------------------------
-function openApiComponents() {
-  const gen =
-    'generator openapi {\n  output_type "rest/openapi"\n  output_dir "../openapi"\n  version "0.89.0"\n}\n';
-  const { project } = runtimeFor({ 'baml_src/generators.baml': gen });
-  const outputs = project.run_generators(true);
-  for (const o of outputs) {
-    for (const f of o.files) {
-      if (f.path_in_output_dir.endsWith('openapi.yaml'))
-        return parseYaml(f.contents).components.schemas;
+  emptied.forEach((m, i) => {
+    if (m.text !== fill(messages[i].text, '')) {
+      throw new Error(
+        `${fnName}: the prompt branches on an argument's value, so the exported template ` +
+          'would carry only the branch the export happened to take. Move the conditional to ' +
+          'the caller (see `buildSummaryPrompt` in _shared/providers.ts).',
+      );
     }
-  }
-  throw new Error('the openapi generator produced no openapi.yaml');
+  });
+
+  return messages;
 }
 
-/** OpenAPI component → plain JSON Schema with every $ref inlined, aliased and bounded. */
-function toJsonSchema(node, components, seen = new Set(), owner = null) {
-  if (Array.isArray(node)) return node.map((n) => toJsonSchema(n, components, seen, owner));
-  if (!node || typeof node !== 'object') return node;
-  if (node.$ref) {
-    const name = node.$ref.replace('#/components/schemas/', '');
-    if (seen.has(name)) throw new Error(`recursive schema ${name} cannot be inlined`);
-    const target = components[name];
-    let inner = toJsonSchema(target, components, new Set([...seen, name]), name);
-    if (target?.enum && aliases[name])
-      inner = { ...inner, enum: target.enum.map((v) => aliases[name][v] ?? v) };
-    // `nullable` beside a $ref is OpenAPI's way of saying `T | null`.
-    return node.nullable ? { anyOf: [inner, { type: 'null' }] } : inner;
+// --- schema derivation ---------------------------------------------------------
+/**
+ * Bounds BAML cannot state, per function, keyed by a path into the schema.
+ *
+ * Everything else about the shape is derived from `baml_src` below. These three
+ * are here because BAML v1 has no constraint syntax, so they cannot be lowered
+ * from the class -- they are documented in the `///` docstrings on
+ * `CanonicalSummary` and `RecallQuestion` and enforced here. `pnpm --filter
+ * @wap/prompts test` fails if any path stops resolving, so a renamed or removed
+ * field breaks the build instead of silently dropping its bound.
+ *
+ * A path segment is a property name; `[]` descends into an array's items, and a
+ * `T | null` property is followed through to `T`.
+ */
+const BOUNDS = {
+  WriteCanonicalSummary: {
+    pulls: { minItems: 1 },
+    topics: { minItems: 1, maxItems: 4 },
+    'pulls[].question.distractors': { minItems: 3, maxItems: 3 },
+  },
+};
+
+/** Follow a `T | null` union to `T`; leave anything else alone. */
+function throughNull(node) {
+  if (!node || !Array.isArray(node.anyOf)) return node;
+  return node.anyOf.find((b) => b && b.type !== 'null') ?? node;
+}
+
+function resolvePath(schema, path) {
+  let node = schema;
+  for (const raw of path.split('.')) {
+    const intoItems = raw.endsWith('[]');
+    const key = intoItems ? raw.slice(0, -2) : raw;
+    node = throughNull(node)?.properties?.[key];
+    if (intoItems) node = throughNull(node)?.items;
+    if (!node) return undefined;
   }
-  const out = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (k === 'nullable' || k === 'title' || k === 'additionalProperties') continue;
-    if (k === 'properties') {
-      out.properties = {};
-      for (const [field, schema] of Object.entries(v)) {
-        const b = owner ? bounds[owner]?.[field] : undefined;
-        out.properties[field] = { ...toJsonSchema(schema, components, seen, null), ...(b ?? {}) };
+  // A nullable node is followed through here too, so a bound may target one.
+  return throughNull(node);
+}
+
+/**
+ * Inline `$ref`/`$defs` away.
+ *
+ * `baml.json.schema` emits provider-neutral JSON Schema, which uses `$defs` for
+ * every class it reaches. Gemini's `responseSchema` dialect has no `$ref`, and
+ * `toGeminiSchema` is total over what this file emits, so the references are
+ * resolved here rather than at the first paid call. A recursive class graph has
+ * no inlined form and no Gemini form either, so it throws instead of looping.
+ */
+function inlineRefs(root) {
+  const defs = root.$defs ?? {};
+  const walk = (node, stack) => {
+    if (Array.isArray(node)) return node.map((n) => walk(n, stack));
+    if (!node || typeof node !== 'object') return node;
+    if (typeof node.$ref === 'string') {
+      const name = node.$ref.replace('#/$defs/', '');
+      if (!(name in defs)) throw new Error(`export: unresolved $ref ${node.$ref}`);
+      if (stack.includes(name)) {
+        throw new Error(
+          `export: ${name} is recursive; JSON Schema references cannot be inlined for a ` +
+            'dialect without $ref, and Gemini has no form for it either',
+        );
       }
-      continue;
+      return walk(defs[name], [...stack, name]);
     }
-    out[k] = toJsonSchema(v, components, seen, owner);
+    return Object.fromEntries(
+      Object.entries(node)
+        .filter(([k]) => k !== '$defs')
+        .map(([k, v]) => [k, walk(v, stack)]),
+    );
+  };
+  return walk(root, []);
+}
+
+/**
+ * The output schema of one BAML function, derived from the function itself.
+ *
+ * `$spec(...).output_type()` is the declared return type and `baml.json.schema`
+ * lowers it, so `baml_src` stays the only place the shape is written down --
+ * adding a field to the class is enough, here and in the Edge Functions both.
+ * The arguments are the same sentinels the prompt render uses; `$spec` needs
+ * values, not their contents.
+ */
+function deriveSchemaWithCli(fnName, paramNames, bounds) {
+  const argExprs = paramNames.map((n) => `\"${SENTINEL(n)}\"`).join(', ');
+  const schema = inlineRefs(runBaml(`baml.json.schema(${fnName}$spec(${argExprs}).output_type())`));
+
+  for (const [path, bound] of Object.entries(bounds ?? {})) {
+    const node = resolvePath(schema, path);
+    if (!node) {
+      throw new Error(
+        `${fnName}: bound path ${JSON.stringify(path)} does not resolve in the derived schema; ` +
+          'update BOUNDS in scripts/export.mjs to match baml_src',
+      );
+    }
+    Object.assign(node, bound);
   }
-  if (node.nullable && node.type) out.type = [node.type, 'null'];
+  return schema;
+}
+
+// --- main export ----------------------------------------------------------------
+/**
+ * Every `function` declared anywhere in `baml_src`, with the client it pins.
+ *
+ * Every, not the first: the export is what the Edge Functions run, and a function
+ * missing from it fails as a lookup error at the call site rather than here. The
+ * body is cut at the next declaration so a function without a `client:` cannot
+ * silently borrow the next one's.
+ */
+function declaredFunctions(sources) {
+  const out = [];
+  for (const [file, src] of Object.entries(sources)) {
+    const decl = /function\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+)\s*\{/g;
+    let m;
+    while ((m = decl.exec(src)) !== null) {
+      const [, name, params, returnType] = m;
+      const rest = src.slice(m.index + m[0].length);
+      const next = rest.search(/\nfunction\s+\w+\s*\(/);
+      const body = next === -1 ? rest : rest.slice(0, next);
+      const client = /(?:^|\n)\s*client:\s*(\w+)/.exec(body);
+      if (!client) {
+        throw new Error(`${name} (${file}): no \`client:\` before the next declaration.`);
+      }
+      out.push({
+        file,
+        name,
+        returnType,
+        client: client[1],
+        params: params
+          .split(',')
+          .map((p) => p.split(':')[0].trim())
+          .filter(Boolean),
+      });
+    }
+  }
+  if (out.length === 0) {
+    throw new Error(`no BAML function declarations found in ${SRC_DIR}`);
+  }
   return out;
 }
 
-// --- main -----------------------------------------------------------------------
-const { rt } = runtimeFor({});
-const functions = rt.list_functions();
-const components = openApiComponents();
-
-const exported = [];
-for (const fn of functions) {
-  const p = await exportFunction(fn);
-  const returnType = String(fn.signature ?? '')
-    .split('->')
-    .pop()
-    ?.trim()
-    .replace(/[^\w]/g, '');
-  if (!returnType || !components[returnType]) {
+const exported = declaredFunctions(files).map(({ file, name, params, returnType, client }) => {
+  const model = models[client];
+  if (!model) {
     throw new Error(
-      `${fn.name}: return type ${JSON.stringify(returnType)} is not an exported component`,
+      `${name} (${file}): client ${JSON.stringify(client)} is not a single pinned model in clients.baml. ` +
+        'Each function names one client with a model; retry and fallback live in the worker, where the ledger is.',
     );
   }
-  exported.push({
-    ...p,
+  return {
+    name,
+    params,
+    client,
+    model,
     returnType,
-    schema: toJsonSchema(components[returnType], components, new Set([returnType]), returnType),
-  });
-}
+    messages: renderPromptWithCli(name, params),
+    schema: deriveSchemaWithCli(name, params, BOUNDS[name]),
+  };
+});
 
 const header = `/**
  * GENERATED by \`pnpm baml:export\` from packages/prompts/baml_src -- do not edit.
@@ -279,13 +331,13 @@ const header = `/**
  * providers read these instead of carrying their own copies; CI check 2 regenerates
  * this file and fails on any difference.
  *
- * Source of truth: packages/prompts/baml_src. Runtime that rendered it:
- * @gloo-ai/baml-schema-wasm-web ${bg.version()}.
+ * Source of truth: packages/prompts/baml_src.
  */
 /* eslint-disable */
 // deno-lint-ignore-file
 // prettier-ignore
 `;
+
 const body = `export const PROMPTS = ${JSON.stringify(
   Object.fromEntries(
     exported.map((e) => [
