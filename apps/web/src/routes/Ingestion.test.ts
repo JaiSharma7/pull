@@ -6,6 +6,6 @@ describe('Ingestion route logic', () => {
     const summary = summarizeIngestion([]);
     expect(summary.totalHighlights).toBe(0);
     expect(summary.distinctBooks).toEqual([]);
-    expect(summary.estimatedHoursSaved).toBe(0);
+    expect(summary.distinctAuthors).toEqual([]);
   });
 });

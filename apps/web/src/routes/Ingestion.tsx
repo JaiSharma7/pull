@@ -14,7 +14,6 @@ export interface IngestionProps {
 export function Ingestion({ onComplete }: IngestionProps) {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState<IngestionSummary | null>(null);
-  const [synced, setSynced] = useState(false);
 
   const handleParse = (text: string) => {
     setRawText(text);
@@ -27,12 +26,7 @@ export function Ingestion({ onComplete }: IngestionProps) {
       ? parseKindleClippings(text)
       : parseCsvHighlights(text);
 
-    if (parsed.length > 0) {
-      setSummary(summarizeIngestion(parsed));
-      setSynced(false);
-    } else {
-      setSummary(null);
-    }
+    setSummary(parsed.length > 0 ? summarizeIngestion(parsed) : null);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,18 +41,18 @@ export function Ingestion({ onComplete }: IngestionProps) {
     reader.readAsText(file);
   };
 
-  const handleSync = () => {
-    if (!summary) return;
-    try {
-      localStorage.setItem('wap_ingested_highlights_count', String(summary.totalHighlights));
-      localStorage.setItem('wap_ingested_books_count', String(summary.distinctBooks.length));
-      localStorage.setItem('wap_ingested_hours_saved', String(summary.estimatedHoursSaved));
-    } catch {
-      // Local storage unavailable or full
-    }
-    setSynced(true);
-    onComplete?.(summary);
-  };
+  /*
+   * There was a "Sync With My Delta →" button here that wrote three counters to
+   * `localStorage`, set a flag, and reported "✓ Synced to your Delta". Nothing read those
+   * keys. The feed, the source Delta and the knowledge graph were unchanged, and the
+   * Delta itself derives known ideas from `knowledge_states` rows that this never wrote —
+   * so the one thing the screen claimed to do was the one thing it did not do.
+   *
+   * It is not replaced with a working import because that is a design decision rather
+   * than a missing function call: see the header of `lib/ingestion.ts` for what law 2 and
+   * law 4 each require of one first. What is left is the half that is real — a parser,
+   * and a count of what it found.
+   */
 
   return (
     <div className="shell__column" style={{ padding: 'var(--space-4) 0' }}>
@@ -70,8 +64,8 @@ export function Ingestion({ onComplete }: IngestionProps) {
           Universal Reading Ingestion
         </h1>
         <p className="meta">
-          Never start from zero. Import your Kindle clippings or Readwise exports so What a Pull
-          knows which core concepts you already understand.
+          Read your Kindle clippings or a Readwise export and see what is in them. This runs in your
+          browser: nothing is uploaded, and nothing is added to your Delta yet.
         </p>
       </header>
 
@@ -109,10 +103,10 @@ export function Ingestion({ onComplete }: IngestionProps) {
       {summary && (
         <section className="pull-card" style={{ borderLeft: '3px solid var(--accent)' }}>
           <span className="pull-card__chip" style={{ color: 'var(--accent)' }}>
-            Calibration Analysis
+            What the file contains
           </span>
           <h2 className="pull-card__headline" style={{ fontSize: '1.4rem' }}>
-            {summary.totalHighlights} Highlights Across {summary.distinctBooks.length} Books
+            {summary.totalHighlights} highlights across {summary.distinctBooks.length} books
           </h2>
 
           <div
@@ -124,32 +118,32 @@ export function Ingestion({ onComplete }: IngestionProps) {
             }}
           >
             <div>
-              <p className="meta">Future Time Spared</p>
-              <p style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--accent)' }}>
-                ~{summary.estimatedHoursSaved}h
-              </p>
+              <p className="meta">Books</p>
+              <p style={{ fontSize: '1.75rem', fontWeight: 700 }}>{summary.distinctBooks.length}</p>
             </div>
             <div>
-              <p className="meta">Identified Authors</p>
-              <p style={{ fontSize: '1.75rem', fontWeight: 700 }}>{summary.distinctBooks.length}</p>
+              {/* Authors, from the author column. This tile read `distinctBooks.length`
+                  under the heading "Identified Authors", so two books by one author
+                  counted twice and a file without authors counted them anyway. Beside it
+                  was a "Future Time Spared" figure of three minutes per highlight. */}
+              <p className="meta">Authors</p>
+              <p style={{ fontSize: '1.75rem', fontWeight: 700 }}>
+                {summary.distinctAuthors.length}
+              </p>
             </div>
           </div>
 
           <p className="meta" style={{ marginBottom: 'var(--space-3)' }}>
-            These highlights seed your retrievability lattice. When encountering these authors and
-            principles, What a Pull automatically calculates the delta rather than re-explaining
-            them.
+            Read here and nowhere else. Bringing these into your Delta means matching each highlight
+            to an idea, which is a cost per reader that has to be bounded before it is spent, and
+            storing them means storing text from books under copyright. Both are open questions, so
+            neither has been answered by pretending.
           </p>
 
           <div className="pull-card__footer">
-            <span className="meta">{synced ? '✓ Synced to your Delta' : 'Ready to calibrate'}</span>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={synced}
-              onClick={handleSync}
-            >
-              {synced ? 'Import Completed' : 'Sync With My Delta →'}
+            <span className="meta">Parsed in your browser · nothing uploaded</span>
+            <button type="button" className="btn btn--plain" onClick={() => onComplete?.(summary)}>
+              Done
             </button>
           </div>
         </section>
