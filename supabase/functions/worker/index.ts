@@ -412,6 +412,10 @@ Deno.serve(async (req) => {
               finished_at: new Date().toISOString(),
             })
             .eq('id', jobId)
+            // Only a live job. A sibling branch may already have closed it (failed,
+            // or succeeded via the reuse jump); rewriting its status and error here
+            // would make a finished job lie. A zero-row match still archives below.
+            .in('status', ['queued', 'running'])
             .select('id'),
           'mark job failed',
         );
