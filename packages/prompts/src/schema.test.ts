@@ -70,12 +70,24 @@ function recallQuestion(schema: JsonSchema): JsonSchema {
   return inner;
 }
 
-/** Field names declared on a `class` in the BAML source, in declaration order. */
+/**
+ * Field names declared on a `class` in the BAML source, in declaration order.
+ *
+ * Indent-width agnostic on purpose. An earlier version matched `^\s{2}(\w+)\s*:`,
+ * which read the two-space sources this file was written against and returned an
+ * empty list the moment `baml fmt` reindented them to its canonical four — every
+ * comparison below then compared two empty arrays and passed. The guard in the
+ * first `it` caught that, but a guard is a smoke alarm, not a fix: the shape of
+ * the file is the formatter's business and this parser has no business knowing
+ * how wide it indents. `[ \t]+` matches any indent and no line without one, and
+ * a trailing comma lands outside the capture, so the canonical style and the
+ * hand-written one both read the same.
+ */
 function classFields(className: string): string[] {
   const source = readFileSync(BAML_SRC, 'utf8');
   const block = new RegExp(`^class\\s+${className}\\s*\\{([\\s\\S]*?)^\\}`, 'm').exec(source);
   if (!block?.[1]) throw new Error(`class ${className} not found in ${BAML_SRC}`);
-  return [...block[1].matchAll(/^\s{2}(\w+)\s*:/gm)].map((m) => m[1] as string);
+  return [...block[1].matchAll(/^[ \t]+(\w+)\s*:/gm)].map((m) => m[1] as string);
 }
 
 describe('exported schema shape', () => {
