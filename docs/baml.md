@@ -41,9 +41,16 @@ Set up:
 - A parity test binding the BAML `TopicSlug` enum to `TOPIC_SLUGS` in the pipeline, in
   both directions.
 
-**Not** set up, and deliberately: nothing in `supabase/functions` calls BAML. The
-pipeline still runs `buildSummaryPrompt` and `SUMMARY_SCHEMA`. See the next section for
-why that crossing is not a one-line import.
+**Not** set up, and deliberately: nothing in `supabase/functions` _calls_ BAML — no
+runtime import crosses into Deno. That is a narrower statement than it used to be, and
+the difference matters: `buildSummaryPrompt` and `SUMMARY_SCHEMA` are still the names the
+pipeline uses, but they are no longer hand-written copies of the contract. Both are
+derived from `baml_src` at build time and read out of
+`_shared/generated/prompts.ts` — `buildSummaryPrompt` renders the exported template
+through `promptFor`, `gemini.ts` converts the exported schema to Gemini's dialect at
+module load, and `anthropic.ts` hands it to its tool as-is. See the next section for why
+the _runtime_ crossing is not a one-line import, and "The export" below for what does
+cross.
 
 ## The Deno boundary
 
@@ -271,6 +278,15 @@ Two mechanics worth knowing before running it:
   The install is deterministic: the same source produces byte-identical output, which is
   what makes the no-op above checkable. Whatever it replaces is copied to
   `baml-old_skills/` beside the new copy — gitignored, and safe to delete.
+
+  It also renames the skill on the way in: upstream's `core` becomes `baml-core`, by the
+  CLI's own account "to avoid registry collisions". Upstream ships the same content as a
+  Claude Code plugin (`plugins/baml/skills/core/SKILL.md`, plugin version 0.11.1), and
+  the committed copies match it.
+
+Divergence between the two copies is checked by `packages/prompts/src/skills.test.ts`;
+staleness against upstream deliberately is not, because that repository moves on its own
+schedule and a lag is not a defect. See CLAUDE.md's generated-files rule.
 
 This is not the same host as the toolchain installer. `pkg.boundaryml.com` and GitHub
 _release assets_ are both reachable (the review on the v1 migration recorded release
