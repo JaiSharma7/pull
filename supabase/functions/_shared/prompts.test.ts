@@ -68,7 +68,8 @@ describe('the exported schema', () => {
     expect([...topics.items.enum]).toEqual([...TOPIC_SLUGS]);
   });
 
-  it('carries the bounds the asserts state', () => {
+  // `BOUNDS` in the exporter, not `@assert` -- v1 ignores that annotation.
+  it('carries the bounds the exporter layers on', () => {
     expect(topics.minItems).toBe(1);
     expect(topics.maxItems).toBe(4);
     expect(summary.schema.properties.pulls.minItems).toBe(1);

@@ -67,22 +67,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
+      # Shared with `scripts/cloud-setup.sh` rather than duplicated: both need the same
+      # pin from `packages/prompts/.baml-version` and the same PATH fix, and a second
+      # copy is how one of them silently keeps the old installer URL. The script reads
+      # `GITHUB_PATH` and appends to it here; elsewhere it symlinks. It also refuses an
+      # empty version file rather than letting the installer fall back to `canary`.
       - name: Install BAML CLI
-        run: |
-          # `-o pipefail` because the default shell here is `bash -e` without it: a
-          # failed download would otherwise feed empty stdin to `sh`, exit 0, and be
-          # reported two steps later as `baml: command not found`.
-          set -euo pipefail
-          # Pinned, not a channel. `canary` is re-cut under the same version string,
-          # and `baml generate` embeds compiled bytecode in `_inlinedbaml.ts`, so an
-          # unpinned toolchain resolves to a different build over time.
-          # `manifest/v1/version/<v>.json` is sha256-pinned; the channel is not.
-          # `packages/prompts/.baml-version` is the single source for that version --
-          # `export.mjs` asserts the running CLI matches it, so a contributor cannot
-          # regenerate with a toolchain CI does not use.
-          curl -fsSL https://pkg.boundaryml.com/install.sh \
-            | sh -s -- --yes --version "$(cat packages/prompts/.baml-version)"
-          echo "$HOME/.baml/bin" >> "$GITHUB_PATH"
+        run: bash scripts/install-baml.sh
 
       # The BAML client is generated from `packages/prompts/baml_src` and committed,
       # for the reason `packages/db/src/database.types.ts` is: a generated file nobody
@@ -91,6 +82,24 @@ jobs:
       # than a clear error.
       - name: BAML sources are valid
         run: pnpm baml:check
+      # `.baml` is the one source language in the repo prettier has no parser for --
+      # `prettier --file-info` reports `inferredParser: null`, so `pnpm format:check`
+      # skips these files rather than ignoring them, and until now nothing formatted
+      # them at all. The v1 toolchain ships the formatter that does, and it partitions
+      # cleanly: `baml fmt` touches only `.baml`, prettier everything else.
+      #
+      # Run-then-diff rather than a flag, because `baml fmt` has no `--check`: its
+      # `--dry-run` writes the formatted text to stdout and still exits 0. Safe to run
+      # in the gate -- it is idempotent (a second pass is a no-op), and it cannot move
+      # the generated outputs: BAML dedents a prompt template before rendering it, so
+      # reindenting the sources leaves `generated/prompts.ts` and the other 66 client
+      # files byte-identical. No staging step, unlike the two gates below, because the
+      # formatter only rewrites files that already exist; it never emits a new one.
+      - name: BAML sources are formatted
+        run: |
+          pnpm baml:fmt
+          git diff --exit-code -- packages/prompts/baml_src \
+            || { echo "::error::BAML sources are not formatted. Run 'pnpm baml:fmt' and commit the result."; exit 1; }
       # Staged before the diff, deliberately: `git diff` ignores untracked files, so a
       # BAML edit that makes the generator emit a NEW file would pass a plain diff with
       # the client incomplete. Staging makes an added file a difference like any other.

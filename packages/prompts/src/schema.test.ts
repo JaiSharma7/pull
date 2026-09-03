@@ -70,12 +70,34 @@ function recallQuestion(schema: JsonSchema): JsonSchema {
   return inner;
 }
 
-/** Field names declared on a `class` in the BAML source, in declaration order. */
+/**
+ * Field names declared on a `class` in the BAML source, in declaration order.
+ *
+ * Indent-width agnostic on purpose. An earlier version matched `^\s{2}(\w+)\s*:`,
+ * which read the two-space sources this file was written against and returned an
+ * empty list the moment `baml fmt` reindented them to its canonical four.
+ *
+ * Be precise about what that cost, because the obvious story is wrong: the
+ * comparisons below did **not** silently pass. They failed, loudly, naming every
+ * exported field as unexpected — `[]` against five, six and three properties — and
+ * the guard in the first `it` failed alongside them. Nothing was vacuous. The
+ * defect was a false alarm, not a silent one: three assertions about schema drift
+ * broke for a reason that had nothing to do with schema drift, which costs a
+ * contributor a debugging session and invites them to "fix" it by reverting the
+ * formatting. Vacuity would need *both* sides empty, which needs the exported node
+ * to lower to no properties — see the guard in the parameterized case for that.
+ *
+ * So: the width of the indent is the formatter's business, and a parser that
+ * hard-codes it breaks every time the toolchain has an opinion. The pattern below
+ * matches any indent, requires a value token on the same line so a `///` docstring
+ * or a multi-line string literal inside the body cannot register as a field, and
+ * leaves a trailing comma outside the capture — so both styles read the same.
+ */
 function classFields(className: string): string[] {
   const source = readFileSync(BAML_SRC, 'utf8');
   const block = new RegExp(`^class\\s+${className}\\s*\\{([\\s\\S]*?)^\\}`, 'm').exec(source);
   if (!block?.[1]) throw new Error(`class ${className} not found in ${BAML_SRC}`);
-  return [...block[1].matchAll(/^\s{2}(\w+)\s*:/gm)].map((m) => m[1] as string);
+  return [...block[1].matchAll(/^[ \t]+(\w+)[ \t]*:[ \t]*\S/gm)].map((m) => m[1] as string);
 }
 
 describe('exported schema shape', () => {
@@ -92,7 +114,15 @@ describe('exported schema shape', () => {
     ['RecallQuestion', recallQuestion],
   ] as const)('carries every field %s declares', (className, pick) => {
     const node = pick(exportedSchema());
-    expect(Object.keys(node.properties ?? {}).sort()).toEqual(classFields(className).sort());
+    const declared = classFields(className);
+    // Per class, not just for `CanonicalSummary` in the guard above. Comparing two
+    // empty arrays is the one way this assertion passes without checking anything,
+    // and it needs both the parser to find no fields AND the exported node to lower
+    // to none -- reachable by adding a class here that legitimately has no
+    // properties. Asserting inside the case makes every row carry its own guard.
+    expect(declared.length).toBeGreaterThan(0);
+    expect(Object.keys(node.properties ?? {}).length).toBeGreaterThan(0);
+    expect(Object.keys(node.properties ?? {}).sort()).toEqual(declared.sort());
   });
 
   it('inlines every reference, because Gemini has no $ref', () => {

@@ -54,4 +54,12 @@ logs/
 # claude local overrides
 .claude/settings.local.json
 .gstack/
+
+# The two directories the BAML CLI writes backups into. Both names are in the
+# 0.17.0 binary; `*.baml-backup/` was already here, and `baml agent install`
+# uses the other -- it copies whatever it replaces to
+# `.claude/skills/baml-old_skills/` and `.agents/skills/baml-old_skills/`, so
+# every refresh of the generated `baml-core` skill left two untracked trees
+# beside it, each holding a stale duplicate of the reference it just replaced.
 *.baml-backup/
+baml-old_skills/

@@ -155,10 +155,15 @@ export function estimateEmbeddingTokens(texts: string[]): number {
  * Exported from `packages/prompts/baml_src` by `pnpm baml:export` and converted to
  * Gemini's dialect at module load. Until now this was a hand-written copy of the
  * same shape, one of four -- and `topics` and `question` were both added under the
- * hazard that copies drift silently. The enum on topic slugs and the bounds on
- * `topics` and `distractors` come through from the BAML `@alias`es and `@assert`s,
- * so a plausible slug the database would refuse, or an empty topic list that would
- * file the work under nothing, is rejected by the API before synthesis is paid for.
+ * hazard that copies drift silently. The enum on topic slugs comes through from the
+ * BAML `@alias`es; the bounds on `topics` and `distractors` do NOT come from
+ * `@assert` -- BAML v1 has no constraint syntax, and it parses v0's `@assert` and
+ * then ignores it. They are layered on from `BOUNDS` in `packages/prompts/scripts/
+ * export.mjs` after the schema is lowered, and `packages/prompts/src/schema.test.ts`
+ * pins that each one landed on the node it was meant for. Either way they reach the
+ * API, so a plausible slug the database would refuse, or an empty topic list that
+ * would file the work under nothing, is rejected before synthesis is paid for --
+ * but change a bound in `BOUNDS`, not in `baml_src`.
  * `narrowTopics` still runs on the way to the database, because a schema the
  * provider enforces is not the same as one this code enforces, and the stub
  * provider does not go through Gemini at all.

@@ -14,6 +14,7 @@
     "lint": "eslint src",
     "test": "vitest run",
     "baml:check": "baml check",
+    "baml:fmt": "baml fmt",
     "baml:generate": "baml generate && node -e \"const {existsSync,unlinkSync}=require('node:fs');const p='baml_sdk/.gitignore';if(existsSync(p))unlinkSync(p);if(existsSync(p))throw new Error('baml_sdk/.gitignore survived removal; it would hide the generated SDK from git')\"",
     "baml:test": "baml test",
     "baml:export": "node scripts/export.mjs"
