@@ -14,18 +14,15 @@
     "lint": "eslint src",
     "test": "vitest run",
     "baml:check": "baml check",
-    "baml:generate": "baml generate && node -e \"import('node:fs').then(fs => fs.promises.unlink('baml_sdk/.gitignore').catch(() => {}))\"",
+    "baml:generate": "baml generate && node -e \"const {existsSync,unlinkSync}=require('node:fs');const p='baml_sdk/.gitignore';if(existsSync(p))unlinkSync(p);if(existsSync(p))throw new Error('baml_sdk/.gitignore survived removal; it would hide the generated SDK from git')\"",
     "baml:test": "baml test",
     "baml:export": "node scripts/export.mjs"
   },
   "devDependencies": {
+    "@boundaryml/baml-bridge": "0.17.0",
     "@types/node": "^26.4.0",
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11",
-    "yaml": "^2.9.0"
-  },
-  "dependencies": {
-    "@boundaryml/baml-bridge": "0.17.0"
+    "vitest": "^4.1.11"
   }
 }

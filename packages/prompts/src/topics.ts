@@ -14,46 +14,51 @@
  * slug here fails `pnpm typecheck`, in the same commit, the same way
  * `packages/db/src/enum-parity.ts` catches a drifted database enum.
  */
-import { TopicSlug } from '../baml_sdk/index.js';
+// `import type`, deliberately: `baml_sdk/index.ts` calls
+// `initializeRuntimeFromBytecode` at module scope, so a value import would boot the
+// native addon in every consumer of this package. The keys below are the enum's
+// string values, so `Record<TopicSlug, string>` stays total either way -- adding a
+// member to the BAML enum without adding its slug here still fails `pnpm typecheck`.
+import type { TopicSlug } from '../baml_sdk/index.js';
 
 /** Every BAML topic member, mapped to the `topics.slug` it stands for. */
 export const TOPIC_SLUG_BY_MEMBER: Record<TopicSlug, string> = {
-  [TopicSlug.Philosophy]: 'philosophy',
-  [TopicSlug.Ethics]: 'ethics',
-  [TopicSlug.Stoicism]: 'stoicism',
-  [TopicSlug.Logic]: 'logic',
-  [TopicSlug.Metaphysics]: 'metaphysics',
-  [TopicSlug.Aesthetics]: 'aesthetics',
-  [TopicSlug.Psychology]: 'psychology',
-  [TopicSlug.Attention]: 'attention',
-  [TopicSlug.Habits]: 'habits',
-  [TopicSlug.Learning]: 'learning',
-  [TopicSlug.Emotion]: 'emotion',
-  [TopicSlug.Science]: 'science',
-  [TopicSlug.Evolution]: 'evolution',
-  [TopicSlug.Physics]: 'physics',
-  [TopicSlug.Chemistry]: 'chemistry',
-  [TopicSlug.Astronomy]: 'astronomy',
-  [TopicSlug.Medicine]: 'medicine',
-  [TopicSlug.Society]: 'society',
-  [TopicSlug.Economics]: 'economics',
-  [TopicSlug.Liberty]: 'liberty',
-  [TopicSlug.Government]: 'government',
-  [TopicSlug.Justice]: 'justice',
-  [TopicSlug.Education]: 'education',
-  [TopicSlug.ArtsAndLetters]: 'arts-and-letters',
-  [TopicSlug.Literature]: 'literature',
-  [TopicSlug.Rhetoric]: 'rhetoric',
-  [TopicSlug.Criticism]: 'criticism',
-  [TopicSlug.History]: 'history',
-  [TopicSlug.Biography]: 'biography',
-  [TopicSlug.Revolutions]: 'revolutions',
-  [TopicSlug.Mathematics]: 'mathematics',
-  [TopicSlug.Computation]: 'computation',
-  [TopicSlug.Architecture]: 'architecture',
-  [TopicSlug.WorldPhilosophy]: 'world-philosophy',
-  [TopicSlug.Strategy]: 'strategy',
-  [TopicSlug.Ecology]: 'ecology',
+  Philosophy: 'philosophy',
+  Ethics: 'ethics',
+  Stoicism: 'stoicism',
+  Logic: 'logic',
+  Metaphysics: 'metaphysics',
+  Aesthetics: 'aesthetics',
+  Psychology: 'psychology',
+  Attention: 'attention',
+  Habits: 'habits',
+  Learning: 'learning',
+  Emotion: 'emotion',
+  Science: 'science',
+  Evolution: 'evolution',
+  Physics: 'physics',
+  Chemistry: 'chemistry',
+  Astronomy: 'astronomy',
+  Medicine: 'medicine',
+  Society: 'society',
+  Economics: 'economics',
+  Liberty: 'liberty',
+  Government: 'government',
+  Justice: 'justice',
+  Education: 'education',
+  ArtsAndLetters: 'arts-and-letters',
+  Literature: 'literature',
+  Rhetoric: 'rhetoric',
+  Criticism: 'criticism',
+  History: 'history',
+  Biography: 'biography',
+  Revolutions: 'revolutions',
+  Mathematics: 'mathematics',
+  Computation: 'computation',
+  Architecture: 'architecture',
+  WorldPhilosophy: 'world-philosophy',
+  Strategy: 'strategy',
+  Ecology: 'ecology',
 };
 
 /** The slug a generated topic actually files a work under. */

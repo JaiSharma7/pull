@@ -32,6 +32,32 @@ function findBaml() {
 
 const bamlBin = findBaml();
 
+/**
+ * Refuse a toolchain CI does not use.
+ *
+ * `baml generate` embeds compiled bytecode, and `_inlinedbaml.ts` does not even
+ * reproduce across machines on one build -- so a *different* build is worse than
+ * useless here. v0 got this for free: `generators.baml` carried a `version` field
+ * and BAML itself refused a mismatched CLI. `baml.toml` has no equivalent, so the
+ * check lives here, against the same `.baml-version` the CI installer reads.
+ */
+function assertPinnedToolchain() {
+  const want = readFileSync(resolve(PROMPTS_DIR, '.baml-version'), 'utf8').trim();
+  const reported = execFileSync(bamlBin, ['--version'], { encoding: 'utf8' });
+  const got = /baml toolchain\s+(\S+)/.exec(reported);
+  if (!got) {
+    throw new Error(`could not read a toolchain version from \`baml --version\`:\n${reported}`);
+  }
+  if (got[1] !== want) {
+    throw new Error(
+      `BAML toolchain ${got[1]} is installed but this project pins ${want} ` +
+        `(packages/prompts/.baml-version). Install it with:\n` +
+        `  curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --version ${want}`,
+    );
+  }
+}
+assertPinnedToolchain();
+
 // --- the sources ----------------------------------------------------------------
 const files = {};
 for (const name of readdirSync(SRC_DIR)) {
@@ -50,13 +76,9 @@ function pinnedModels(source) {
 }
 const models = pinnedModels(files['baml_src/clients.baml'] ?? '');
 
-// --- prompt rendering via BAML CLI ----------------------------------------------
-const SENTINEL = (name) => `__WAP_ARG_${name}__`;
-
-function renderPromptWithCli(fnName, paramNames) {
-  const argExprs = paramNames.map((n) => `\"${SENTINEL(n)}\"`).join(', ');
-  const expr = `${fnName}$render_prompt(${argExprs}).messages().map((m) -> { { \"role\": m.role, \"text\": m.content } })`;
-
+// --- running the BAML CLI -------------------------------------------------------
+/** Evaluate one BAML expression against this project and parse its JSON result. */
+function runBaml(expr) {
   const bamlPath = dirname(bamlBin);
   const pathSep = process.platform === 'win32' ? ';' : ':';
   const out = execFileSync(
@@ -64,18 +86,45 @@ function renderPromptWithCli(fnName, paramNames) {
     ['run', '--project', PROMPTS_DIR, '-e', expr, '--output-format', 'json'],
     {
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}`,
-      },
+      env: { ...process.env, PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}` },
     },
   );
+  return JSON.parse(out);
+}
 
-  const parsed = JSON.parse(out);
-  const messages = parsed.map((m) => ({
-    role: m.role ? m.role : 'user',
-    text: m.text,
-  }));
+// --- prompt rendering via BAML CLI ----------------------------------------------
+const SENTINEL = (name) => `__WAP_ARG_${name}__`;
+
+/** Render one function's prompt with `valueOf(param)` substituted for each argument. */
+function renderWith(fnName, paramNames, valueOf) {
+  const argExprs = paramNames.map((n) => `\"${valueOf(n)}\"`).join(', ');
+  const expr = `${fnName}$render_prompt(${argExprs}).messages().map((m) -> { { \"role\": m.role, \"text\": m.content } })`;
+  return runBaml(expr).map((m, i) => {
+    if (typeof m.text !== 'string') {
+      throw new Error(
+        `${fnName}: message ${i} did not render to text (media, a tool block, or a nested ` +
+          'content shape); only text prompts can be exported as templates',
+      );
+    }
+    return { role: m.role ? m.role : 'user', text: m.text };
+  });
+}
+
+/**
+ * The prompt as a template, with `{{name}}` where each argument went.
+ *
+ * Two things have to hold for that to be honest, and both are checked rather than
+ * assumed. Each argument must survive rendering verbatim, or there is nothing to
+ * put a placeholder around. And rendering must *commute* with substitution: the
+ * prompt a reader gets by filling in the template has to be the prompt BAML would
+ * have rendered from the same values. A conditional on an argument's value breaks
+ * the second without breaking the first -- `if (context != "")` keeps the sentinel
+ * intact on the branch it happens to take, and quietly drops the other branch from
+ * the export. So the prompt is rendered a second time with empty arguments and
+ * compared against the template with its placeholders emptied.
+ */
+function renderPromptWithCli(fnName, paramNames) {
+  const messages = renderWith(fnName, paramNames, SENTINEL);
 
   for (const n of paramNames) {
     const sentinel = SENTINEL(n);
@@ -89,6 +138,25 @@ function renderPromptWithCli(fnName, paramNames) {
       m.text = m.text.split(sentinel).join(`{{${n}}}`);
     }
   }
+
+  const fill = (text, value) =>
+    paramNames.reduce((acc, n) => acc.split(`{{${n}}}`).join(value), text);
+  const emptied = renderWith(fnName, paramNames, () => '');
+  if (emptied.length !== messages.length) {
+    throw new Error(
+      `${fnName}: the prompt changes shape with its arguments (${messages.length} message(s) ` +
+        `rendered, ${emptied.length} with empty arguments); it cannot be exported as a template`,
+    );
+  }
+  emptied.forEach((m, i) => {
+    if (m.text !== fill(messages[i].text, '')) {
+      throw new Error(
+        `${fnName}: the prompt branches on an argument's value, so the exported template ` +
+          'would carry only the branch the export happened to take. Move the conditional to ' +
+          'the caller (see `buildSummaryPrompt` in _shared/providers.ts).',
+      );
+    }
+  });
 
   return messages;
 }
@@ -179,20 +247,7 @@ function inlineRefs(root) {
  */
 function deriveSchemaWithCli(fnName, paramNames, bounds) {
   const argExprs = paramNames.map((n) => `\"${SENTINEL(n)}\"`).join(', ');
-  const expr = `baml.json.schema(${fnName}$spec(${argExprs}).output_type())`;
-
-  const bamlPath = dirname(bamlBin);
-  const pathSep = process.platform === 'win32' ? ';' : ':';
-  const out = execFileSync(
-    bamlBin,
-    ['run', '--project', PROMPTS_DIR, '-e', expr, '--output-format', 'json'],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}` },
-    },
-  );
-
-  const schema = inlineRefs(JSON.parse(out));
+  const schema = inlineRefs(runBaml(`baml.json.schema(${fnName}$spec(${argExprs}).output_type())`));
 
   for (const [path, bound] of Object.entries(bounds ?? {})) {
     const node = resolvePath(schema, path);
@@ -208,46 +263,64 @@ function deriveSchemaWithCli(fnName, paramNames, bounds) {
 }
 
 // --- main export ----------------------------------------------------------------
-const canonicalSrc = files['baml_src/canonical_summary.baml'] ?? '';
-
-// Extract function metadata: name, params, returnType, client
-const fnMatch = /function\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+)\s*\{[\s\S]*?client:\s*(\w+)/.exec(
-  canonicalSrc,
-);
-if (!fnMatch) {
-  throw new Error('Could not find function declaration in canonical_summary.baml');
+/**
+ * Every `function` declared anywhere in `baml_src`, with the client it pins.
+ *
+ * Every, not the first: the export is what the Edge Functions run, and a function
+ * missing from it fails as a lookup error at the call site rather than here. The
+ * body is cut at the next declaration so a function without a `client:` cannot
+ * silently borrow the next one's.
+ */
+function declaredFunctions(sources) {
+  const out = [];
+  for (const [file, src] of Object.entries(sources)) {
+    const decl = /function\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+)\s*\{/g;
+    let m;
+    while ((m = decl.exec(src)) !== null) {
+      const [, name, params, returnType] = m;
+      const rest = src.slice(m.index + m[0].length);
+      const next = rest.search(/\nfunction\s+\w+\s*\(/);
+      const body = next === -1 ? rest : rest.slice(0, next);
+      const client = /(?:^|\n)\s*client:\s*(\w+)/.exec(body);
+      if (!client) {
+        throw new Error(`${name} (${file}): no \`client:\` before the next declaration.`);
+      }
+      out.push({
+        file,
+        name,
+        returnType,
+        client: client[1],
+        params: params
+          .split(',')
+          .map((p) => p.split(':')[0].trim())
+          .filter(Boolean),
+      });
+    }
+  }
+  if (out.length === 0) {
+    throw new Error(`no BAML function declarations found in ${SRC_DIR}`);
+  }
+  return out;
 }
 
-const fnName = fnMatch[1];
-const paramNames = fnMatch[2]
-  .split(',')
-  .map((p) => p.split(':')[0].trim())
-  .filter(Boolean);
-const returnType = fnMatch[3];
-const client = fnMatch[4];
-const model = models[client];
-
-if (!model) {
-  throw new Error(
-    `${fnName}: client ${JSON.stringify(client)} is not a single pinned model in clients.baml. ` +
-      'Each function names one client with a model; retry and fallback live in the worker, where the ledger is.',
-  );
-}
-
-const messages = renderPromptWithCli(fnName, paramNames);
-const schema = deriveSchemaWithCli(fnName, paramNames, BOUNDS[fnName]);
-
-const exported = [
-  {
-    name: fnName,
-    params: paramNames,
+const exported = declaredFunctions(files).map(({ file, name, params, returnType, client }) => {
+  const model = models[client];
+  if (!model) {
+    throw new Error(
+      `${name} (${file}): client ${JSON.stringify(client)} is not a single pinned model in clients.baml. ` +
+        'Each function names one client with a model; retry and fallback live in the worker, where the ledger is.',
+    );
+  }
+  return {
+    name,
+    params,
     client,
     model,
     returnType,
-    messages,
-    schema,
-  },
-];
+    messages: renderPromptWithCli(name, params),
+    schema: deriveSchemaWithCli(name, params, BOUNDS[name]),
+  };
+});
 
 const header = `/**
  * GENERATED by \`pnpm baml:export\` from packages/prompts/baml_src -- do not edit.

@@ -130,7 +130,7 @@ function WriteCanonicalSummary(workTitle: string, kind: string, context: string)
     fewer.
 
     Context:
-    ${if (context != "") { context } else { "(no additional context supplied)" }}
+    ${context}
 
     ${ctx.output_format}
   `

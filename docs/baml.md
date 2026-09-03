@@ -86,11 +86,15 @@ Three limits of the export, stated rather than discovered:
 - Each function must name one pinned client; the exporter refuses a fallback or
   round-robin client, because retry and fallback belong in the worker, where the ledger
   is.
-- Array bounds are not derivable. BAML v1 has no constraint syntax, so `minItems` and
-  `maxItems` cannot be lowered from the class and are layered on from `BOUNDS` in
-  `scripts/export.mjs` after lowering. That is the one hand-kept part of the schema, and
-  `packages/prompts/src/schema.test.ts` fails if a bound's path stops resolving or if the
-  exported properties drift from the class they came from.
+- Array bounds are not derivable. BAML v1 has no constraint syntax — v0 carried
+  `@assert` on the field, and nothing replaced it — so `minItems` and `maxItems` cannot
+  be lowered from the class and are layered on from `BOUNDS` in `scripts/export.mjs`
+  after lowering. That is the one hand-kept part of the schema. Be precise about what
+  guards it: `packages/prompts/src/schema.test.ts` pins that each bound landed on the
+  node it was meant for, and that the exported properties still match the classes they
+  came from, so a renamed or added field fails the build. It cannot check the _numbers_ —
+  there is nothing in `baml_src` to check them against, and a docstring saying "one to
+  four" is prose. Changing a bound means changing the docstring and `BOUNDS` together.
 
 ## Enum members are not slugs
 
@@ -155,3 +159,10 @@ configured in `packages/prompts/baml.toml`.
 vendored `openai`, `aws`, `vercel` and `claude_code` clients alongside the `google` and
 `anthropic` ones. Nothing in this repository imports them and they are not prunable by
 hand — regenerating would put them straight back.
+
+**Nothing outside `packages/prompts` may import `baml_sdk` as a value.** Its `index.ts`
+calls `initializeRuntimeFromBytecode` at module scope, so a value import — an `enum`
+counts, which is how this regressed once — loads the native addon into whatever imports
+it, `apps/web` included. `src/index.ts` re-exports types only, `@boundaryml/baml-bridge`
+is a devDependency so it does not follow the package, and `src/boundary.test.ts` fails on
+any value import from `baml_sdk` under `src/`.

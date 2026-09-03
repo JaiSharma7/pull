@@ -47,24 +47,27 @@ function exportedSchema(): JsonSchema {
   return schema;
 }
 
-/** Follow a `T | null` union to `T`; leave anything else alone. */
-function throughNull(node: JsonSchema | undefined): JsonSchema | undefined {
-  if (!node?.anyOf) return node;
-  return node.anyOf.find((b) => b.type !== 'null') ?? node;
+/**
+ * Deliberately not a shared resolver.
+ *
+ * An earlier draft copied `throughNull`/`resolvePath` out of `scripts/export.mjs`,
+ * which made this file unable to catch the thing it exists to catch: a resolver
+ * that walks to the wrong node puts the bound somewhere unintended, and a copy of
+ * the same resolver walks there too and agrees. Sharing the implementation has the
+ * same defect. So the paths below are spelled out by hand -- if the exporter's
+ * resolver drifts, these stop finding the bounds and fail.
+ */
+function pullItems(schema: JsonSchema): JsonSchema {
+  const node = schema.properties?.pulls?.items;
+  if (!node) throw new Error('pulls[] is not in the exported schema');
+  return node;
 }
 
-/** `a.b[].c` — a property name per segment, `[]` descending into array items. */
-function resolve(schema: JsonSchema, path: string): JsonSchema | undefined {
-  let node: JsonSchema | undefined = schema;
-  for (const raw of path.split('.')) {
-    const intoItems = raw.endsWith('[]');
-    const key = intoItems ? raw.slice(0, -2) : raw;
-    node = throughNull(node)?.properties?.[key];
-    if (intoItems) node = throughNull(node)?.items;
-    if (!node) return undefined;
-  }
-  // A nullable node is followed through here too, so a path may end on one.
-  return throughNull(node);
+function recallQuestion(schema: JsonSchema): JsonSchema {
+  const q = pullItems(schema).properties?.question;
+  const inner = q?.anyOf?.find((b) => b.type !== 'null');
+  if (!inner) throw new Error('pulls[].question is not a `T | null` in the exported schema');
+  return inner;
 }
 
 /** Field names declared on a `class` in the BAML source, in declaration order. */
@@ -84,12 +87,12 @@ describe('exported schema shape', () => {
   });
 
   it.each([
-    ['CanonicalSummary', ''],
-    ['Pull', 'pulls[]'],
-    ['RecallQuestion', 'pulls[].question'],
-  ])('carries every field %s declares', (className, path) => {
-    const node = path === '' ? exportedSchema() : resolve(exportedSchema(), path);
-    expect(Object.keys(node?.properties ?? {}).sort()).toEqual(classFields(className).sort());
+    ['CanonicalSummary', (s: JsonSchema) => s],
+    ['Pull', pullItems],
+    ['RecallQuestion', recallQuestion],
+  ] as const)('carries every field %s declares', (className, pick) => {
+    const node = pick(exportedSchema());
+    expect(Object.keys(node.properties ?? {}).sort()).toEqual(classFields(className).sort());
   });
 
   it('inlines every reference, because Gemini has no $ref', () => {
@@ -98,13 +101,17 @@ describe('exported schema shape', () => {
     expect(raw).not.toContain('$defs');
   });
 
-  it.each([
-    ['pulls', { minItems: 1 }],
-    ['topics', { minItems: 1, maxItems: 4 }],
-    ['pulls[].question.distractors', { minItems: 3, maxItems: 3 }],
-  ])('keeps the bound BAML cannot state on %s', (path, bound) => {
-    const node = resolve(exportedSchema(), path);
-    expect(node, `${path} no longer resolves; update BOUNDS in scripts/export.mjs`).toBeDefined();
-    expect(node).toMatchObject(bound);
+  it('keeps the bounds BAML cannot state', () => {
+    // Spelled out rather than resolved, per the note above. These numbers are a
+    // declaration, not a derivation -- BAML v1 has no constraint syntax, so nothing
+    // in baml_src can be compared against them. What this pins is that the exporter
+    // put each one on the node it was meant for.
+    const schema = exportedSchema();
+    expect(schema.properties?.pulls).toMatchObject({ minItems: 1 });
+    expect(schema.properties?.topics).toMatchObject({ minItems: 1, maxItems: 4 });
+    expect(recallQuestion(schema).properties?.distractors).toMatchObject({
+      minItems: 3,
+      maxItems: 3,
+    });
   });
 });

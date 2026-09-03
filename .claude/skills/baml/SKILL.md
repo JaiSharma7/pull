@@ -24,6 +24,9 @@ the repo workflow.
    not an import.
 4. **Never use a generated enum value as a database value.** `TopicSlug.ArtsAndLetters`
    is `"ArtsAndLetters"`, not `"arts-and-letters"`. Go through `topicSlugOf`.
+   And import it as a _type_ only — `baml_sdk/index.ts` boots the native runtime at
+   module scope, so a value import drags a NAPI addon into every consumer.
+   `src/boundary.test.ts` enforces this.
 5. **Law 2 is unchanged.** BAML at generation time, never in the read path. A new
    `function` is a new model call — say what it costs and where it writes to
    `cost_ledger`.
