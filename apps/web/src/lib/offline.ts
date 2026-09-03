@@ -503,10 +503,13 @@ export function isOfflineFailure(error: unknown): boolean {
  * have applied, the local state may now be a lie, and the reader has to hear
  * about it.
  *
- * Returns whether the write was queued, so the caller knows whether it still has
- * an error on its hands. Callers that answer a failure by reloading must ask
- * this first — reloading offline replaces a working screen with a dead end, and
- * that is precisely the reload worth not doing.
+ * Returns whether this was an offline failure that has been taken off the caller's
+ * hands — NOT whether the write reached the store. It answers `true` for a write
+ * `queueMutation` could not persist, deliberately: see the note on the return below.
+ * Callers that answer a failure by reloading must ask this first — reloading offline
+ * replaces a working screen with a dead end, and that is precisely the reload worth
+ * not doing. A caller that needs to know the write is really on disk calls
+ * `queueMutation` directly.
  */
 export async function queueIfOffline(
   userId: string,

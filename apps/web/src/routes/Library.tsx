@@ -669,7 +669,7 @@ export function Library({ userId }: { userId: string }) {
                   onClick={() => {
                     // A graph node always carries a real `workId` — `get_user_knowledge_graph`
                     // inner-joins `works` — and `groupByWork` keys a group by that id when
-                    // it has one, falling back to `orphan:<save id>` when it does not. So
+                    // it has one, falling back to `orphan:<pull id>` when it does not. So
                     // this opens the right group. Opening it is only half of it, though:
                     // the Delta has to be asked for too, which `toggle` does and this
                     // used not to.

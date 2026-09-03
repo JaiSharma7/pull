@@ -12,6 +12,8 @@ import {
   writeScope,
   type PendingWrite,
 } from './offline.js';
+/* The module's own shape, for the re-imported instance the broken-store cases use. */
+import type * as OfflineModule from './offline.js';
 import { TRANSPORT_ERROR } from './rpc-error.js';
 import type { FeedRow } from './types.js';
 
@@ -726,33 +728,53 @@ describe('queueMutation reports whether it persisted', () => {
    * module gives a stable rejection — which is what a browser with site data blocked
    * looks like from here.
    */
-  it('answers false when the store cannot be opened', async () => {
+  /*
+   * A store that cannot be opened at all — a browser with site data blocked, which is the
+   * population this whole contract exists for. `idb`'s `openDB` rejects on this object
+   * rather than going through `onerror`; either way `queueMutation`'s catch is what runs,
+   * and the point of the fixture is that opening fails, not how.
+   */
+  const withBrokenStore = async <T>(run: (m: typeof OfflineModule) => Promise<T>) => {
     const original = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
-    // A store that rejects on open, without disturbing the memoised handle the rest of
-    // this file shares.
-    const broken = {
-      open() {
-        const request: Record<string, unknown> = { onerror: null, onsuccess: null };
-        setTimeout(() => {
-          (request.onerror as (() => void) | null)?.();
-        }, 0);
-        return request;
-      },
-    };
-    Object.defineProperty(globalThis, 'indexedDB', { value: broken, configurable: true });
+    Object.defineProperty(globalThis, 'indexedDB', { value: {}, configurable: true });
     try {
-      // A fresh module registry, so this instance memoises the broken store rather than
-      // the working handle the rest of this file shares.
+      // A fresh registry, so the instance under test does not share the working handle
+      // the rest of this file has already memoised.
       vi.resetModules();
-      const isolated = await import('./offline.js');
-      await expect(
-        isolated.queueMutation('broken-store-user', { kind: 'read', pullId: 'p9' }),
-      ).resolves.toBe(false);
+      return await run(await import('./offline.js'));
     } finally {
       if (original) Object.defineProperty(globalThis, 'indexedDB', original);
       else delete (globalThis as unknown as Record<string, unknown>).indexedDB;
       vi.resetModules();
     }
+  };
+
+  it('answers false when the store cannot be opened', async () => {
+    await withBrokenStore(async (offline) => {
+      await expect(
+        offline.queueMutation('broken-store-user', { kind: 'read', pullId: 'p9' }),
+      ).resolves.toBe(false);
+    });
+  });
+
+  /*
+   * The half the previous revision left untested, and the one whose absence would let the
+   * regression back in silently: re-propagating `queueMutation`'s answer through
+   * `queueIfOffline` kept the whole suite green, because every case ran against a working
+   * store. This is the case that fails if the two contracts are collapsed again — and its
+   * failure mode is a reader with site data blocked watching their Library be replaced by
+   * the error screen.
+   */
+  it('queueIfOffline still takes responsibility when the store could not keep it', async () => {
+    await withBrokenStore(async (offline) => {
+      const handled = await withOnline(false, () =>
+        offline.queueIfOffline('broken-store-user', TRANSPORT_ERROR, {
+          kind: 'read',
+          pullId: 'p10',
+        }),
+      );
+      expect(handled).toBe(true);
+    });
   });
 });
 
