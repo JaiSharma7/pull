@@ -75,6 +75,12 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
    */
   const liveRef = useRef(true);
   useEffect(() => {
+    // Armed on setup as well as disarmed on cleanup, because `main.tsx` renders under
+    // `StrictMode`: development replays effects as setup → cleanup → setup, so an effect
+    // that only ever sets this false leaves it false for the life of a mounted component.
+    // Every `finishIfLive()` would then be suppressed and onboarding could not advance at
+    // all in development — a guard against a rare late write, turned into a wall.
+    liveRef.current = true;
     return () => {
       liveRef.current = false;
     };
