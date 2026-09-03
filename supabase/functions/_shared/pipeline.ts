@@ -32,6 +32,27 @@ import { contentHash, extractText, fetchBounded, MAX_SOURCE_CHARS, segment } fro
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
 /**
+ * Another job is synthesising this source; ask again later.
+ *
+ * Not a failure, and the worker must not record it as one: a failed attempt
+ * counts against `MAX_ATTEMPTS`, and a holder retrying a slow provider could
+ * otherwise make the waiter fail terminally for doing nothing wrong. The worker
+ * answers this by re-sending the step with a delay -- no `job_steps` row, no
+ * `read_ct` -- and bounds the number of waits itself.
+ */
+export class SourceHeldError extends Error {
+  constructor() {
+    // Deliberately says nothing about who holds the source. When the wait runs out
+    // this text lands in `job_steps.error`, which the requester can read, and
+    // "another job holds this" would confirm that a different account submitted
+    // the same document in the last half hour -- the membership question the
+    // `works.content_hash` revoke exists to keep unanswerable.
+    super('synthesize: the source is being summarised; will ask again');
+    this.name = 'SourceHeldError';
+  }
+}
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -323,6 +344,16 @@ export interface PipelineDb {
   ): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
+  /**
+   * Reserve a source for this job's synthesis.
+   *
+   * `claimed` means go; `held` means another live job is synthesising the same
+   * text and this one should not pay for it too. The claim expires and a finished
+   * or failed holder's claim is takeable, so a crashed job cannot hold a source
+   * hostage -- see 20260902200000.
+   */
+  claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
+  releaseSourceHash(jobId: string): Promise<void>;
 }
 
 /**
@@ -700,24 +731,21 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       if (!acquired?.text) throw new Error('synthesize: acquire produced no text');
 
       /*
-       * Asked a second time, immediately before paying.
+       * Asked a second time, immediately before paying -- and then the source is
+       * reserved.
        *
        *   job A   acquire ──────── … ──────── synthesize ─── template(commit)
        *   job B        acquire(miss) ──── … ──────── synthesize ← re-check catches it here
        *
        * `acquire` asks whether this source is already summarised, but the answer can
        * go stale: `acquire` and `synthesize` are separate invocations, minutes apart
-       * on a queue, so two jobs fingerprinting the same text can both miss and both
-       * pay. The adopt-on-23505 in `createSummary` stops that ending in a crash — but
-       * a duplicated provider bill is a law 2 failure whether or not anything throws.
-       *
-       * This does not serialize; it narrows. The window shrinks from the whole
-       * acquire→synthesize span to the moment between this lookup and the call below.
-       * Closing it properly means reserving the fingerprint — a `generation_hash_claims`
-       * row taken at `acquire` and released at publish or failure — which is a migration,
-       * a lease timeout, and a new way for a crashed job to block every later one on the
-       * same source. That is worth doing when reuse volume justifies it and is recorded
-       * as such, rather than half-built here where it would read as solved.
+       * on a queue, so two jobs fingerprinting the same text can both miss. The
+       * re-check narrows that window to the moment between this lookup and the call;
+       * the claim below closes it. Whichever job claims first pays; the other is told
+       * `held`, throws an unbilled error, and its message is redelivered at the queue's
+       * visibility timeout -- by which time the holder has usually published, and this
+       * re-check adopts its summary and calls no provider at all. The claim expires,
+       * so a holder that crashed mid-call is takeable by the third redelivery.
        */
       const raced = await db.findPublishedSummaryByHash(acquired.hash, job.requester_id);
       if (raced) {
@@ -726,6 +754,14 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
           output: { reuse: raced, skipped: 'another job published this source first' },
           jumpTo: 'publish',
         };
+      }
+
+      // A wait, not a failure: nothing has been sent to a provider, and the worker
+      // re-sends this step later without spending a retry. It sits AFTER the
+      // re-check above so a job that finds the summary already published never
+      // contends for the claim at all.
+      if ((await db.claimSourceHash(job.id, acquired.hash)) === 'held') {
+        throw new SourceHeldError();
       }
 
       /*
@@ -810,6 +846,12 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
           }
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
+
+      // Renew the claim now that there is a summary to protect. A second job cannot
+      // adopt it until `publish`, and the nodes between here and there can sit in
+      // a queue for longer than a short lease -- so the lease is long, and this
+      // renewal is what keeps a live holder's claim its own until then.
+      await db.claimSourceHash(job.id, acquired.hash);
 
       // The URL `resolve_identity` validated, not the raw target. A job whose
       // `acquire` output predates the `url` field has no such value at all -- the
@@ -1018,6 +1060,9 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       if (templated.reused) return { output: { published: false, reason: 'reused' } };
       if (!templated.summaryId) throw new Error('publish: no summary to publish');
       await db.publishSummary(templated.summaryId);
+      // The source is free for the next job the moment it can be reused. A failed
+      // job's claim is takeable without this, and the lease is the net under both.
+      await db.releaseSourceHash(job.id);
       return { output: { published: true, summaryId: templated.summaryId } };
     }
 

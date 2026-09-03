@@ -498,6 +498,23 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       );
     },
 
+    async claimSourceHash(jobId, contentHash) {
+      // 'claimed' or 'held'; the function's own comment says which takeovers are
+      // legal. Anything else is a transport failure and is thrown as one.
+      const verdict = must(
+        await supabase.rpc('claim_source_hash', { p_job_id: jobId, p_hash: contentHash }),
+        'claim source hash',
+      ) as string;
+      if (verdict !== 'claimed' && verdict !== 'held') {
+        throw new Error(`claim source hash: unexpected verdict ${JSON.stringify(verdict)}`);
+      }
+      return verdict;
+    },
+
+    async releaseSourceHash(jobId) {
+      must(await supabase.rpc('release_source_hash', { p_job_id: jobId }), 'release source hash');
+    },
+
     async attachSummaryToJob(jobId, summaryId, workId) {
       must(
         await supabase

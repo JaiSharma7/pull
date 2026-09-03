@@ -525,6 +525,35 @@ export type Database = {
           },
         ]
       }
+      generation_hash_claims: {
+        Row: {
+          claimed_at: string
+          content_hash: string
+          expires_at: string
+          job_id: string
+        }
+        Insert: {
+          claimed_at?: string
+          content_hash: string
+          expires_at: string
+          job_id: string
+        }
+        Update: {
+          claimed_at?: string
+          content_hash?: string
+          expires_at?: string
+          job_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "generation_hash_claims_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       generation_jobs: {
         Row: {
           attempts: number
@@ -1808,6 +1837,10 @@ export type Database = {
           read_ct: number
         }[]
       }
+      claim_source_hash: {
+        Args: { p_hash: string; p_job_id: string; p_lease?: string }
+        Returns: string
+      }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
@@ -1982,6 +2015,17 @@ export type Database = {
       related_pulls: {
         Args: { p_limit?: number; p_pull_id: string }
         Returns: Json
+      }
+      release_source_hash: { Args: { p_job_id: string }; Returns: number }
+      requeue_generation_message: {
+        Args: {
+          p_delay_seconds: number
+          p_job_id: string
+          p_msg_id: number
+          p_step: string
+          p_waits: number
+        }
+        Returns: number
       }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }

@@ -191,33 +191,29 @@ that reach Postgres rather than the call counts alone. Unrecognised rights claim
 narrow to `review_required`, so the direction a mistake falls in is toward refusing to
 publish.
 
-### Open risk: reuse is narrowed, not serialized
+### Reuse is serialized ✅
 
-Two jobs fingerprinting the same source can still both pay a provider.
+Two jobs fingerprinting the same source could both pay a provider. `acquire` asked
+whether a source was already summarised, and `synthesize` asked again immediately
+before calling the provider — but they are separate invocations minutes apart on a
+queue, so the answer could go stale in between and both could pay. The
+adopt-on-`23505` in `createSummary` stopped that ending in a crash; what remained was a
+duplicated bill, a law 2 failure whether or not anything throws.
 
-`acquire` asks whether a source is already summarised, and `synthesize` now asks again
-immediately before calling the provider — but they are separate invocations, minutes
-apart on a queue, so the answer can go stale in between:
+`20260902200000` closes it by reserving the fingerprint: `synthesize` takes a
+`generation_hash_claims` row after the re-check and before the call. A job told `held`
+waits without spending a retry — the worker archives its message and re-sends the step
+a minute later with a wait count, bounded at thirty — by which time the holder has
+usually published and the re-check adopts its summary, so no provider is called at all.
 
-```
-job A   acquire ──────── … ──────── synthesize ─── template (commits)
-job B        acquire(miss) ──── … ──────── synthesize ← second lookup catches it here
-                                             ↑
-                        still open: both reach synthesize inside this gap
-```
-
-The adopt-on-`23505` in `createSummary` means this no longer ends in a crash or a
-permanently failed job, so what remains is purely a duplicated bill — which is a law 2
-failure whether or not anything throws, since the whole cost argument is that a source
-is generated once.
-
-Closing it properly means reserving the fingerprint: a `generation_hash_claims` row
-taken at `acquire` and released at publish or failure, with a lease timeout. That was
-deferred rather than half-built because the lease is the hard part — a crashed job
-holding a claim would block every later request for the same source, turning a
-duplicated bill into a stalled queue, which is the worse failure. Worth doing when reuse
-volume makes the duplicate spend measurable; `cost_ledger` is where that shows up, since
-two billable `synthesize` rows against one content hash is exactly the query.
+The lease was the reason this was deferred, and two things make it safe. A claim whose
+job is no longer queued or running is takeable at once, whatever the lease says, and
+that — with the stranded-job sweeper — is what handles a dead holder. The lease itself
+is for a holder that is alive but slow: a summary is not reusable until `publish`, and
+the nodes between `synthesize` and `publish` can sit in a queue, so the lease is thirty
+minutes and `template` renews it once the summary is committed. `hash_claims.sql`
+asserts each takeover, that a live holder is never displaced, and that waiting archives
+the delivered message and sends a delayed one.
 
 ### Still to do
 

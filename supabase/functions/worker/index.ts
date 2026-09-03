@@ -6,6 +6,7 @@ import {
   BilledStepError,
   jumpFor,
   runPipelineStep,
+  SourceHeldError,
   type JobRow,
   type StepResult,
 } from '../_shared/pipeline.ts';
@@ -51,6 +52,19 @@ const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
  * job promptly.
  */
 const VISIBILITY_SECONDS = 180;
+/**
+ * How a job waits on a source another job is synthesising.
+ *
+ * Not by throwing and being redelivered: that spends the same `MAX_ATTEMPTS` and
+ * `read_ct` budget as a real failure, and a holder retrying a slow provider could
+ * fail the waiter terminally for doing nothing wrong. The step is re-sent with a
+ * delay instead, carrying a count. Thirty minutes of waiting is longer than any
+ * live holder needs to reach `publish` and longer than a dead one keeps its claim
+ * -- the sweeper fails a stranded job in ten and the status rule frees the claim
+ * at once -- so a wait that runs out is a real failure and is recorded as one.
+ */
+const WAIT_SECONDS = 60;
+const MAX_WAITS = 30;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -62,7 +76,7 @@ const supabase = createClient(
 
 interface QueueMessage {
   msg_id: number;
-  message: { jobId: string; step: Step };
+  message: { jobId: string; step: Step; waits?: number };
   /** pgmq's delivery count, incremented on every read of this message. */
   read_ct: number;
 }
@@ -484,6 +498,41 @@ Deno.serve(async (req) => {
       }
 
       const message = e instanceof Error ? e.message : String(e);
+
+      // A wait, not a failure -- unless it has waited long enough that something
+      // is wrong, in which case it falls through and is recorded like any other.
+      if (e instanceof SourceHeldError) {
+        const waits = (msg.message.waits ?? 0) + 1;
+        if (waits <= MAX_WAITS) {
+          try {
+            // Null means the message was already gone: a delivery that outlived
+            // its visibility timeout was redelivered, and the other delivery has
+            // archived and re-sent it. Nothing to do -- the wait is queued once.
+            const requeued = must(
+              await supabase.rpc('requeue_generation_message', {
+                p_msg_id: msg.msg_id,
+                p_job_id: jobId,
+                p_step: step,
+                p_delay_seconds: WAIT_SECONDS,
+                p_waits: waits,
+              }),
+              'requeue waiting step',
+            ) as number | null;
+            processed.push({
+              jobId,
+              step,
+              waiting: waits,
+              ...(requeued === null ? { alreadyQueued: true } : {}),
+            });
+          } catch (requeueError) {
+            // The message was left unarchived, so the visibility timeout redelivers
+            // it; that costs a read_ct, which is the lesser evil next to losing it.
+            processed.push({ jobId, step, waiting: waits, error: String(requeueError) });
+          }
+          continue;
+        }
+      }
+
       // A failure that happened *after* the provider was billed. The tokens are
       // spent either way, so the ledger has to hear about it: law 2 counts every
       // model call, not every successful one, and the step is about to be
