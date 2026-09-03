@@ -65,32 +65,55 @@ not:
 call a model → ask what the user should see next
 ```
 
-## The generation step-machine
+## The generation graph
 
 Supabase Edge Functions cap at **150s wall-clock and 2s CPU** per request on the free
 plan. A generation pipeline — acquire, chunk, extract, synthesise, critique, embed,
 illustrate — does not fit in one invocation and must never be written as though it does.
 
-So generation is a resumable state machine. Each invocation executes **exactly one step**
-and enqueues the next:
+So generation is a resumable machine. Each invocation executes **exactly one node**,
+records what it produced and what it cost, and dispatches whatever that node unblocks:
 
 ```
 pg_cron (every 10s) ──pg_net──> worker function
                                     │
                             pgmq.read('generation')
                                     │
-                            execute ONE step
+                            execute ONE node, given only the outputs it declared
                                     │
-                    write job_steps + cost_ledger
+                    write job_steps + cost_ledger (one transaction)
                                     │
-                    enqueue next step, delete message
+                    dispatch each successor whose predecessors have all succeeded
 ```
 
-Steps: `resolve_identity → acquire → chunk → extract_evidence → synthesize → template →
-critic → cards → artwork → embed → moderate → publish`.
+The nodes form a graph, declared as data in `supabase/functions/_shared/graph.ts` and
+asserted by `graph.test.ts` (acyclic, every node reachable, every input an ancestor):
 
-Each step is keyed `unique (job_id, step, attempt)`, so a retry after a mid-step crash
-cannot duplicate work. Every step records its model, prompt version, token counts,
+```
+resolve_identity → acquire ──reuse?──────────────────────────┐
+                      ↓                                       │
+                    chunk                                     │
+              ┌───────┴────────┐                              │
+      extract_evidence     synthesize → template              │
+              └───────┬────────┘                              │
+                   critic → cards                             │
+                           ┌──┴───┐                           │
+                       artwork  embed                         │
+                           └──┬───┘                           │
+                          moderate ◄──────────────────────────┘
+                              ↓
+                          publish
+```
+
+Each node declares `needs` (the outputs it reads — the worker fetches only those) and
+`after` (the nodes that must have succeeded first). A node with several `after` entries
+is a join, sent by whichever predecessor commits last; `dispatch_generation_step` verifies
+the rows and guards the send with a unique index on `(job, step)`, so two predecessors
+finishing in the same instant produce one message by construction. A job whose join can
+never fire — one predecessor failed for good — is caught by `sweep_stranded_generation_jobs`.
+
+Each node is keyed `unique (job_id, step, attempt)`, so a retry after a mid-node crash
+cannot duplicate work. Every node records its model, prompt version, token counts,
 duration and cost — which makes a bad generation correctable rather than a permanent
 mysterious blob.
 
@@ -150,6 +173,7 @@ that they have to be listed somewhere, which is here.
 | `enable_knowledge_vector_refresh()`         | Knowledge centroids go stale, so the Delta slowly stops filtering |
 | `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out      |
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
+| `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever              |
 
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
 deletes anonymous accounts after a day of disuse, and that retention promise is

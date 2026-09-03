@@ -1,7 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
-import { TRANSPORT_ERROR } from './rpc-error.js';
+import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
 import type { SavePatch } from './stash-api.js';
 import type { FeedRow } from './types.js';
 
@@ -349,6 +349,11 @@ async function runDrain(
       // Only this account's writes. Another user's stay queued for them.
       .filter((item) => item.userId === userId)
       .sort((a, b) => a.at - b.at);
+    // Collections this pass may still create. A write that points at one of them
+    // can fail its foreign key today and succeed tomorrow -- see `refusedForGood`.
+    const queuedStashes = new Set(
+      items.flatMap((item) => (item.kind === 'stash-create' ? [item.stashId] : [])),
+    );
     for (const item of items) {
       // Re-check between every item, not just at the start: signing out
       // mid-drain must stop the remaining writes rather than attribute them to
@@ -361,9 +366,29 @@ async function runDrain(
       if (blocked.has(scope)) continue;
       try {
         await apply(write);
-      } catch {
-        // Keep it queued and skip the rest of this subject's writes, preserving
-        // their relative order for the next attempt.
+      } catch (error) {
+        // A refusal that will not change on a retry -- the row is gone -- is
+        // dropped rather than kept: kept, it holds `hasPending` true and the retry
+        // timer alive for the life of the tab. The subject is not blocked, so a
+        // later write for it is judged on its own; it will most likely be dropped
+        // for the same reason, which is the right outcome for a save-then-unsave
+        // of a pull that no longer exists. Everything else is kept, and the rest
+        // of this subject's writes are skipped to preserve their relative order
+        // for the next attempt.
+        //
+        // Only in a pass where nothing was held back. A write blocked earlier in
+        // this drain may be the one this write depends on -- the collection it
+        // moves a save into, say -- and a foreign key it fails today is one it
+        // passes once that lands. Dropping is deferred to a pass that can tell.
+        if (blocked.size === 0 && refusedForGood(error, write, queuedStashes)) {
+          console.warn('[offline] dropping a queued write the server refused for good', {
+            kind: write.kind,
+            scope,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (item.id !== undefined) await database.delete('pending', item.id);
+          continue;
+        }
         blocked.add(scope);
         continue;
       }
@@ -374,6 +399,44 @@ async function runDrain(
     /* IndexedDB itself is unavailable — nothing to drain */
   }
   return drained;
+}
+
+/**
+ * Is this refusal final for this write?
+ *
+ * `isPermanentFailure` says whether the SQLSTATE is one Postgres uses for a
+ * request it can never satisfy. Whether that is true of *this* request depends on
+ * what the request was, and two kinds of write can carry one of those codes
+ * transiently:
+ *
+ *   23503 on a collection write. `stash-create` names a parent and `organise` a
+ *   destination, and either may be a collection this same drain is still about
+ *   to create -- the parent was queued first and the drain runs oldest first, but
+ *   a transport failure on the parent blocks only the parent's scope, so the child
+ *   is attempted anyway and refused. It stays queued while its target is queued,
+ *   and is dropped only when the target is nowhere: not queued, and not on the
+ *   server.
+ *
+ * Everything else is what the codes were listed for: a pull that is gone is gone,
+ * and no later pass brings it back. A check violation is dropped too, and on text
+ * the reader composed that is a loss -- but a kept write blocks its scope on every
+ * pass and holds the timer alive for the life of the tab, which is the failure this
+ * whole classification exists to end. The honest fix is not to let the text get
+ * that long: the inputs are bounded to the columns' limits in the components.
+ */
+function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
+  if (!isPermanentFailure(error)) return false;
+  const code = sqlState(error);
+  if (code === '23503') {
+    if (write.kind === 'stash-create') {
+      return write.parentId === null || !queuedStashes.has(write.parentId);
+    }
+    if (write.kind === 'organise') {
+      const target = write.patch.stashId;
+      return typeof target !== 'string' || !queuedStashes.has(target);
+    }
+  }
+  return true;
 }
 
 export function onReconnect(handler: () => void): () => void {

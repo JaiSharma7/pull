@@ -1,21 +1,24 @@
 # Edge Functions
 
-| Function  | Purpose                                                                                                          |
-| --------- | ---------------------------------------------------------------------------------------------------------------- |
-| `worker`  | One tick of the generation step-machine — reads pgmq, runs **one** step per job, records cost, enqueues the next |
-| `enqueue` | Authenticated job creation with a sustainability quota (never a paywall)                                         |
-| `og`      | Open Graph metadata for `/pull/:id`, so shared links unfurl without SSR for the whole app                        |
+| Function  | Purpose                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `worker`  | One tick of the generation graph — reads pgmq, runs **one** node per job, records cost, dispatches what it unblocks |
+| `enqueue` | Authenticated job creation with a sustainability quota (never a paywall)                                            |
+| `og`      | Open Graph metadata for `/pull/:id`, so shared links unfurl without SSR for the whole app                           |
 
-## Why a step-machine
+## Why one node per invocation
 
 Edge Functions cap at **150s wall clock and 2s CPU** per request on the free
 plan. A generation pipeline — acquire, chunk, extract, synthesise, critique,
 embed, illustrate — does not fit in one invocation, so it must not be written
 as though it does.
 
-`pg_cron` ticks the dispatcher; each tick runs one step per job and re-enqueues.
-`unique (job_id, step, attempt)` on `job_steps` makes retries idempotent: a
-worker that dies mid-step cannot double-charge or duplicate work.
+`pg_cron` ticks the dispatcher; each tick runs one node per job and dispatches
+the successors it unblocks. The nodes are a graph (`_shared/graph.ts`): a node
+reads only the outputs it declares, and a node with several predecessors is
+sent once, by the last of them to finish, guarded by a unique index rather
+than by timing. `unique (job_id, step, attempt)` on `job_steps` makes retries
+idempotent: a worker that dies mid-node cannot double-charge or duplicate work.
 
 ## Round 1
 

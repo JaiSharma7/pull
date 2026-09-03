@@ -40,7 +40,12 @@ function RouteFallback() {
 import { OnboardingGate, Preferences } from './routes/Preferences.js';
 import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
+import { Graph } from './routes/Graph.js';
 import { Library } from './routes/Library.js';
+import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
+import { OnboardingDemo } from './components/OnboardingDemo.js';
+import { Ingestion } from './routes/Ingestion.js';
+
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
 import { SecondFactorGate } from './routes/SecondFactorGate.js';
@@ -106,7 +111,24 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
   /*
+   * All four are `signedIn`, and the flag is load-bearing rather than tidy.
+   *
+   * `publicRoute` below lists what a visitor may actually open, and none of these are in
+   * it — so while they were advertised without the flag, a signed-out visitor on Explore
+   * was shown four destinations that each dropped them onto the sign-in screen the
+   * moment they were selected. The navigation promised something the router refused.
+   *
+   * They belong behind it on their own merits too: the graph, the ROI figures and the
+   * import are all keyed to a reader, which is the same reason `SECTIONS` is hidden from
+   * a visitor. The demo runs inside onboarding, where there is already a session.
+   */
+  { path: '/graph', label: 'Graph', signedIn: true },
+  { path: '/import', label: 'Import', signedIn: true },
+  { path: '/metacognition', label: 'Progress', signedIn: true },
+
+  /*
    * A destination rather than a seventh section, and last of the three.
+
    *
    * The sections are the reader's own material — a feed, a library, a history —
    * and every one of them is a row keyed to a user, which is why `SECTIONS` is
@@ -579,6 +601,10 @@ export function App() {
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
+  const graphOpen = isPath(path, '/graph');
+  const importOpen = isPath(path, '/import');
+  const demoOpen = isPath(path, '/demo');
+  const metacognitionOpen = isPath(path, '/metacognition');
   /*
    * A real address rather than a seventh section, for the same reason the legal
    * documents have one: it is a place a reader is sent to. "Delete your account" in a
@@ -618,6 +644,10 @@ export function App() {
     searchOpen ||
     exploreOpen ||
     appearanceOpen ||
+    graphOpen ||
+    importOpen ||
+    demoOpen ||
+    metacognitionOpen ||
     accountOpen ||
     topicSlug !== null;
 
@@ -971,7 +1001,30 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
+            {graphOpen && !guest && (
+              <Graph
+                userId={session?.user.id ?? null}
+                onOpenSource={(id) => navigate(`/source/${id}`)}
+              />
+            )}
+            {/* No `onComplete` destination. It used to navigate to /metacognition, which
+                re-implies by navigation the thing the import does not do: nothing here
+                reaches the Delta, so landing the reader on the ROI dashboard afterwards
+                suggests it did. */}
+            {importOpen && !guest && <Ingestion />}
+
+            {demoOpen && (
+              <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
+            )}
+            {metacognitionOpen && !guest && (
+              <MetacognitiveDashboard
+                userId={session?.user.id ?? null}
+                onNavigate={navigate}
+                onGoToReview={() => goToTab('review')}
+              />
+            )}
             {appearanceOpen && <Appearance />}
+
             {accountOpen && session && !guest && (
               <Suspense fallback={<RouteFallback />}>
                 <Account userId={session.user.id} email={session.user.email ?? null} />
@@ -987,6 +1040,47 @@ export function App() {
               code in a mailbox — so rendering it would be a page of things that cannot
               complete. This says which one thing to do instead.
             */}
+            {/*
+              The same answer `/account` gives, for the same reason and now for the three
+              destinations gated from a guest above. A URL is still a URL: adding
+              `&& !guest` to the routes without a fallback meant a guest arriving at
+              /graph, /import or /metacognition by bookmark got a titled tab, a masthead,
+              a rail and an entirely empty main — `routeOpen` hides the feed, and
+              `isKnownPath` matches, so the 404 branch does not catch it either.
+            */}
+            {(graphOpen || importOpen || metacognitionOpen) && guest && (
+              <section className="stack measure">
+                <p className="meta">Reading as a guest</p>
+                <h1>This one needs an account.</h1>
+                <p>
+                  A guest session keeps your reading on this device and nothing else. These screens
+                  are built from a knowledge model that belongs to an account — what you have read,
+                  how well you are holding on to it, and what connects to what — so there is nothing
+                  here to show you yet.
+                </p>
+                {/*
+                  What /account says, because it is what actually happens. This read
+                  "everything you have read as a guest carries over when you sign in",
+                  which is false — `signInWithOtp` mints a different `auth.users` row,
+                  nothing links the two, and 20260901190000 deletes an anonymous user and
+                  everything keyed to them a day after last use. It was also the sentence
+                  most likely to be acted on: it sat under a prompt to sign in, on a screen
+                  a guest reaches only after building up something to lose.
+                */}
+                {/* Body text, not `.meta`. The rule and its reason are written 25 lines
+                    below on /account: `.meta` is a chip face, all-caps destroys word shape,
+                    and it is wrong for the one sentence on a screen that carries a
+                    consequence — which this now does. */}
+                <p>
+                  Signing in starts a fresh account, so what you have read as a guest stays behind.
+                  Worth knowing before you do it.
+                </p>
+                <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
+                  Back to reading
+                </button>
+              </section>
+            )}
+
             {accountOpen && guest && (
               <section className="stack measure">
                 <p className="meta">Account</p>
@@ -1174,11 +1268,35 @@ export function App() {
             it in view during a session instead of only at the end of one.
           */}
             <div className="shell__group">
-              <p className="meta">The Delta</p>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                }}
+              >
+                <p className="meta">The Delta</p>
+                {/* Same condition as `destinations` above, which withholds /metacognition
+                    from a guest. The two navigations disagreed: the rail offered a guest a
+                    link the masthead deliberately hid, and the route would have refused it.
+                    No arrow either — nothing else in the app labels a button that way. */}
+                {!visitor && !guest ? (
+                  <button
+                    type="button"
+                    className="btn btn--plain meta"
+                    style={{ textDecoration: 'underline' }}
+                    onClick={() => navigate('/metacognition')}
+                  >
+                    Your progress
+                  </button>
+                ) : null}
+              </div>
+
               <div className="shell__stat">
                 <span>Already knew</span>
                 <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
               </div>
+
               <div className="shell__stat">
                 <span>Time saved</span>
                 <span className="shell__stat-value shell__stat-value--accent">

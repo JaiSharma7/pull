@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { WORK_KINDS, type WorkKind } from '@wap/schemas';
+import { KnowledgeCensus } from '../components/KnowledgeCensus.js';
+import { OnboardingDemo } from '../components/OnboardingDemo.js';
 import {
   fetchAvailableMediaKinds,
   fetchPreferences,
@@ -177,7 +179,18 @@ export function Preferences({
 
   return (
     <section className="prefs measure">
-      <h1 className="prose__heading">
+      {/* The counter starts here, or it does not start. Renumbering the census to "Step 2
+          of 3" without labelling the first screen meant a new reader's first counter was
+          a 2, with no step 1 anywhere. */}
+      {mode === 'onboarding' ? <p className="meta">Step 1 of 3 · Topics</p> : null}
+      {/* `marginTop` matched to the other two onboarding screens. `.prose__heading` carries
+          a 3rem top margin, and the rule that zeroes it applies only to a `:first-child` of
+          a `.prose` — neither is true here, so the step counter above floated 3rem clear of
+          the title it labels while screens 2 and 3 tucked theirs under it. */}
+      <h1
+        className="prose__heading"
+        style={mode === 'onboarding' ? { marginTop: 'var(--space-1)' } : undefined}
+      >
         {mode === 'onboarding' ? 'What do you want to learn about?' : 'Preferences'}
       </h1>
 
@@ -289,7 +302,9 @@ export function Preferences({
           disabled={saving}
           onClick={() => void save()}
         >
-          {saving ? 'Saving…' : mode === 'onboarding' ? 'Start reading' : 'Save'}
+          {/* "Continue", not "Start reading": onboarding now has two more steps after
+              this one, so the button named an action it no longer performs. */}
+          {saving ? 'Saving…' : mode === 'onboarding' ? 'Continue' : 'Save'}
         </button>
         {mode === 'onboarding' ? (
           <button
@@ -319,6 +334,54 @@ export function Preferences({
  * reader behind a settings screen because a query failed is a far worse outcome than
  * asking them again next session, and it is the failure mode a gate invites.
  */
+type OnboardingStage = 'preferences' | 'census' | 'demo';
+
+/*
+ * Where the reader got to, so a reload does not skip the rest of the gate.
+ *
+ * `savePreferences` writes `onboarded_at` on every save — deliberately, see its comment
+ * — and the preferences step is the first of three. So the moment that step finished,
+ * `onboardedAt` was non-null, and a reader who reloaded or closed the tab during the
+ * census or the demo came back to `needed === false` and could never reach either
+ * again. The census is the one that matters: it is the only thing that seeds a
+ * knowledge model, and it cannot be offered twice.
+ *
+ * Kept per device rather than in the profile because that is what it is: the position
+ * of a one-time tour, not a fact about the reader. A reader who onboards on their phone
+ * and reloads on their laptop is finished either way — `onboarded_at` still governs
+ * that, and this can only ever extend the gate within the session it started in.
+ *
+ * `sessionStorage`, not `localStorage`, and the difference is the reason `guest-storage.ts`
+ * exists: "`localStorage` is the one place a guest token must never be". This gate runs for
+ * guests too, so a `localStorage` key named after `auth.uid()` would outlive the tab, the
+ * guest sweep and the browser restart — leaving a UUID identifying a person on a shared
+ * machine, readable by nobody but present forever. The cost is that closing the tab
+ * mid-tour loses the position; a reload, which is the case this was written for, still
+ * resumes.
+ */
+const STAGE_KEY_PREFIX = 'wap_onboarding_stage_';
+
+function readStage(userId: string): OnboardingStage | null {
+  try {
+    const raw = sessionStorage.getItem(`${STAGE_KEY_PREFIX}${userId}`);
+    return raw === 'census' || raw === 'demo' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStage(userId: string, stage: OnboardingStage | null): void {
+  try {
+    const key = `${STAGE_KEY_PREFIX}${userId}`;
+    if (stage === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, stage);
+  } catch {
+    // Private browsing, or a full quota. The gate then behaves as it did before: the
+    // reader keeps their preferences and misses the rest of the tour, which is a
+    // degraded outcome rather than a broken one.
+  }
+}
+
 export function OnboardingGate({
   userId,
   children,
@@ -327,12 +390,25 @@ export function OnboardingGate({
   children: React.ReactNode;
 }) {
   const [needed, setNeeded] = useState<boolean | null>(null);
+  const [stage, setStage] = useState<OnboardingStage>('preferences');
 
   useEffect(() => {
     let live = true;
     fetchPreferences(userId)
       .then((p) => {
-        if (live) setNeeded(p !== null && p.onboardedAt === null);
+        if (!live) return;
+        const resumed = readStage(userId);
+        if (p !== null && p.onboardedAt === null) {
+          setNeeded(true);
+          return;
+        }
+        // Onboarded, but a stage was left in flight on this device: finish it.
+        if (resumed !== null) {
+          setStage(resumed);
+          setNeeded(true);
+          return;
+        }
+        setNeeded(false);
       })
       .catch(() => {
         if (live) setNeeded(false);
@@ -342,25 +418,29 @@ export function OnboardingGate({
     };
   }, [userId]);
 
+  const goTo = (next: OnboardingStage) => {
+    writeStage(userId, next);
+    setStage(next);
+  };
+
+  const finish = () => {
+    writeStage(userId, null);
+    setNeeded(false);
+  };
+
   // Undecided renders the app, not a spinner: the gate is worth showing once, and
   // never worth making someone wait to find out whether they will see it.
   if (needed !== true) return <>{children}</>;
-  /*
-   * Wrapped, because this replaces the shell rather than rendering inside it.
-   *
-   * `App.tsx` puts every other screen in `<main className="shell__main"><div
-   * className="shell__column">`, which is where the page padding and the centring of the
-   * reading column actually live. Returning `<Preferences>` bare skipped both: the picker
-   * sat hard against the left edge of the window, its first character on x=0, clipped on
-   * a phone and stranded beside an empty half-screen on a monitor.
-   *
-   * `main` rather than a `div` for the same reason the shell uses one -- this is the
-   * whole page while it is on screen, and it was the only screen in the app with no
-   * landmark at all.
-   */
+
   return (
     <main className="gate">
-      <Preferences userId={userId} mode="onboarding" onDone={() => setNeeded(false)} />
+      {stage === 'preferences' && (
+        <Preferences userId={userId} mode="onboarding" onDone={() => goTo('census')} />
+      )}
+      {stage === 'census' && (
+        <KnowledgeCensus onComplete={() => goTo('demo')} onSkip={() => goTo('demo')} />
+      )}
+      {stage === 'demo' && <OnboardingDemo onComplete={finish} onSkip={finish} />}
     </main>
   );
 }

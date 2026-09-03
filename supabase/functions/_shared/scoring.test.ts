@@ -94,6 +94,36 @@ describe('qualityFromDraft', () => {
     expect(without).toBeLessThan(withTopics);
   });
 
+  it('penalises padding, not only thinness', () => {
+    // The comment always said "more is usually the model padding"; the term
+    // saturated at eight and could not say it. Forty ideas must rank below
+    // ten, and ten must not be punished for being more than eight.
+    const ten = qualityFromDraft({
+      pulls: Array.from({ length: 10 }, () => pull()),
+      topics: ['a'],
+    });
+    const fourteen = qualityFromDraft({
+      pulls: Array.from({ length: 14 }, () => pull()),
+      topics: ['a'],
+    });
+    const forty = qualityFromDraft({
+      pulls: Array.from({ length: 40 }, () => pull()),
+      topics: ['a'],
+    });
+    expect(fourteen).toBe(ten);
+    expect(forty).toBeLessThan(ten);
+    // Not so steep that a slightly long draft ranks with a thin one.
+    const twenty = qualityFromDraft({
+      pulls: Array.from({ length: 20 }, () => pull()),
+      topics: ['a'],
+    });
+    const three = qualityFromDraft({
+      pulls: Array.from({ length: 3 }, () => pull()),
+      topics: ['a'],
+    });
+    expect(twenty).toBeGreaterThan(three);
+  });
+
   it('penalises bodies outside a readable band in either direction', () => {
     const good = qualityFromDraft({ pulls: [pull('x'.repeat(400))], topics: ['a'] });
     const tooShort = qualityFromDraft({ pulls: [pull('x'.repeat(50))], topics: ['a'] });

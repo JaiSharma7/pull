@@ -1,10 +1,12 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
+import { MAX_ATTEMPTS, NEEDS, nextStep, NODES, successorsOf, type Step } from '../_shared/graph.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
   BilledStepError,
+  jumpFor,
   runPipelineStep,
+  SourceHeldError,
   type JobRow,
   type StepResult,
 } from '../_shared/pipeline.ts';
@@ -50,6 +52,19 @@ const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
  * job promptly.
  */
 const VISIBILITY_SECONDS = 180;
+/**
+ * How a job waits on a source another job is synthesising.
+ *
+ * Not by throwing and being redelivered: that spends the same `MAX_ATTEMPTS` and
+ * `read_ct` budget as a real failure, and a holder retrying a slow provider could
+ * fail the waiter terminally for doing nothing wrong. The step is re-sent with a
+ * delay instead, carrying a count. Thirty minutes of waiting is longer than any
+ * live holder needs to reach `publish` and longer than a dead one keeps its claim
+ * -- the sweeper fails a stranded job in ten and the status rule frees the claim
+ * at once -- so a wait that runs out is a real failure and is recorded as one.
+ */
+const WAIT_SECONDS = 60;
+const MAX_WAITS = 30;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -61,7 +76,7 @@ const supabase = createClient(
 
 interface QueueMessage {
   msg_id: number;
-  message: { jobId: string; step: Step };
+  message: { jobId: string; step: Step; waits?: number };
   /** pgmq's delivery count, incremented on every read of this message. */
   read_ct: number;
 }
@@ -134,14 +149,27 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
   const job = must(
     await supabase
       .from('generation_jobs')
-      .select('id, kind, target, work_id, summary_id, visibility, requester_id')
+      .select('id, kind, target, work_id, summary_id, visibility, requester_id, status')
       .eq('id', jobId)
       .single(),
     'read job',
-  ) as JobRow;
+  ) as JobRow & { status: string };
 
+  // A message can outlive its job. With the fan-out, one branch can exhaust its
+  // attempts and fail the job while a sibling's message is still queued; running
+  // that sibling would pay a provider for a job nobody will publish, and
+  // `dispatch_generation_step` would then refuse its successors anyway. Stop here,
+  // before anything is spent, and let the caller archive the message.
+  if (job.status !== 'queued' && job.status !== 'running') {
+    throw new JobClosedError(jobId, job.status);
+  }
+
+  // Only the outputs this step declares it reads. The one-argument form returned
+  // every succeeded step's output -- source text included, twice -- on every
+  // invocation; see NEEDS for the arithmetic. PostgREST resolves the overload by
+  // the named arguments, so passing `p_steps` selects the two-argument function.
   const priorOutputs = (must(
-    await supabase.rpc('job_step_outputs', { p_job_id: jobId }),
+    await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [...NEEDS[step]] }),
     'read prior step outputs',
   ) ?? {}) as Record<string, unknown>;
 
@@ -155,6 +183,16 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
 }
 
 const archive = (msgId: number) => supabase.rpc('archive_generation_message', { p_msg_id: msgId });
+
+/** The job this message belongs to is already failed or done; there is nothing to run. */
+class JobClosedError extends Error {
+  constructor(jobId: string, status: string) {
+    super(
+      `job ${jobId} is ${status}; its ${status === 'failed' ? 'remaining' : 'stale'} message is dropped`,
+    );
+    this.name = 'JobClosedError';
+  }
+}
 
 /** Length-independent comparison, so a wrong token leaks nothing through timing. */
 function secureEquals(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -207,29 +245,75 @@ async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why
 }
 
 /**
- * Move the job on and enqueue its successor.
+ * Move the job on: dispatch every successor this node unblocks, or close the job.
  *
- * Both writes happen inside one Postgres transaction (`pgmq.send` is itself a
- * SQL function), so the pair is atomic. Previously they were separate round
- * trips: a crash between them left the job advanced with nothing queued, which
- * — with no sweeper — is a permanent stall rather than a recoverable one.
+ * The pipeline is a graph (`_shared/graph.ts`), so "next" is a set. Each successor
+ * is dispatched through `dispatch_generation_step`, which reads the successor's
+ * `after` list, verifies every one of those nodes has a SUCCEEDED row, and guards
+ * the send with a unique index on (job, step). So a join is sent by whichever
+ * predecessor commits last, exactly once, and a redelivered message cannot send a
+ * successor twice -- the dispatch row from the first attempt is still there. The
+ * verdicts are returned so the invocation log says which of those happened.
  *
- * The compare-and-set lives inside that same transaction, so a redelivered
- * message cannot enqueue the successor twice.
+ * `jumpTo` is still a step's own decision -- a reused job goes straight to
+ * `publish` -- and it is dispatched with an empty `after`, because the step that
+ * chose the jump has already established that nothing else needs to run.
+ *
+ * `publish` has no successors, so completing it closes the job. That still goes
+ * through `advance_generation_job(…, null)` and its compare-and-set on
+ * `current_step`, which the dispatch has just set to `publish`.
  */
-async function advance(jobId: string, step: Step, jumpTo?: Step) {
-  must(
-    await supabase.rpc('advance_generation_job', {
-      p_job_id: jobId,
-      p_from_step: step,
-      // A step may name where the job goes next — currently only `acquire`, which
-      // sends a job that adopted an existing summary straight to `publish` rather
-      // than through nine steps that would each do nothing. `nextStep` remains the
-      // default, so the pipeline is still a straight line unless a step says otherwise.
-      p_to_step: jumpTo ?? nextStep(step),
-    }),
-    'advance job',
-  );
+async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record<string, string>> {
+  // The line's successor is asked for as well as the graph's. A job queued before
+  // the graph existed was advanced along `STEPS` by the old worker, which never
+  // wrote a dispatch row -- so at `extract_evidence` nothing has sent `synthesize`,
+  // and at `artwork` nothing has sent `embed`; the graph alone would leave both
+  // waiting on a sibling that never runs. Asking for `nextStep` too is free for a
+  // job that started on the graph: its successor already has a dispatch row and
+  // answers `already`. This is what lets the graph deploy under a live queue.
+  const next = nextStep(step);
+  const targets = jumpTo
+    ? [jumpTo]
+    : [...new Set([...successorsOf(step), ...(next ? [next] : [])])];
+
+  if (targets.length === 0) {
+    const closed = must(
+      await supabase.rpc('advance_generation_job', {
+        p_job_id: jobId,
+        p_from_step: step,
+        p_to_step: null,
+      }),
+      'close job',
+    ) as boolean;
+    /*
+     * `false` has two innocent causes now, not one, so it is not a warning.
+     *
+     * It used to mean only "the compare-and-set found `current_step` elsewhere".
+     * `20260903010000` added `status in ('queued','running')` to the close, so a
+     * redelivered close on an already-closed job — the ordinary outcome when a worker
+     * dies between recording its step and archiving its message — also returns `false`.
+     * That is the idempotent success path, and `warn` misclassifies it as a problem. The
+     * line stays — it is the only trace of a redelivered close — at the level it belongs.
+     *
+     * A job genuinely stuck at `running` after its sink ran is caught by the stranded
+     * sweep (`20260902170000`), which is the mechanism for it.
+     */
+    if (!closed) console.log(`[worker] job ${jobId}: close from ${step} was already settled`);
+    return { closed: closed ? step : `not-closed:${step}` };
+  }
+
+  const verdicts: Record<string, string> = {};
+  for (const to of targets) {
+    verdicts[to] = must(
+      await supabase.rpc('dispatch_generation_step', {
+        p_job_id: jobId,
+        p_to_step: to,
+        p_after: jumpTo ? [] : [...NODES[to].after],
+      }),
+      `dispatch ${to}`,
+    ) as string;
+  }
+  return verdicts;
 }
 
 Deno.serve(async (req) => {
@@ -310,16 +394,20 @@ Deno.serve(async (req) => {
     // work. `advance` is idempotent, so repeating it is safe.
     if (last?.status === 'succeeded') {
       try {
-        // No `jumpTo` here: the result that would have carried it belongs to an
-        // invocation that has already ended. Both outcomes are correct. If that
-        // invocation advanced before dying, this compare-and-set matches nothing and
-        // changes nothing; if it died first, the job takes the long way round and
-        // every intermediate step no-ops on the reuse that `acquire` recorded. The
-        // cost of the rare case is invocations, not correctness, which is the right
-        // direction for a path that only runs after a crash.
-        await advance(jobId, step);
+        // The result that carried `jumpTo` belongs to an invocation that has ended,
+        // so the jump is read back from the output that invocation persisted. That
+        // is not optional: resuming a reused `acquire` down the normal path would
+        // dispatch `chunk` beside the `publish` it had already sent, overwrite
+        // `current_step`, and strand the job -- see `jumpFor`. With the jump in
+        // hand every dispatch here answers `already` if the dying invocation got
+        // that far, and sends exactly what it would have if it did not.
+        const own = (must(
+          await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [step] }),
+          'read resumed step output',
+        ) ?? {}) as Record<string, unknown>;
+        const dispatched = await advance(jobId, step, jumpFor(step, own[step]));
         must(await archive(msg.msg_id), 'archive resumed message');
-        processed.push({ jobId, step, resumed: true });
+        processed.push({ jobId, step, resumed: true, dispatched });
       } catch (e) {
         processed.push({ jobId, step, resumed: false, error: String(e) });
       }
@@ -348,6 +436,10 @@ Deno.serve(async (req) => {
               finished_at: new Date().toISOString(),
             })
             .eq('id', jobId)
+            // Only a live job. A sibling branch may already have closed it (failed,
+            // or succeeded via the reuse jump); rewriting its status and error here
+            // would make a finished job lie. A zero-row match still archives below.
+            .in('status', ['queued', 'running'])
             .select('id'),
           'mark job failed',
         );
@@ -393,14 +485,64 @@ Deno.serve(async (req) => {
         'record step and cost',
       );
 
-      await advance(jobId, step, result.jumpTo);
+      const dispatched = await advance(jobId, step, result.jumpTo);
 
       // Only archive once every write above has been confirmed. Archiving
       // earlier would drop the message with the job's state unpersisted.
       must(await archive(msg.msg_id), 'archive message');
-      processed.push({ jobId, step, attempt, ok: true });
+      processed.push({ jobId, step, attempt, ok: true, dispatched });
     } catch (e) {
+      // Not a failed attempt: the job was closed by another branch before this
+      // step ran, nothing was spent, and recording a failure against a job that is
+      // already failed would only make its history lie. Archive and move on.
+      if (e instanceof JobClosedError) {
+        const { error: archiveError } = await archive(msg.msg_id);
+        processed.push({
+          jobId,
+          step,
+          ok: false,
+          closed: true,
+          ...(archiveError ? { archiveError: archiveError.message } : {}),
+        });
+        continue;
+      }
+
       const message = e instanceof Error ? e.message : String(e);
+
+      // A wait, not a failure -- unless it has waited long enough that something
+      // is wrong, in which case it falls through and is recorded like any other.
+      if (e instanceof SourceHeldError) {
+        const waits = (msg.message.waits ?? 0) + 1;
+        if (waits <= MAX_WAITS) {
+          try {
+            // Null means the message was already gone: a delivery that outlived
+            // its visibility timeout was redelivered, and the other delivery has
+            // archived and re-sent it. Nothing to do -- the wait is queued once.
+            const requeued = must(
+              await supabase.rpc('requeue_generation_message', {
+                p_msg_id: msg.msg_id,
+                p_job_id: jobId,
+                p_step: step,
+                p_delay_seconds: WAIT_SECONDS,
+                p_waits: waits,
+              }),
+              'requeue waiting step',
+            ) as number | null;
+            processed.push({
+              jobId,
+              step,
+              waiting: waits,
+              ...(requeued === null ? { alreadyQueued: true } : {}),
+            });
+          } catch (requeueError) {
+            // The message was left unarchived, so the visibility timeout redelivers
+            // it; that costs a read_ct, which is the lesser evil next to losing it.
+            processed.push({ jobId, step, waiting: waits, error: String(requeueError) });
+          }
+          continue;
+        }
+      }
+
       // A failure that happened *after* the provider was billed. The tokens are
       // spent either way, so the ledger has to hear about it: law 2 counts every
       // model call, not every successful one, and the step is about to be

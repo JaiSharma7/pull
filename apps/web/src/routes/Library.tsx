@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PullCard, textAtDepth } from '@wap/ui';
+import { PullCard, SynapseMap, type SynapseNode, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
+
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
+import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
+import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak } from '../lib/speech.js';
@@ -24,7 +27,7 @@ import {
   newStashId,
   withoutStashes,
 } from '../lib/stashes.js';
-import type { LibraryItem, SourceDelta } from '../lib/types.js';
+import type { KnowledgeGraphData, LibraryItem, SourceDelta } from '../lib/types.js';
 
 /**
  * Everything the reader has kept, and — finally — somewhere to put it.
@@ -77,6 +80,25 @@ export function Library({ userId }: { userId: string }) {
   /* One depth for the screen, for the reason the Feed keeps one: it is a reading
      preference, not a property of any single saved idea. */
   const [depth, setDepth] = useState(1);
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+  /*
+   * The graph view's numbers come from `get_user_knowledge_graph` — the same RPC the
+   * `/graph` destination reads — and not from anything derivable here.
+   *
+   * They were derived here, and that is what this replaces: `retrievability` was
+   * `known / total` from the source Delta, which is a source-wide coverage ratio and
+   * not this Pull's retrievability, falling back to a literal `0.9` whenever the Delta
+   * had not been loaded — which is always, until the reader expands a group, because
+   * `delta` is populated by `toggle()`. `stability` was the constant 14 and `status`
+   * the constant 'solid'. So the Solid/Fading lattice, which is the whole point of the
+   * view, was solid for everyone, always, on invented numbers.
+   *
+   * Loaded only when the reader actually opens the graph: it is one RPC, and the list
+   * view has no use for it.
+   */
+  const [graph, setGraph] = useState<KnowledgeGraphData | null>(null);
+  const [graphFilter, setGraphFilter] = useState<'all' | 'solid' | 'fading'>('all');
+  const [selectedPullId, setSelectedPullId] = useState<string | null>(null);
 
   /*
    * Everything the reader has marked or written, as a file they keep.
@@ -159,6 +181,72 @@ export function Library({ userId }: { userId: string }) {
     [items, filter, stashId],
   );
   const groups = useMemo(() => groupByWork(visible), [visible]);
+
+  useEffect(() => {
+    if (viewMode !== 'graph' || graph !== null) return;
+    let cancelled = false;
+    void fetchKnowledgeGraph(userId).then((g) => {
+      if (!cancelled) setGraph(g);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, graph, userId]);
+
+  /* Derived rather than a second piece of state: the effect above starts the moment the
+     reader opens the graph, and `fetchKnowledgeGraph` resolves either way — it answers a
+     failed RPC with `SAMPLE_GRAPH` rather than rejecting — so "graph mode with nothing
+     loaded" is exactly "in flight". Holding it in state meant a `setState` in the body of
+     an effect, which is a cascading render and a lint error. */
+  const graphLoading = viewMode === 'graph' && graph === null;
+
+  /*
+   * The saved ideas the reader has actually read, with the retrievability the database
+   * computed for them.
+   *
+   * Intersected rather than mapped over `visible`, because the two sets are not the
+   * same: the Library is what was *saved*, the graph is what has a `knowledge_states`
+   * row — what was *read*. A saved Pull that has never been read has no retrievability,
+   * and the honest thing to do with it is leave it out of a retrievability lattice
+   * rather than assign it a number. `graphMissing` below says so in words.
+   *
+   * A `seed` or `sample` graph is nobody's history, so it is not shown here at all —
+   * see `GraphSource`. The `/graph` destination may present the seed corpus as a
+   * demonstration; a view labelled "your library" may not.
+   */
+  const graphNodes: SynapseNode[] = useMemo(() => {
+    const measured = personalGraph(graph);
+    if (!measured) return [];
+    const savedPullIds = new Set((visible ?? []).map((item) => item.id));
+    return measured.nodes
+      .filter((n) => savedPullIds.has(n.pullId))
+      .map((n) => ({
+        pullId: n.pullId,
+        workId: n.workId,
+        workTitle: n.workTitle,
+        workKind: n.workKind,
+        headline: n.headline,
+        body: n.body,
+        retrievability: n.retrievability,
+        stability: n.stability,
+        difficulty: n.difficulty,
+        status: n.status,
+      }));
+  }, [graph, visible]);
+
+  const graphEdges = useMemo(() => {
+    if (!graph) return [];
+    const ids = new Set(graphNodes.map((n) => n.pullId));
+    return undirectedEdges(graph.edges.filter((e) => ids.has(e.fromPullId) && ids.has(e.toPullId)));
+  }, [graph, graphNodes]);
+
+  /** Saved ideas with no knowledge state yet — read nothing into their absence. */
+  const graphMissing = (visible ?? []).length - graphNodes.length;
+
+  const selectedNode = useMemo(
+    () => graphNodes.find((n) => n.pullId === selectedPullId) ?? null,
+    [graphNodes, selectedPullId],
+  );
 
   const activeStash = useMemo(
     () => (stashId === null ? null : (flat.find((n) => n.id === stashId) ?? null)),
@@ -250,7 +338,9 @@ export function Library({ userId }: { userId: string }) {
   }
 
   async function addStash() {
-    const name = window.prompt('Name this collection');
+    // Bounded to `stashes_name_length`: an over-long name queued offline would be
+    // refused for good on drain, not shown back.
+    const name = window.prompt('Name this collection')?.slice(0, 200) ?? null;
     if (!name?.trim()) return;
     setBusy(true);
     // The id is minted here rather than by the database, so a retry after a lost
@@ -504,119 +594,197 @@ export function Library({ userId }: { userId: string }) {
             Export highlights
           </button>
         </div>
+
+        <div className="library__filters" role="group" aria-label="View mode">
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={viewMode === 'list'}
+            onClick={() => setViewMode('list')}
+          >
+            List
+          </button>
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={viewMode === 'graph'}
+            onClick={() => setViewMode('graph')}
+          >
+            Graph
+          </button>
+        </div>
       </div>
 
       {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
 
-      {groups.map((group) => {
-        const open = openWork === group.key;
-        const d = group.workId ? delta[group.workId] : undefined;
-        return (
-          <section key={group.key} className="stack">
-            <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
-              <button
-                type="button"
-                className="btn btn--plain"
-                aria-expanded={open}
-                onClick={() => toggle(group)}
-                style={{ textAlign: 'left' }}
-              >
-                {group.title}
-              </button>
-            </h2>
+      {viewMode === 'graph' ? (
+        graphLoading ? (
+          <p className="measure">Reading your knowledge graph…</p>
+        ) : graphAbsence(graph) === 'unreachable' ? (
+          <p className="measure">
+            Could not reach your reading history just now, so there is nothing to plot. This view is
+            built from it.
+          </p>
+        ) : graphNodes.length === 0 ? (
+          <p className="measure">
+            Nothing to plot yet. This view maps saved ideas you have read against how well you are
+            holding on to them, so an idea appears here once you have read it at least once.
+          </p>
+        ) : (
+          <>
+            <SynapseMap
+              nodes={graphNodes}
+              edges={graphEdges}
+              height="540px"
+              filter={graphFilter}
+              onFilterChange={setGraphFilter}
+              selectedNodeId={selectedPullId}
+              onSelectNode={(n) => setSelectedPullId(n ? n.pullId : null)}
+            />
+            {/* A click on a node used to set `openWork`, which is only read inside the
+                list branch — so in graph mode it produced nothing visible at all. The
+                selection is shown here, next to the graph the reader clicked in. */}
+            {selectedNode ? (
+              <div className="measure" style={{ marginTop: 'var(--space-3)' }}>
+                <p className="meta">
+                  {selectedNode.workTitle} · {selectedNode.status} ·{' '}
+                  {Math.round(selectedNode.retrievability * 100)}% retrievable
+                </p>
+                <p>{selectedNode.headline}</p>
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => {
+                    setOpenWork(selectedNode.workId);
+                    setViewMode('list');
+                  }}
+                >
+                  Open in list
+                </button>
+              </div>
+            ) : null}
+            {graphMissing > 0 ? (
+              <p className="measure meta">
+                {graphMissing} more saved {graphMissing === 1 ? 'idea is' : 'ideas are'} not plotted
+                — either not read yet, or beyond the most recent ideas this map covers.
+              </p>
+            ) : null}
+          </>
+        )
+      ) : (
+        groups.map((group) => {
+          const open = openWork === group.key;
+          const d = group.workId ? delta[group.workId] : undefined;
+          return (
+            <section key={group.key} className="stack">
+              <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  aria-expanded={open}
+                  onClick={() => toggle(group)}
+                  style={{ textAlign: 'left' }}
+                >
+                  {group.title}
+                </button>
+              </h2>
 
-            <p className="meta">
-              {group.items.length} kept
-              {d && (
-                <>
-                  {' · '}
-                  <span style={{ color: 'var(--accent)' }}>
-                    {d.new} of {d.total} still new to you
-                  </span>
-                </>
-              )}
-            </p>
+              <p className="meta">
+                {group.items.length} kept
+                {d && (
+                  <>
+                    {' · '}
+                    <span style={{ color: 'var(--accent)' }}>
+                      {d.new} of {d.total} still new to you
+                    </span>
+                  </>
+                )}
+              </p>
 
-            {open &&
-              group.items.map((item) => (
-                <div key={item.id} className="library__item">
-                  <PullCard
-                    source={{ title: group.title, kind: group.kind }}
-                    headline={item.headline}
-                    body={item.body}
-                    whyItMatters={item.whyItMatters}
-                    example={item.example}
-                    explanation={item.explanation}
-                    sourceTrail={group.title}
-                    saved
-                    depth={depth}
-                    onDepthChange={setDepth}
-                    onListen={() => speak(textAtDepth(item, depth))}
-                    onShare={() => void share(item, group.title)}
-                    shareLabel={shareLabel(shareCapability(navigator))}
-                  />
+              {open &&
+                group.items.map((item) => (
+                  <div key={item.id} className="library__item">
+                    <PullCard
+                      source={{ title: group.title, kind: group.kind }}
+                      headline={item.headline}
+                      body={item.body}
+                      whyItMatters={item.whyItMatters}
+                      example={item.example}
+                      explanation={item.explanation}
+                      sourceTrail={group.title}
+                      saved
+                      depth={depth}
+                      onDepthChange={setDepth}
+                      onListen={() => speak(textAtDepth(item, depth))}
+                      onShare={() => void share(item, group.title)}
+                      shareLabel={shareLabel(shareCapability(navigator))}
+                    />
 
-                  {shareStatus?.saveId === item.saveId ? (
-                    <p className="meta" role="status">
-                      {shareStatus.note}
-                    </p>
-                  ) : null}
+                    {shareStatus?.saveId === item.saveId ? (
+                      <p className="meta" role="status">
+                        {shareStatus.note}
+                      </p>
+                    ) : null}
 
-                  <div className="library__actions">
-                    <label className="library__assign">
-                      <span className="meta">Collection</span>{' '}
-                      <select
-                        className="field__input library__select"
-                        value={item.stashId ?? ''}
-                        onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
+                    <div className="library__actions">
+                      <label className="library__assign">
+                        <span className="meta">Collection</span>{' '}
+                        <select
+                          className="field__input library__select"
+                          value={item.stashId ?? ''}
+                          onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
+                        >
+                          <option value="">None</option>
+                          {flat.map((n) => (
+                            <option key={n.id} value={n.id}>
+                              {'— '.repeat(n.depth)}
+                              {n.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <button
+                        type="button"
+                        className="btn btn--plain library__filter"
+                        aria-pressed={item.readLater}
+                        onClick={() => patchSave(item, { readLater: !item.readLater })}
                       >
-                        <option value="">None</option>
-                        {flat.map((n) => (
-                          <option key={n.id} value={n.id}>
-                            {'— '.repeat(n.depth)}
-                            {n.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        {item.readLater ? 'For later ✓' : 'Read later'}
+                      </button>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain library__filter"
-                      aria-pressed={item.readLater}
-                      onClick={() => patchSave(item, { readLater: !item.readLater })}
-                    >
-                      {item.readLater ? 'For later ✓' : 'Read later'}
-                    </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain library__filter"
+                        aria-pressed={item.archived}
+                        onClick={() => patchSave(item, { archived: !item.archived })}
+                      >
+                        {item.archived ? 'Archived ✓' : 'Archive'}
+                      </button>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain library__filter"
-                      aria-pressed={item.archived}
-                      onClick={() => patchSave(item, { archived: !item.archived })}
-                    >
-                      {item.archived ? 'Archived ✓' : 'Archive'}
-                    </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => {
+                          const next =
+                            window
+                              .prompt('A note on this idea', item.note ?? '')
+                              ?.slice(0, 20000) ?? null;
+                          if (next === null) return;
+                          patchSave(item, { note: next.trim() || null });
+                        }}
+                      >
+                        {item.note ? 'Edit note' : 'Add note'}
+                      </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      onClick={() => {
-                        const next = window.prompt('A note on this idea', item.note ?? '');
-                        if (next === null) return;
-                        patchSave(item, { note: next.trim() || null });
-                      }}
-                    >
-                      {item.note ? 'Edit note' : 'Add note'}
-                    </button>
+                    {item.note ? <p className="library__note">{item.note}</p> : null}
                   </div>
-
-                  {item.note ? <p className="library__note">{item.note}</p> : null}
-                </div>
-              ))}
-          </section>
-        );
-      })}
+                ))}
+            </section>
+          );
+        })
+      )}
     </div>
   );
 }

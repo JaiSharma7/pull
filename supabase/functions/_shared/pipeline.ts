@@ -32,6 +32,27 @@ import { contentHash, extractText, fetchBounded, MAX_SOURCE_CHARS, segment } fro
 export const NO_USAGE: Usage = { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
 /**
+ * Another job is synthesising this source; ask again later.
+ *
+ * Not a failure, and the worker must not record it as one: a failed attempt
+ * counts against `MAX_ATTEMPTS`, and a holder retrying a slow provider could
+ * otherwise make the waiter fail terminally for doing nothing wrong. The worker
+ * answers this by re-sending the step with a delay -- no `job_steps` row, no
+ * `read_ct` -- and bounds the number of waits itself.
+ */
+export class SourceHeldError extends Error {
+  constructor() {
+    // Deliberately says nothing about who holds the source. When the wait runs out
+    // this text lands in `job_steps.error`, which the requester can read, and
+    // "another job holds this" would confirm that a different account submitted
+    // the same document in the last half hour -- the membership question the
+    // `works.content_hash` revoke exists to keep unanswerable.
+    super('synthesize: the source is being summarised; will ask again');
+    this.name = 'SourceHeldError';
+  }
+}
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -323,6 +344,16 @@ export interface PipelineDb {
   ): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
+  /**
+   * Reserve a source for this job's synthesis.
+   *
+   * `claimed` means go; `held` means another live job is synthesising the same
+   * text and this one should not pay for it too. The claim expires and a finished
+   * or failed holder's claim is takeable, so a crashed job cannot hold a source
+   * hostage -- see 20260902200000.
+   */
+  claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
+  releaseSourceHash(jobId: string): Promise<void>;
 }
 
 /**
@@ -389,8 +420,13 @@ export function qualityFromDraft(summary: {
 
   // Eight to fourteen ideas is what a source page needs for the Delta to say
   // anything ("4 of 18 are new to you" needs an 18). Fewer is thin; more is
-  // usually the model padding.
-  const count = Math.min(1, pulls.length / 8);
+  // usually the model padding -- and until now that sentence was a comment
+  // rather than a term: `min(1, n / 8)` saturated at eight and treated forty
+  // Pulls as ideal. A band, then: full marks from eight to fourteen, falling
+  // off linearly on either side and reaching zero at forty, the same slope
+  // out as in.
+  const n = pulls.length;
+  const count = n < 8 ? n / 8 : n <= 14 ? 1 : Math.max(0, 1 - (n - 14) / 26);
 
   const lengths = pulls.map((p) => (p.body ?? '').trim().length);
   const inBand = lengths.filter((n) => n >= 200 && n <= 900).length / pulls.length;
@@ -457,8 +493,13 @@ interface AcquireOutput {
   /** The source URL, carried forward for exactly the same reason as `rights`: the
    *  one `resolve_identity` validated, not the raw target re-read at the far end.
    *  Empty for a job that supplied pasted text, which is a legitimate state — a
-   *  work with no URL simply renders without an outbound link. */
-  url: string;
+   *  work with no URL simply renders without an outbound link.
+   *
+   *  Optional because a stored output can predate the property: a job that ran
+   *  `acquire` before this field existed resumes with no `url` key at all, and
+   *  `template` falls back to the target for exactly that case. The type says so
+   *  rather than letting `??` on a required string pass as a habit. */
+  url?: string;
 }
 
 function asString(value: unknown, fallback = ''): string {
@@ -481,6 +522,30 @@ function reuseOf(priorOutputs: Record<string, unknown>): { summaryId: string } |
   const acquired = priorOutputs.acquire as { reuse?: { summaryId: string } } | undefined;
   const synthesized = priorOutputs.synthesize as { reuse?: { summaryId: string } } | undefined;
   return acquired?.reuse ?? synthesized?.reuse ?? null;
+}
+
+/**
+ * The jump a step took, read back from the output it persisted.
+ *
+ * `jumpTo` rides on the step's result, and a result belongs to the invocation
+ * that produced it. When the worker dies after recording the step but before
+ * archiving its message, the redelivery resumes with no result in hand -- and a
+ * resume that dispatched the *normal* successor would send a reused job down
+ * the long path while a `publish` it had already dispatched ran beside it:
+ * `current_step` overwritten away from `publish`, the close compare-and-set
+ * failing silently, and the long path unable to dispatch `publish` again
+ * because that row already exists. Stranded, on the one path that should have
+ * been the cheapest. Found by Codex.
+ *
+ * So the jump is a function of the persisted output, not of the result: the
+ * two steps that can jump both record why under `reuse`, which is what
+ * `reuseOf` reads. Kept here beside the steps, so the knowledge of what a jump
+ * means stays with the code that decides to take one.
+ */
+export function jumpFor(step: Step, output: unknown): Step | undefined {
+  if (step !== 'acquire' && step !== 'synthesize') return undefined;
+  const reuse = (output as { reuse?: unknown } | null | undefined)?.reuse;
+  return reuse ? 'publish' : undefined;
 }
 
 /**
@@ -666,24 +731,21 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       if (!acquired?.text) throw new Error('synthesize: acquire produced no text');
 
       /*
-       * Asked a second time, immediately before paying.
+       * Asked a second time, immediately before paying -- and then the source is
+       * reserved.
        *
        *   job A   acquire ──────── … ──────── synthesize ─── template(commit)
        *   job B        acquire(miss) ──── … ──────── synthesize ← re-check catches it here
        *
        * `acquire` asks whether this source is already summarised, but the answer can
        * go stale: `acquire` and `synthesize` are separate invocations, minutes apart
-       * on a queue, so two jobs fingerprinting the same text can both miss and both
-       * pay. The adopt-on-23505 in `createSummary` stops that ending in a crash — but
-       * a duplicated provider bill is a law 2 failure whether or not anything throws.
-       *
-       * This does not serialize; it narrows. The window shrinks from the whole
-       * acquire→synthesize span to the moment between this lookup and the call below.
-       * Closing it properly means reserving the fingerprint — a `generation_hash_claims`
-       * row taken at `acquire` and released at publish or failure — which is a migration,
-       * a lease timeout, and a new way for a crashed job to block every later one on the
-       * same source. That is worth doing when reuse volume justifies it and is recorded
-       * as such, rather than half-built here where it would read as solved.
+       * on a queue, so two jobs fingerprinting the same text can both miss. The
+       * re-check narrows that window to the moment between this lookup and the call;
+       * the claim below closes it. Whichever job claims first pays; the other is told
+       * `held`, throws an unbilled error, and its message is redelivered at the queue's
+       * visibility timeout -- by which time the holder has usually published, and this
+       * re-check adopts its summary and calls no provider at all. The claim expires,
+       * so a holder that crashed mid-call is takeable by the third redelivery.
        */
       const raced = await db.findPublishedSummaryByHash(acquired.hash, job.requester_id);
       if (raced) {
@@ -692,6 +754,14 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
           output: { reuse: raced, skipped: 'another job published this source first' },
           jumpTo: 'publish',
         };
+      }
+
+      // A wait, not a failure: nothing has been sent to a provider, and the worker
+      // re-sends this step later without spending a retry. It sits AFTER the
+      // re-check above so a job that finds the summary already published never
+      // contends for the claim at all.
+      if ((await db.claimSourceHash(job.id, acquired.hash)) === 'held') {
+        throw new SourceHeldError();
       }
 
       /*
@@ -777,14 +847,26 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
 
+      // Renew the claim now that there is a summary to protect. A second job cannot
+      // adopt it until `publish`, and the nodes between here and there can sit in
+      // a queue for longer than a short lease -- so the lease is long, and this
+      // renewal is what keeps a live holder's claim its own until then.
+      await db.claimSourceHash(job.id, acquired.hash);
+
+      // The URL `resolve_identity` validated, not the raw target. A job whose
+      // `acquire` output predates the `url` field has no such value at all -- the
+      // property is absent, not empty -- and for that job the target is the only
+      // record; an intentionally empty string (pasted text, no URL) stays empty.
+      // Both `sourceUrl` and the trust score below read this one value, so the
+      // work is linked to and scored on the same URL.
+      const sourceUrl = (acquired.url ?? asString(job.target.url)) || null;
+
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
-        // `acquired.url` is the one `resolve_identity` validated, not the raw target —
-        // the same distinction the scores below make about re-deriving from input.
-        sourceUrl: acquired.url || null,
+        sourceUrl,
         author: asString(job.target.author) || null,
         // Both deterministic, both from what is already in hand: no extra call,
         // and a quarter of `get_feed`'s score stops being the 0.5 default.
@@ -794,9 +876,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         // a source are allowed to move a shared row's ranking.
         qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
         trustScore:
-          job.visibility === 'public'
-            ? trustFromProvenance(acquired.rights, asString(job.target.url) || null)
-            : null,
+          job.visibility === 'public' ? trustFromProvenance(acquired.rights, sourceUrl) : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
         // `rights` already get. A job queued before this field existed replays with
@@ -980,6 +1060,9 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       if (templated.reused) return { output: { published: false, reason: 'reused' } };
       if (!templated.summaryId) throw new Error('publish: no summary to publish');
       await db.publishSummary(templated.summaryId);
+      // The source is free for the next job the moment it can be reused. A failed
+      // job's claim is takeable without this, and the lease is the net under both.
+      await db.releaseSourceHash(job.id);
       return { output: { published: true, summaryId: templated.summaryId } };
     }
 

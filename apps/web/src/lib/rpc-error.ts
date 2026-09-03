@@ -118,3 +118,58 @@ export function isSchemaMismatch(error: unknown): boolean {
   const e = (error ?? {}) as RpcErrorShape;
   return typeof e.code === 'string' && SCHEMA_MISMATCH_CODES.includes(e.code);
 }
+
+/**
+ * The SQLSTATE Postgres attached to a refusal, or nothing if the error did not
+ * come from Postgres at all. Read off the name `rpcError` gave it, or off a raw
+ * PostgREST error object.
+ */
+export function sqlState(error: unknown): string | undefined {
+  if (error instanceof Error) return /^PostgrestError (.+)$/.exec(error.name)?.[1];
+  const e = (error ?? {}) as RpcErrorShape;
+  return typeof e.code === 'string' && e.code.length > 0 ? e.code : undefined;
+}
+
+/**
+ * Could Postgres itself have refused this, for a reason a retry cannot change?
+ *
+ * The offline queue retries a failed write until it lands, and for a network
+ * failure or an unwell server that is right. It is wrong for a write the server
+ * has looked at and refused for a reason that will not change: a save for a pull
+ * that was deleted while the reader was offline. Those kept `hasPending` true and
+ * the retry timer alive for the life of the tab -- one IndexedDB read and one
+ * request every five minutes, forever -- and the roadmap carried it as a known gap
+ * because the obvious bound, "give up after N attempts", trades it for the worse
+ * failure of silently discarding something the reader did.
+ *
+ * So the classification is conservative and by SQLSTATE, not by count:
+ *
+ *   23503  foreign key -- the row this write points at is gone
+ *   23514  check violation -- the value can never be accepted
+ *   22P02  invalid text representation -- an id that is not a uuid at all
+ *
+ * and it is only half the decision. Whether one of these is *final* depends on
+ * what the write is, which this module does not know: a collection's foreign key
+ * can point at a collection that is itself still queued, and a check on text the
+ * reader typed is a value they would rather be told about than lose. `offline.ts`
+ * makes that call per write; this says only whether the code is one that can be.
+ *
+ * Not on the list, and deliberately: 42501. RLS refuses as `anon` too, and a
+ * request goes out as `anon` whenever the session's refresh has failed --
+ * transiently, on a laptop whose wifi came back before its DNS did -- so the
+ * code cannot tell "this account may never do this" from "this account was not
+ * attached to the request". Dropping every queued write in that minute is the
+ * exact failure this classification exists to avoid.
+ *
+ * Everything else stays queued: transport failures, 5xx, a rate limit, an expired
+ * token, and a schema mismatch -- which `isSchemaMismatch` recognises and which a
+ * pending migration or a reload resolves. Not knowing is the same as transient;
+ * the cost of a wrong "permanent" is a lost write, and the cost of a wrong
+ * "transient" is a retry.
+ */
+const PERMANENT_CODES = ['23503', '23514', '22P02'];
+
+export function isPermanentFailure(error: unknown): boolean {
+  const code = sqlState(error);
+  return code !== undefined && PERMANENT_CODES.includes(code);
+}

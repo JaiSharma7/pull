@@ -34,6 +34,11 @@ const TAB_TITLES: Record<TitleTab, string> = {
 const PATH_TITLES: Record<string, string> = {
   '/explore': 'Explore',
   '/search': 'Search',
+  '/graph': 'Synapse Graph',
+  '/import': 'Import History',
+  '/demo': 'Demo',
+  '/metacognition': 'Metacognitive ROI',
+
   '/appearance': 'Appearance',
   '/account': 'Account',
   '/privacy': 'Privacy Policy',

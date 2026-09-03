@@ -3,7 +3,9 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  jumpFor,
   narrowTopics,
+  SourceHeldError,
   NO_USAGE,
   RIGHTS_STATUSES,
   runPipelineStep,
@@ -19,6 +21,7 @@ import {
   sourceHostsFrom,
 } from './source.ts';
 import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
+import { NEEDS, NODES, ROOT, STEPS, successorsOf, type Step } from './graph.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
 const SYNTHESIZED = {
@@ -387,13 +390,18 @@ describe('segment', () => {
  * content would not catch a regression here — only counting the calls does.
  */
 describe('reuse skips the paid work', () => {
-  function harness(reuse: { workId: string; summaryId: string } | null) {
+  function harness(
+    reuse: { workId: string; summaryId: string } | null,
+    claim: 'claimed' | 'held' = 'claimed',
+  ) {
     const calls = {
       summary: 0,
       embedding: 0,
       createSummary: 0,
       insertPulls: 0,
       insertQuizQuestions: 0,
+      claim: 0,
+      release: 0,
     };
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
@@ -507,6 +515,13 @@ describe('reuse skips the paid work', () => {
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,
         attachSummaryToJob: async () => undefined,
+        claimSourceHash: async () => {
+          calls.claim++;
+          return claim;
+        },
+        releaseSourceHash: async () => {
+          calls.release++;
+        },
       },
     };
     return { deps, calls, received };
@@ -528,6 +543,46 @@ describe('reuse skips the paid work', () => {
     expect(templated.output).toMatchObject({ summaryId: 's9', reused: true });
   });
 
+  it('scores a pre-upgrade acquire output on the target URL it validated', async () => {
+    // An `acquire` output stored before the `url` field existed has no such
+    // property. The job's target still carries the URL that step validated, and a
+    // public-domain Gutenberg job must not be rescored from 0.9 to 0.7 -- and have
+    // that lower score persisted on the shared work -- because it was queued a day
+    // early. Found by Codex.
+    const { deps, received } = harness(null);
+    const legacy = {
+      ...deps,
+      job: {
+        ...deps.job,
+        visibility: 'public',
+        target: {
+          ...deps.job.target,
+          url: 'https://www.gutenberg.org/files/2680/2680-0.txt',
+          rights_status: 'public_domain',
+        },
+      },
+    };
+    const identity = await runPipelineStep('resolve_identity', {
+      ...legacy,
+      priorOutputs: {},
+    } as never);
+    const acquired = await runPipelineStep('acquire', {
+      ...legacy,
+      priorOutputs: { resolve_identity: identity.output },
+    } as never);
+    const { url: _dropped, ...withoutUrl } = acquired.output as { url: string };
+
+    await runPipelineStep('template', {
+      ...legacy,
+      priorOutputs: { acquire: withoutUrl, synthesize: SYNTHESIZED },
+    } as never);
+
+    expect(received.upsertWork).toMatchObject({
+      sourceUrl: 'https://www.gutenberg.org/files/2680/2680-0.txt',
+      trustScore: 0.9,
+    });
+  });
+
   it('does call the provider when the source is new', async () => {
     const { deps, calls } = harness(null);
 
@@ -538,6 +593,56 @@ describe('reuse skips the paid work', () => {
     } as never);
 
     expect(calls.summary).toBe(1);
+  });
+
+  /*
+   * The lease. One source, one payer at a time.
+   *
+   * A `held` answer must stop the provider call and cost nothing: the error is a
+   * plain one, so the worker records an unbilled attempt and the queue redelivers
+   * the message later -- by which time the holder has usually published and the
+   * re-check adopts its summary. Asserted by counting, as everything in this
+   * block is: the claim was asked, the provider was not.
+   */
+  it('does not pay for a source another job is synthesising', async () => {
+    const { deps, calls } = harness(null, 'held');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    const err = await attempt.catch((e) => e);
+    // A wait, not a failure: the worker re-sends the step rather than recording
+    // an attempt, and nothing was sent, so this is not a BilledStepError either.
+    expect(err).toBeInstanceOf(SourceHeldError);
+    expect(err).not.toBeInstanceOf(BilledStepError);
+    expect(calls.claim).toBe(1);
+    expect(calls.summary).toBe(0);
+  });
+
+  it('renews the claim once the summary is committed', async () => {
+    // The nodes between template and publish can outlast a short lease; the
+    // renewal here is what keeps a live holder's claim its own until publish.
+    const { deps, calls } = harness(null);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('template', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never);
+    expect(calls.claim).toBe(1);
+  });
+
+  it('releases the source once the summary is published', async () => {
+    const { deps, calls } = harness(null);
+
+    await runPipelineStep('publish', {
+      ...deps,
+      priorOutputs: { template: { summaryId: 's1', reused: false } },
+    } as never);
+
+    expect(calls.release).toBe(1);
   });
 
   /*
@@ -556,6 +661,90 @@ describe('reuse skips the paid work', () => {
     const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
     expect(acquired.jumpTo).toBe('publish');
+  });
+
+  /*
+   * NEEDS is complete, proven by starvation -- and the graph concludes.
+   *
+   * The worker hands each node only the outputs `needs` declares for it, and
+   * dispatches a successor only once every node in its `after` has succeeded. A
+   * node that reads something undeclared does not fail loudly -- `priorOutputs.foo`
+   * is simply undefined -- so it would surface in production as "template: missing
+   * acquire or synthesize output" on a job that had both. This walks the graph the
+   * way the worker does, keeping every output but giving each node exactly its
+   * declared slice and each join exactly its readiness rule, and asserts the job
+   * still reaches `publish`.
+   */
+  async function walk(deps: ReturnType<typeof harness>['deps']) {
+    const outputs: Record<string, unknown> = {};
+    const done: Step[] = [];
+    const queue: Step[] = [ROOT];
+    while (queue.length > 0) {
+      const step = queue.shift() as Step;
+      if (done.includes(step)) continue;
+      const priorOutputs = Object.fromEntries(
+        NEEDS[step].filter((s) => s in outputs).map((s) => [s, outputs[s]]),
+      );
+      const result = await runPipelineStep(step, { ...deps, priorOutputs } as never);
+      if (result.output !== undefined) outputs[step] = result.output;
+      done.push(step);
+      // The worker's rule, in miniature: a jump is dispatched unconditionally, a
+      // successor only when its whole `after` set has finished.
+      const targets = result.jumpTo ? [result.jumpTo] : successorsOf(step);
+      for (const t of targets) {
+        const ready = result.jumpTo !== undefined || NODES[t].after.every((a) => done.includes(a));
+        if (ready && !done.includes(t)) queue.push(t);
+      }
+    }
+    return { outputs, done };
+  }
+
+  it('recovers the jump a step took from the output it persisted', async () => {
+    // What the resume path relies on: the result is gone with the invocation
+    // that produced it, and the persisted output must say the same thing.
+    const { deps } = harness({ workId: 'w9', summaryId: 's9' });
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    expect(acquired.jumpTo).toBe('publish');
+    expect(jumpFor('acquire', acquired.output)).toBe('publish');
+
+    const fresh = harness(null);
+    const plain = await runPipelineStep('acquire', { ...fresh.deps, priorOutputs: {} } as never);
+    expect(plain.jumpTo).toBeUndefined();
+    expect(jumpFor('acquire', plain.output)).toBeUndefined();
+
+    // Only the two steps that can jump ever answer; a reuse marker on any other
+    // step's output is not a jump.
+    expect(jumpFor('template', { reuse: { summaryId: 's9' } })).toBeUndefined();
+    expect(jumpFor('synthesize', { reuse: { workId: 'w7', summaryId: 's7' } })).toBe('publish');
+    expect(jumpFor('synthesize', null)).toBeUndefined();
+  });
+
+  it('concludes a new source when every step gets only what it declared', async () => {
+    const { deps, calls } = harness(null);
+
+    const { outputs, done } = await walk(deps);
+
+    expect([...done].sort()).toEqual([...STEPS].sort());
+    expect(done.at(-1)).toBe('publish');
+    expect(outputs.publish).toMatchObject({ published: true, summaryId: 's1' });
+    // The join held: moderate ran after both of its predecessors.
+    expect(done.indexOf('moderate')).toBeGreaterThan(done.indexOf('artwork'));
+    expect(done.indexOf('moderate')).toBeGreaterThan(done.indexOf('embed'));
+    expect(calls.summary).toBe(1);
+    expect(calls.embedding).toBe(1);
+    expect(calls.insertPulls).toBe(1);
+  });
+
+  it('concludes a reused source the same way', async () => {
+    const { deps, calls } = harness({ workId: 'w9', summaryId: 's9' });
+
+    const { outputs, done } = await walk(deps);
+
+    // acquire jumps to publish, and publish reads the reuse marker off acquire.
+    expect(done).toEqual(['resolve_identity', 'acquire', 'publish']);
+    expect(outputs.publish).toMatchObject({ published: false, reason: 'reused' });
+    expect(calls.summary).toBe(0);
+    expect(calls.createSummary).toBe(0);
   });
 
   /*
@@ -730,7 +919,9 @@ describe('reuse skips the paid work', () => {
    * `acquire` and `synthesize` are separate invocations minutes apart, so the reuse
    * answer can go stale between them and two jobs can both pay for the same source.
    * The re-check narrows that window; it does not close it. See the comment in
-   * `synthesize` for why reserving the fingerprint is deferred rather than half-built.
+   * `synthesize` for the claim that now sits behind it: the re-check catches a
+   * source published while this job was queued, and the claim catches the one still
+   * being written.
    */
   /** Misses on the first lookup and hits on the second — the race, deterministically. */
   function racingHarness() {
@@ -777,6 +968,8 @@ describe('reuse skips the paid work', () => {
         attachSummaryToJob: async (jobId: string, summaryId: string, workId: string) => {
           attached.push({ jobId, summaryId, workId });
         },
+        claimSourceHash: async () => 'claimed' as const,
+        releaseSourceHash: async () => undefined,
       },
     };
     return { deps, calls, attached };

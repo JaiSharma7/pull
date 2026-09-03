@@ -16,6 +16,7 @@ describe('titleFor', () => {
 
   it('names a destination by its path', () => {
     expect(titleFor({ ...base, pathname: '/explore' })).toBe('Explore · What a Pull');
+    expect(titleFor({ ...base, pathname: '/graph' })).toBe('Synapse Graph · What a Pull');
     expect(titleFor({ ...base, pathname: '/account' })).toBe('Account · What a Pull');
     expect(titleFor({ ...base, pathname: '/privacy' })).toBe('Privacy Policy · What a Pull');
   });

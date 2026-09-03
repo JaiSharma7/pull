@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSchemaMismatch, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
+import { isPermanentFailure, isSchemaMismatch, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
 import { isOfflineFailure } from './offline.js';
 
 /**
@@ -185,5 +185,34 @@ describe('isSchemaMismatch', () => {
     expect(isSchemaMismatch(null)).toBe(false);
     expect(isSchemaMismatch(undefined)).toBe(false);
     expect(isSchemaMismatch(new Error('plain'))).toBe(false);
+  });
+});
+
+describe('isPermanentFailure', () => {
+  it('recognises a refusal that a retry cannot change', () => {
+    for (const code of ['23503', '23514', '22P02']) {
+      expect(isPermanentFailure({ code, message: 'refused' })).toBe(true);
+      expect(isPermanentFailure(rpcError({ code, message: 'refused' }))).toBe(true);
+    }
+  });
+
+  it('does not treat an RLS refusal as permanent, because anon gets one too', () => {
+    // A request whose session refresh failed goes out with only the publishable
+    // key, and RLS answers 42501 exactly as it would for an account that may never
+    // do this. The code cannot tell those apart, so a queue drained in that minute
+    // would be emptied for good. Kept, it lands once the session is back.
+    expect(isPermanentFailure({ code: '42501', message: 'permission denied' })).toBe(false);
+    expect(isPermanentFailure(rpcError({ code: '42501', message: 'denied' }))).toBe(false);
+  });
+
+  it('treats everything it does not know as transient', () => {
+    // The direction of the error matters: a wrong "permanent" loses something the
+    // reader did; a wrong "transient" costs a retry.
+    expect(isPermanentFailure({ code: '', message: 'TypeError: Failed to fetch' })).toBe(false);
+    expect(isPermanentFailure({ code: '57014', message: 'canceling statement' })).toBe(false);
+    expect(isPermanentFailure({ code: 'PGRST301', message: 'JWT expired' })).toBe(false);
+    expect(isPermanentFailure({ code: '42703', message: 'column does not exist' })).toBe(false);
+    expect(isPermanentFailure(new Error('plain'))).toBe(false);
+    expect(isPermanentFailure(null)).toBe(false);
   });
 });
