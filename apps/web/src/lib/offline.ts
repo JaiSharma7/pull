@@ -255,15 +255,26 @@ export function onPendingQueued(handler: () => void): () => void {
   };
 }
 
-export async function queueMutation(userId: string, write: PendingWrite): Promise<void> {
+/**
+ * Queue a write for the next drain. Answers whether it was actually persisted.
+ *
+ * The failure is still swallowed — a caller mid-gesture has nothing useful to do about a
+ * dead IndexedDB, and throwing here would turn a lost write into a broken screen. What
+ * changed is that it no longer *reports* success it did not achieve. Most callers ignore
+ * the answer, which is right for them; the one that tells the reader their answer was
+ * recorded needs to know the difference, because in a browser with site data blocked the
+ * write reached neither Postgres nor IndexedDB and 'recorded' was untrue.
+ */
+export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
   try {
     const database = await db();
     await database.add('pending', { ...write, userId, at: Date.now() });
   } catch {
-    /* nothing to do — the mutation is simply lost, which is the honest outcome */
-    return;
+    /* Lost, which is the honest outcome — and now the honest return value too. */
+    return false;
   }
   for (const listener of queuedListeners) listener();
+  return true;
 }
 
 /**
@@ -503,6 +514,7 @@ export async function queueIfOffline(
   write: PendingWrite,
 ): Promise<boolean> {
   if (!isOfflineFailure(error)) return false;
-  await queueMutation(userId, write);
-  return true;
+  // Propagated rather than assumed: `true` here means the write is genuinely waiting for
+  // the drain, not merely that it was offered to it.
+  return await queueMutation(userId, write);
 }

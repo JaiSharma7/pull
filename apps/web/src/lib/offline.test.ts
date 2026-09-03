@@ -702,3 +702,36 @@ describe('isOfflineFailure', () => {
     expect(withOnline(true, () => isOfflineFailure(null))).toBe(false);
   });
 });
+
+/*
+ * `queueMutation` used to return `void` and swallow an IndexedDB failure, so a caller had
+ * no way to tell a write that was waiting for the drain from one that had vanished. Most
+ * callers do not care — a reader mid-gesture cannot act on a dead IndexedDB, and throwing
+ * would turn a lost write into a broken screen. The census does care, because it tells the
+ * reader their answer was recorded, and in a browser with site data blocked that was untrue.
+ */
+describe('queueMutation reports whether it persisted', () => {
+  it('answers true when the write is waiting for the drain', async () => {
+    const user = 'queue-contract-user';
+    await expect(queueMutation(user, { kind: 'read', pullId: 'p1' })).resolves.toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('propagates that answer through queueIfOffline', async () => {
+    const user = 'queue-contract-offline';
+    const queued = await withOnline(false, () =>
+      queueIfOffline(user, TRANSPORT_ERROR, { kind: 'read', pullId: 'p2' }),
+    );
+    expect(queued).toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('still answers false without queueing when the failure was not an offline one', async () => {
+    const user = 'queue-contract-online';
+    const queued = await withOnline(true, () =>
+      queueIfOffline(user, new Error('server said no'), { kind: 'read', pullId: 'p3' }),
+    );
+    expect(queued).toBe(false);
+    await expect(hasPending(user)).resolves.toBe(false);
+  });
+});
