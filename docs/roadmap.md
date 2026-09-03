@@ -274,14 +274,14 @@ native ad SDK.
 Named here because they are inert rather than broken, and a reader of this repo should
 not have to rediscover them.
 
-- **`refresh_knowledge_vector` has no caller.** `user_knowledge_vectors` is therefore
-  never populated, so the `uvec` term in `get_feed` — 18% of the ranking score, and the
-  largest personalisation signal in it — evaluates to the same constant for every card
-  and every reader. The feed is currently ranked by topic weights, quality, novelty and
-  jitter alone. Wiring it up belongs with the generation pipeline that produces the
-  embeddings it averages, not before: recomputing a reader's centroid on every read
-  would be a write amplification we have no evidence is needed. Round 2 either calls it
-  from a `pg_cron` tick or drops the term and redistributes its weight.
+- **`refresh_knowledge_vector` has a caller now, and the roadmap said otherwise for a
+  day too long.** `20260901070000` added `refresh_stale_knowledge_vectors` and
+  `enable_knowledge_vector_refresh()`, and the hosted project runs it every fifteen
+  minutes (`cron.job`, checked 2026-09-02). So `user_knowledge_vectors` is populated and
+  the `uvec` term -- 18% of `get_feed`'s score -- varies by reader as designed. Recorded
+  here rather than silently deleted because the Fable 5.1 plan was written from this
+  paragraph and repeated the gap as a finding; a stale "known gap" is worse than none,
+  since a reader trusts it precisely because it sounds like a confession.
 - **The Delta banner counts the pool, not the page.** At the `p_limit` the client actually
   sends (20), `directly_known` counts over an 800-row candidate pool and `covered_delta`
   over a 400-row shortlist, while the page shows 20 — so the number describes something
