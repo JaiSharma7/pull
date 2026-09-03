@@ -1058,8 +1058,18 @@ export function App() {
                   how well you are holding on to it, and what connects to what — so there is nothing
                   here to show you yet.
                 </p>
+                {/*
+                  What /account says, because it is what actually happens. This read
+                  "everything you have read as a guest carries over when you sign in",
+                  which is false — `signInWithOtp` mints a different `auth.users` row,
+                  nothing links the two, and 20260901190000 deletes an anonymous user and
+                  everything keyed to them a day after last use. It was also the sentence
+                  most likely to be acted on: it sat under a prompt to sign in, on a screen
+                  a guest reaches only after building up something to lose.
+                */}
                 <p className="meta">
-                  Everything you have read as a guest carries over when you sign in.
+                  Signing in starts a fresh account, so what you have read as a guest stays behind.
+                  Worth knowing before you do it.
                 </p>
                 <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
                   Back to reading

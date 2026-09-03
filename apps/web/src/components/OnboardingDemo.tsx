@@ -216,8 +216,9 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               Try it — drag a node, or zoom:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
-              Drag a node, or zoom. A dashed oxblood chord is a disagreement between two ideas. An
-              idea you are still holding is drawn filled; one that is fading is drawn as an outline.
+              Drag a node, or zoom. A dashed oxblood chord between two nodes is a disagreement
+              between two ideas. A node itself says how well you are holding it: filled if it is
+              solid, a plain ring if it is due a refresh, a dashed ring if it is fading.
             </p>
           </div>
 

@@ -145,9 +145,16 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
        * thing this screen was rebuilt to stop doing. "Try again" now retries only the
        * ones that did not land.
        */
+      /*
+       * Counted over one population, not two. `settled.size` is everything ever applied —
+       * including ideas the reader has since unmarked — while `marked.length` is what is
+       * marked now, so the two could disagree and print "Saved 1 of 1" directly above
+       * "the 1 that did not save".
+       */
+      const savedOfMarked = marked.filter(([pullId]) => settled.has(pullId)).length;
       setError(
-        `Saved ${settled.size} of ${marked.length}. Try again to retry the ${lost.length} that ` +
-          `did not save — the ones that did are not re-sent.`,
+        `Saved ${savedOfMarked} of ${marked.length}. Try again to retry the ${lost.length} ` +
+          `that did not — the ones that saved are not re-sent.`,
       );
       return;
     }
@@ -212,37 +219,53 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                 </h2>
                 <p style={{ color: 'var(--text-soft)', margin: 0 }}>{item.body}</p>
 
-                <div
-                  className="library__filters"
-                  role="group"
-                  aria-label={`Knowledge level for ${item.headline}`}
-                  style={{ marginTop: 'var(--space-2)' }}
-                >
-                  <button
-                    type="button"
-                    className="btn btn--plain library__filter"
-                    aria-pressed={current === 'unknown'}
-                    onClick={() => handleLevelChange(item.id, 'unknown')}
+                {/*
+                  Recorded answers are shown as recorded and cannot be changed.
+
+                  `grade_recall` multiplies stability rather than setting it, so a corrected
+                  grade would compound the first one instead of replacing it — which is why
+                  `unappliedGrades` refuses to re-send. But refusing silently while leaving
+                  the buttons live let a reader press a new answer, watch it go pressed, and
+                  never learn it had been discarded. Locking them is the honest half of the
+                  same rule.
+                */}
+                {applied.has(item.id) ? (
+                  <p className="meta" style={{ marginTop: 'var(--space-2)' }}>
+                    Recorded as {levels[item.id] === 'mastered' ? 'known well' : 'familiar'}.
+                  </p>
+                ) : (
+                  <div
+                    className="library__filters"
+                    role="group"
+                    aria-label={`Knowledge level for ${item.headline}`}
+                    style={{ marginTop: 'var(--space-2)' }}
                   >
-                    New to me
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--plain library__filter"
-                    aria-pressed={current === 'familiar'}
-                    onClick={() => handleLevelChange(item.id, 'familiar')}
-                  >
-                    Familiar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--plain library__filter"
-                    aria-pressed={current === 'mastered'}
-                    onClick={() => handleLevelChange(item.id, 'mastered')}
-                  >
-                    Know it well
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      className="btn btn--plain library__filter"
+                      aria-pressed={current === 'unknown'}
+                      onClick={() => handleLevelChange(item.id, 'unknown')}
+                    >
+                      New to me
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--plain library__filter"
+                      aria-pressed={current === 'familiar'}
+                      onClick={() => handleLevelChange(item.id, 'familiar')}
+                    >
+                      Familiar
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--plain library__filter"
+                      aria-pressed={current === 'mastered'}
+                      onClick={() => handleLevelChange(item.id, 'mastered')}
+                    >
+                      Know it well
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -257,7 +280,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
 
       {error ? (
         <button type="button" className="btn btn--plain" onClick={() => onComplete([...applied])}>
-          Continue without the rest
+          {applied.size > 0 ? 'Continue without the rest' : 'Continue without saving'}
         </button>
       ) : null}
 
