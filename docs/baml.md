@@ -87,7 +87,12 @@ Three limits of the export, stated rather than discovered:
   round-robin client, because retry and fallback belong in the worker, where the ledger
   is.
 - Array bounds are not derivable. BAML v1 has no constraint syntax — v0 carried
-  `@assert` on the field, and nothing replaced it — so `minItems` and `maxItems` cannot
+  `@assert` on the field, and nothing replaced it. Worth knowing precisely, because the
+  failure mode is quiet: v1 still **parses** `@assert(name, {{ ... }})` without an
+  error and then ignores it entirely — `baml describe` does not report it,
+  `baml.json.schema` lowers no bounds from it, and `$parse` on `{"topics": []}` returns
+  an empty list rather than throwing (checked against 0.17.0). So putting the v0
+  annotation back would read as enforcement and do nothing. `minItems`/`maxItems` cannot
   be lowered from the class and are layered on from `BOUNDS` in `scripts/export.mjs`
   after lowering. That is the one hand-kept part of the schema. Be precise about what
   guards it: `packages/prompts/src/schema.test.ts` pins that each bound landed on the

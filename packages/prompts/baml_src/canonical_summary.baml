@@ -93,6 +93,15 @@ class CanonicalSummary {
   /// satisfies the shape and the work is filed under nothing -- `topic_affinity`
   /// then returns 0.0, and that term is 28% of the score in `get_feed`, so the
   /// feature fails silently rather than visibly.
+  ///
+  /// The bound is NOT declared here, and do not put it back with `@assert`.
+  /// v1 accepts v0's `@assert(name, {{ ... }})` without a parse error and then
+  /// ignores it: `baml describe` does not show it, `baml.json.schema` lowers no
+  /// `minItems`/`maxItems`, and `$parse` on `{"topics": []}` returns an empty
+  /// list rather than throwing. Verified against 0.17.0. An annotation that
+  /// looks like enforcement and is not is worse than none, so the bound lives
+  /// in `BOUNDS` in scripts/export.mjs, reaches the model through Gemini's
+  /// `responseSchema`, and is pinned by src/schema.test.ts.
   topics: TopicSlug[]
 }
 
