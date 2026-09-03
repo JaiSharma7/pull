@@ -15,15 +15,18 @@
     "test": "vitest run",
     "baml:check": "baml-cli check --from baml_src",
     "baml:generate": "baml-cli generate --from baml_src",
-    "baml:test": "baml-cli test --from baml_src"
+    "baml:test": "baml-cli test --from baml_src",
+    "baml:export": "node scripts/export.mjs"
   },
   "dependencies": {
     "@boundaryml/baml": "0.226.2"
   },
   "devDependencies": {
+    "@gloo-ai/baml-schema-wasm-web": "0.89.1",
     "@types/node": "^26.4.0",
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "yaml": "^2.9.0"
   }
 }

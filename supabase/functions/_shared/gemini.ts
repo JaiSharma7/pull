@@ -11,12 +11,8 @@
  * made by the worker, once per canonical summary, and lands in `cost_ledger`.
  */
 
-import {
-  BilledProviderError,
-  buildSummaryPrompt,
-  ProviderUnavailableError,
-  TOPIC_SLUGS,
-} from './providers.ts';
+import { PROMPTS, toGeminiSchema } from './prompts.ts';
+import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -153,81 +149,21 @@ export function estimateEmbeddingTokens(texts: string[]): number {
   return texts.reduce((total, text) => total + Math.ceil(text.length / 4), 0);
 }
 
-/** The shape the summary model must return. Enforced by the API, not by parsing hope. */
-const SUMMARY_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    title: { type: 'STRING' },
-    elevatorPitch: { type: 'STRING' },
-    whyItMatters: { type: 'STRING' },
-    pulls: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          headline: { type: 'STRING' },
-          body: { type: 'STRING' },
-          whyItMatters: { type: 'STRING' },
-          /*
-           * One recall question per idea, from the same call.
-           *
-           * `distractors` are what turn the recall interrupt from a self-graded
-           * reveal into something that can actually be wrong — and grading three
-           * wrong answers against one right one is a comparison the client does,
-           * so no model is anywhere near the read path.
-           *
-           * Not in `required`: a source too thin to support a fair question
-           * should omit it rather than invent one, and `get_due_reviews` already
-           * copes with a pull that has none.
-           */
-          question: {
-            type: 'OBJECT',
-            properties: {
-              prompt: { type: 'STRING' },
-              answer: { type: 'STRING' },
-              distractors: {
-                type: 'ARRAY',
-                items: { type: 'STRING' },
-                minItems: 3,
-                maxItems: 3,
-              },
-            },
-            required: ['prompt', 'answer', 'distractors'],
-          },
-        },
-        required: ['headline', 'body', 'whyItMatters'],
-      },
-    },
-    /*
-     * Classification rides along with the summary rather than being its own step.
-     *
-     * It is the same call, so it costs no extra request and very few extra output
-     * tokens — which matters, because `topic_affinity` is 28% of the score in
-     * `get_feed` and until now every generated work scored zero on it. A separate
-     * `classify` step would have meant a thirteenth entry in STEPS, a second
-     * provider call per source, and a state machine that in-flight jobs no longer
-     * matched.
-     *
-     * `enum` is what makes this worth doing: the API rejects a slug outside the
-     * list, so the usual failure — a plausible value that only Postgres refuses,
-     * after synthesis has been paid for — cannot happen here. `narrowTopics` still
-     * runs on the way to the database, because a schema the provider enforces is
-     * not the same as one this code enforces, and stub or future providers do not
-     * go through Gemini at all.
-     */
-    topics: {
-      type: 'ARRAY',
-      items: { type: 'STRING', enum: TOPIC_SLUGS as unknown as string[] },
-      // Bounded at both ends. Without minItems an empty array satisfies the schema,
-      // and `required` below would be met by a response that classified nothing —
-      // the feature failing silently rather than visibly, which is the failure mode
-      // this file already exists to avoid.
-      minItems: 1,
-      maxItems: 4,
-    },
-  },
-  required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls', 'topics'],
-} as const;
+/**
+ * The shape the summary model must return. Enforced by the API, not by parsing hope.
+ *
+ * Exported from `packages/prompts/baml_src` by `pnpm baml:export` and converted to
+ * Gemini's dialect at module load. Until now this was a hand-written copy of the
+ * same shape, one of four -- and `topics` and `question` were both added under the
+ * hazard that copies drift silently. The enum on topic slugs and the bounds on
+ * `topics` and `distractors` come through from the BAML `@alias`es and `@assert`s,
+ * so a plausible slug the database would refuse, or an empty topic list that would
+ * file the work under nothing, is rejected by the API before synthesis is paid for.
+ * `narrowTopics` still runs on the way to the database, because a schema the
+ * provider enforces is not the same as one this code enforces, and the stub
+ * provider does not go through Gemini at all.
+ */
+const SUMMARY_SCHEMA = toGeminiSchema(PROMPTS.WriteCanonicalSummary.schema);
 
 class GeminiError extends Error {
   // Assigned explicitly rather than declared as a constructor parameter property:

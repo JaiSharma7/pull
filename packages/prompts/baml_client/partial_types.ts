@@ -44,15 +44,17 @@ export namespace partial_types {
       topics: types.TopicSlug[]
     }
     /**
-     * One atomic idea that stands on its own out of context.
+     * One atomic idea that stands on its own out of context, structured for progressive depth.
     */
     export interface Pull {
       /**
-       * States the idea rather than teasing it.
+       * Shortest stop: states the idea rather than teasing it.
        */
       headline?: string | null
       body?: string | null
       whyItMatters?: string | null
+      example?: string | null
+      explanation?: string | null
       question?: RecallQuestion | null
     }
     /**

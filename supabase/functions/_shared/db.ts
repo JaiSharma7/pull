@@ -426,6 +426,8 @@ export function createPipelineDb(supabase: Db): PipelineDb {
               headline: p.headline,
               body: p.body,
               why_it_matters: p.whyItMatters,
+              example: p.example ?? null,
+              explanation: p.explanation ?? null,
             })),
             // `(summary_id, ordinal)` is unique. Upserting rather than inserting
             // makes a retry after a partial write converge instead of colliding

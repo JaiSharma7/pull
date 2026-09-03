@@ -61,8 +61,33 @@ There are three ways across, and they are not equally good:
    JSON schema that the existing Deno providers already consume. No runtime dependency
    crosses the boundary at all.
 
-(3) is the cheapest and buys most of the benefit; (2) is where the graph-shaped pipeline
-wants to end up. Neither is decided here — see the Fable 5.1 plan.
+**Decided: (3), and it is built.** `pnpm baml:export` runs the BAML runtime's WASM build
+(`@gloo-ai/baml-schema-wasm-web`, a devDependency of `packages/prompts`) in Node at build
+time. It renders each function's prompt into a template with `{{name}}` placeholders,
+records the client and the model it pins, runs BAML's OpenAPI generator in memory and
+inlines the return type into plain JSON Schema — with the topic enum as the database
+slugs (from `@alias`) and the array bounds lifted from the `@assert`s — and writes the
+lot to `supabase/functions/_shared/generated/prompts.ts`. The Deno providers import that
+file; `gemini.ts` converts the schema to Gemini's dialect at module load and
+`anthropic.ts` hands it to its tool as-is. `_shared/prompts.test.ts` pins what they rely
+on. CI check 2 regenerates the export and fails on any difference.
+
+Two facts, so nobody re-derives them: that WASM package is the playground runtime, not a
+formatter, and its 0.89 parser accepts this repository's 0.226 sources with zero
+diagnostics. The sidecar route (1) was built and verified first, then closed unmerged
+when this landed within its timebox; its branch remains for reference.
+
+Three limits of the export, stated rather than discovered:
+
+- A template cannot carry a conditional on an argument's value, because a placeholder
+  must be the argument verbatim; the exporter refuses a transformed argument. The
+  fallback for an empty context therefore lives in `buildSummaryPrompt`.
+- Each function must name one pinned `client<llm>`; the exporter refuses a fallback or
+  round-robin client, because retry and fallback belong in the worker, where the ledger
+  is.
+- Only the three assert shapes in use (`>=`, `<=`, `==` on `this|length`) become
+  `minItems`/`maxItems`. Any other assert is enforced by BAML's own runtime only, which
+  the Edge Functions do not run.
 
 ## Enum members are not slugs
 

@@ -88,6 +88,12 @@ export enum TopicSlug {
   History = "History",
   Biography = "Biography",
   Revolutions = "Revolutions",
+  Mathematics = "Mathematics",
+  Computation = "Computation",
+  Architecture = "Architecture",
+  WorldPhilosophy = "WorldPhilosophy",
+  Strategy = "Strategy",
+  Ecology = "Ecology",
 }
 
 export interface CanonicalSummary {
@@ -100,15 +106,17 @@ export interface CanonicalSummary {
 }
 
 /**
- * One atomic idea that stands on its own out of context.
+ * One atomic idea that stands on its own out of context, structured for progressive depth.
  */
 export interface Pull {
   /**
-   * States the idea rather than teasing it.
+   * Shortest stop: states the idea rather than teasing it.
    */
   headline: string
   body: string
   whyItMatters: string
+  example?: string | null
+  explanation?: string | null
   question?: RecallQuestion | null
   
 }

@@ -29,12 +29,12 @@ export default class TypeBuilder {
     
     CanonicalSummary: ClassViewer<'CanonicalSummary', "title" | "elevatorPitch" | "whyItMatters" | "pulls" | "topics">;
     
-    Pull: ClassViewer<'Pull', "headline" | "body" | "whyItMatters" | "question">;
+    Pull: ClassViewer<'Pull', "headline" | "body" | "whyItMatters" | "example" | "explanation" | "question">;
     
     RecallQuestion: ClassViewer<'RecallQuestion', "prompt" | "answer" | "distractors">;
     
     
-    TopicSlug: EnumViewer<'TopicSlug', "Philosophy" | "Ethics" | "Stoicism" | "Logic" | "Metaphysics" | "Aesthetics" | "Psychology" | "Attention" | "Habits" | "Learning" | "Emotion" | "Science" | "Evolution" | "Physics" | "Chemistry" | "Astronomy" | "Medicine" | "Society" | "Economics" | "Liberty" | "Government" | "Justice" | "Education" | "ArtsAndLetters" | "Literature" | "Rhetoric" | "Criticism" | "History" | "Biography" | "Revolutions">;
+    TopicSlug: EnumViewer<'TopicSlug', "Philosophy" | "Ethics" | "Stoicism" | "Logic" | "Metaphysics" | "Aesthetics" | "Psychology" | "Attention" | "Habits" | "Learning" | "Emotion" | "Science" | "Evolution" | "Physics" | "Chemistry" | "Astronomy" | "Medicine" | "Society" | "Economics" | "Liberty" | "Government" | "Justice" | "Education" | "ArtsAndLetters" | "Literature" | "Rhetoric" | "Criticism" | "History" | "Biography" | "Revolutions" | "Mathematics" | "Computation" | "Architecture" | "WorldPhilosophy" | "Strategy" | "Ecology">;
     
 
     constructor() {
@@ -53,7 +53,7 @@ export default class TypeBuilder {
         ]);
         
         this.Pull = this.tb.classViewer("Pull", [
-          "headline","body","whyItMatters","question",
+          "headline","body","whyItMatters","example","explanation","question",
         ]);
         
         this.RecallQuestion = this.tb.classViewer("RecallQuestion", [
@@ -62,7 +62,7 @@ export default class TypeBuilder {
         
         
         this.TopicSlug = this.tb.enumViewer("TopicSlug", [
-          "Philosophy","Ethics","Stoicism","Logic","Metaphysics","Aesthetics","Psychology","Attention","Habits","Learning","Emotion","Science","Evolution","Physics","Chemistry","Astronomy","Medicine","Society","Economics","Liberty","Government","Justice","Education","ArtsAndLetters","Literature","Rhetoric","Criticism","History","Biography","Revolutions",
+          "Philosophy","Ethics","Stoicism","Logic","Metaphysics","Aesthetics","Psychology","Attention","Habits","Learning","Emotion","Science","Evolution","Physics","Chemistry","Astronomy","Medicine","Society","Economics","Liberty","Government","Justice","Education","ArtsAndLetters","Literature","Rhetoric","Criticism","History","Biography","Revolutions","Mathematics","Computation","Architecture","WorldPhilosophy","Strategy","Ecology",
         ]);
         
     }

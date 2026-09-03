@@ -12,7 +12,6 @@ import {
   disabledImageProvider,
   stubEmbeddingProvider,
   stubSummaryProvider,
-  TOPIC_SLUGS,
   type EmbeddingProvider,
   type ImageProvider,
   type SummaryProvider,
@@ -191,7 +190,7 @@ export async function resolveProviders(
     summary: anthropicKey
       ? createFallbackSummaryProvider(
           primarySummary,
-          createAnthropicSummaryProvider(anthropicConfigFrom(env, anthropicKey), TOPIC_SLUGS),
+          createAnthropicSummaryProvider(anthropicConfigFrom(env, anthropicKey)),
         )
       : primarySummary,
     embedding:

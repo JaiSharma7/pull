@@ -48,6 +48,12 @@ export const TOPIC_SLUG_BY_MEMBER: Record<TopicSlug, string> = {
   [TopicSlug.History]: 'history',
   [TopicSlug.Biography]: 'biography',
   [TopicSlug.Revolutions]: 'revolutions',
+  [TopicSlug.Mathematics]: 'mathematics',
+  [TopicSlug.Computation]: 'computation',
+  [TopicSlug.Architecture]: 'architecture',
+  [TopicSlug.WorldPhilosophy]: 'world-philosophy',
+  [TopicSlug.Strategy]: 'strategy',
+  [TopicSlug.Ecology]: 'ecology',
 };
 
 /** The slug a generated topic actually files a work under. */

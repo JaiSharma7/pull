@@ -302,7 +302,13 @@ export interface PipelineDb {
    */
   insertPulls(
     summaryId: string,
-    pulls: { headline: string; body: string; whyItMatters: string | null }[],
+    pulls: {
+      headline: string;
+      body: string;
+      whyItMatters: string | null;
+      example?: string | null;
+      explanation?: string | null;
+    }[],
   ): Promise<{ ordinal: number; id: string }[]>;
   setPullEmbeddings(rows: { id: string; embedding: number[] }[]): Promise<void>;
   /**
@@ -856,6 +862,8 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
               headline: string;
               body: string;
               whyItMatters: string;
+              example?: string;
+              explanation?: string;
               question?: { prompt?: unknown; answer?: unknown; distractors?: unknown };
             }[];
           }

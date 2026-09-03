@@ -14,6 +14,7 @@
  */
 
 import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
+import { PROMPTS } from './prompts.ts';
 import type { CanonicalSummary, SummaryInput, SummaryProvider, Usage } from './providers.ts';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
@@ -84,38 +85,14 @@ class AnthropicError extends Error {
  * usual failure impossible, where a plausible-looking slug passes the model and the
  * client and is refused only by Postgres, after synthesis has been paid for.
  */
-function summaryTool(topicSlugs: readonly string[]) {
+function summaryTool() {
   return {
     name: 'emit_summary',
     description: 'Return the canonical summary of the source, and file it under topics.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string' },
-        elevatorPitch: { type: 'string' },
-        whyItMatters: { type: 'string' },
-        pulls: {
-          type: 'array',
-          minItems: 1,
-          items: {
-            type: 'object',
-            properties: {
-              headline: { type: 'string' },
-              body: { type: 'string' },
-              whyItMatters: { type: 'string' },
-            },
-            required: ['headline', 'body', 'whyItMatters'],
-          },
-        },
-        topics: {
-          type: 'array',
-          items: { type: 'string', enum: topicSlugs as string[] },
-          minItems: 1,
-          maxItems: 4,
-        },
-      },
-      required: ['title', 'elevatorPitch', 'whyItMatters', 'pulls', 'topics'],
-    },
+    // Plain JSON Schema, as exported from `packages/prompts/baml_src` -- the same
+    // source `gemini.ts` converts to its own dialect. The topic enum and the array
+    // bounds arrive from the BAML aliases and asserts, so this copy cannot drift.
+    input_schema: PROMPTS.WriteCanonicalSummary.schema,
   };
 }
 
@@ -210,15 +187,12 @@ function toolInput(payload: Record<string, unknown>): Record<string, unknown> {
   throw new Error(`Anthropic returned no tool_use block (stop_reason: ${stop})`);
 }
 
-export function createAnthropicSummaryProvider(
-  config: AnthropicConfig,
-  topicSlugs: readonly string[],
-): SummaryProvider {
+export function createAnthropicSummaryProvider(config: AnthropicConfig): SummaryProvider {
   return {
     name: 'anthropic',
 
     async generateSummary(input: SummaryInput) {
-      const tool = summaryTool(topicSlugs);
+      const tool = summaryTool();
       const model = config.summaryModel;
 
       let payload: Record<string, unknown>;
