@@ -35,7 +35,8 @@ export function gradeForLevel(level: KnowledgeLevel): 'good' | 'easy' | null {
  */
 export function unappliedGrades(
   levels: Record<string, KnowledgeLevel>,
-  applied: ReadonlySet<string>,
+  /* A `Set` of ids or a `Map` of id → grade; only membership is asked of it. */
+  applied: { has(pullId: string): boolean },
 ): [string, 'good' | 'easy'][] {
   const out: [string, 'good' | 'easy'][] = [];
   for (const [pullId, level] of Object.entries(levels)) {

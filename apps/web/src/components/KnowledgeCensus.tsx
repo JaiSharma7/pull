@@ -53,7 +53,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
    * pushing them out of review for weeks. The screen whose purpose is to establish an
    * initial stability would have fabricated one instead.
    */
-  const [applied, setApplied] = useState<Set<string>>(new Set());
+  const [applied, setApplied] = useState<Map<string, 'good' | 'easy'>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -94,20 +94,20 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
     }
     if (claimed.length === 0) {
       // Everything marked has already landed; a retry has nothing left to send.
-      onComplete([...applied]);
+      onComplete([...applied.keys()]);
       return;
     }
 
     setSaving(true);
     setError(null);
-    const recorded: string[] = [];
+    const recorded: [string, 'good' | 'easy'][] = [];
     const lost: string[] = [];
     const userId = getCurrentUserId();
 
     for (const [pullId, grade] of claimed) {
       try {
         await api.gradeRecall(pullId, grade);
-        recorded.push(pullId);
+        recorded.push([pullId, grade]);
       } catch (e) {
         /*
          * Queued when the request provably never left, dropped otherwise — the same rule
@@ -120,7 +120,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
         if (userId && isOfflineFailure(e)) {
           try {
             await queueMutation(userId, { kind: 'recall', pullId, grade });
-            recorded.push(pullId);
+            recorded.push([pullId, grade]);
             continue;
           } catch (queueError) {
             console.error('Could not queue calibration for', pullId, queueError);
@@ -131,7 +131,10 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       }
     }
     setSaving(false);
-    const settled = new Set([...applied, ...recorded]);
+    // Keyed by the grade that was actually sent, not by whatever `levels` says now: the
+    // reader can change an answer while the save is in flight, and the applied line has to
+    // describe the write that happened rather than the answer on screen.
+    const settled = new Map([...applied, ...recorded]);
     setApplied(settled);
 
     if (settled.size === 0) {
@@ -158,7 +161,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       );
       return;
     }
-    onComplete([...settled]);
+    onComplete([...settled.keys()]);
   };
 
   return (
@@ -231,7 +234,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                 */}
                 {applied.has(item.id) ? (
                   <p className="meta" style={{ marginTop: 'var(--space-2)' }}>
-                    Recorded as {levels[item.id] === 'mastered' ? 'known well' : 'familiar'}.
+                    Recorded as {applied.get(item.id) === 'easy' ? 'known well' : 'familiar'}.
                   </p>
                 ) : (
                   <div
@@ -244,6 +247,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                       type="button"
                       className="btn btn--plain library__filter"
                       aria-pressed={current === 'unknown'}
+                      disabled={saving}
                       onClick={() => handleLevelChange(item.id, 'unknown')}
                     >
                       New to me
@@ -252,6 +256,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                       type="button"
                       className="btn btn--plain library__filter"
                       aria-pressed={current === 'familiar'}
+                      disabled={saving}
                       onClick={() => handleLevelChange(item.id, 'familiar')}
                     >
                       Familiar
@@ -260,6 +265,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                       type="button"
                       className="btn btn--plain library__filter"
                       aria-pressed={current === 'mastered'}
+                      disabled={saving}
                       onClick={() => handleLevelChange(item.id, 'mastered')}
                     >
                       Know it well
@@ -279,7 +285,11 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       ) : null}
 
       {error ? (
-        <button type="button" className="btn btn--plain" onClick={() => onComplete([...applied])}>
+        <button
+          type="button"
+          className="btn btn--plain"
+          onClick={() => onComplete([...applied.keys()])}
+        >
           {applied.size > 0 ? 'Continue without the rest' : 'Continue without saving'}
         </button>
       ) : null}

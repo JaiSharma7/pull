@@ -1067,7 +1067,11 @@ export function App() {
                   most likely to be acted on: it sat under a prompt to sign in, on a screen
                   a guest reaches only after building up something to lose.
                 */}
-                <p className="meta">
+                {/* Body text, not `.meta`. The rule and its reason are written 25 lines
+                    below on /account: `.meta` is a chip face, all-caps destroys word shape,
+                    and it is wrong for the one sentence on a screen that carries a
+                    consequence — which this now does. */}
+                <p>
                   Signing in starts a fresh account, so what you have read as a guest stays behind.
                   Worth knowing before you do it.
                 </p>
