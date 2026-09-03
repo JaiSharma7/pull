@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   cachePulls,
   drainPending,
@@ -717,7 +717,56 @@ describe('queueMutation reports whether it persisted', () => {
     await expect(hasPending(user)).resolves.toBe(true);
   });
 
-  it('propagates that answer through queueIfOffline', async () => {
+  /*
+   * The branch the change exists for, and the one the first version of this suite left
+   * uncovered: two of its three cases passed against the old `Promise<void>` shape,
+   * because `queueIfOffline` already returned a hard-coded `true` on the offline branch.
+   *
+   * `db()` memoises its promise, so removing `indexedDB` before the first call in this
+   * module gives a stable rejection — which is what a browser with site data blocked
+   * looks like from here.
+   */
+  it('answers false when the store cannot be opened', async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+    // A store that rejects on open, without disturbing the memoised handle the rest of
+    // this file shares.
+    const broken = {
+      open() {
+        const request: Record<string, unknown> = { onerror: null, onsuccess: null };
+        setTimeout(() => {
+          (request.onerror as (() => void) | null)?.();
+        }, 0);
+        return request;
+      },
+    };
+    Object.defineProperty(globalThis, 'indexedDB', { value: broken, configurable: true });
+    try {
+      // A fresh module registry, so this instance memoises the broken store rather than
+      // the working handle the rest of this file shares.
+      vi.resetModules();
+      const isolated = await import('./offline.js');
+      await expect(
+        isolated.queueMutation('broken-store-user', { kind: 'read', pullId: 'p9' }),
+      ).resolves.toBe(false);
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'indexedDB', original);
+      else delete (globalThis as unknown as Record<string, unknown>).indexedDB;
+      vi.resetModules();
+    }
+  });
+});
+
+/*
+ * `queueIfOffline` answers a different question from `queueMutation`, deliberately.
+ *
+ * Its three callers in `Library.tsx` all reload the screen when it is false, so `false`
+ * has to mean "the server refused this" and nothing else. An earlier revision propagated
+ * persistence through it, which made a dead IndexedDB read as a server refusal and
+ * replaced a working Library with the error screen — worse than the silent loss it was
+ * trying to fix.
+ */
+describe('queueIfOffline answers whether it took responsibility', () => {
+  it('is true for an offline failure, whatever the store did', async () => {
     const user = 'queue-contract-offline';
     const queued = await withOnline(false, () =>
       queueIfOffline(user, TRANSPORT_ERROR, { kind: 'read', pullId: 'p2' }),
@@ -726,7 +775,7 @@ describe('queueMutation reports whether it persisted', () => {
     await expect(hasPending(user)).resolves.toBe(true);
   });
 
-  it('still answers false without queueing when the failure was not an offline one', async () => {
+  it('is false for a failure the server chose, and queues nothing', async () => {
     const user = 'queue-contract-online';
     const queued = await withOnline(true, () =>
       queueIfOffline(user, new Error('server said no'), { kind: 'read', pullId: 'p3' }),

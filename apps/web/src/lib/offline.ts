@@ -514,7 +514,22 @@ export async function queueIfOffline(
   write: PendingWrite,
 ): Promise<boolean> {
   if (!isOfflineFailure(error)) return false;
-  // Propagated rather than assumed: `true` here means the write is genuinely waiting for
-  // the drain, not merely that it was offered to it.
-  return await queueMutation(userId, write);
+  /*
+   * Deliberately NOT propagating `queueMutation`'s answer.
+   *
+   * The two functions answer different questions. `queueMutation` says whether the write
+   * is on disk, which is what a caller telling the reader "recorded" needs. This says
+   * whether the failure was an offline one that has been taken off the caller's hands —
+   * which is what its callers actually branch on, and all three of them reload the screen
+   * when it is false.
+   *
+   * Propagating persistence collapsed those into one value, and a dead IndexedDB then
+   * read as "the server refused this". A reader with site data blocked, moving a kept
+   * Pull into a collection in a tunnel, had their whole Library replaced by the error
+   * screen — the exact dead end `Library.tsx` and `queueMutation` above both say must not
+   * happen, and worse than the silent loss it replaced. A caller that needs the stronger
+   * answer calls `queueMutation` directly, as `KnowledgeCensus` does.
+   */
+  await queueMutation(userId, write);
+  return true;
 }
