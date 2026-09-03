@@ -88,7 +88,7 @@ export function Ingestion() {
             ornament.
 
             `sr-only` keeps the input reachable by keyboard and screen reader while the
-            styled label still works as the click target.
+            styled label works as the click target and carries the focus ring.
           */}
           <label
             className="btn btn--plain file-drop"
@@ -96,14 +96,22 @@ export function Ingestion() {
             style={{ cursor: 'pointer', border: '1px dashed var(--rule-strong)' }}
           >
             Upload My Clippings.txt or a CSV
+            {/*
+              Nested, not a `for`-associated sibling. `:focus-within` matches an element
+              that is focused or *contains* a focused descendant, so as siblings the focus
+              rule was dead — and the input's own ring is a `box-shadow`, which `sr-only`
+              clips away with `clip-path: inset(50%)`. Tabbing here changed nothing on
+              screen. Nesting puts the ring on the label the reader can see; the label
+              wraps no other labelable control, so the association stays unambiguous.
+            */}
+            <input
+              id="clippings-file"
+              type="file"
+              accept=".txt,.csv"
+              className="sr-only"
+              onChange={handleFileUpload}
+            />
           </label>
-          <input
-            id="clippings-file"
-            type="file"
-            accept=".txt,.csv"
-            className="sr-only"
-            onChange={handleFileUpload}
-          />
         </div>
 
         <label className="field">

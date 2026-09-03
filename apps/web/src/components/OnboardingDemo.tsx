@@ -221,6 +221,11 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             </p>
           </div>
 
+          {/* Captioned like step 2's worked example, and for the same reason: the filter
+              bar counts these nodes and the screen-reader list reads out their
+              percentages, all of which come from `SAMPLE_GRAPH`'s hand-typed values. Real
+              seeded Pulls, illustrative numbers — and the reader is told which is which. */}
+          <p className="meta">Illustration, not your data — a sample map of public-domain ideas</p>
           <SynapseMap nodes={SAMPLE_GRAPH.nodes} edges={demoEdges} height="380px" />
         </div>
       )}
@@ -255,9 +260,10 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             className="btn btn--primary"
             onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}
           >
-            {/* Names the heading it actually leads to — step 3 was renamed to "The graph"
-                — and drops the arrow, which nothing else in the app puts on a button. */}
-            Next: {step === 1 ? 'the Delta' : 'the graph'}
+            {/* Names the heading it actually leads to; step 3 was renamed to "The graph".
+                The arrow stays: the two buttons either side of this one in the same footer
+                carry them, and making one of three inconsistent is worse than the mark. */}
+            Next: {step === 1 ? 'the Delta →' : 'the graph →'}
           </button>
         ) : (
           <button type="button" className="btn btn--primary" onClick={onComplete}>

@@ -349,15 +349,13 @@ function isGraphEdge(e: unknown): e is GraphEdge {
 }
 
 /**
- * Whether a cached graph may be handed to this caller.
+ * Whether there is a signed-in reader who could have a personal graph at all.
  *
- * A signed-out reader gets `null` here and therefore never sees a cache. That is the
- * rule the previous implementation broke: it keyed the cache by `userId ?? 'guest'` and
- * returned it on any RPC failure, so a session that had just expired — the one case
- * where the server has explicitly declined to hand this data over — was answered out of
- * local storage with the previous reader\'s headlines and bodies.
+ * Named `mayServeCache` until the cache it guarded was removed, which left the name
+ * describing something that no longer exists — the next reader of
+ * `if (!hasReader(userId))` would have gone looking for one.
  */
-export function mayServeCache(userId: string | null): userId is string {
+export function hasReader(userId: string | null): userId is string {
   return typeof userId === 'string' && userId.length > 0;
 }
 

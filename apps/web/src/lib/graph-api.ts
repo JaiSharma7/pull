@@ -1,4 +1,4 @@
-import { mayServeCache, narrowGraph, SAMPLE_GRAPH } from './graph.js';
+import { hasReader, narrowGraph, SAMPLE_GRAPH } from './graph.js';
 import { supabase } from './supabase.js';
 import type { KnowledgeGraphData } from './types.js';
 
@@ -36,7 +36,7 @@ export async function fetchKnowledgeGraph(
 ): Promise<KnowledgeGraphData> {
   // Still asked, and still meaning what it meant: whether there is a reader who could
   // have a personal graph at all. It no longer gates a cache, because there is none.
-  if (!mayServeCache(userId)) return SAMPLE_GRAPH;
+  if (!hasReader(userId)) return SAMPLE_GRAPH;
 
   try {
     const { data, error } = await supabase.rpc('get_user_knowledge_graph', { p_limit: limit });

@@ -4,7 +4,7 @@ import {
   filterConnectedEdges,
   filterGraphNodes,
   formatRetrievabilityLabel,
-  mayServeCache,
+  hasReader,
   narrowGraph,
 } from './graph.js';
 import type { GraphEdge, GraphNode } from './types.js';
@@ -133,18 +133,19 @@ describe('narrowGraph', () => {
   });
 });
 
-describe('mayServeCache', () => {
+describe('hasReader', () => {
   /*
-   * A graph node carries the reader's headlines and bodies. The cache was keyed by
-   * `userId ?? 'guest'` and returned on any RPC error — including an expired session,
-   * which is precisely when the server has declined to hand that data over.
+   * There is no longer a local graph cache to guard — see `graph-api.ts` for why it was
+   * removed rather than repaired. What this still decides is whether the RPC is worth
+   * calling at all: with no signed-in reader there is no personal graph to ask for, and
+   * the honest answer is the sample.
    */
-  it('never serves a cached graph to a signed-out reader', () => {
-    expect(mayServeCache(null)).toBe(false);
-    expect(mayServeCache('')).toBe(false);
+  it('is false without a signed-in reader', () => {
+    expect(hasReader(null)).toBe(false);
+    expect(hasReader('')).toBe(false);
   });
 
-  it('serves one to a signed-in reader', () => {
-    expect(mayServeCache('user-1')).toBe(true);
+  it('is true for a signed-in reader', () => {
+    expect(hasReader('user-1')).toBe(true);
   });
 });

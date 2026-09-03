@@ -183,7 +183,14 @@ export function Preferences({
           of 3" without labelling the first screen meant a new reader's first counter was
           a 2, with no step 1 anywhere. */}
       {mode === 'onboarding' ? <p className="meta">Step 1 of 3 · Topics</p> : null}
-      <h1 className="prose__heading">
+      {/* `marginTop` matched to the other two onboarding screens. `.prose__heading` carries
+          a 3rem top margin, and the rule that zeroes it applies only to a `:first-child` of
+          a `.prose` — neither is true here, so the step counter above floated 3rem clear of
+          the title it labels while screens 2 and 3 tucked theirs under it. */}
+      <h1
+        className="prose__heading"
+        style={mode === 'onboarding' ? { marginTop: 'var(--space-1)' } : undefined}
+      >
         {mode === 'onboarding' ? 'What do you want to learn about?' : 'Preferences'}
       </h1>
 

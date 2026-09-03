@@ -271,7 +271,10 @@ export function SynapseMap({
     const observer = new MutationObserver(repaint);
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme', 'data-contrast', 'data-text'],
+      // `data-focus` too: focus mode hides the rails in CSS, which widens the canvas
+      // without firing a `resize` — so the backing store stayed at the old width and the
+      // browser stretched the bitmap. It is the one root attribute that changes our size.
+      attributeFilter: ['data-theme', 'data-contrast', 'data-text', 'data-focus'],
     });
     return () => {
       window.removeEventListener('resize', repaint);

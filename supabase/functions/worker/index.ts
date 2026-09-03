@@ -292,8 +292,8 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
      * `20260903010000` added `status in ('queued','running')` to the close, so a
      * redelivered close on an already-closed job — the ordinary outcome when a worker
      * dies between recording its step and archiving its message — also returns `false`.
-     * That is the idempotent success path, and warning on it reads as a stall while
-     * costing log lines the free tier counts (`20260901030000`).
+     * That is the idempotent success path, and `warn` misclassifies it as a problem. The
+     * line stays — it is the only trace of a redelivered close — at the level it belongs.
      *
      * A job genuinely stuck at `running` after its sink ran is caught by the stranded
      * sweep (`20260902170000`), which is the mechanism for it.

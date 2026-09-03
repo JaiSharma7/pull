@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api.js';
-import { gradeForLevel, type KnowledgeLevel } from '../lib/calibration.js';
+import { unappliedGrades, type KnowledgeLevel } from '../lib/calibration.js';
 import { isOfflineFailure, queueMutation } from '../lib/offline.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
@@ -43,6 +43,17 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
   const [levels, setLevels] = useState<Record<string, KnowledgeLevel>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * Pull ids whose grade has already been applied, or durably queued.
+   *
+   * `grade_recall` is not replay-safe — it *multiplies* stability and increments `reps`,
+   * with no idempotency key — so a write that landed must never be sent twice. Without
+   * this the "Try again" the previous round added re-sent the whole set: four ideas that
+   * had already succeeded got a second `good`, taking stability 1.0 → 2.7 → 7.29 and
+   * pushing them out of review for weeks. The screen whose purpose is to establish an
+   * initial stability would have fabricated one instead.
+   */
+  const [applied, setApplied] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -73,12 +84,17 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
   };
 
   const handleFinish = async () => {
-    const claimed = Object.entries(levels).flatMap(([pullId, lvl]) => {
-      const grade = gradeForLevel(lvl);
-      return grade ? [[pullId, grade] as const] : [];
-    });
-    if (claimed.length === 0) {
+    const marked = unappliedGrades(levels, new Set());
+    // Anything already applied is excluded rather than retried — see `applied`.
+    const claimed = unappliedGrades(levels, applied);
+
+    if (marked.length === 0) {
       onComplete([]);
+      return;
+    }
+    if (claimed.length === 0) {
+      // Everything marked has already landed; a retry has nothing left to send.
+      onComplete([...applied]);
       return;
     }
 
@@ -115,8 +131,10 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       }
     }
     setSaving(false);
+    const settled = new Set([...applied, ...recorded]);
+    setApplied(settled);
 
-    if (recorded.length === 0) {
+    if (settled.size === 0) {
       setError('Could not save your calibration just now. You can skip and do this later.');
       return;
     }
@@ -124,12 +142,16 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       /*
        * A partial failure used to advance silently. Mark six, have five fail and one
        * land, and the reader was moved on having been told nothing — which is the exact
-       * thing this screen was rebuilt to stop doing.
+       * thing this screen was rebuilt to stop doing. "Try again" now retries only the
+       * ones that did not land.
        */
-      setError(`Saved ${recorded.length} of ${claimed.length}. The rest could not be recorded.`);
+      setError(
+        `Saved ${settled.size} of ${marked.length}. Try again to retry the ${lost.length} that ` +
+          `did not save — the ones that did are not re-sent.`,
+      );
       return;
     }
-    onComplete(recorded);
+    onComplete([...settled]);
   };
 
   return (
@@ -234,8 +256,8 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       ) : null}
 
       {error ? (
-        <button type="button" className="btn btn--plain" onClick={() => onComplete([])}>
-          Continue without saving these
+        <button type="button" className="btn btn--plain" onClick={() => onComplete([...applied])}>
+          Continue without the rest
         </button>
       ) : null}
 

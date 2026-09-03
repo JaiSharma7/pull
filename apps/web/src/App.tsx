@@ -1040,6 +1040,33 @@ export function App() {
               code in a mailbox — so rendering it would be a page of things that cannot
               complete. This says which one thing to do instead.
             */}
+            {/*
+              The same answer `/account` gives, for the same reason and now for the three
+              destinations gated from a guest above. A URL is still a URL: adding
+              `&& !guest` to the routes without a fallback meant a guest arriving at
+              /graph, /import or /metacognition by bookmark got a titled tab, a masthead,
+              a rail and an entirely empty main — `routeOpen` hides the feed, and
+              `isKnownPath` matches, so the 404 branch does not catch it either.
+            */}
+            {(graphOpen || importOpen || metacognitionOpen) && guest && (
+              <section className="stack measure">
+                <p className="meta">Reading as a guest</p>
+                <h1>This one needs an account.</h1>
+                <p>
+                  A guest session keeps your reading on this device and nothing else. These screens
+                  are built from a knowledge model that belongs to an account — what you have read,
+                  how well you are holding on to it, and what connects to what — so there is nothing
+                  here to show you yet.
+                </p>
+                <p className="meta">
+                  Everything you have read as a guest carries over when you sign in.
+                </p>
+                <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
+                  Back to reading
+                </button>
+              </section>
+            )}
+
             {accountOpen && guest && (
               <section className="stack measure">
                 <p className="meta">Account</p>

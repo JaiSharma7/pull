@@ -22,3 +22,26 @@ export function gradeForLevel(level: KnowledgeLevel): 'good' | 'easy' | null {
   if (level === 'familiar') return 'good';
   return null;
 }
+
+/**
+ * The grades still to send: every marked idea, minus the ones already applied.
+ *
+ * Pure and separate because the subtraction is the whole safety property, and it is
+ * invisible when it fails. `grade_recall` multiplies stability and increments `reps` with
+ * no idempotency key, so re-sending an applied grade does not repeat a write — it
+ * compounds one. A "Try again" that resent the whole set took a successful `good` from
+ * stability 1.0 to 2.7 to 7.29 and pushed the idea out of review for weeks, on the
+ * screen whose entire job is to establish an accurate starting stability.
+ */
+export function unappliedGrades(
+  levels: Record<string, KnowledgeLevel>,
+  applied: ReadonlySet<string>,
+): [string, 'good' | 'easy'][] {
+  const out: [string, 'good' | 'easy'][] = [];
+  for (const [pullId, level] of Object.entries(levels)) {
+    if (applied.has(pullId)) continue;
+    const grade = gradeForLevel(level);
+    if (grade) out.push([pullId, grade]);
+  }
+  return out;
+}
