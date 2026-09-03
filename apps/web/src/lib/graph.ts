@@ -1,57 +1,32 @@
 import type { GraphEdge, GraphNode, KnowledgeGraphData } from './types.js';
 
 /**
- * Fallback seed graph for guests, cold-start, or offline states when no local
- * cache exists.
+ * The graph shown when the RPC cannot be reached at all.
+ *
+ * Every node is a real seeded Pull from a public-domain work, and every edge a real
+ * row from `20260829131109_seed_relations_and_daily.sql`. That is not incidental:
+ * `docs/design.md` requires an illustrative card to be a real seeded Pull from a
+ * public-domain work, and says so because this repository has already once reached for
+ * an in-copyright bestseller the moment it wanted a plausible example. The version of
+ * this constant that shipped in the branch did it again — invented one-line paraphrases
+ * attributed to *Thinking, Fast and Slow*, *Antifragile*, *The Black Swan* and *The
+ * Structure of Scientific Revolutions*, plus a line attributed to *Man's Search for
+ * Meaning* that is not in that book.
+ *
+ * The retrievability values are illustrative rather than measured, which is exactly why
+ * `KnowledgeGraphData.source` marks this graph `sample`: a caller that reports counts to
+ * a reader must refuse to treat these as their own.
  */
 export const SAMPLE_GRAPH: KnowledgeGraphData = {
+  source: 'sample',
   nodes: [
     {
-      pullId: 'sample-1',
-      workId: 'work-1',
-      workTitle: 'Thinking, Fast and Slow',
+      pullId: 'sample-enchiridion-1',
+      workId: 'sample-work-enchiridion',
+      workTitle: 'The Enchiridion',
       workKind: 'book',
-      headline: 'System 1 is fast and heuristic; System 2 is slow and deliberate',
-      body: 'Most judgment operates automatically. Deliberate effort is invoked only when surprise or complexity demands it.',
-      stability: 18.0,
-      difficulty: 0.3,
-      retrievability: 0.94,
-      lastSeenAt: '2026-09-01T00:00:00.000Z',
-      status: 'solid',
-    },
-    {
-      pullId: 'sample-2',
-      workId: 'work-2',
-      workTitle: 'Antifragile',
-      workKind: 'book',
-      headline: 'Antifragility gains from disorder, volatility, and stressors',
-      body: 'Some things benefit from shocks; they thrive and grow when exposed to volatility, randomness, and stressors.',
-      stability: 8.5,
-      difficulty: 0.4,
-      retrievability: 0.88,
-      lastSeenAt: '2026-09-01T00:00:00.000Z',
-      status: 'solid',
-    },
-    {
-      pullId: 'sample-3',
-      workId: 'work-3',
-      workTitle: 'The Black Swan',
-      workKind: 'book',
-      headline: 'Outlier events dominate history yet are retrospectively rationalized',
-      body: 'A Black Swan is an event with extreme impact, incomprehensible predictability, and retrospective explanation.',
-      stability: 3.2,
-      difficulty: 0.5,
-      retrievability: 0.58,
-      lastSeenAt: '2026-08-28T00:00:00.000Z',
-      status: 'fading',
-    },
-    {
-      pullId: 'sample-4',
-      workId: 'work-4',
-      workTitle: 'Meditations',
-      workKind: 'book',
-      headline: 'You have power over your mind, not outside events',
-      body: 'Realize this, and you will find strength. The obstacle to action advances action; what stands in the way becomes the way.',
+      headline: 'Some things are up to you. Most are not.',
+      body: 'Your judgements, intentions and effort are yours. Reputation, outcomes, other people and the past are not.',
       stability: 24.0,
       difficulty: 0.2,
       retrievability: 0.96,
@@ -59,62 +34,115 @@ export const SAMPLE_GRAPH: KnowledgeGraphData = {
       status: 'solid',
     },
     {
-      pullId: 'sample-5',
-      workId: 'work-5',
-      workTitle: 'The Structure of Scientific Revolutions',
+      pullId: 'sample-enchiridion-2',
+      workId: 'sample-work-enchiridion',
+      workTitle: 'The Enchiridion',
       workKind: 'book',
-      headline: 'Science progresses by paradigm shifts, not steady accumulation',
-      body: 'Normal science operates within a paradigm until accumulating anomalies trigger a crisis and fundamental shift.',
-      stability: 2.1,
-      difficulty: 0.6,
-      retrievability: 0.48,
+      headline: 'You are disturbed by your judgement, not by the event.',
+      body: 'Events arrive without commentary. The distress comes from the verdict you attach to them, which is why two people meet the same news very differently.',
+      stability: 18.0,
+      difficulty: 0.3,
+      retrievability: 0.91,
+      lastSeenAt: '2026-09-01T00:00:00.000Z',
+      status: 'solid',
+    },
+    {
+      pullId: 'sample-meditations-2',
+      workId: 'sample-work-meditations',
+      workTitle: 'Meditations',
+      workKind: 'book',
+      headline: 'It is your opinion of the thing that wounds you, and you can revoke it.',
+      body: 'The pain is attached to the verdict rather than the event, and the verdict is something you issued and can withdraw.',
+      stability: 12.0,
+      difficulty: 0.35,
+      retrievability: 0.84,
+      lastSeenAt: '2026-08-31T00:00:00.000Z',
+      status: 'solid',
+    },
+    {
+      pullId: 'sample-on-liberty-1',
+      workId: 'sample-work-on-liberty',
+      workTitle: 'On Liberty',
+      workKind: 'book',
+      headline: 'Silencing an opinion robs the people doing the silencing.',
+      body: 'If the opinion is right, they lose a correction. If it is wrong, they lose the sharper understanding that comes from defeating it.',
+      stability: 6.0,
+      difficulty: 0.45,
+      retrievability: 0.68,
+      lastSeenAt: '2026-08-29T00:00:00.000Z',
+      status: 'refreshing',
+    },
+    {
+      pullId: 'sample-walden-3',
+      workId: 'sample-work-walden',
+      workTitle: 'Walden',
+      workKind: 'book',
+      headline: 'Living deliberately is mostly deciding what to attend to.',
+      body: 'The point of the experiment was not the cabin. It was removing enough noise to find out which parts of a life were actually chosen.',
+      stability: 3.2,
+      difficulty: 0.5,
+      retrievability: 0.55,
       lastSeenAt: '2026-08-26T00:00:00.000Z',
       status: 'fading',
     },
     {
-      pullId: 'sample-6',
-      workId: 'work-6',
-      workTitle: 'Man’s Search for Meaning',
+      pullId: 'sample-walden-1',
+      workId: 'sample-work-walden',
+      workTitle: 'Walden',
       workKind: 'book',
-      headline: 'Between stimulus and response there is a space: our choice',
-      body: 'In that space is our power to choose our response. In our response lies our growth and our freedom.',
-      stability: 12.0,
+      headline: 'The cost of a thing is the amount of life you exchange for it.',
+      body: 'Not the price. The hours required to earn the price, plus the hours spent maintaining, storing and worrying about what you bought.',
+      stability: 9.0,
       difficulty: 0.35,
-      retrievability: 0.85,
-      lastSeenAt: '2026-09-01T00:00:00.000Z',
-      status: 'solid',
+      retrievability: 0.79,
+      lastSeenAt: '2026-08-30T00:00:00.000Z',
+      status: 'refreshing',
+    },
+    {
+      pullId: 'sample-origin-2',
+      workId: 'sample-work-origin',
+      workTitle: 'On the Origin of Species',
+      workKind: 'book',
+      headline: 'Very small advantages, compounded over deep time, do very large work.',
+      body: 'A trait that helps fractionally, in each generation, across an interval of time the mind is not built to picture, produces results that look designed.',
+      stability: 2.1,
+      difficulty: 0.6,
+      retrievability: 0.47,
+      lastSeenAt: '2026-08-25T00:00:00.000Z',
+      status: 'fading',
     },
   ],
   edges: [
     {
-      fromPullId: 'sample-2',
-      toPullId: 'sample-3',
-      kind: 'elaborates',
-      weight: 0.85,
-      rationale: 'Antifragility provides the operational antidote to Black Swan vulnerabilities.',
-    },
-    {
-      fromPullId: 'sample-1',
-      toPullId: 'sample-3',
-      kind: 'opposes',
-      weight: 0.7,
-      rationale:
-        'Heuristic pattern-matching falsely assures us of predictability in tail-risk regimes.',
-    },
-    {
-      fromPullId: 'sample-4',
-      toPullId: 'sample-6',
-      kind: 'ancestor',
+      fromPullId: 'sample-enchiridion-2',
+      toPullId: 'sample-meditations-2',
+      kind: 'descendant',
       weight: 0.9,
       rationale:
-        'Stoic dichotomy of control directly informs logotherapy and existential psychology.',
+        'Marcus was a reader of Epictetus; this is the same claim, restated by a later Stoic.',
     },
     {
-      fromPullId: 'sample-2',
-      toPullId: 'sample-4',
+      fromPullId: 'sample-meditations-2',
+      toPullId: 'sample-enchiridion-2',
+      kind: 'ancestor',
+      weight: 0.9,
+      rationale: "Traces back to the Enchiridion's distinction between event and judgement.",
+    },
+    {
+      fromPullId: 'sample-on-liberty-1',
+      toPullId: 'sample-walden-3',
+      kind: 'opposes',
+      weight: 0.75,
+      rationale:
+        'Mill argues for engaging with opinions you reject; Thoreau argues that attention is scarce and must be spent selectively. Both cannot be maximised.',
+    },
+    {
+      fromPullId: 'sample-origin-2',
+      toPullId: 'sample-walden-1',
       kind: 'related',
-      weight: 0.65,
-      rationale: 'Voluntary exposure to hardship builds psychological and systemic antifragility.',
+      weight: 0.6,
+      rationale:
+        'Both turn on the same failure of intuition about small quantities accumulating over long intervals.',
     },
   ],
 };

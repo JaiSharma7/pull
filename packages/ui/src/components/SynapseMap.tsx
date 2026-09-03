@@ -118,6 +118,11 @@ export function SynapseMap({
   // Direct neighbors of selected node (for highlight focus)
   const neighborSet = useMemo(() => {
     if (!selectedNodeId) return null;
+    // A selection the current filter has removed is not a focus. Without this the set
+    // is non-null and holds only the absent id, so nothing matches it and every node
+    // still on screen is drawn dimmed — select a fading node, switch to Solid, and the
+    // whole graph greys out around a node that is no longer in it.
+    if (!activePullIds.has(selectedNodeId)) return null;
     const s = new Set<string>();
     s.add(selectedNodeId);
     for (const e of filteredEdges) {
@@ -125,7 +130,7 @@ export function SynapseMap({
       if (e.toPullId === selectedNodeId) s.add(e.fromPullId);
     }
     return s;
-  }, [selectedNodeId, filteredEdges]);
+  }, [selectedNodeId, filteredEdges, activePullIds]);
 
   // Simulation state maintained across renders
   const simNodesRef = useRef<SimulationNode[]>([]);

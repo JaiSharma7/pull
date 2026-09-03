@@ -32,17 +32,23 @@ export function MetacognitiveDashboard({
     };
   }, [userId]);
 
-  const stats = useMemo(() => {
-    if (!graphData) return null;
-    return computeGraphStats(graphData.nodes, graphData.edges);
-  }, [graphData]);
+  /*
+   * Only the reader's own graph is counted here.
+   *
+   * `fetchKnowledgeGraph` has two fallbacks that both return a populated graph: the RPC
+   * serves the published seed corpus to a reader with no `knowledge_states` yet, and a
+   * failed RPC serves `SAMPLE_GRAPH`. Neither is anybody's history. Without this check a
+   * reader who had just signed up — or was simply offline — was shown a retention health
+   * percentage, a count of concepts retained and a list of ideas due for review, all
+   * computed over rows they had never seen. A dashboard that reports the corpus back as
+   * personal progress is worse than no dashboard, and this one is named for measurement.
+   */
+  const measured = graphData?.source === 'personal' ? graphData : null;
 
-  // Derived estimates for metacognitive time saved:
-  // Each retained node spares an estimated 20-30 mins of re-reading or research
-  const hoursSpared = useMemo(() => {
-    if (!stats) return 0;
-    return Math.round(stats.totalNodes * 0.45 * 10) / 10;
-  }, [stats]);
+  const stats = useMemo(() => {
+    if (!measured) return null;
+    return computeGraphStats(measured.nodes, measured.edges);
+  }, [measured]);
 
   return (
     <div className="stack" style={{ gap: 'var(--space-5)', maxWidth: '42rem' }}>
@@ -52,8 +58,8 @@ export function MetacognitiveDashboard({
           Metacognitive ROI
         </h1>
         <p className="meta">
-          Every minute invested in What a Pull is measured in time spared, enduring recall, and
-          interleaved understanding.
+          What you have read, and how well you are still holding on to it. Every number here is
+          computed from your own recall history — nothing is estimated.
         </p>
       </header>
 
@@ -61,9 +67,14 @@ export function MetacognitiveDashboard({
         <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
           {error}
         </p>
-      ) : !stats ? (
+      ) : !graphData ? (
         <p className="meta" role="status">
           Calculating retention metrics…
+        </p>
+      ) : !stats ? (
+        <p className="meta" role="status">
+          Nothing measured yet. These numbers come from your own reading — read and recall a few
+          ideas and this fills in. Until then there is nothing here that would be true.
         </p>
       ) : (
         <div className="stack" style={{ gap: 'var(--space-5)' }}>
@@ -75,27 +86,17 @@ export function MetacognitiveDashboard({
               gap: 'var(--space-4)',
             }}
           >
-            <div
-              style={{
-                border: '1px solid var(--rule)',
-                padding: 'var(--space-4)',
-                backgroundColor: 'var(--surface-raised)',
-              }}
-            >
-              <p className="meta">Time Spared (The Delta)</p>
-              <div
-                style={{
-                  fontSize: 'var(--step-4)',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--accent)',
-                  margin: 'var(--space-2) 0',
-                }}
-              >
-                {hoursSpared}h
-              </div>
-              <p className="meta">reading time saved vs whole books</p>
-            </div>
-
+            {/*
+              There was a "Time Spared (The Delta)" tile here, reading `totalNodes * 0.45`
+              hours. It is gone rather than corrected because there is no number to correct
+              it to. `totalNodes` counts `knowledge_states` rows, which `record_read`
+              creates whenever a card is read — so the figure rose by 0.45h every time the
+              reader read anything, including an idea the Delta had just told them they
+              already knew, and it was labelled with the name of the one mechanism in this
+              product that does compute what a reader was spared. Attaching "The Delta" to a
+              typed-in constant costs more than the tile was worth. It comes back when the
+              Delta reports minutes.
+            */}
             <div
               style={{
                 border: '1px solid var(--rule)',
@@ -134,7 +135,7 @@ export function MetacognitiveDashboard({
                   margin: 'var(--space-2) 0',
                 }}
               >
-                {graphData?.edges.length ?? 0}
+                {measured?.edges.length ?? 0}
               </div>
               <p className="meta">{stats.opposesCount} dialectical tensions</p>
             </div>

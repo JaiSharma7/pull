@@ -5,6 +5,7 @@ import * as api from '../lib/api.js';
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
+import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak } from '../lib/speech.js';
@@ -25,7 +26,8 @@ import {
   newStashId,
   withoutStashes,
 } from '../lib/stashes.js';
-import type { LibraryItem, SourceDelta } from '../lib/types.js';
+import { getCurrentUserId } from '../lib/supabase.js';
+import type { KnowledgeGraphData, LibraryItem, SourceDelta } from '../lib/types.js';
 
 /**
  * Everything the reader has kept, and — finally — somewhere to put it.
@@ -79,6 +81,24 @@ export function Library({ userId }: { userId: string }) {
      preference, not a property of any single saved idea. */
   const [depth, setDepth] = useState(1);
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+  /*
+   * The graph view's numbers come from `get_user_knowledge_graph` — the same RPC the
+   * `/graph` destination reads — and not from anything derivable here.
+   *
+   * They were derived here, and that is what this replaces: `retrievability` was
+   * `known / total` from the source Delta, which is a source-wide coverage ratio and
+   * not this Pull's retrievability, falling back to a literal `0.9` whenever the Delta
+   * had not been loaded — which is always, until the reader expands a group, because
+   * `delta` is populated by `toggle()`. `stability` was the constant 14 and `status`
+   * the constant 'solid'. So the Solid/Fading lattice, which is the whole point of the
+   * view, was solid for everyone, always, on invented numbers.
+   *
+   * Loaded only when the reader actually opens the graph: it is one RPC, and the list
+   * view has no use for it.
+   */
+  const [graph, setGraph] = useState<KnowledgeGraphData | null>(null);
+  const [graphFilter, setGraphFilter] = useState<'all' | 'solid' | 'fading'>('all');
+  const [selectedPullId, setSelectedPullId] = useState<string | null>(null);
 
   /*
    * Everything the reader has marked or written, as a file they keep.
@@ -162,22 +182,70 @@ export function Library({ userId }: { userId: string }) {
   );
   const groups = useMemo(() => groupByWork(visible), [visible]);
 
-  const graphNodes: SynapseNode[] = useMemo(() => {
-    return (visible ?? []).map((item) => {
-      const d = item.work.id ? delta[item.work.id] : undefined;
-      return {
-        pullId: item.id,
-        workId: item.work.id,
-        workTitle: item.work.title,
-        workKind: item.work.kind ?? 'book',
-        headline: item.headline,
-        body: item.body,
-        retrievability: d ? d.known / Math.max(1, d.total) : 0.9,
-        stability: 14,
-        status: 'solid' as const,
-      };
+  useEffect(() => {
+    if (viewMode !== 'graph' || graph !== null) return;
+    let cancelled = false;
+    void fetchKnowledgeGraph(getCurrentUserId()).then((g) => {
+      if (!cancelled) setGraph(g);
     });
-  }, [visible, delta]);
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, graph]);
+
+  /* Derived rather than a second piece of state: the effect above starts the moment the
+     reader opens the graph, and `fetchKnowledgeGraph` resolves either way — it answers a
+     failed RPC with `SAMPLE_GRAPH` rather than rejecting — so "graph mode with nothing
+     loaded" is exactly "in flight". Holding it in state meant a `setState` in the body of
+     an effect, which is a cascading render and a lint error. */
+  const graphLoading = viewMode === 'graph' && graph === null;
+
+  /*
+   * The saved ideas the reader has actually read, with the retrievability the database
+   * computed for them.
+   *
+   * Intersected rather than mapped over `visible`, because the two sets are not the
+   * same: the Library is what was *saved*, the graph is what has a `knowledge_states`
+   * row — what was *read*. A saved Pull that has never been read has no retrievability,
+   * and the honest thing to do with it is leave it out of a retrievability lattice
+   * rather than assign it a number. `graphMissing` below says so in words.
+   *
+   * A `seed` or `sample` graph is nobody's history, so it is not shown here at all —
+   * see `GraphSource`. The `/graph` destination may present the seed corpus as a
+   * demonstration; a view labelled "your library" may not.
+   */
+  const graphNodes: SynapseNode[] = useMemo(() => {
+    if (!graph || graph.source !== 'personal') return [];
+    const savedPullIds = new Set((visible ?? []).map((item) => item.id));
+    return graph.nodes
+      .filter((n) => savedPullIds.has(n.pullId))
+      .map((n) => ({
+        pullId: n.pullId,
+        workId: n.workId,
+        workTitle: n.workTitle,
+        workKind: n.workKind,
+        headline: n.headline,
+        body: n.body,
+        retrievability: n.retrievability,
+        stability: n.stability,
+        difficulty: n.difficulty,
+        status: n.status,
+      }));
+  }, [graph, visible]);
+
+  const graphEdges = useMemo(() => {
+    if (!graph) return [];
+    const ids = new Set(graphNodes.map((n) => n.pullId));
+    return graph.edges.filter((e) => ids.has(e.fromPullId) && ids.has(e.toPullId));
+  }, [graph, graphNodes]);
+
+  /** Saved ideas with no knowledge state yet — read nothing into their absence. */
+  const graphMissing = (visible ?? []).length - graphNodes.length;
+
+  const selectedNode = useMemo(
+    () => graphNodes.find((n) => n.pullId === selectedPullId) ?? null,
+    [graphNodes, selectedPullId],
+  );
 
   const activeStash = useMemo(
     () => (stashId === null ? null : (flat.find((n) => n.id === stashId) ?? null)),
@@ -549,12 +617,54 @@ export function Library({ userId }: { userId: string }) {
       {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
 
       {viewMode === 'graph' ? (
-        <SynapseMap
-          nodes={graphNodes}
-          edges={[]}
-          height="540px"
-          onSelectNode={(n) => n && setOpenWork(n.workId)}
-        />
+        graphLoading ? (
+          <p className="measure">Reading your knowledge graph…</p>
+        ) : graphNodes.length === 0 ? (
+          <p className="measure">
+            Nothing to plot yet. This view maps saved ideas you have read against how well you are
+            holding on to them, so an idea appears here once you have read it at least once.
+          </p>
+        ) : (
+          <>
+            <SynapseMap
+              nodes={graphNodes}
+              edges={graphEdges}
+              height="540px"
+              filter={graphFilter}
+              onFilterChange={setGraphFilter}
+              selectedNodeId={selectedPullId}
+              onSelectNode={(n) => setSelectedPullId(n ? n.pullId : null)}
+            />
+            {/* A click on a node used to set `openWork`, which is only read inside the
+                list branch — so in graph mode it produced nothing visible at all. The
+                selection is shown here, next to the graph the reader clicked in. */}
+            {selectedNode ? (
+              <div className="library__selection measure">
+                <p className="text-muted">
+                  {selectedNode.workTitle} · {selectedNode.status} ·{' '}
+                  {Math.round(selectedNode.retrievability * 100)}% retrievable
+                </p>
+                <p>{selectedNode.headline}</p>
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => {
+                    setOpenWork(selectedNode.workId);
+                    setViewMode('list');
+                  }}
+                >
+                  Open in list
+                </button>
+              </div>
+            ) : null}
+            {graphMissing > 0 ? (
+              <p className="measure text-muted">
+                {graphMissing} more saved {graphMissing === 1 ? 'idea has' : 'ideas have'} not been
+                read yet, so {graphMissing === 1 ? 'it is' : 'they are'} not plotted.
+              </p>
+            ) : null}
+          </>
+        )
       ) : (
         groups.map((group) => {
           const open = openWork === group.key;

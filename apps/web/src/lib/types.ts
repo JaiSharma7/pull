@@ -119,8 +119,21 @@ export interface GraphEdge {
   rationale: string | null;
 }
 
+/**
+ * Where a graph's numbers came from, which anything that reports a count to a reader
+ * has to check before calling them theirs.
+ *
+ *   * `personal` — the reader's own `knowledge_states`, with real retrievability.
+ *   * `seed`     — the published corpus, returned by the RPC when a reader has no
+ *                  states yet. Real rows, but not this reader's history.
+ *   * `sample`   — the hard-coded `SAMPLE_GRAPH`, served when the RPC could not be
+ *                  reached at all. Not data.
+ */
+export type GraphSource = 'personal' | 'seed' | 'sample';
+
 /** Full data structure returned for the knowledge graph. */
 export interface KnowledgeGraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  source: GraphSource;
 }

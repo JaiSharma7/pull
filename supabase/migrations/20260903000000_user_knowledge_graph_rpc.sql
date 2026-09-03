@@ -3,9 +3,9 @@
 -- Joins the reader's knowledge states with published pulls, works, and
 -- relation edges (lineage and counterpoints). Retrievability is computed
 -- on read via retrievability(). For a reader with no knowledge states yet
--- or a signed-out visitor, returns the published canonical seed graph.
+-- or a signed-out visitor, returns the published canonical seed graph, and says
+-- so in `source` so a caller cannot report the corpus back as personal progress.
 create or replace function public.get_user_knowledge_graph(
-  p_user_id uuid default null,
   p_limit int default 150
 )
 returns jsonb
@@ -14,9 +14,18 @@ security invoker
 set search_path = ''
 as $$
 declare
-  uid uuid := coalesce(p_user_id, (select auth.uid()));
+  -- `auth.uid()` and nothing else. This is `security invoker`, so RLS on
+  -- `knowledge_states` is what scopes the read; a `p_user_id` argument could only ever
+  -- name the caller, and naming anyone else returned an empty personal set and the seed
+  -- graph. A parameter that cannot do what its name says is one a caller eventually
+  -- believes, so it is gone rather than ignored.
+  uid uuid := (select auth.uid());
   nodes_json jsonb;
   edges_json jsonb;
+  -- Which graph the caller is actually looking at. Without this the seed fallback is
+  -- indistinguishable from a personal graph, and anything downstream that counts nodes
+  -- reports the seed corpus to a brand-new reader as though it were their own history.
+  graph_source text := 'personal';
 begin
   if uid is not null then
     with user_nodes as (
@@ -92,6 +101,7 @@ begin
 
   -- Fallback to seed corpus when no knowledge states exist
   if nodes_json is null or jsonb_array_length(nodes_json) = 0 then
+    graph_source := 'seed';
     with seed_nodes as (
       select
         p.id as pull_id,
@@ -160,12 +170,13 @@ begin
 
   return jsonb_build_object(
     'nodes', coalesce(nodes_json, '[]'::jsonb),
-    'edges', coalesce(edges_json, '[]'::jsonb)
+    'edges', coalesce(edges_json, '[]'::jsonb),
+    'source', graph_source
   );
 end;
 $$;
 
 comment on function public.get_user_knowledge_graph is
-  'Returns the nodes and edges of a user knowledge graph with real-time retrievability values.';
+  'Returns the nodes and edges of a user knowledge graph with real-time retrievability values, plus a source of personal or seed. A caller that reports counts to a reader must check source: seed is the published corpus, not their history.';
 
-grant execute on function public.get_user_knowledge_graph(uuid, int) to anon, authenticated;
+grant execute on function public.get_user_knowledge_graph(int) to anon, authenticated;
