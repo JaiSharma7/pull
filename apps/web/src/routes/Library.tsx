@@ -665,8 +665,8 @@ export function Library({ userId }: { userId: string }) {
             ) : null}
             {graphMissing > 0 ? (
               <p className="measure meta">
-                {graphMissing} more saved {graphMissing === 1 ? 'idea has' : 'ideas have'} not been
-                read yet, so {graphMissing === 1 ? 'it is' : 'they are'} not plotted.
+                {graphMissing} more saved {graphMissing === 1 ? 'idea is' : 'ideas are'} not plotted
+                — either not read yet, or beyond the most recent ideas this map covers.
               </p>
             ) : null}
           </>

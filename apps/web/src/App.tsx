@@ -124,8 +124,7 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
    */
   { path: '/graph', label: 'Graph', signedIn: true },
   { path: '/import', label: 'Import', signedIn: true },
-  { path: '/metacognition', label: 'ROI', signedIn: true },
-  { path: '/demo', label: 'Demo', signedIn: true },
+  { path: '/metacognition', label: 'Progress', signedIn: true },
 
   /*
    * A destination rather than a seventh section, and last of the three.
@@ -1236,14 +1235,20 @@ export function App() {
                 }}
               >
                 <p className="meta">The Delta</p>
-                <button
-                  type="button"
-                  className="btn btn--plain meta"
-                  style={{ padding: 0, textDecoration: 'underline' }}
-                  onClick={() => navigate('/metacognition')}
-                >
-                  ROI →
-                </button>
+                {/* Same condition as `destinations` above, which withholds /metacognition
+                    from a guest. The two navigations disagreed: the rail offered a guest a
+                    link the masthead deliberately hid, and the route would have refused it.
+                    No arrow either — nothing else in the app labels a button that way. */}
+                {!visitor && !guest ? (
+                  <button
+                    type="button"
+                    className="btn btn--plain meta"
+                    style={{ textDecoration: 'underline' }}
+                    onClick={() => navigate('/metacognition')}
+                  >
+                    Your progress
+                  </button>
+                ) : null}
               </div>
 
               <div className="shell__stat">

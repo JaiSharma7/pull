@@ -58,10 +58,10 @@ export function Ingestion({ onComplete }: IngestionProps) {
     <div className="shell__column" style={{ padding: 'var(--space-4) 0' }}>
       <header style={{ marginBottom: 'var(--space-4)' }}>
         <span className="pull-card__chip" style={{ color: 'var(--accent)' }}>
-          The Universal Bridge
+          Import
         </span>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: 'var(--space-2) 0' }}>
-          Universal Reading Ingestion
+          Bring in your highlights
         </h1>
         <p className="meta">
           Read your Kindle clippings or a Readwise export and see what is in them. This runs in your
@@ -71,7 +71,7 @@ export function Ingestion({ onComplete }: IngestionProps) {
 
       <section className="pull-card" style={{ marginBottom: 'var(--space-4)' }}>
         <h2 className="pull-card__headline" style={{ fontSize: '1.25rem' }}>
-          Choose your file or paste clippings
+          Choose a file, or paste your clippings
         </h2>
         <div style={{ margin: 'var(--space-3) 0' }}>
           {/*

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { recognitionSupported, speechSupported, startRecognition } from './speech.js';
 
 describe('speech utilities', () => {
@@ -62,6 +62,11 @@ function fakeRecognition() {
 function clearRecognition() {
   delete (globalThis as unknown as Record<string, unknown>)['window'];
 }
+
+/* The fake `window` is torn down here as well as inline: a failing assertion returns
+   before the inline `clearRecognition()`, and the leak makes the *next* test in the file
+   fail for a reason that has nothing to do with it. */
+afterEach(clearRecognition);
 
 function emit(
   instance: { onresult: ((e: unknown) => void) | null },

@@ -64,9 +64,9 @@ export function Graph({
   return (
     <div className="stack" style={{ gap: 'var(--space-4)' }}>
       <header>
-        <p className="meta">Synapse Knowledge Graph</p>
+        <p className="meta">Your graph</p>
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
-          Your Mental Landscape
+          How your ideas connect
         </h1>
         {absence === 'unreachable' ? (
           <p className="meta">

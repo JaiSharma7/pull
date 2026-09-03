@@ -54,9 +54,9 @@ export function MetacognitiveDashboard({
   return (
     <div className="stack" style={{ gap: 'var(--space-5)', maxWidth: '42rem' }}>
       <header>
-        <p className="meta">Learning Efficiency Analytics</p>
+        <p className="meta">Your reading</p>
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
-          Metacognitive ROI
+          What you are holding on to
         </h1>
         <p className="meta">
           What you have read, and how well you are still holding on to it. Every number here is
@@ -113,7 +113,7 @@ export function MetacognitiveDashboard({
                 backgroundColor: 'var(--surface-raised)',
               }}
             >
-              <p className="meta">Retention Health</p>
+              <p className="meta">Still holding</p>
               <div
                 style={{
                   fontSize: 'var(--step-4)',
@@ -136,7 +136,7 @@ export function MetacognitiveDashboard({
                 backgroundColor: 'var(--surface-raised)',
               }}
             >
-              <p className="meta">Lattice Connections</p>
+              <p className="meta">Connections</p>
               <div
                 style={{
                   fontSize: 'var(--step-4)',
@@ -159,10 +159,10 @@ export function MetacognitiveDashboard({
             }}
             className="stack"
           >
-            <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>FSRS Retrievability Spectrum</h2>
+            <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>How well each idea is holding</h2>
             <p className="meta">
-              Ideas decay exponentially along Ebbinghaus forgetting curves. Active recall resets
-              stability with increasing half-life intervals.
+              An idea you do not revisit fades on a curve. Recalling one resets its clock, and each
+              success buys a longer interval than the last.
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
@@ -252,7 +252,7 @@ export function MetacognitiveDashboard({
             }}
           >
             <button type="button" className="btn btn--primary" onClick={() => onNavigate('/graph')}>
-              Open Synapse Graph →
+              Open the graph
             </button>
 
             {onGoToReview && stats.fadingCount > 0 && (

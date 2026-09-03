@@ -36,9 +36,9 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
         </div>
 
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-1)' }}>
-          {step === 1 && '1. The Depth Dial'}
-          {step === 2 && '2. The Delta (Time Saved)'}
-          {step === 3 && '3. The Synapse Network'}
+          {step === 1 && 'The Depth Dial'}
+          {step === 2 && 'The Delta'}
+          {step === 3 && 'The graph'}
         </h1>
         <p className="meta">
           {step === 1 &&
@@ -61,7 +61,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             }}
           >
             <p className="meta" style={{ color: 'var(--accent)' }}>
-              Interactive Try-It · Slide the dial at the bottom of the card:
+              Try it — slide the dial at the bottom of the card:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
               Level 1 captures the thesis in seconds. Level 2 details mechanisms. Level 3 includes
@@ -106,7 +106,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             }}
           >
             <p className="meta" style={{ color: 'var(--accent)' }}>
-              Interactive Try-It · Toggle your prior knowledge:
+              Try it — toggle what you already know:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
               The same idea turns up in book after book. The Delta leaves out the ones you have
@@ -206,7 +206,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             }}
           >
             <p className="meta" style={{ color: 'var(--accent)' }}>
-              Interactive Try-It · Explore your seed lattice:
+              Try it — drag, zoom, or tap a node:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
               Drag nodes, zoom, or tap to inspect connections. Red dashed lines represent opposing
