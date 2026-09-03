@@ -1,5 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { MAX_ATTEMPTS, nextStep, type Step } from '../_shared/steps.ts';
+import { MAX_ATTEMPTS, NEEDS, nextStep, type Step } from '../_shared/steps.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
@@ -140,8 +140,12 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
     'read job',
   ) as JobRow;
 
+  // Only the outputs this step declares it reads. The one-argument form returned
+  // every succeeded step's output -- source text included, twice -- on every
+  // invocation; see NEEDS for the arithmetic. PostgREST resolves the overload by
+  // the named arguments, so passing `p_steps` selects the two-argument function.
   const priorOutputs = (must(
-    await supabase.rpc('job_step_outputs', { p_job_id: jobId }),
+    await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [...NEEDS[step]] }),
     'read prior step outputs',
   ) ?? {}) as Record<string, unknown>;
 
