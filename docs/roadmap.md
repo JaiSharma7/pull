@@ -320,15 +320,20 @@ not have to rediscover them.
   placement rules over thousands of sessions without a database — but the prefetch use
   it was originally described as serving would need a pure-JS MD5 first. It is a
   devDependency now, which is what it has always in fact been.
-- **A permanently-invalid queued write retries forever.** `drainAndReschedule` keeps a
-  timer alive while `hasPending` is true, and a write that can never succeed — a save
-  for a pull deleted while the reader was offline — keeps it true. The loop settles at
-  its 5-minute ceiling and stays there for the life of the tab: one IndexedDB read and
-  one request per cycle, so cheap, but unbounded. The obvious bound is to give up after
-  N attempts, which trades this for the worse failure of silently discarding something
-  the reader did. Round 2 should classify permanent failures — a 404 or a 403 is not a
-  500 — and drop only those. Found while reviewing my own retry path, not by either
-  reviewer.
+- **A permanently-invalid queued write no longer retries forever.** `drainAndReschedule`
+  keeps a timer alive while `hasPending` is true, and a write that can never succeed — a
+  save for a pull deleted while the reader was offline — kept it true for the life of
+  the tab. The obvious bound, giving up after N attempts, trades that for silently
+  discarding something the reader did, which is why it stayed open. The fix is by
+  SQLSTATE rather than by count: `isPermanentFailure` drops a write only when Postgres
+  itself said the request cannot be satisfied (a foreign key to a row that is gone, a
+  check violation, a malformed id), and everything it does not recognise stays queued.
+  Not knowing is the same as transient. Two refinements the first cut got wrong: an RLS
+  refusal is _not_ on the list, because a request whose session refresh failed goes out
+  as `anon` and is refused with the same code; and a foreign key or check failure is
+  judged per write, since a collection can point at a collection still in the queue.
+  Text the reader composed is bounded in the inputs to the columns' limits instead,
+  because a check violation kept in the queue would block its subject forever.
 - **`acquire` was open to DNS rebinding. Closed, by inverting the check.** The host
   blocklist rejects private and link-local literals in both IPv4 and IPv6 and re-checks
   every redirect hop, so a public URL that 302s to `169.254.169.254` was refused. What

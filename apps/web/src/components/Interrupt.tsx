@@ -93,6 +93,9 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
           <span className="field__label">In your own words</span>
           <textarea
             className="field__textarea"
+            // `explanations_text_length` refuses more; a queued explanation that long
+            // would be dropped on drain rather than shown back to the reader.
+            maxLength={20000}
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             placeholder="What does this actually claim, and why would it matter?"

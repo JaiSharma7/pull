@@ -250,7 +250,9 @@ export function Library({ userId }: { userId: string }) {
   }
 
   async function addStash() {
-    const name = window.prompt('Name this collection');
+    // Bounded to `stashes_name_length`: an over-long name queued offline would be
+    // refused for good on drain, not shown back.
+    const name = window.prompt('Name this collection')?.slice(0, 200) ?? null;
     if (!name?.trim()) return;
     setBusy(true);
     // The id is minted here rather than by the database, so a retry after a lost
@@ -602,7 +604,9 @@ export function Library({ userId }: { userId: string }) {
                       type="button"
                       className="btn btn--plain"
                       onClick={() => {
-                        const next = window.prompt('A note on this idea', item.note ?? '');
+                        const next =
+                          window.prompt('A note on this idea', item.note ?? '')?.slice(0, 20000) ??
+                          null;
                         if (next === null) return;
                         patchSave(item, { note: next.trim() || null });
                       }}
