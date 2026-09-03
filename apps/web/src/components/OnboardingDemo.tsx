@@ -1,11 +1,18 @@
 import { useState } from 'react';
 import { PullCard, SynapseMap } from '@wap/ui';
-import { SAMPLE_GRAPH } from '../lib/graph.js';
+import { SAMPLE_GRAPH, undirectedEdges } from '../lib/graph.js';
 
 export interface OnboardingDemoProps {
   onComplete: () => void;
   onSkip?: () => void;
 }
+
+/* Module scope, so the identity is stable: `SynapseMap` keys its whole simulation off
+   this array, and a fresh one each render resets the layout to full alpha. Collapsed to
+   one edge per pair, like the other two consumers — `SAMPLE_GRAPH` carries the
+   Enchiridion/Meditations lineage in both directions, and drawing both strokes the same
+   chord twice. */
+const demoEdges = undirectedEdges(SAMPLE_GRAPH.edges);
 
 export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -28,7 +35,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               "Step 1 of 2" then "Step 1 of 3", so a reader saw three screens described by
               two disagreeing scales. */}
           <p className="meta" style={{ color: 'var(--accent)' }}>
-            Step 3 of 3 · A quick tour ({step} of 3)
+            Step 3 of 3 · A quick tour, {step} of 3
           </p>
           <button type="button" className="btn btn--plain" onClick={onSkip ?? onComplete}>
             Skip demo
@@ -206,15 +213,15 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             }}
           >
             <p className="meta" style={{ color: 'var(--accent)' }}>
-              Try it — drag, zoom, or tap a node:
+              Try it — drag a node, or zoom:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
-              Drag nodes, zoom, or tap to inspect connections. Red dashed lines represent opposing
-              viewpoints. Nodes decay in brightness as retrievability drops, queuing review.
+              Drag a node, or zoom. A dashed oxblood chord is a disagreement between two ideas. An
+              idea you are still holding is drawn filled; one that is fading is drawn as an outline.
             </p>
           </div>
 
-          <SynapseMap nodes={SAMPLE_GRAPH.nodes} edges={SAMPLE_GRAPH.edges} height="380px" />
+          <SynapseMap nodes={SAMPLE_GRAPH.nodes} edges={demoEdges} height="380px" />
         </div>
       )}
 
@@ -248,7 +255,9 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             className="btn btn--primary"
             onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}
           >
-            Next: {step === 1 ? 'The Delta →' : 'Synapse Network →'}
+            {/* Names the heading it actually leads to — step 3 was renamed to "The graph"
+                — and drops the arrow, which nothing else in the app puts on a button. */}
+            Next: {step === 1 ? 'the Delta' : 'the graph'}
           </button>
         ) : (
           <button type="button" className="btn btn--primary" onClick={onComplete}>

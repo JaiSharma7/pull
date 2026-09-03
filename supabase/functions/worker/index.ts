@@ -285,10 +285,20 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
       }),
       'close job',
     ) as boolean;
-    // `false` is the compare-and-set finding `current_step` elsewhere. It is not
-    // an error -- a redelivered close after a successful one lands here -- but a
-    // job that stays `running` after its sink ran is worth a line in the log.
-    if (!closed) console.warn(`[worker] job ${jobId}: close from ${step} matched nothing`);
+    /*
+     * `false` has two innocent causes now, not one, so it is not a warning.
+     *
+     * It used to mean only "the compare-and-set found `current_step` elsewhere".
+     * `20260903010000` added `status in ('queued','running')` to the close, so a
+     * redelivered close on an already-closed job — the ordinary outcome when a worker
+     * dies between recording its step and archiving its message — also returns `false`.
+     * That is the idempotent success path, and warning on it reads as a stall while
+     * costing log lines the free tier counts (`20260901030000`).
+     *
+     * A job genuinely stuck at `running` after its sink ran is caught by the stranded
+     * sweep (`20260902170000`), which is the mechanism for it.
+     */
+    if (!closed) console.log(`[worker] job ${jobId}: close from ${step} was already settled`);
     return { closed: closed ? step : `not-closed:${step}` };
   }
 

@@ -199,8 +199,8 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
           ) : null}
           {recognitionSupported() ? (
             /* Said where the decision is made, not only in docs/privacy.md. In most
-               browsers speech recognition is not on the device — Chrome and Edge send the
-               audio to Google, Safari to Apple. It never reaches us, but it does leave
+               browsers speech recognition is not on the device — the audio goes to the
+               browser's own vendor. It never reaches us, but it does leave
                the reader's machine, and they are about to press the button that does it. */
             <p className="meta">
               Dictation uses your browser's speech recognition, which in most browsers sends the

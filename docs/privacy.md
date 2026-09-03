@@ -209,8 +209,8 @@ is between your browser and its vendor, and we neither see nor control it.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's
-speech recognition, and in most browsers that is **not** on your device: Chrome and Edge send
-the captured audio to Google, Safari to Apple. **We never receive it**, we store no recording,
+speech recognition, and in most browsers that is **not** on your device: the audio goes to
+whoever makes your browser — Google for Chrome, Apple for Safari, Microsoft for Edge. **We never receive it**, we store no recording,
 and nothing is sent to any model of ours — but your voice does leave your machine, to your
 browser's vendor, under their privacy policy and not ours. The button is opt-in, per answer,
 and typing the same answer sends no audio at all.

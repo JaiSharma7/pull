@@ -1001,7 +1001,7 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
-            {graphOpen && (
+            {graphOpen && !guest && (
               <Graph
                 userId={session?.user.id ?? null}
                 onOpenSource={(id) => navigate(`/source/${id}`)}
@@ -1011,12 +1011,12 @@ export function App() {
                 re-implies by navigation the thing the import does not do: nothing here
                 reaches the Delta, so landing the reader on the ROI dashboard afterwards
                 suggests it did. */}
-            {importOpen && <Ingestion />}
+            {importOpen && !guest && <Ingestion />}
 
             {demoOpen && (
               <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
             )}
-            {metacognitionOpen && (
+            {metacognitionOpen && !guest && (
               <MetacognitiveDashboard
                 userId={session?.user.id ?? null}
                 onNavigate={navigate}

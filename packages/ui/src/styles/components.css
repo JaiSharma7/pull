@@ -1186,3 +1186,14 @@
 :root[data-focus='on'] .pull-card {
   max-width: none;
 }
+
+/*
+ * A file input has to be hidden to be styled, and `sr-only` clips the focus ring off with
+ * it — leaving a tab stop with no visible indicator anywhere on screen. The ring goes on
+ * the label the reader can actually see. docs/design.md requires a visible, non-colour-only
+ * focus state, which the outline plus offset gives independently of hue.
+ */
+.file-drop:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -179,6 +179,10 @@ export function Preferences({
 
   return (
     <section className="prefs measure">
+      {/* The counter starts here, or it does not start. Renumbering the census to "Step 2
+          of 3" without labelling the first screen meant a new reader's first counter was
+          a 2, with no step 1 anywhere. */}
+      {mode === 'onboarding' ? <p className="meta">Step 1 of 3 · Topics</p> : null}
       <h1 className="prose__heading">
         {mode === 'onboarding' ? 'What do you want to learn about?' : 'Preferences'}
       </h1>

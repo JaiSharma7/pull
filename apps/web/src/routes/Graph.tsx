@@ -61,6 +61,16 @@ export function Graph({
     return computeGraphStats(measured.nodes, measured.edges);
   }, [measured]);
 
+  /*
+   * Memoised, because `SynapseMap` keys its whole simulation off the identity of this
+   * array. Passed inline, `undirectedEdges` returned a fresh one on every render — so
+   * selecting a node re-rendered this component, changed the prop identity, re-ran the
+   * init effect and reset alpha to 1.0: the graph flew apart for six seconds under the
+   * cursor that had just clicked it. Under reduced motion it re-ran the 300-iteration
+   * O(n²) settle pass instead, on the main thread, per click.
+   */
+  const edges = useMemo(() => (data ? undirectedEdges(data.edges) : []), [data]);
+
   return (
     <div className="stack" style={{ gap: 'var(--space-4)' }}>
       <header>
@@ -104,7 +114,7 @@ export function Graph({
         <section className="stack" style={{ gap: 'var(--space-4)' }}>
           <SynapseMap
             nodes={data.nodes}
-            edges={undirectedEdges(data.edges)}
+            edges={edges}
             selectedNodeId={selectedNode?.pullId}
             onSelectNode={setSelectedNode}
             filter={filter}

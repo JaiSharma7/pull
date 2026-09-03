@@ -6,8 +6,9 @@
  * where it runs.
  *
  * `SpeechRecognition` is **not** the same bargain, and this header used to vouch for both.
- * In Chrome and Edge it streams the captured audio to Google's speech service, and in
- * Safari to Apple's; only a few configurations run it locally. It still costs us nothing
+ * In most browsers it streams the captured audio to that browser's own speech
+ * service — Chrome to Google, Safari to Apple, Edge to Microsoft; only a few
+ * configurations run it locally. It still costs us nothing
  * and calls no model of ours — law 2 is untouched — but "on the device" is false for it,
  * and a reader pressing Dictate is sending their voice to their browser's vendor. That is
  * their call to make, so `docs/privacy.md` says so and the control says so beside itself.

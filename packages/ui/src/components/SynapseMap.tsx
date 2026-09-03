@@ -116,9 +116,17 @@ export function neighborsOf(
  * govern, so it has to ask. `design-laws.test.ts` greps the CSS bundle for the media
  * query and passes vacuously here.
  */
+let reducedMotionQuery: MediaQueryList | null | undefined;
+
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Allocated once. This is read from inside `draw` and from the rAF continuation, so a
+  // fresh `matchMedia` each time was ~120 MediaQueryList objects a second while the
+  // layout settled.
+  if (reducedMotionQuery === undefined) {
+    reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  }
+  return reducedMotionQuery?.matches ?? false;
 }
 
 export function SynapseMap({
@@ -199,6 +207,8 @@ export function SynapseMap({
         vy: prev ? prev.vy : 0,
         radius: baseRadius,
         mass: 1 + n.retrievability,
+        // Carried forward, or a rebuild silently unpins a node the reader is holding.
+        pinned: prev ? prev.pinned : false,
       };
     });
 
@@ -252,12 +262,16 @@ export function SynapseMap({
     window.addEventListener('resize', repaint);
     const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
     scheme?.addEventListener?.('change', repaint);
-    // The in-app theme toggle writes `data-theme` on the root rather than changing the OS
-    // preference, so the media query alone would miss it.
+    /* The in-app appearance controls write to the root rather than changing any OS
+       preference, so the media query alone would miss them — and `lib/appearance.ts`
+       writes three attributes, not one: theme, contrast and text size. The last matters
+       here because the canvas reads its label size from the computed `--step--1`, so a
+       large-text change with the graph mounted otherwise leaves the labels at the old
+       size. Nothing writes a class to `<html>`, so watching for one was noise. */
     const observer = new MutationObserver(repaint);
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme', 'class'],
+      attributeFilter: ['data-theme', 'data-contrast', 'data-text'],
     });
     return () => {
       window.removeEventListener('resize', repaint);
@@ -549,10 +563,11 @@ export function SynapseMap({
   };
 
   /*
-   * Arrow keys step through the nodes in the order they are drawn; Enter and Space select
-   * the focused one; Escape clears. Not a spatial traversal — the layout is a physics
+   * Arrow keys step through the nodes in the order they are drawn, selecting as they go;
+   * Escape clears the selection. Not a spatial traversal — the layout is a physics
    * simulation and moves — but a total order over the same set, which is what makes the
-   * graph answerable without a pointer at all.
+   * graph answerable without a pointer at all. Space is left to the browser, so a reader
+   * focused on the canvas can still scroll the page.
    */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
     if (filteredNodes.length === 0) return;
@@ -571,6 +586,26 @@ export function SynapseMap({
       e.preventDefault();
       onSelectNode?.(null);
     }
+  };
+
+  /**
+   * Release the drag without selecting anything.
+   *
+   * `pointercancel` is not an edge case here — it is the ordinary end of the gesture
+   * `touch-action: pan-y` exists to allow. A reader touching a node and dragging down to
+   * scroll past the map hands the pointer to the browser, which releases capture and
+   * fires this instead of `pointerup`. Without it `draggedNodeIdRef` stayed set and the
+   * node stayed `pinned` — frozen out of every force in the simulation, and re-attached
+   * to the next drag anywhere on the canvas, because `handlePointerMove` tests the drag
+   * ref before it tests panning.
+   */
+  const handlePointerCancel = () => {
+    if (draggedNodeIdRef.current) {
+      const node = simNodesRef.current.find((n) => n.id === draggedNodeIdRef.current);
+      if (node) node.pinned = false;
+      draggedNodeIdRef.current = null;
+    }
+    isPanningRef.current = false;
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -691,6 +726,7 @@ export function SynapseMap({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
       />
 
       <ul className="sr-only">

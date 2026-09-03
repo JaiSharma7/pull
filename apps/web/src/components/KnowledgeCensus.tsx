@@ -65,6 +65,11 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
 
   const handleLevelChange = (id: string, level: KnowledgeLevel) => {
     setLevels((prev) => ({ ...prev, [id]: level }));
+    // Clears the failure, which was otherwise a one-way latch: `setError(null)` lived only
+    // inside `handleFinish`, and the button stopped routing there once `error` was set. So
+    // a reader who marked more ideas after a partial failure watched the counter rise,
+    // pressed the button, and had those marks dropped without a request being made.
+    setError(null);
   };
 
   const handleFinish = async () => {
@@ -121,10 +126,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
        * land, and the reader was moved on having been told nothing — which is the exact
        * thing this screen was rebuilt to stop doing.
        */
-      setError(
-        `Saved ${recorded.length} of ${claimed.length}. The rest could not be recorded — ` +
-          'you can continue, or try again.',
-      );
+      setError(`Saved ${recorded.length} of ${claimed.length}. The rest could not be recorded.`);
       return;
     }
     onComplete(recorded);
@@ -231,6 +233,12 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
         </p>
       ) : null}
 
+      {error ? (
+        <button type="button" className="btn btn--plain" onClick={() => onComplete([])}>
+          Continue without saving these
+        </button>
+      ) : null}
+
       <footer
         style={{
           display: 'flex',
@@ -251,10 +259,10 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => (error ? onComplete([]) : void handleFinish())}
+          onClick={() => void handleFinish()}
           disabled={saving || items === null}
         >
-          {saving ? 'Recording…' : error ? 'Continue anyway' : 'Continue'}
+          {saving ? 'Recording…' : error ? 'Try again' : 'Continue'}
         </button>
       </footer>
     </div>

@@ -7,11 +7,12 @@ import {
   summarizeIngestion,
 } from '../lib/ingestion.js';
 
-export interface IngestionProps {
-  onComplete?: (summary: IngestionSummary) => void;
-}
-
-export function Ingestion({ onComplete }: IngestionProps) {
+/*
+ * No props. `onComplete` existed to navigate to /metacognition on Done, which re-implied
+ * by navigation the Delta sync this screen does not perform; removing the destination
+ * left the callback and its button doing nothing at all, so both are gone.
+ */
+export function Ingestion() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState<IngestionSummary | null>(null);
 
@@ -90,9 +91,9 @@ export function Ingestion({ onComplete }: IngestionProps) {
             styled label still works as the click target.
           */}
           <label
-            className="btn btn--plain"
+            className="btn btn--plain file-drop"
             htmlFor="clippings-file"
-            style={{ cursor: 'pointer', borderStyle: 'dashed' }}
+            style={{ cursor: 'pointer', border: '1px dashed var(--rule-strong)' }}
           >
             Upload My Clippings.txt or a CSV
           </label>
@@ -158,10 +159,10 @@ export function Ingestion({ onComplete }: IngestionProps) {
           </p>
 
           <div className="pull-card__footer">
+            {/* No button. Removing the misleading /metacognition destination left this
+                one resolving to nothing — a control that changed nothing on screen. The
+                result panel is the whole outcome, so the line below is the whole footer. */}
             <span className="meta">Parsed in your browser · nothing uploaded</span>
-            <button type="button" className="btn btn--plain" onClick={() => onComplete?.(summary)}>
-              Done
-            </button>
           </div>
         </section>
       )}

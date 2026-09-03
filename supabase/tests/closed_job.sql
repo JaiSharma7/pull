@@ -26,8 +26,11 @@ begin
           'step extract_evidence exhausted retries', now())
   returning id into failed_id;
 
-  insert into public.generation_jobs (kind, target, current_step, status)
-  values ('summary', '{}'::jsonb, 'publish', 'running')
+  -- Seeded WITH an error, or the "a succeeded job carries no error" assertion below is
+  -- vacuous: `error` would be null before the close either way, and dropping
+  -- `error = null` from the migration would leave db:test green.
+  insert into public.generation_jobs (kind, target, current_step, status, error)
+  values ('summary', '{}'::jsonb, 'publish', 'running', 'a transient provider timeout')
   returning id into live_id;
 
   perform set_config('role', 'service_role', true);
@@ -69,6 +72,26 @@ begin
     raise exception 'a succeeded job is carrying an error: %', err;
   end if;
 
+  -- 4. Not for readers. `advance_generation_job` is `security definer` and takes the job
+  -- id with no ownership check, and `generation_jobs` has a SELECT policy and no UPDATE
+  -- policy — so this function is the only way to write one, and the revoke is what stops
+  -- a signed-in reader closing somebody else's job by uuid. Asserted here for the same
+  -- reason graph_dispatch, hash_claims and stranded_jobs assert it of theirs.
+  declare
+    refused boolean := false;
+  begin
+    perform set_config('role', 'authenticated', true);
+    begin
+      perform public.advance_generation_job(live_id, 'publish', null);
+    exception when insufficient_privilege then
+      refused := true;
+    end;
+    if not refused then
+      raise exception 'a reader was able to call advance_generation_job.';
+    end if;
+  end;
+
+  perform set_config('role', 'postgres', true);
   raise notice 'closed job: ok';
 end $$;
 

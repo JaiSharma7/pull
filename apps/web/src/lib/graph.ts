@@ -295,11 +295,16 @@ export function narrowGraph(data: unknown): KnowledgeGraphData | null {
   if (nodes.length === 0) return null;
 
   const source: GraphSource = res.source === 'personal' ? 'personal' : 'seed';
-  return {
-    nodes,
-    edges: Array.isArray(res.edges) ? res.edges.filter(isGraphEdge) : [],
-    source,
-  };
+  // Only edges whose both ends survived. A dangling edge would be counted by
+  // `computeGraphStats` as a connection to an idea that is not in the graph, and drawn
+  // to a node the simulation does not have.
+  const present = new Set(nodes.map((n) => n.pullId));
+  const edges = Array.isArray(res.edges)
+    ? res.edges
+        .filter(isGraphEdge)
+        .filter((e) => present.has(e.fromPullId) && present.has(e.toPullId))
+    : [];
+  return { nodes, edges, source };
 }
 
 function isGraphNode(n: unknown): n is GraphNode {
@@ -308,16 +313,39 @@ function isGraphNode(n: unknown): n is GraphNode {
   return (
     typeof c.pullId === 'string' &&
     typeof c.workId === 'string' &&
+    // The renderer dereferences these without checking — `data.headline.length` inside the
+    // rAF callback, where a TypeError is an uncaught async error that stops the frame and
+    // leaves a half-drawn canvas.
+    typeof c.workTitle === 'string' &&
+    typeof c.headline === 'string' &&
+    typeof c.body === 'string' &&
     typeof c.retrievability === 'number' &&
     Number.isFinite(c.retrievability) &&
-    typeof c.stability === 'number'
+    typeof c.stability === 'number' &&
+    Number.isFinite(c.stability)
   );
 }
 
+/**
+ * An edge, checked on the field whose absence is fatal rather than merely wrong.
+ *
+ * `weight` is not decoration: `SynapseMap` computes a spring length of
+ * `70 + (1 - weight) * 50`, so a missing weight is `NaN`, and one `NaN` length puts both
+ * endpoints' velocities to `NaN` in the spring pass — which the O(n²) repulsion pass then
+ * spreads to every node in the graph within a frame or two. The whole map disappears,
+ * permanently, with no error. The node guard gained a finiteness check because drift
+ * there produced a wrong number; drift here produces a blank screen, so it gets one too.
+ */
 function isGraphEdge(e: unknown): e is GraphEdge {
   if (typeof e !== 'object' || e === null) return false;
   const c = e as Record<string, unknown>;
-  return typeof c.fromPullId === 'string' && typeof c.toPullId === 'string';
+  return (
+    typeof c.fromPullId === 'string' &&
+    typeof c.toPullId === 'string' &&
+    typeof c.weight === 'number' &&
+    Number.isFinite(c.weight) &&
+    typeof c.kind === 'string'
+  );
 }
 
 /**
