@@ -389,8 +389,13 @@ export function qualityFromDraft(summary: {
 
   // Eight to fourteen ideas is what a source page needs for the Delta to say
   // anything ("4 of 18 are new to you" needs an 18). Fewer is thin; more is
-  // usually the model padding.
-  const count = Math.min(1, pulls.length / 8);
+  // usually the model padding -- and until now that sentence was a comment
+  // rather than a term: `min(1, n / 8)` saturated at eight and treated forty
+  // Pulls as ideal. A band, then: full marks from eight to fourteen, falling
+  // off linearly on either side and reaching zero at forty, the same slope
+  // out as in.
+  const n = pulls.length;
+  const count = n < 8 ? n / 8 : n <= 14 ? 1 : Math.max(0, 1 - (n - 14) / 26);
 
   const lengths = pulls.map((p) => (p.body ?? '').trim().length);
   const inBand = lengths.filter((n) => n >= 200 && n <= 900).length / pulls.length;
@@ -457,8 +462,13 @@ interface AcquireOutput {
   /** The source URL, carried forward for exactly the same reason as `rights`: the
    *  one `resolve_identity` validated, not the raw target re-read at the far end.
    *  Empty for a job that supplied pasted text, which is a legitimate state — a
-   *  work with no URL simply renders without an outbound link. */
-  url: string;
+   *  work with no URL simply renders without an outbound link.
+   *
+   *  Optional because a stored output can predate the property: a job that ran
+   *  `acquire` before this field existed resumes with no `url` key at all, and
+   *  `template` falls back to the target for exactly that case. The type says so
+   *  rather than letting `??` on a required string pass as a habit. */
+  url?: string;
 }
 
 function asString(value: unknown, fallback = ''): string {
@@ -801,14 +811,20 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         | undefined;
       if (!acquired || !summary) throw new Error('template: missing acquire or synthesize output');
 
+      // The URL `resolve_identity` validated, not the raw target. A job whose
+      // `acquire` output predates the `url` field has no such value at all -- the
+      // property is absent, not empty -- and for that job the target is the only
+      // record; an intentionally empty string (pasted text, no URL) stays empty.
+      // Both `sourceUrl` and the trust score below read this one value, so the
+      // work is linked to and scored on the same URL.
+      const sourceUrl = (acquired.url ?? asString(job.target.url)) || null;
+
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
         kind: acquired.kind,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
-        // `acquired.url` is the one `resolve_identity` validated, not the raw target —
-        // the same distinction the scores below make about re-deriving from input.
-        sourceUrl: acquired.url || null,
+        sourceUrl,
         author: asString(job.target.author) || null,
         // Both deterministic, both from what is already in hand: no extra call,
         // and a quarter of `get_feed`'s score stops being the 0.5 default.
@@ -818,9 +834,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         // a source are allowed to move a shared row's ranking.
         qualityScore: job.visibility === 'public' ? qualityFromDraft(summary) : null,
         trustScore:
-          job.visibility === 'public'
-            ? trustFromProvenance(acquired.rights, asString(job.target.url) || null)
-            : null,
+          job.visibility === 'public' ? trustFromProvenance(acquired.rights, sourceUrl) : null,
         // `topics` is whatever came back in the synthesize step's stored output, so
         // it is narrowed here rather than trusted — the same treatment `kind` and
         // `rights` already get. A job queued before this field existed replays with
