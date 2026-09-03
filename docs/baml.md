@@ -181,15 +181,26 @@ recognise the extension and skips the files. For a while nothing formatted them 
 and the two sources were hand-kept at the repo's two-space indent.
 
 `baml fmt` is the formatter that does, and it is now canonical: `pnpm baml:fmt`, gated by
-check 2. Its style is four-space with trailing commas, which is why `baml_src` indents
-differently from every other file in the tree — that is the toolchain's choice, not a
-house one, and the alternative was a formatter nobody ran. The two tools partition by
-extension, so they never touch the same file and cannot disagree.
+check 2. The two tools partition by extension, so they never touch the same file and
+cannot disagree.
 
-Adopting it is inert to everything downstream, which is what made it safe: BAML dedents a
-prompt template before rendering, so reindenting the sources leaves
-`generated/prompts.ts` and the other 66 client files byte-identical. Only
-`_inlinedbaml.ts` moves, and the gate already excludes it.
+**Be precise about how much it normalises, because it is less than "four-space with
+trailing commas" suggests.** It reformats _declaration bodies_ — enum members, class
+fields, function signatures — to four-space with trailing commas, which is why
+`canonical_summary.baml` now indents unlike every other file in the tree. It does **not**
+touch the layout of call-argument lists: `clients.baml`'s `google.GoogleClient.new(…)`
+arguments sit at two spaces, and hand-reindenting them to four leaves `baml fmt`
+reporting success and changing nothing (checked against 0.17.0). So the gate pins each
+file against _drift from what was committed_, not against one canonical style across the
+directory, and two files in `baml_src` legitimately indent differently. Whichever style a
+new client declaration lands in is the style the gate then holds it to.
+
+Adopting it is inert to what the model receives, which is what made it safe: BAML dedents
+a prompt template before rendering, so reindenting the sources leaves
+`generated/prompts.ts` and the other 66 client files byte-identical. It is _not_ inert to
+the whole tree — `_inlinedbaml.ts` and the `.baml-generator-output.json` that records its
+hash both move, because the bytecode embeds the source. Both are excluded from the
+staleness gate, so that is invisible to CI but very visible in a diff.
 
 The gate is run-then-diff rather than a flag, because `baml fmt` has no `--check`:
 `--dry-run` prints the formatted text to stdout and still exits 0. It is idempotent, so
@@ -198,9 +209,13 @@ running it in the gate is safe.
 One thing this closed: **do not parse `baml_src` at a fixed indent.**
 `src/schema.test.ts` compares the exported schema's properties against the fields
 declared on each class, and read them with `^\s{2}(\w+)\s*:`. Against four-space sources
-that matched nothing, `classFields` returned `[]`, and every comparison compared two
-empty arrays and passed. The guard in the first `it` caught it — deliberately there for
-this — but the parser now matches any indent instead of relying on the alarm.
+that matched nothing, so `classFields` returned `[]`. The comparisons then failed —
+loudly, naming every exported field as unexpected — which is worth stating exactly,
+because the plausible version of this story is that they passed vacuously and they did
+not. The defect was a false alarm: three assertions about schema drift broke for a reason
+unrelated to schema drift, which reads like the export is broken and invites reverting the
+formatting instead. The parser now matches any indent, and every row of the parity table
+carries its own non-empty guard rather than leaning on the one in the first `it`.
 
 The TypeScript project integrates with `@boundaryml/baml-bridge`, which provides the
 runtime bindings for generated code in `packages/prompts/baml_sdk`. Code generation is

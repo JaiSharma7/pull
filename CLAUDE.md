@@ -153,6 +153,15 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
   `supabase/functions/_shared/generated` from `pnpm baml:export`. CI fails if any is
   stale.
 
+  A fourth is generated and committed but **not** gated, deliberately:
+  `.claude/skills/baml-core/SKILL.md` and `.agents/skills/baml-core/SKILL.md` come from
+  `baml agent install` (from the repo root; see `docs/baml.md` for the `--source` it
+  needs here). Both are the same file, one per agent ecosystem, and both are
+  load-bearing — this repo's review gate is Codex. They are not diffed against upstream
+  because `BoundaryML/baml-skill` moves on its own schedule, so a lag is not a defect
+  and a gate would redden unrelated PRs. What _is_ checked is that the two copies have
+  not diverged (`packages/prompts/src/skills.test.ts`).
+
 - **Prompts and their output schemas live in BAML.** `packages/prompts/baml_src` is where
   a model call's prompt, its schema and its tests are written together, and
   `pnpm baml:export` renders them into plain TypeScript under
@@ -164,3 +173,10 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
 
 Format, lint, typecheck and tests pass; `pnpm db:lint` and `pnpm db:test` are clean; Supabase advisors report
 no security findings; the diff obeys the seven laws. Then the review gate in `AGENTS.md`.
+
+**`pnpm check` does not cover BAML.** Prettier has no `.baml` parser, so `format:check`
+skips `baml_src` rather than ignoring it, and no `baml:*` command is in the `check`
+chain — a contributor can get a green `pnpm check` and still fail CI check 2. If the diff
+touches `packages/prompts`, run `pnpm baml:fmt && pnpm baml:check && pnpm baml:generate &&
+pnpm baml:export` and commit what moves. `scripts/cloud-setup.sh` installs the toolchain
+those need.

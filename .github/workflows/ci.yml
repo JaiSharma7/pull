@@ -67,22 +67,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
+      # Shared with `scripts/cloud-setup.sh` rather than duplicated: both need the same
+      # pin from `packages/prompts/.baml-version` and the same PATH fix, and a second
+      # copy is how one of them silently keeps the old installer URL. The script reads
+      # `GITHUB_PATH` and appends to it here; elsewhere it symlinks. It also refuses an
+      # empty version file rather than letting the installer fall back to `canary`.
       - name: Install BAML CLI
-        run: |
-          # `-o pipefail` because the default shell here is `bash -e` without it: a
-          # failed download would otherwise feed empty stdin to `sh`, exit 0, and be
-          # reported two steps later as `baml: command not found`.
-          set -euo pipefail
-          # Pinned, not a channel. `canary` is re-cut under the same version string,
-          # and `baml generate` embeds compiled bytecode in `_inlinedbaml.ts`, so an
-          # unpinned toolchain resolves to a different build over time.
-          # `manifest/v1/version/<v>.json` is sha256-pinned; the channel is not.
-          # `packages/prompts/.baml-version` is the single source for that version --
-          # `export.mjs` asserts the running CLI matches it, so a contributor cannot
-          # regenerate with a toolchain CI does not use.
-          curl -fsSL https://pkg.boundaryml.com/install.sh \
-            | sh -s -- --yes --version "$(cat packages/prompts/.baml-version)"
-          echo "$HOME/.baml/bin" >> "$GITHUB_PATH"
+        run: bash scripts/install-baml.sh
 
       # The BAML client is generated from `packages/prompts/baml_src` and committed,
       # for the reason `packages/db/src/database.types.ts` is: a generated file nobody

@@ -20,14 +20,20 @@ is Codex's — both are generator output from `baml agent install`; see `docs/ba
 2. **`pnpm baml:check` before generating.** A `.baml` file that does not parse produces a
    confusing diff instead of a clear error.
 3. **`pnpm baml:fmt` before committing.** `baml fmt` is canonical for `.baml` and check 2
-   gates it — prettier has no parser for the extension, so `pnpm check` will not catch an
-   unformatted source. Four-space with trailing commas is the toolchain's style, not a
-   house one; do not hand-reindent it back. It cannot change the generated outputs, so
-   formatting is never the cause of an export diff.
+   gates it — prettier has no parser for the extension, so **`pnpm check` will not catch
+   an unformatted source**; run `baml:fmt` yourself or the gate is the first thing that
+   tells you. Four-space with trailing commas is the toolchain's style, not a house one;
+   do not hand-reindent it back. It only normalises declaration bodies, not
+   call-argument layout, so `clients.baml` staying at two spaces is correct rather than
+   stale. Formatting cannot change what the model receives — the prompt template is
+   dedented before rendering — but it _does_ move `baml_sdk/_inlinedbaml.ts` and the
+   generator manifest, because the bytecode embeds the source. A 3.3 MB binary diff after
+   `baml:fmt && baml:generate` is expected; both files are excluded from the gate.
 4. **Do not parse `baml_src` at a fixed indent.** A test that reads the sources with a
-   regex must match any indent width. `schema.test.ts` matched exactly two spaces once,
-   and returned an empty field list — comparing nothing to nothing and passing — the
-   moment the formatter reindented.
+   regex must match any indent width. `schema.test.ts` matched exactly two spaces once
+   and returned an empty field list the moment the formatter reindented. That made three
+   drift assertions fail for a reason unrelated to drift — a false alarm, not a silent
+   pass — which is the kind of failure someone "fixes" by reverting the formatting.
 5. **Nothing in `supabase/functions` imports BAML.** The runtime is a native Node addon
    and Edge Functions are Deno isolates. If a change seems to need it there, read the
    "Deno boundary" section of `docs/baml.md` — the answer is an architecture decision,
