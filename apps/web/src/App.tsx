@@ -42,6 +42,8 @@ import { PullRedirect, Source } from './routes/Source.js';
 import { Feed, type FeedStats } from './routes/Feed.js';
 import { Graph } from './routes/Graph.js';
 import { Library } from './routes/Library.js';
+import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
+import { OnboardingDemo } from './components/OnboardingDemo.js';
 
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
@@ -108,6 +110,8 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
   { path: '/graph', label: 'Graph' },
+  { path: '/metacognition', label: 'ROI' },
+  { path: '/demo', label: 'Demo' },
 
   /*
    * A destination rather than a seventh section, and last of the three.
@@ -585,6 +589,8 @@ export function App() {
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
   const graphOpen = isPath(path, '/graph');
+  const demoOpen = isPath(path, '/demo');
+  const metacognitionOpen = isPath(path, '/metacognition');
   /*
    * A real address rather than a seventh section, for the same reason the legal
    * documents have one: it is a place a reader is sent to. "Delete your account" in a
@@ -625,6 +631,8 @@ export function App() {
     exploreOpen ||
     appearanceOpen ||
     graphOpen ||
+    demoOpen ||
+    metacognitionOpen ||
     accountOpen ||
     topicSlug !== null;
 
@@ -984,6 +992,16 @@ export function App() {
                 onOpenSource={(id) => navigate(`/source/${id}`)}
               />
             )}
+            {demoOpen && (
+              <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
+            )}
+            {metacognitionOpen && (
+              <MetacognitiveDashboard
+                userId={session?.user.id ?? null}
+                onNavigate={navigate}
+                onGoToReview={() => goToTab('review')}
+              />
+            )}
             {appearanceOpen && <Appearance />}
 
             {accountOpen && session && !guest && (
@@ -1188,7 +1206,23 @@ export function App() {
             it in view during a session instead of only at the end of one.
           */}
             <div className="shell__group">
-              <p className="meta">The Delta</p>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                }}
+              >
+                <p className="meta">The Delta</p>
+                <button
+                  type="button"
+                  className="btn btn--plain meta"
+                  style={{ padding: 0, textDecoration: 'underline' }}
+                  onClick={() => navigate('/metacognition')}
+                >
+                  ROI →
+                </button>
+              </div>
 
               <div className="shell__stat">
                 <span>Already knew</span>
