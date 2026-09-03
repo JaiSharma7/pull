@@ -118,6 +118,7 @@ pnpm db:types       # regenerate packages/db/src/database.types.ts — never han
 pnpm db:lint        # the schema invariants CI check 4 runs
 pnpm db:test        # read-path behaviour, as a real reader under RLS
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
+pnpm baml:fmt       # format packages/prompts/baml_src — prettier has no .baml parser
 pnpm baml:generate  # regenerate packages/prompts/baml_sdk — never hand-edit
 pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/generated — never hand-edit
 ```

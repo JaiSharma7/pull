@@ -23,6 +23,7 @@
     "db:push": "supabase db push",
     "db:types": "node scripts/gen-types.mjs",
     "baml:check": "pnpm --filter @wap/prompts baml:check",
+    "baml:fmt": "pnpm --filter @wap/prompts baml:fmt",
     "baml:generate": "pnpm --filter @wap/prompts baml:generate",
     "baml:test": "pnpm --filter @wap/prompts baml:test",
     "baml:export": "pnpm --filter @wap/prompts baml:export",

@@ -91,6 +91,24 @@ jobs:
       # than a clear error.
       - name: BAML sources are valid
         run: pnpm baml:check
+      # `.baml` is the one source language in the repo prettier has no parser for --
+      # `prettier --file-info` reports `inferredParser: null`, so `pnpm format:check`
+      # skips these files rather than ignoring them, and until now nothing formatted
+      # them at all. The v1 toolchain ships the formatter that does, and it partitions
+      # cleanly: `baml fmt` touches only `.baml`, prettier everything else.
+      #
+      # Run-then-diff rather than a flag, because `baml fmt` has no `--check`: its
+      # `--dry-run` writes the formatted text to stdout and still exits 0. Safe to run
+      # in the gate -- it is idempotent (a second pass is a no-op), and it cannot move
+      # the generated outputs: BAML dedents a prompt template before rendering it, so
+      # reindenting the sources leaves `generated/prompts.ts` and the other 66 client
+      # files byte-identical. No staging step, unlike the two gates below, because the
+      # formatter only rewrites files that already exist; it never emits a new one.
+      - name: BAML sources are formatted
+        run: |
+          pnpm baml:fmt
+          git diff --exit-code -- packages/prompts/baml_src \
+            || { echo "::error::BAML sources are not formatted. Run 'pnpm baml:fmt' and commit the result."; exit 1; }
       # Staged before the diff, deliberately: `git diff` ignores untracked files, so a
       # BAML edit that makes the generator emit a NEW file would pass a plain diff with
       # the client incomplete. Staging makes an added file a difference like any other.
