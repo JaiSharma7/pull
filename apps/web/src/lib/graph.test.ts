@@ -4,6 +4,8 @@ import {
   filterConnectedEdges,
   filterGraphNodes,
   formatRetrievabilityLabel,
+  mayServeCache,
+  narrowGraph,
 } from './graph.js';
 import type { GraphEdge, GraphNode } from './types.js';
 
@@ -85,5 +87,64 @@ describe('graph pure functions', () => {
     expect(formatRetrievabilityLabel(0.92)).toBe('92% · Solid');
     expect(formatRetrievabilityLabel(0.71)).toBe('71% · Refreshing');
     expect(formatRetrievabilityLabel(0.45)).toBe('45% · Fading');
+  });
+});
+
+describe('narrowGraph', () => {
+  const node = {
+    pullId: 'p1',
+    workId: 'w1',
+    workTitle: 'Meditations',
+    workKind: 'book',
+    headline: 'h',
+    body: 'b',
+    stability: 1,
+    difficulty: 0.3,
+    retrievability: 0.9,
+    lastSeenAt: '2026-09-01T00:00:00.000Z',
+    status: 'solid' as const,
+  };
+
+  it('keeps a personal graph marked personal', () => {
+    const g = narrowGraph({ nodes: [node], edges: [], source: 'personal' });
+    expect(g?.source).toBe('personal');
+  });
+
+  /*
+   * The important direction. A caller that treats an unmarked graph as personal reports
+   * the published corpus back to a brand-new reader as their own retention, which is the
+   * defect this field exists to close — so anything that is not explicitly `personal`
+   * reads as `seed`, including a deployment too old to send the key at all.
+   */
+  it('treats an unmarked or unrecognised graph as seed, never as personal', () => {
+    expect(narrowGraph({ nodes: [node], edges: [] })?.source).toBe('seed');
+    expect(narrowGraph({ nodes: [node], edges: [], source: 'seed' })?.source).toBe('seed');
+    expect(narrowGraph({ nodes: [node], edges: [], source: 'whatever' })?.source).toBe('seed');
+  });
+
+  it('rejects a payload with no nodes rather than returning an empty graph', () => {
+    expect(narrowGraph({ nodes: [], edges: [], source: 'personal' })).toBeNull();
+    expect(narrowGraph(null)).toBeNull();
+    expect(narrowGraph({ source: 'personal' })).toBeNull();
+  });
+
+  it('defaults missing edges to none', () => {
+    expect(narrowGraph({ nodes: [node], source: 'personal' })?.edges).toEqual([]);
+  });
+});
+
+describe('mayServeCache', () => {
+  /*
+   * A graph node carries the reader's headlines and bodies. The cache was keyed by
+   * `userId ?? 'guest'` and returned on any RPC error — including an expired session,
+   * which is precisely when the server has declined to hand that data over.
+   */
+  it('never serves a cached graph to a signed-out reader', () => {
+    expect(mayServeCache(null)).toBe(false);
+    expect(mayServeCache('')).toBe(false);
+  });
+
+  it('serves one to a signed-in reader', () => {
+    expect(mayServeCache('user-1')).toBe(true);
   });
 });

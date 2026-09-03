@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode, KnowledgeGraphData } from './types.js';
+import type { GraphEdge, GraphNode, GraphSource, KnowledgeGraphData } from './types.js';
 
 /**
  * The graph shown when the RPC cannot be reached at all.
@@ -237,4 +237,41 @@ export function formatRetrievabilityLabel(retrievability: number): string {
   if (retrievability >= 0.8) return `${pct}% · Solid`;
   if (retrievability >= 0.6) return `${pct}% · Refreshing`;
   return `${pct}% · Fading`;
+}
+
+/**
+ * Narrow what `get_user_knowledge_graph` returned, or say it gave us nothing usable.
+ *
+ * Pure and here rather than in `graph-api.ts` so it can be tested: that module imports
+ * the Supabase client, which throws at import time without the environment.
+ *
+ * `source` is the load-bearing field. It decides whether a caller may describe these
+ * nodes as the reader's own, and the default when the server does not send one is
+ * `seed` — an older deployment predating the key returns a perfectly good graph with no
+ * claim attached, and the safe reading of a missing claim is the one that suppresses
+ * personal-progress numbers rather than inventing them.
+ */
+export function narrowGraph(data: unknown): KnowledgeGraphData | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const res = data as { nodes?: unknown; edges?: unknown; source?: unknown };
+  if (!Array.isArray(res.nodes) || res.nodes.length === 0) return null;
+  const source: GraphSource = res.source === 'personal' ? 'personal' : 'seed';
+  return {
+    nodes: res.nodes as GraphNode[],
+    edges: Array.isArray(res.edges) ? (res.edges as GraphEdge[]) : [],
+    source,
+  };
+}
+
+/**
+ * Whether a cached graph may be handed to this caller.
+ *
+ * A signed-out reader gets `null` here and therefore never sees a cache. That is the
+ * rule the previous implementation broke: it keyed the cache by `userId ?? 'guest'` and
+ * returned it on any RPC failure, so a session that had just expired — the one case
+ * where the server has explicitly declined to hand this data over — was answered out of
+ * local storage with the previous reader\'s headlines and bodies.
+ */
+export function mayServeCache(userId: string | null): userId is string {
+  return typeof userId === 'string' && userId.length > 0;
 }

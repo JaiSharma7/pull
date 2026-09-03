@@ -1,6 +1,6 @@
-import { SAMPLE_GRAPH } from './graph.js';
+import { mayServeCache, narrowGraph, SAMPLE_GRAPH } from './graph.js';
 import { supabase } from './supabase.js';
-import type { GraphEdge, GraphNode, KnowledgeGraphData } from './types.js';
+import type { KnowledgeGraphData } from './types.js';
 
 export { SAMPLE_GRAPH };
 
@@ -48,6 +48,15 @@ function writeCache(userId: string, data: KnowledgeGraphData): void {
   }
 }
 
+/** What to show when the RPC gave us nothing: this reader's own cache, or the sample. */
+function fallback(userId: string | null): KnowledgeGraphData {
+  if (mayServeCache(userId)) {
+    const cached = readCache(userId);
+    if (cached) return cached;
+  }
+  return SAMPLE_GRAPH;
+}
+
 /**
  * Fetch the reader's personal knowledge graph.
  *
@@ -67,27 +76,16 @@ export async function fetchKnowledgeGraph(
 
     if (error) {
       console.warn('get_user_knowledge_graph RPC error:', error);
-      return (userId && readCache(userId)) || SAMPLE_GRAPH;
+      return fallback(userId);
     }
 
-    const res = data as { nodes?: GraphNode[]; edges?: GraphEdge[]; source?: string } | null;
-    if (!res || !Array.isArray(res.nodes) || res.nodes.length === 0) {
-      return (userId && readCache(userId)) || SAMPLE_GRAPH;
-    }
+    const graph = narrowGraph(data);
+    if (!graph) return fallback(userId);
 
-    const graph: KnowledgeGraphData = {
-      nodes: res.nodes,
-      edges: res.edges ?? [],
-      // Trust the server's word over an assumption. An older deployment that predates
-      // the `source` key returns nothing here, and `seed` is the safe reading: it
-      // suppresses the personal-progress claims rather than inventing them.
-      source: res.source === 'personal' ? 'personal' : 'seed',
-    };
-
-    if (userId && graph.source === 'personal') writeCache(userId, graph);
+    if (mayServeCache(userId) && graph.source === 'personal') writeCache(userId, graph);
     return graph;
   } catch (err: unknown) {
     console.warn('Network error fetching knowledge graph:', err);
-    return (userId && readCache(userId)) || SAMPLE_GRAPH;
+    return fallback(userId);
   }
 }
