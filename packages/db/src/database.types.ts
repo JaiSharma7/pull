@@ -499,6 +499,32 @@ export type Database = {
         }
         Relationships: []
       }
+      generation_dispatches: {
+        Row: {
+          created_at: string
+          job_id: string
+          step: string
+        }
+        Insert: {
+          created_at?: string
+          job_id: string
+          step: string
+        }
+        Update: {
+          created_at?: string
+          job_id?: string
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "generation_dispatches_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       generation_jobs: {
         Row: {
           attempts: number
@@ -1787,6 +1813,10 @@ export type Database = {
       disable_generation_dispatcher: { Args: never; Returns: string }
       disable_knowledge_vector_refresh: { Args: never; Returns: string }
       dismissal_damping: { Args: { p_user_id: string }; Returns: number }
+      dispatch_generation_step: {
+        Args: { p_after: string[]; p_job_id: string; p_to_step: string }
+        Returns: string
+      }
       due_pressure: { Args: { p_user_id: string }; Returns: number }
       enable_generation_dispatcher: {
         Args: {

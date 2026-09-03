@@ -3,6 +3,7 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  jumpFor,
   narrowTopics,
   NO_USAGE,
   RIGHTS_STATUSES,
@@ -19,7 +20,7 @@ import {
   sourceHostsFrom,
 } from './source.ts';
 import { stubSummaryProvider, TOPIC_SLUGS } from './providers.ts';
-import { NEEDS, nextStep, STEPS, type Step } from './steps.ts';
+import { NEEDS, NODES, ROOT, STEPS, successorsOf, type Step } from './graph.ts';
 
 /** A synthesize output, so `template` can be exercised without re-running it. */
 const SYNTHESIZED = {
@@ -560,37 +561,72 @@ describe('reuse skips the paid work', () => {
   });
 
   /*
-   * NEEDS is complete, proven by starvation.
+   * NEEDS is complete, proven by starvation -- and the graph concludes.
    *
-   * The worker now hands each step only the outputs `NEEDS` declares for it. A step
-   * that reads something undeclared does not fail loudly -- `priorOutputs.foo` is
-   * simply undefined -- so it would surface in production as "template: missing
-   * acquire or synthesize output" on a job that had both. This walks the whole
-   * pipeline the way the worker does, keeping every output but giving each step
-   * exactly its declared slice, and asserts the job still concludes.
+   * The worker hands each node only the outputs `needs` declares for it, and
+   * dispatches a successor only once every node in its `after` has succeeded. A
+   * node that reads something undeclared does not fail loudly -- `priorOutputs.foo`
+   * is simply undefined -- so it would surface in production as "template: missing
+   * acquire or synthesize output" on a job that had both. This walks the graph the
+   * way the worker does, keeping every output but giving each node exactly its
+   * declared slice and each join exactly its readiness rule, and asserts the job
+   * still reaches `publish`.
    */
   async function walk(deps: ReturnType<typeof harness>['deps']) {
     const outputs: Record<string, unknown> = {};
-    let step: Step | null = 'resolve_identity';
-    let last: Awaited<ReturnType<typeof runPipelineStep>> | undefined;
-    while (step) {
+    const done: Step[] = [];
+    const queue: Step[] = [ROOT];
+    while (queue.length > 0) {
+      const step = queue.shift() as Step;
+      if (done.includes(step)) continue;
       const priorOutputs = Object.fromEntries(
         NEEDS[step].filter((s) => s in outputs).map((s) => [s, outputs[s]]),
       );
-      last = await runPipelineStep(step, { ...deps, priorOutputs } as never);
-      if (last.output !== undefined) outputs[step] = last.output;
-      step = last.jumpTo ?? nextStep(step);
+      const result = await runPipelineStep(step, { ...deps, priorOutputs } as never);
+      if (result.output !== undefined) outputs[step] = result.output;
+      done.push(step);
+      // The worker's rule, in miniature: a jump is dispatched unconditionally, a
+      // successor only when its whole `after` set has finished.
+      const targets = result.jumpTo ? [result.jumpTo] : successorsOf(step);
+      for (const t of targets) {
+        const ready = result.jumpTo !== undefined || NODES[t].after.every((a) => done.includes(a));
+        if (ready && !done.includes(t)) queue.push(t);
+      }
     }
-    return { outputs, last };
+    return { outputs, done };
   }
+
+  it('recovers the jump a step took from the output it persisted', async () => {
+    // What the resume path relies on: the result is gone with the invocation
+    // that produced it, and the persisted output must say the same thing.
+    const { deps } = harness({ workId: 'w9', summaryId: 's9' });
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    expect(acquired.jumpTo).toBe('publish');
+    expect(jumpFor('acquire', acquired.output)).toBe('publish');
+
+    const fresh = harness(null);
+    const plain = await runPipelineStep('acquire', { ...fresh.deps, priorOutputs: {} } as never);
+    expect(plain.jumpTo).toBeUndefined();
+    expect(jumpFor('acquire', plain.output)).toBeUndefined();
+
+    // Only the two steps that can jump ever answer; a reuse marker on any other
+    // step's output is not a jump.
+    expect(jumpFor('template', { reuse: { summaryId: 's9' } })).toBeUndefined();
+    expect(jumpFor('synthesize', { reuse: { workId: 'w7', summaryId: 's7' } })).toBe('publish');
+    expect(jumpFor('synthesize', null)).toBeUndefined();
+  });
 
   it('concludes a new source when every step gets only what it declared', async () => {
     const { deps, calls } = harness(null);
 
-    const { outputs, last } = await walk(deps);
+    const { outputs, done } = await walk(deps);
 
-    expect(Object.keys(outputs)).toEqual([...STEPS]);
-    expect(last?.output).toMatchObject({ published: true, summaryId: 's1' });
+    expect([...done].sort()).toEqual([...STEPS].sort());
+    expect(done.at(-1)).toBe('publish');
+    expect(outputs.publish).toMatchObject({ published: true, summaryId: 's1' });
+    // The join held: moderate ran after both of its predecessors.
+    expect(done.indexOf('moderate')).toBeGreaterThan(done.indexOf('artwork'));
+    expect(done.indexOf('moderate')).toBeGreaterThan(done.indexOf('embed'));
     expect(calls.summary).toBe(1);
     expect(calls.embedding).toBe(1);
     expect(calls.insertPulls).toBe(1);
@@ -599,11 +635,11 @@ describe('reuse skips the paid work', () => {
   it('concludes a reused source the same way', async () => {
     const { deps, calls } = harness({ workId: 'w9', summaryId: 's9' });
 
-    const { outputs, last } = await walk(deps);
+    const { outputs, done } = await walk(deps);
 
     // acquire jumps to publish, and publish reads the reuse marker off acquire.
-    expect(Object.keys(outputs)).toEqual(['resolve_identity', 'acquire', 'publish']);
-    expect(last?.output).toMatchObject({ published: false, reason: 'reused' });
+    expect(done).toEqual(['resolve_identity', 'acquire', 'publish']);
+    expect(outputs.publish).toMatchObject({ published: false, reason: 'reused' });
     expect(calls.summary).toBe(0);
     expect(calls.createSummary).toBe(0);
   });

@@ -484,6 +484,30 @@ function reuseOf(priorOutputs: Record<string, unknown>): { summaryId: string } |
 }
 
 /**
+ * The jump a step took, read back from the output it persisted.
+ *
+ * `jumpTo` rides on the step's result, and a result belongs to the invocation
+ * that produced it. When the worker dies after recording the step but before
+ * archiving its message, the redelivery resumes with no result in hand -- and a
+ * resume that dispatched the *normal* successor would send a reused job down
+ * the long path while a `publish` it had already dispatched ran beside it:
+ * `current_step` overwritten away from `publish`, the close compare-and-set
+ * failing silently, and the long path unable to dispatch `publish` again
+ * because that row already exists. Stranded, on the one path that should have
+ * been the cheapest. Found by Codex.
+ *
+ * So the jump is a function of the persisted output, not of the result: the
+ * two steps that can jump both record why under `reuse`, which is what
+ * `reuseOf` reads. Kept here beside the steps, so the knowledge of what a jump
+ * means stays with the code that decides to take one.
+ */
+export function jumpFor(step: Step, output: unknown): Step | undefined {
+  if (step !== 'acquire' && step !== 'synthesize') return undefined;
+  const reuse = (output as { reuse?: unknown } | null | undefined)?.reuse;
+  return reuse ? 'publish' : undefined;
+}
+
+/**
  * Run one step.
  *
  * Steps that produce nothing yet return zero usage and no output, which is a
