@@ -322,10 +322,32 @@ function declaredFunctions(sources) {
  * the generated `$spec`/`$parse`/`$render_prompt` companions, not declarations.
  */
 function assertCoversEveryFunction(found) {
-  const listed = runBamlText(['describe', '--project', PROMPTS_DIR])
+  const raw = runBamlText(['describe', '--project', PROMPTS_DIR]);
+  const listed = raw
     .split('\n')
     .map((line) => /^function\s+(\S+)/.exec(line)?.[1])
     .filter((name) => name && !name.includes('$'));
+
+  // A short listing would make this check pass by knowing less, which is the one way
+  // a completeness guard fails worse than no guard. `baml describe` truncates its
+  // *stdlib* output with an "N more lines" marker (see the baml-core skill); the
+  // project listing does not appear to -- `--budget 3` and no budget both return every
+  // symbol here. Both are cheap to refuse anyway, and the count comparison does not
+  // depend on the marker's wording surviving a CLI release: a listing that reports
+  // fewer functions than the source obviously declares is not a listing to trust.
+  if (/\bmore lines?\b/i.test(raw)) {
+    throw new Error(
+      '`baml describe` truncated its output, so it cannot be used to check coverage. ' +
+        'Re-run the export with a larger --budget in assertCoversEveryFunction().',
+    );
+  }
+  if (listed.length < found.length) {
+    throw new Error(
+      `\`baml describe\` reported ${listed.length} function(s) but the source declares ` +
+        `at least ${found.length} (${found.join(', ')}). The listing is incomplete, so it ` +
+        'cannot confirm the export covers every contract.',
+    );
+  }
 
   const missed = listed.filter((name) => !found.includes(name));
   if (missed.length > 0) {
