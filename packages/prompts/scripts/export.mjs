@@ -77,19 +77,21 @@ function pinnedModels(source) {
 const models = pinnedModels(files['baml_src/clients.baml'] ?? '');
 
 // --- running the BAML CLI -------------------------------------------------------
-/** Evaluate one BAML expression against this project and parse its JSON result. */
-function runBaml(expr) {
+/** Run the BAML CLI with the toolchain's own directory on PATH, and return stdout. */
+function runBamlText(args) {
   const bamlPath = dirname(bamlBin);
   const pathSep = process.platform === 'win32' ? ';' : ':';
-  const out = execFileSync(
-    bamlBin,
-    ['run', '--project', PROMPTS_DIR, '-e', expr, '--output-format', 'json'],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}` },
-    },
+  return execFileSync(bamlBin, args, {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bamlPath}${pathSep}${process.env.PATH || ''}` },
+  });
+}
+
+/** Evaluate one BAML expression against this project and parse its JSON result. */
+function runBaml(expr) {
+  return JSON.parse(
+    runBamlText(['run', '--project', PROMPTS_DIR, '-e', expr, '--output-format', 'json']),
   );
-  return JSON.parse(out);
 }
 
 // --- prompt rendering via BAML CLI ----------------------------------------------
@@ -274,7 +276,11 @@ function deriveSchemaWithCli(fnName, paramNames, bounds) {
 function declaredFunctions(sources) {
   const out = [];
   for (const [file, src] of Object.entries(sources)) {
-    const decl = /function\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+)\s*\{/g;
+    // The return type is `[\w.]+` with optional `[]`/`?`, not `\w+`: `-> Pull[]`,
+    // `-> Summary?` and `-> ns.Thing` are all valid and a narrower pattern drops them
+    // -- silently, which is the failure `assertCoversEveryFunction` below exists to
+    // make impossible rather than to fix twice.
+    const decl = /function\s+(\w+)\s*\(([^)]*)\)\s*->\s*([\w.]+(?:\[\])?\??)\s*\{/g;
     let m;
     while ((m = decl.exec(src)) !== null) {
       const [, name, params, returnType] = m;
@@ -300,10 +306,53 @@ function declaredFunctions(sources) {
   if (out.length === 0) {
     throw new Error(`no BAML function declarations found in ${SRC_DIR}`);
   }
+  assertCoversEveryFunction(out.map((f) => f.name));
   return out;
 }
 
-const exported = declaredFunctions(files).map(({ file, name, params, returnType, client }) => {
+/**
+ * The regex above found every function the compiler did.
+ *
+ * Reading `.baml` with a regex is a compromise -- the metadata this script needs
+ * (parameter names, the pinned client) is not on offer from the CLI in one call.
+ * The compromise is only acceptable if failing to match is loud, because the
+ * consequence otherwise is a function missing from the export with an exit code of
+ * 0 and a green CI, which is how `WriteCanonicalSummary` came to be the only entry
+ * for a while. `baml describe` is the compiler's own list; `$`-suffixed entries are
+ * the generated `$spec`/`$parse`/`$render_prompt` companions, not declarations.
+ */
+function assertCoversEveryFunction(found) {
+  const listed = runBamlText(['describe', '--project', PROMPTS_DIR])
+    .split('\n')
+    .map((line) => /^function\s+(\S+)/.exec(line)?.[1])
+    .filter((name) => name && !name.includes('$'));
+
+  const missed = listed.filter((name) => !found.includes(name));
+  if (missed.length > 0) {
+    throw new Error(
+      `the exporter did not match ${missed.join(', ')}, which \`baml describe\` reports as ` +
+        `declared. The declaration pattern in declaredFunctions() needs to cover it -- ` +
+        'exporting the rest would drop it silently.',
+    );
+  }
+}
+
+const declared = declaredFunctions(files);
+
+// A `BOUNDS` key that names no function applies to nothing, and says nothing while it
+// does so: rename `WriteCanonicalSummary`, or mistype the key for a new function, and
+// the export still succeeds with every bound quietly absent from the schema the model
+// is given. The paths inside an entry are already checked; this checks the entry.
+const orphanedBounds = Object.keys(BOUNDS).filter((name) => !declared.some((f) => f.name === name));
+if (orphanedBounds.length > 0) {
+  throw new Error(
+    `BOUNDS names ${orphanedBounds.join(', ')}, which is not a declared BAML function. ` +
+      `Declared: ${declared.map((f) => f.name).join(', ') || '(none)'}. A renamed function ` +
+      'needs its BOUNDS key renamed with it, or its bounds stop reaching the schema.',
+  );
+}
+
+const exported = declared.map(({ file, name, params, returnType, client }) => {
   const model = models[client];
   if (!model) {
     throw new Error(

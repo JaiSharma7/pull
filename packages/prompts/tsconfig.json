@@ -5,6 +5,19 @@
     "rootDir": ".",
     "composite": true,
     "types": ["node"],
+    // Off for this project only, and only because of `baml_sdk`. The generated SDK
+    // trips nine TS6133/TS6205 in its vendored `baml/reflect`, `baml/sap` and
+    // `baml/spawn` trees, and it cannot be hand-fixed -- `pnpm baml:generate` would
+    // put them straight back. It also cannot be dropped from `include`: `src/`
+    // imports its types, and `composite` requires every file in the program to be
+    // listed. TypeScript has no per-directory options, so the exemption lands on
+    // the project.
+    //
+    // The hand-written surface is still covered, by `eslint src` rather than by
+    // tsc: `@typescript-eslint/no-unused-vars` errors on an unused local in
+    // `src/`, so dead code there still fails CI (check 1 rather than check 2).
+    // That equivalence holds only while the hand-written code lives under `src/` --
+    // a new top-level directory here would be covered by neither.
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },

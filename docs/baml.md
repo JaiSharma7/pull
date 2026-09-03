@@ -37,9 +37,16 @@ Set up:
 - A parity test binding the BAML `TopicSlug` enum to `TOPIC_SLUGS` in the pipeline, in
   both directions.
 
-**Not** set up, and deliberately: nothing in `supabase/functions` calls BAML. The
-pipeline still runs `buildSummaryPrompt` and `SUMMARY_SCHEMA`. See the next section for
-why that crossing is not a one-line import.
+**Not** set up, and deliberately: nothing in `supabase/functions` _calls_ BAML — no
+runtime import crosses into Deno. That is a narrower statement than it used to be, and
+the difference matters: `buildSummaryPrompt` and `SUMMARY_SCHEMA` are still the names the
+pipeline uses, but they are no longer hand-written copies of the contract. Both are
+derived from `baml_src` at build time and read out of
+`_shared/generated/prompts.ts` — `buildSummaryPrompt` renders the exported template
+through `promptFor`, `gemini.ts` converts the exported schema to Gemini's dialect at
+module load, and `anthropic.ts` hands it to its tool as-is. See the next section for why
+the _runtime_ crossing is not a one-line import, and "The export" below for what does
+cross.
 
 ## The Deno boundary
 
@@ -159,6 +166,18 @@ The standalone toolchain provides the official `baml` CLI (version `0.17.0`, wra
 The TypeScript project integrates with `@boundaryml/baml-bridge`, which provides the
 runtime bindings for generated code in `packages/prompts/baml_sdk`. Code generation is
 configured in `packages/prompts/baml.toml`.
+
+`baml agent install` refreshes the vendored `baml-core` reference skill, and **it cannot
+run from the Claude Code environment this repository is worked on from**: it fetches
+`https://codeload.github.com/BoundaryML/baml-skill/tar.gz/main`, which the egress policy
+refuses with a 403 (checked today, while `pkg.boundaryml.com` and GitHub release assets
+both answer 200 — so the toolchain installs fine and only this command is blocked).
+Consequently the skill is committed twice, byte-identical, at
+`.agents/skills/baml-core/SKILL.md` and `.claude/skills/baml-core/SKILL.md`, and which
+one the CLI actually owns is unverified — running the command is what would establish it.
+Do not delete either on a guess: the `.claude/` copy is what Claude Code discovers, and
+the `.agents/` copy is what `.claude/skills/baml/SKILL.md` points readers at. Allowlisting
+`codeload.github.com` would settle it.
 
 `baml_sdk` is generator output and committed whole, which is why it is 4.8 MB and carries
 vendored `openai`, `aws`, `vercel` and `claude_code` clients alongside the `google` and
