@@ -45,7 +45,6 @@ import { Library } from './routes/Library.js';
 import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
 import { OnboardingDemo } from './components/OnboardingDemo.js';
 import { Ingestion } from './routes/Ingestion.js';
-import { Paths } from './routes/Paths.js';
 
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
@@ -111,11 +110,22 @@ function readLocation(): string {
 const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
   { path: '/search', label: 'Search' },
-  { path: '/graph', label: 'Graph' },
-  { path: '/paths', label: 'Paths' },
-  { path: '/import', label: 'Import' },
-  { path: '/metacognition', label: 'ROI' },
-  { path: '/demo', label: 'Demo' },
+  /*
+   * All four are `signedIn`, and the flag is load-bearing rather than tidy.
+   *
+   * `publicRoute` below lists what a visitor may actually open, and none of these are in
+   * it — so while they were advertised without the flag, a signed-out visitor on Explore
+   * was shown four destinations that each dropped them onto the sign-in screen the
+   * moment they were selected. The navigation promised something the router refused.
+   *
+   * They belong behind it on their own merits too: the graph, the ROI figures and the
+   * import are all keyed to a reader, which is the same reason `SECTIONS` is hidden from
+   * a visitor. The demo runs inside onboarding, where there is already a session.
+   */
+  { path: '/graph', label: 'Graph', signedIn: true },
+  { path: '/import', label: 'Import', signedIn: true },
+  { path: '/metacognition', label: 'ROI', signedIn: true },
+  { path: '/demo', label: 'Demo', signedIn: true },
 
   /*
    * A destination rather than a seventh section, and last of the three.
@@ -593,7 +603,6 @@ export function App() {
   const exploreOpen = isPath(path, '/explore');
   const appearanceOpen = isPath(path, '/appearance');
   const graphOpen = isPath(path, '/graph');
-  const pathsOpen = isPath(path, '/paths');
   const importOpen = isPath(path, '/import');
   const demoOpen = isPath(path, '/demo');
   const metacognitionOpen = isPath(path, '/metacognition');
@@ -637,7 +646,6 @@ export function App() {
     exploreOpen ||
     appearanceOpen ||
     graphOpen ||
-    pathsOpen ||
     importOpen ||
     demoOpen ||
     metacognitionOpen ||
@@ -1000,7 +1008,6 @@ export function App() {
                 onOpenSource={(id) => navigate(`/source/${id}`)}
               />
             )}
-            {pathsOpen && <Paths onOpenPull={(id) => navigate(`/source/${id}`)} />}
             {importOpen && <Ingestion onComplete={() => navigate('/metacognition')} />}
 
             {demoOpen && (

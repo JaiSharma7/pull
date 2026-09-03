@@ -48,12 +48,22 @@ export function stopSpeaking(): void {
 }
 
 interface SpeechRecognitionEventResult {
+  /** False while the engine may still revise this segment. */
+  isFinal: boolean;
   [index: number]: {
     transcript: string;
   };
 }
 
 interface SpeechRecognitionEventLike {
+  /**
+   * The index of the first result this event actually changed.
+   *
+   * `results` is cumulative for the whole session, so an event fired after the tenth
+   * word still carries all ten. Reading the list from zero on every event, as this did,
+   * is how the same words get delivered again and again.
+   */
+  resultIndex: number;
   results: {
     length: number;
     [index: number]: SpeechRecognitionEventResult;
@@ -82,7 +92,23 @@ export function recognitionSupported(): boolean {
 }
 
 export interface RecognitionOptions {
+  /**
+   * Called once per newly *finalised* segment, with only that segment's text.
+   *
+   * It used to be called on every event with the entire session transcript, while its
+   * one caller appended what it received to a textarea. So a reader dictating "the
+   * obstacle is the way" watched it arrive as "the / the obstacle / the obstacle is"
+   * concatenated — the sentence repeated back several times over, growing as they spoke.
+   * A caller may now append what it is handed, which is what a caller will do.
+   */
   onResult: (transcript: string) => void;
+  /**
+   * The words the engine has heard but not yet committed, replaced on every event.
+   *
+   * Separate from `onResult` because it is not additive: this is a preview to show, not
+   * text to keep. Optional — a caller that only wants finished sentences can ignore it.
+   */
+  onInterim?: (transcript: string) => void;
   onEnd?: () => void;
   onError?: (err: unknown) => void;
 }
@@ -103,14 +129,19 @@ export function startRecognition(options: RecognitionOptions): () => void {
   recognition.lang = 'en-US';
 
   recognition.onresult = (event: SpeechRecognitionEventLike) => {
-    let full = '';
-    for (let i = 0; i < event.results.length; i++) {
+    let settled = '';
+    let pending = '';
+    // From `resultIndex`, not from zero: everything before it was delivered by an
+    // earlier event and has not changed.
+    for (let i = event.resultIndex ?? 0; i < event.results.length; i++) {
       const res = event.results[i];
-      if (res && res[0]) {
-        full += res[0].transcript;
-      }
+      const text = res?.[0]?.transcript;
+      if (!text) continue;
+      if (res.isFinal) settled += text;
+      else pending += text;
     }
-    options.onResult(full);
+    if (settled) options.onResult(settled);
+    options.onInterim?.(pending);
   };
 
   if (options.onEnd) {

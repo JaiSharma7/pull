@@ -31,6 +31,9 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   const [revealed, setRevealed] = useState(false);
   const [explanation, setExplanation] = useState('');
   const [listening, setListening] = useState(false);
+  /* Shown under the field, never appended. `startRecognition` hands interim words over
+     separately for exactly this: they are a preview the engine may still revise. */
+  const [interim, setInterim] = useState('');
   const stopListeningRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -43,11 +46,20 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
     if (listening) {
       stopListeningRef.current?.();
       setListening(false);
+      setInterim('');
     } else {
       const teardown = startRecognition({
-        onResult: (text) => setExplanation((prev) => (prev ? prev + ' ' + text : text)),
-        onEnd: () => setListening(false),
-        onError: () => setListening(false),
+        onResult: (text) =>
+          setExplanation((prev) => (prev ? prev + ' ' + text.trim() : text.trim())),
+        onInterim: setInterim,
+        onEnd: () => {
+          setListening(false);
+          setInterim('');
+        },
+        onError: () => {
+          setListening(false);
+          setInterim('');
+        },
       });
       stopListeningRef.current = teardown;
       setListening(true);
@@ -113,7 +125,16 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
         <h2 className="pull-card__headline" id={`interrupt-${pull.id}`}>
           {pull.headline}
         </h2>
-        <label className="field">
+        {/*
+          A div, not a label, and the association is explicit.
+
+          The dictate button was placed inside the wrapping `<label>`, where it became the
+          first labelable descendant — so the implicit association bound the label to the
+          button, and the textarea was left with a placeholder and no accessible name.
+          `htmlFor`/`id` says which control the text names, and works with the button
+          wherever it sits.
+        */}
+        <div className="field">
           <div
             style={{
               display: 'flex',
@@ -121,19 +142,26 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
               alignItems: 'baseline',
             }}
           >
-            <span className="field__label">In your own words</span>
+            <label className="field__label" htmlFor={`explain-${pull.id}`}>
+              In your own words
+            </label>
             {recognitionSupported() && (
               <button
                 type="button"
                 className="btn btn--plain meta"
                 style={{ padding: 0, textDecoration: 'underline' }}
+                aria-pressed={listening}
                 onClick={toggleListening}
               >
-                {listening ? '● Listening (click to stop)' : '🎤 Dictate'}
+                {/* Typography is the ornament — docs/design.md. This read "🎤 Dictate"
+                    and "● Listening (click to stop)"; `aria-pressed` carries the state
+                    that the bullet was standing in for. */}
+                {listening ? 'Stop' : 'Dictate'}
               </button>
             )}
           </div>
           <textarea
+            id={`explain-${pull.id}`}
             className="field__textarea"
             // `explanations_text_length` refuses more; a queued explanation that long
             // would be dropped on drain rather than shown back to the reader.
@@ -142,7 +170,12 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             onChange={(e) => setExplanation(e.target.value)}
             placeholder="What does this actually claim, and why would it matter?"
           />
-        </label>
+          {listening ? (
+            <p className="meta" aria-live="polite">
+              {interim || 'Listening…'}
+            </p>
+          ) : null}
+        </div>
         {revealed ? (
           <>
             <p className="meta">The card said</p>
@@ -155,8 +188,15 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
                 borderLeft: '2px solid var(--accent)',
               }}
             >
+              {/*
+                Called "One more question", not "Socratic Self-Audit". It is one fixed
+                sentence shown to every reader on every card — a prompt, which is a
+                perfectly good thing to be, and not an audit of anything, which is what
+                the heading claimed. A real per-Pull question would be generated once at
+                generation time and stored, which law 2 permits and nothing here does.
+              */}
               <p className="meta" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                Socratic Self-Audit
+                One more question
               </p>
               <p className="meta">
                 Did your formulation identify the boundary condition where this idea fails?
@@ -176,6 +216,12 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             </div>
           </>
         ) : (
+          /*
+            Revealing and submitting are two steps on purpose. The whole point of
+            this variant is seeing your own words next to the card's, so the card
+            has to stay on screen after the comparison — submitting here would
+            retire the question before the reader had read the thing they asked for.
+          */
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -185,6 +231,7 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
                 if (listening) {
                   stopListeningRef.current?.();
                   setListening(false);
+                  setInterim('');
                 }
                 setRevealed(true);
               }}
