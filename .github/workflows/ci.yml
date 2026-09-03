@@ -13,6 +13,9 @@ concurrency:
 env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.33.0'
+  # The BAML toolchain is pinned to an exact build, never a channel. See the
+  # install step in check 2 for why.
+  BAML_VERSION: '0.17.0'
 
 # No job here references `secrets.*`, and none should. `pull_request` runs with a
 # read-only token and, on a fork, no access to repository secrets at all — so a
@@ -69,7 +72,11 @@ jobs:
 
       - name: Install BAML CLI
         run: |
-          curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --yes
+          # Pinned, not a channel. `canary` is re-cut under the same version string,
+          # and `baml generate` embeds compiled bytecode in `_inlinedbaml.ts`, so an
+          # unpinned toolchain makes the diff below fail on a toolchain change rather
+          # than a source change. `manifest/v1/version/0.17.0.json` is sha256-pinned.
+          curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --yes --version "$BAML_VERSION"
           echo "$HOME/.baml/bin" >> "$GITHUB_PATH"
 
       # The BAML client is generated from `packages/prompts/baml_src` and committed,

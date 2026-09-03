@@ -31,7 +31,13 @@ export const PROMPTS = {
     "schema": {
       "type": "object",
       "properties": {
+        "title": {
+          "type": "string"
+        },
         "elevatorPitch": {
+          "type": "string"
+        },
+        "whyItMatters": {
           "type": "string"
         },
         "pulls": {
@@ -39,60 +45,71 @@ export const PROMPTS = {
           "items": {
             "type": "object",
             "properties": {
-              "body": {
-                "type": "string"
-              },
-              "example": {
-                "type": "string"
-              },
-              "explanation": {
-                "type": "string"
-              },
               "headline": {
                 "type": "string"
               },
-              "question": {
-                "type": "object",
-                "properties": {
-                  "answer": {
-                    "type": "string"
-                  },
-                  "distractors": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    },
-                    "minItems": 3,
-                    "maxItems": 3
-                  },
-                  "prompt": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "answer",
-                  "distractors",
-                  "prompt"
-                ]
+              "body": {
+                "type": "string"
               },
               "whyItMatters": {
                 "type": "string"
+              },
+              "example": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "explanation": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "question": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "prompt": {
+                        "type": "string"
+                      },
+                      "answer": {
+                        "type": "string"
+                      },
+                      "distractors": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                      }
+                    },
+                    "required": [
+                      "prompt",
+                      "answer",
+                      "distractors"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
-              "body",
               "headline",
+              "body",
               "whyItMatters"
             ]
           },
           "minItems": 1
         },
-        "title": {
-          "type": "string"
-        },
         "topics": {
           "type": "array",
           "items": {
+            "type": "string",
             "enum": [
               "philosophy",
               "ethics",
@@ -130,22 +147,18 @@ export const PROMPTS = {
               "world-philosophy",
               "strategy",
               "ecology"
-            ],
-            "type": "string"
+            ]
           },
           "minItems": 1,
           "maxItems": 4
-        },
-        "whyItMatters": {
-          "type": "string"
         }
       },
       "required": [
-        "elevatorPitch",
-        "pulls",
         "title",
-        "topics",
-        "whyItMatters"
+        "elevatorPitch",
+        "whyItMatters",
+        "pulls",
+        "topics"
       ]
     }
   }

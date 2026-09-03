@@ -45,7 +45,9 @@ export interface GeminiSchema {
 }
 
 type JsonSchema = {
-  type?: string | string[];
+  // `readonly`, like the fields below it: the exported `PROMPTS` is `as const`, so a
+  // nullable field arrives as the readonly tuple `['string', 'null']`.
+  type?: string | readonly string[];
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
   required?: readonly string[];

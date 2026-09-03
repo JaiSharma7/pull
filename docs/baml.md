@@ -73,7 +73,12 @@ on. CI check 2 regenerates the export and fails on any difference.
 The sidecar route (1) was built and verified first, then closed unmerged
 when this landed within its timebox; its branch remains for reference.
 
-Two limits of the export, stated rather than discovered:
+The schema is _derived_, not restated: the exporter asks the compiler to lower the
+function's declared return type (`baml.json.schema(F$spec(...).output_type())`), so the
+class in `baml_src` is the only place the shape is written down. References are inlined
+on the way out, because Gemini's `responseSchema` dialect has no `$ref`.
+
+Three limits of the export, stated rather than discovered:
 
 - A template cannot carry a conditional on an argument's value, because a placeholder
   must be the argument verbatim; the exporter refuses a transformed argument. The
@@ -81,6 +86,11 @@ Two limits of the export, stated rather than discovered:
 - Each function must name one pinned client; the exporter refuses a fallback or
   round-robin client, because retry and fallback belong in the worker, where the ledger
   is.
+- Array bounds are not derivable. BAML v1 has no constraint syntax, so `minItems` and
+  `maxItems` cannot be lowered from the class and are layered on from `BOUNDS` in
+  `scripts/export.mjs` after lowering. That is the one hand-kept part of the schema, and
+  `packages/prompts/src/schema.test.ts` fails if a bound's path stops resolving or if the
+  exported properties drift from the class they came from.
 
 ## Enum members are not slugs
 
@@ -108,16 +118,30 @@ itself.
 ## The toolchain
 
 Installed using Boundary's official standalone installer:
+
 ```bash
-curl -fsSL https://pkg.boundaryml.com/install.sh | sh
+curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --version 0.17.0
 ```
+
 (or `install.ps1` via PowerShell on Windows).
 
-The standalone toolchain provides the official `baml` CLI (version `0.17.0 (canary)` with
-wrapper `0.2.4`): `baml check`, `baml generate`, `baml test`, `baml run`, `baml describe`,
+**Install the pinned version, not the channel.** Left to itself the installer takes
+`canary`, and `canary` is re-cut under the same version string. `baml generate` embeds
+compiled bytecode in `baml_sdk/_inlinedbaml.ts`, so two builds that both call themselves
+`0.17.0` produce different committed output — which CI check 2 reads as a stale client
+even when nothing in `baml_src` changed. `manifest/v1/version/0.17.0.json` is
+sha256-pinned and immutable; the channel is not. CI installs the same pin from
+`BAML_VERSION` in `.github/workflows/ci.yml`, and the two move together.
+
+The standalone toolchain provides the official `baml` CLI (version `0.17.0`, wrapper
+`0.2.4`): `baml check`, `baml generate`, `baml test`, `baml run`, `baml describe`,
 `baml agent install`, and `baml init`.
 
 The TypeScript project integrates with `@boundaryml/baml-bridge`, which provides the
 runtime bindings for generated code in `packages/prompts/baml_sdk`. Code generation is
 configured in `packages/prompts/baml.toml`.
 
+`baml_sdk` is generator output and committed whole, which is why it is 4.8 MB and carries
+vendored `openai`, `aws`, `vercel` and `claude_code` clients alongside the `google` and
+`anthropic` ones. Nothing in this repository imports them and they are not prunable by
+hand — regenerating would put them straight back.
