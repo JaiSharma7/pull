@@ -7,8 +7,7 @@
  * providers read these instead of carrying their own copies; CI check 2 regenerates
  * this file and fails on any difference.
  *
- * Source of truth: packages/prompts/baml_src. Runtime that rendered it:
- * @gloo-ai/baml-schema-wasm-web 0.89.0.
+ * Source of truth: packages/prompts/baml_src.
  */
 /* eslint-disable */
 // deno-lint-ignore-file

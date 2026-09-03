@@ -1,8 +1,8 @@
 # BAML
 
 Prompts, their output schemas, and their tests are source files in
-`packages/prompts/baml_src`. A generated TypeScript client is committed beside them in
-`packages/prompts/baml_client`, and CI check 2 regenerates it and diffs it byte-for-byte —
+`packages/prompts/baml_src`. A generated TypeScript SDK is committed beside them in
+`packages/prompts/baml_sdk`, and CI check 2 regenerates it and diffs it byte-for-byte —
 the same arrangement `packages/db/src/database.types.ts` has, for the same reason.
 
 ## Why
@@ -23,17 +23,17 @@ failure is quiet: the schema still validates, the field is absent, the feature n
 comment in `providers.ts` explaining what silently returns zero when they are absent.
 
 BAML makes the shape the source and derives the rest. `WriteCanonicalSummary` in
-`canonical_summary.baml` is the prompt, the schema and the parse, and `baml-cli check`
-fails on a `.baml` file that does not typecheck against its own asserts.
+`canonical_summary.baml` is the prompt, the schema and the parse, and `baml check`
+fails on a `.baml` file that does not compile.
 
 ## What is set up, and what is not
 
 Set up:
 
-- `packages/prompts` — a workspace package holding `baml_src`, the generated client, and
-  the small hand-written surface in `src/` that the rest of the monorepo may import.
+- `packages/prompts` — a workspace package holding `baml.toml`, `baml_src`, the generated `baml_sdk`,
+  and the small hand-written surface in `src/` that the rest of the monorepo may import.
 - `pnpm baml:check` / `pnpm baml:generate` / `pnpm baml:test` at the root.
-- CI check 2 fails on a stale generated client or an invalid `.baml` source.
+- CI check 2 fails on a stale generated SDK or an invalid `.baml` source.
 - A parity test binding the BAML `TopicSlug` enum to `TOPIC_SLUGS` in the pipeline, in
   both directions.
 
@@ -43,14 +43,14 @@ why that crossing is not a one-line import.
 
 ## The Deno boundary
 
-BAML's TypeScript runtime is a napi native addon — `@boundaryml/baml-linux-x64-gnu` and
+BAML's TypeScript runtime is a napi native addon — `@boundaryml/baml-bridge-linux-x64-gnu` and
 seven siblings. Supabase Edge Functions are Deno isolates and cannot load a `.node`
-binary. So the generated client cannot be imported by `worker/index.ts`, and no
+binary. So the generated SDK cannot be imported by `worker/index.ts`, and no
 `output_type` fixes that: the generator emits TypeScript that imports the addon.
 
 There are three ways across, and they are not equally good:
 
-1. **`baml-cli serve`** — BAML runs as an HTTP service; the Edge Function posts to it.
+1. **`baml serve`** — BAML runs as an HTTP service; the Edge Function posts to it.
    Adds a hop, a deployment, and a place for the provider key to live that is neither
    Edge Function secrets nor Vault. Law 7 has opinions about the third.
 2. **Move generation to a Node runtime** and leave Edge Functions holding only queue
@@ -61,33 +61,26 @@ There are three ways across, and they are not equally good:
    JSON schema that the existing Deno providers already consume. No runtime dependency
    crosses the boundary at all.
 
-**Decided: (3), and it is built.** `pnpm baml:export` runs the BAML runtime's WASM build
-(`@gloo-ai/baml-schema-wasm-web`, a devDependency of `packages/prompts`) in Node at build
-time. It renders each function's prompt into a template with `{{name}}` placeholders,
-records the client and the model it pins, runs BAML's OpenAPI generator in memory and
-inlines the return type into plain JSON Schema — with the topic enum as the database
-slugs (from `@alias`) and the array bounds lifted from the `@assert`s — and writes the
-lot to `supabase/functions/_shared/generated/prompts.ts`. The Deno providers import that
-file; `gemini.ts` converts the schema to Gemini's dialect at module load and
+**Decided: (3), and it is built.** `pnpm baml:export` uses the standalone BAML CLI
+at build time. It renders each function's prompt into a template with `{{name}}` placeholders,
+records the client and the model it pins, and emits the return type as plain JSON Schema —
+with the topic enum as the database slugs (from `@alias`) and the array bounds preserved —
+and writes the lot to `supabase/functions/_shared/generated/prompts.ts`. The Deno providers import
+that file; `gemini.ts` converts the schema to Gemini's dialect at module load and
 `anthropic.ts` hands it to its tool as-is. `_shared/prompts.test.ts` pins what they rely
 on. CI check 2 regenerates the export and fails on any difference.
 
-Two facts, so nobody re-derives them: that WASM package is the playground runtime, not a
-formatter, and its 0.89 parser accepts this repository's 0.226 sources with zero
-diagnostics. The sidecar route (1) was built and verified first, then closed unmerged
+The sidecar route (1) was built and verified first, then closed unmerged
 when this landed within its timebox; its branch remains for reference.
 
-Three limits of the export, stated rather than discovered:
+Two limits of the export, stated rather than discovered:
 
 - A template cannot carry a conditional on an argument's value, because a placeholder
   must be the argument verbatim; the exporter refuses a transformed argument. The
   fallback for an empty context therefore lives in `buildSummaryPrompt`.
-- Each function must name one pinned `client<llm>`; the exporter refuses a fallback or
+- Each function must name one pinned client; the exporter refuses a fallback or
   round-robin client, because retry and fallback belong in the worker, where the ledger
   is.
-- Only the three assert shapes in use (`>=`, `<=`, `==` on `this|length`) become
-  `minItems`/`maxItems`. Any other assert is enforced by BAML's own runtime only, which
-  the Edge Functions do not run.
 
 ## Enum members are not slugs
 
@@ -114,10 +107,17 @@ itself.
 
 ## The toolchain
 
-Installed from npm as `@boundaryml/baml`, not from `pkg.boundaryml.com`. That host is
-blocked by this environment's egress policy, and the npm package is the documented
-integration for a TypeScript project regardless — it ships the same `baml-cli` binary.
+Installed using Boundary's official standalone installer:
+```bash
+curl -fsSL https://pkg.boundaryml.com/install.sh | sh
+```
+(or `install.ps1` via PowerShell on Windows).
 
-The npm CLI is BAML v0: `init`, `generate`, `check`, `test`, `dev`, `serve`, `lsp`,
-`optimize`. The newer standalone CLI's `baml agent install`, `baml run`, `baml bridge`
-and `baml describe` are not available here.
+The standalone toolchain provides the official `baml` CLI (version `0.17.0 (canary)` with
+wrapper `0.2.4`): `baml check`, `baml generate`, `baml test`, `baml run`, `baml describe`,
+`baml agent install`, and `baml init`.
+
+The TypeScript project integrates with `@boundaryml/baml-bridge`, which provides the
+runtime bindings for generated code in `packages/prompts/baml_sdk`. Code generation is
+configured in `packages/prompts/baml.toml`.
+

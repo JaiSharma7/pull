@@ -1,0 +1,7 @@
+[package]
+name = "wap-prompts"
+
+[generator.typescript]
+output_type = "typescript/node"
+output_dir = "."
+naming_convention = "preserve-case"

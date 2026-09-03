@@ -59,58 +59,58 @@ enum TopicSlug {
 /// one right one is a comparison the client does, so no model goes near the
 /// read path.
 class RecallQuestion {
-  prompt string
-  answer string
-  distractors string[] @assert(exactly_three, {{ this|length == 3 }})
+  prompt: string
+  answer: string
+  distractors: string[]
 }
 
 /// One atomic idea that stands on its own out of context, structured for progressive depth.
 class Pull {
   /// Shortest stop: states the idea rather than teasing it.
-  headline string
+  headline: string
   /// Short stop: the core claim and reasoning in 1-3 sentences.
-  body string
-  /// Medium stop (impact): what changes if the reader believes it — not a restatement of the body.
-  whyItMatters string
+  body: string
+  /// Medium stop (impact): what changes if the reader believes it -- not a restatement of the body.
+  whyItMatters: string
   /// Medium stop (concrete grounding): a real case study, historical instance, demonstration, or thought experiment.
-  example string?
+  example: string?
   /// Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
-  explanation string?
+  explanation: string?
   /// Omitted rather than invented when the source is too thin to support a fair
   /// question. `get_due_reviews` already copes with a pull that has none.
-  question RecallQuestion?
+  question: RecallQuestion?
 }
 
 class CanonicalSummary {
-  title string
-  elevatorPitch string
-  whyItMatters string
+  title: string
+  elevatorPitch: string
+  whyItMatters: string
   /// A summary with no ideas in it is not a summary.
-  pulls Pull[] @assert(at_least_one, {{ this|length >= 1 }})
+  pulls: Pull[]
   /// One to four, most central first.
   ///
   /// Bounded at both ends deliberately. Unbounded below, an empty array
-  /// satisfies the shape and the work is filed under nothing — `topic_affinity`
+  /// satisfies the shape and the work is filed under nothing -- `topic_affinity`
   /// then returns 0.0, and that term is 28% of the score in `get_feed`, so the
   /// feature fails silently rather than visibly.
-  topics TopicSlug[] @assert(one_to_four, {{ this|length >= 1 and this|length <= 4 }})
+  topics: TopicSlug[]
 }
 
 /// Analysis, not reproduction (law 4).
 ///
-/// The prompt asks for claims, arguments and consequences a reader can act on —
+/// The prompt asks for claims, arguments and consequences a reader can act on --
 /// never a condensed retelling that could stand in for the original. See
 /// docs/content-policy.md.
 function WriteCanonicalSummary(workTitle: string, kind: string, context: string) -> CanonicalSummary {
   // One client, never `SummaryChain`. The worker meters every attempt and decides
   // whether a failure is safe to retry elsewhere; a fallback chosen here would make
   // that decision without a ledger. See the note on `SummaryChain` in clients.baml.
-  client GeminiFlash
-  prompt #"
+  client: GeminiFlash
+  prompt: `
     You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.
 
-    Source: {{ workTitle }}
-    Medium: {{ kind }}
+    Source: ${workTitle}
+    Medium: ${kind}
 
     Write an original analysis of the ideas in this work: its claims, the arguments
     behind them, and what follows from them. Do not retell the work section by section,
@@ -130,25 +130,24 @@ function WriteCanonicalSummary(workTitle: string, kind: string, context: string)
     fewer.
 
     Context:
-    {{ context if context else "(no additional context supplied)" }}
+    ${if (context != "") { context } else { "(no additional context supplied)" }}
 
-    {{ ctx.output_format }}
-  "#
+    ${ctx.output_format}
+  `
 }
 
 /// A public-domain source, so the fixture can live in the repository (law 4).
-test meditations {
-  functions [WriteCanonicalSummary]
-  args {
-    workTitle "Meditations"
-    kind "book"
-    context #"
+test "meditations" {
+  let res = WriteCanonicalSummary(
+    workTitle = "Meditations",
+    kind = "book",
+    context = `
       The private notebooks of Marcus Aurelius, written on campaign and never
       intended for publication. Recurring themes: the dichotomy of control, the
       brevity of life as an argument for acting well now rather than later, and
-      the discipline of assent — that judgement, not event, is what disturbs.
-    "#
-  }
-  @@assert(files_under_stoicism, {{ "stoicism" in this.topics }})
-  @@assert(has_ideas, {{ this.pulls|length >= 1 }})
+      the discipline of assent -- that judgement, not event, is what disturbs.
+    `
+  );
+  assert.is_true(res.topics.includes(TopicSlug.Stoicism));
+  assert.is_true(res.pulls.length() >= 1);
 }

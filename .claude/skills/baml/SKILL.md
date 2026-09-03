@@ -5,14 +5,15 @@ description: How to write, generate and test BAML prompts in What a Pull. Read b
 
 # Writing BAML in this repo
 
-`baml agent install` could not run here — `pkg.boundaryml.com` is blocked by egress
-policy, and the npm CLI is BAML v0, which has no `agent` subcommand. This file is the
-repo-local stand-in. `docs/baml.md` holds the architecture; this holds the workflow.
+The project uses the official standalone BAML v1 toolchain (`baml`).
+General BAML language syntax and stdlib reference are available in the `baml-core` skill
+(`.agents/skills/baml-core/SKILL.md`). `docs/baml.md` holds the architecture; this holds
+the repo workflow.
 
 ## Rules
 
 1. **Regenerate, export, and commit.** `pnpm baml:generate && pnpm baml:export` after any
-   `.baml` edit. The client in `packages/prompts/baml_client` and the export in
+   `.baml` edit. The generated SDK in `packages/prompts/baml_sdk` and the export in
    `supabase/functions/_shared/generated` are both committed and CI check 2 diffs them
    byte-for-byte. Never hand-edit either.
 2. **`pnpm baml:check` before generating.** A `.baml` file that does not parse produces a
@@ -35,7 +36,7 @@ repo-local stand-in. `docs/baml.md` holds the architecture; this holds the workf
 
 ```bash
 pnpm baml:check       # parse and typecheck baml_src
-pnpm baml:generate    # rewrite packages/prompts/baml_client
+pnpm baml:generate    # rewrite packages/prompts/baml_sdk
 pnpm baml:export      # rewrite supabase/functions/_shared/generated/prompts.ts
 pnpm --filter @wap/prompts test   # parity tests, no API key needed
 pnpm baml:test        # runs the `test` blocks against real providers — costs money
@@ -47,16 +48,14 @@ reason. CI never runs it.
 
 ## Writing a function
 
-- Put the shape in a `class`, the taxonomy in an `enum`, and the constraints in
-  `@assert` — not in a comment and not in a downstream narrowing pass. An assert that
-  BAML can check is worth more than a paragraph explaining what the model should not do.
-- Name ONE pinned `client` from `clients.baml` — never `SummaryChain` or any fallback or
-  round-robin client. Retry and fallback live in the worker, where the ledger is; a
-  chain chosen in BAML would pay for attempts `cost_ledger` never hears about. Do not
-  inline `provider/model` strings either: the model names there are mirrored from
-  `_shared/gemini.ts` and `_shared/anthropic.ts` and are meant to move together.
-- Every function gets at least one `test` block with a **public-domain** fixture. Law 4:
-  no copyrighted source text in this repository, including in test args.
-- `@@assert` in a test block checks the parsed result. Reference enum members by their
-  alias string (`"stoicism"`), not by `TopicSlug.Stoicism` — the jinja scope has no
-  binding for the enum type.
+- Put the shape in a `class`, the taxonomy in an `enum`, and docstrings in `///`.
+- Name ONE pinned `client` from `clients.baml` (e.g. `client: GeminiFlash`) — never
+  `SummaryChain` or any fallback or round-robin client. Retry and fallback live in the
+  worker, where the ledger is; a chain chosen in BAML would pay for attempts
+  `cost_ledger` never hears about. Do not inline `provider/model` strings either: the model
+  names are mirrored from `_shared/gemini.ts` and `_shared/anthropic.ts` and move together.
+- Use backtick strings and `${...}` interpolation for prompts: `prompt: ` `...` `` and
+  include `${ctx.output_format}`.
+- Every function gets at least one `test "name"` block with a **public-domain** fixture.
+  Law 4: no copyrighted source text in this repository, including in test args.
+- Use `assert.*` methods in test blocks (`assert.is_true`, `assert.equal`, etc.).

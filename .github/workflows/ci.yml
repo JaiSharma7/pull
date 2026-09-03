@@ -67,6 +67,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
+      - name: Install BAML CLI
+        run: |
+          curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --yes
+          echo "$HOME/.baml/bin" >> "$GITHUB_PATH"
+
       # The BAML client is generated from `packages/prompts/baml_src` and committed,
       # for the reason `packages/db/src/database.types.ts` is: a generated file nobody
       # can see is a generated file nobody notices going stale. `baml check` first,
@@ -80,8 +85,8 @@ jobs:
       - name: Generated BAML client is in sync with baml_src
         run: |
           pnpm baml:generate
-          git add -A -- packages/prompts/baml_client
-          git diff --cached --exit-code -- packages/prompts/baml_client \
+          git add -A -- packages/prompts/baml_sdk
+          git diff --cached --exit-code -- packages/prompts/baml_sdk \
             || { echo "::error::Generated BAML client is stale. Run 'pnpm baml:generate' and commit the result."; exit 1; }
       # The prompts and schemas the Edge Functions run are exported from the same
       # sources at build time (docs/baml.md). Same rule, same reason.

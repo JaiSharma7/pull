@@ -14,7 +14,7 @@
  * slug here fails `pnpm typecheck`, in the same commit, the same way
  * `packages/db/src/enum-parity.ts` catches a drifted database enum.
  */
-import { TopicSlug } from '../baml_client/types.js';
+import { TopicSlug } from '../baml_sdk/index.js';
 
 /** Every BAML topic member, mapped to the `topics.slug` it stands for. */
 export const TOPIC_SLUG_BY_MEMBER: Record<TopicSlug, string> = {

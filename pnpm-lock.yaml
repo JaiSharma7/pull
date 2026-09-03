@@ -8,9 +8,6 @@ importers:
 
   .:
     devDependencies:
-      '@boundaryml/baml':
-        specifier: 0.226.2
-        version: 0.226.2
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1)
@@ -129,13 +126,10 @@ importers:
 
   packages/prompts:
     dependencies:
-      '@boundaryml/baml':
-        specifier: 0.226.2
-        version: 0.226.2
+      '@boundaryml/baml-bridge':
+        specifier: 0.17.0
+        version: 0.17.0
     devDependencies:
-      '@gloo-ai/baml-schema-wasm-web':
-        specifier: 0.89.1
-        version: 0.89.1
       '@types/node':
         specifier: ^26.4.0
         version: 26.4.0
@@ -734,62 +728,52 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@boundaryml/baml-darwin-arm64@0.226.2':
-    resolution: {integrity: sha512-E4s2eNWA4aym2cdKx63Lev8+laAHebku6XKKY1RhMSQbRtL5OjnYc2RDhsMYBhKXhWznumJd5M7lB93zOzrWiA==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-darwin-arm64@0.17.0':
+    resolution: {integrity: sha512-RvG5vALN38EZfjkS4NbOf74b3NFEsfob+bHW4NTMOgLN2wWIeiE5SxnRgvjOJEBGOklu0okWHcP9rWBuzEH+ng==}
     cpu: [arm64]
     os: [darwin]
 
-  '@boundaryml/baml-darwin-x64@0.226.2':
-    resolution: {integrity: sha512-r5VtsfCbPRJ1koSRr0i0PiG15LpISpOkYYSN8LlxD1aDOTcNTHaxkt/N0q20wA0JWU9v5EzpXbHa1aDzj6TH4w==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-darwin-x64@0.17.0':
+    resolution: {integrity: sha512-WqvbLeIPOGpKlo+NTQ8WvMa7uOVmrctobiTmvuxcNCC/T11wQOV+JS4+q/57Mj3wEwnq34PEl6hEjItJOHUIeA==}
     cpu: [x64]
     os: [darwin]
 
-  '@boundaryml/baml-linux-arm64-gnu@0.226.2':
-    resolution: {integrity: sha512-8lKtA40sdOlIL9iFAZclClGZX/DBniPm7tdsXWJ7FX4eMLrpf0agUj0/RkhmfAAc2tY058anTTaLmADgmhPi+A==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-linux-arm64-gnu@0.17.0':
+    resolution: {integrity: sha512-Vp7FSbYBTbclJX2q/NYBiUwc37iS6fPJhOvTjsvDN1MOWk6nSArSrfeDlfAJp8KVTHOk6EJWu9U00HQieOc6og==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@boundaryml/baml-linux-arm64-musl@0.226.2':
-    resolution: {integrity: sha512-aX25zW6cDyUb3rlddANvKYtORaXVV6Iz8y/toCcsHL3Pu9Q7OtQmdFJ/WG5E6w33BESeX0JCtpB8wqUkCnu50Q==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-linux-arm64-musl@0.17.0':
+    resolution: {integrity: sha512-Rjj8SQdOFQX1TaXgm5+bUmHiEhF68oJ90v1jssfzCOhbYBfNgQFPzeOpLRC0MiQ70RYu/RSN/y3ef+/e20bn4Q==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@boundaryml/baml-linux-x64-gnu@0.226.2':
-    resolution: {integrity: sha512-MIhwhFZS45Bn6J6jEKa1Ka1N89zquxy57SOTAnx1Zmp+zSRZ2epSLYozhwtnAdlYIvGD1g57rjk+dA6iW8wvSg==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-linux-x64-gnu@0.17.0':
+    resolution: {integrity: sha512-OVyfocW2wl/EPsdsNjpCV+JWtHJRxEiMJKrM2glvx1Y9JsRdALS/+tACE1zd8oc2mdDwGVl03+5iTp6WjWTuXA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@boundaryml/baml-linux-x64-musl@0.226.2':
-    resolution: {integrity: sha512-GfCcByC4pGY6DYF0DMpIoVkKpJ3Gyop7qeBvwMNDd/W+8TOux2SiElU0sgGe7EQYCOh7xnXc8XkLXa3EyXb48w==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-linux-x64-musl@0.17.0':
+    resolution: {integrity: sha512-qOnM2wkbB2tatjCuGkUxDCvaJblQofaDqSwMq0/mXWD4Z9oR1mVW6JRFmNbKHpVMIBRir9GeB7gBYDeQz8DpRA==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@boundaryml/baml-win32-arm64-msvc@0.226.2':
-    resolution: {integrity: sha512-apQSn/1wDvEi0PfR5doiEBGeGLUtH21Qdr2/oUkV7H+0zxGhJLdqnC9YDEhhdeUYvpe0kgpu8lIWRIblD9PQPA==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-win32-arm64-msvc@0.17.0':
+    resolution: {integrity: sha512-AhwYKEdvJ8N3TaMWaBE3ttZU0aIsq6UJCtcNEELX6HRRoA6GQXpFpR5uCinByoJ7UO0FDtbvtkTSSNBzWkDZbQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@boundaryml/baml-win32-x64-msvc@0.226.2':
-    resolution: {integrity: sha512-+AEpaPagmyBOoalcB7P59VTmRg4xUXIQ5ksDzKancLUX7e2kkvRv+Ru/NTk3E1d1qWhMOMzyEefDQ2uk+ryJcA==}
-    engines: {node: '>= 10'}
+  '@boundaryml/baml-bridge-win32-x64-msvc@0.17.0':
+    resolution: {integrity: sha512-ZaeQE7AmquwQWEKr5aL7UOkPoeXzZlbzj54GaA6CJyZKcy/PynT2U/0GK3flo+UjvAio+i4N4RTKwIrhIeI3KQ==}
     cpu: [x64]
     os: [win32]
 
-  '@boundaryml/baml@0.226.2':
-    resolution: {integrity: sha512-aUavYA9t5a5hCV3TThzny3ewg/RhLRbKQHuPPoVSTGX3/x+8Zrs3UXcLbNdFhon3NgPCAVVIKZj/cVJTxy/nMw==}
-    engines: {node: '>= 10'}
-    hasBin: true
+  '@boundaryml/baml-bridge@0.17.0':
+    resolution: {integrity: sha512-crR3fOneRzqKfYwQxp0KZywfQ+nYBRtuC5lVuru1a3+XPk0tRniEpiL6Fp11jXff6+uamsVWxEFKdak4wHjxnQ==}
 
   '@ecies/ciphers@0.2.6':
     resolution: {integrity: sha512-patgsRPKGkhhoBjETV4XxD0En4ui5fbX0hzayqI3M8tvNMGUoUvmyYAIWwlxBc1KX5cturfqByYdj5bYGRpN9g==}
@@ -847,9 +831,6 @@ packages:
 
   '@fontsource/jetbrains-mono@5.3.0':
     resolution: {integrity: sha512-fqDfB5I9f1p1TV486aUgB9t8zP84P0O1FtQR5Ol9vjwPy+S+EIGlVYm1cvj2W5shcZMTg2nZFdVMoH5wFu8a1A==}
-
-  '@gloo-ai/baml-schema-wasm-web@0.89.1':
-    resolution: {integrity: sha512-baaOJlpXT4BYiPE/8JgmTRpkDNYw2AeTA6OQcZJJCZBHy+AwsJ5x+4quVguCRUuZJU7sUYxYCVXKIML++JKdEg==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -915,6 +896,33 @@ packages:
 
   '@oxc-project/types@0.147.0':
     resolution: {integrity: sha512-IJ3s6ltHLp45S0bh7phkX+gJO7A1Wuz2EaqpAhb8WjqDwbzMiWKHhyyT42tskaWjEYXtHtVCPpnBJVT9+dcRLg==}
+
+  '@protobufjs/aspromise@1.1.2':
+    resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
+
+  '@protobufjs/base64@1.1.2':
+    resolution: {integrity: sha512-AZkcAA5vnN/v4PDqKyMR5lx7hZttPDgClv83E//FMNhR2TMcLUhfRUBHCmSl0oi9zMgDDqRUJkSxO3wm85+XLg==}
+
+  '@protobufjs/codegen@2.0.5':
+    resolution: {integrity: sha512-zgXFLzW3Ap33e6d0Wlj4MGIm6Ce8O89n/apUaGNB/jx+hw+ruWEp7EwGUshdLKVRCxZW12fp9r40E1mQrf/34g==}
+
+  '@protobufjs/eventemitter@1.1.1':
+    resolution: {integrity: sha512-vW1GmwMZNnL+gMRaovlh9yZX74kc+TTU3FObkkurpMaRtBfLP3ldjS9KQWlwZgraRE0+dheEEoAxdzcJQ8eXZg==}
+
+  '@protobufjs/fetch@1.1.1':
+    resolution: {integrity: sha512-GpptLrs57adMSuHi3VNj0mAF8dwh36LMaYF6XyJ6JMWlVsc+t42tm1HSEDmOs3A8fC9yyeisgLhsTVQokOZ0zw==}
+
+  '@protobufjs/float@1.0.2':
+    resolution: {integrity: sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==}
+
+  '@protobufjs/path@1.1.2':
+    resolution: {integrity: sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==}
+
+  '@protobufjs/pool@1.1.0':
+    resolution: {integrity: sha512-0kELaGSIDBKvcgS4zkjz1PeddatrjYcmMWOlAuAPwAeccUrPHdUqo/J6LiymHHEiJT5NrF1UVwxY14f+fy4WQw==}
+
+  '@protobufjs/utf8@1.1.2':
+    resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
   '@rolldown/binding-android-arm-eabi@1.2.6':
     resolution: {integrity: sha512-b+jTcARdTiFLI6jB4a5XjTm0RWd6KcRfQj/I2356fxUZemiho9zQLxo0RtCuMDAyKcLo6cEltkgbQp6d1+sjjQ==}
@@ -1201,9 +1209,6 @@ packages:
     resolution: {integrity: sha512-at8QVep6S3h5Y6gSbdGU06bRY5WJkf6WUduM9YtvYMbYhB1MOFfUgc6kehitQXzOtMSaT70q7f9ydPhpqu821w==}
     cpu: [x64]
     os: [win32]
-
-  '@scarf/scarf@1.4.0':
-    resolution: {integrity: sha512-xxeapPiUXdZAE3che6f3xogoJPeZgig6omHEy1rIY5WVsB3H2BHNnZH+gHG6x91SCWyQCzWGsuL2Hh3ClO5/qQ==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2230,6 +2235,9 @@ packages:
   lodash.debounce@4.0.8:
     resolution: {integrity: sha512-FT1yDzDYEoYWhnSGnpE/4Kj1fLZkDFyqRb7fNt6FdYOSxlUWAtp42Eh6Wb0rGIv/m9Bgo7x4GhQbm5Ys4SG5ow==}
 
+  long@5.3.2:
+    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
+
   lru-cache@11.5.2:
     resolution: {integrity: sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g==}
     engines: {node: 20 || >=22}
@@ -2366,6 +2374,10 @@ packages:
   pretty-bytes@6.1.1:
     resolution: {integrity: sha512-mQUvGU6aUFQ+rNvTIAcZuWGRT9a6f6Yrg9bHs4ImKF+HZCEK+plBvnAZYSIQztknZF2qnzNtr6F8s0+IuptdlQ==}
     engines: {node: ^14.13.1 || >=16.0.0}
+
+  protobufjs@7.6.6:
+    resolution: {integrity: sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==}
+    engines: {node: '>=12.0.0'}
 
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
@@ -3549,42 +3561,42 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@boundaryml/baml-darwin-arm64@0.226.2':
+  '@boundaryml/baml-bridge-darwin-arm64@0.17.0':
     optional: true
 
-  '@boundaryml/baml-darwin-x64@0.226.2':
+  '@boundaryml/baml-bridge-darwin-x64@0.17.0':
     optional: true
 
-  '@boundaryml/baml-linux-arm64-gnu@0.226.2':
+  '@boundaryml/baml-bridge-linux-arm64-gnu@0.17.0':
     optional: true
 
-  '@boundaryml/baml-linux-arm64-musl@0.226.2':
+  '@boundaryml/baml-bridge-linux-arm64-musl@0.17.0':
     optional: true
 
-  '@boundaryml/baml-linux-x64-gnu@0.226.2':
+  '@boundaryml/baml-bridge-linux-x64-gnu@0.17.0':
     optional: true
 
-  '@boundaryml/baml-linux-x64-musl@0.226.2':
+  '@boundaryml/baml-bridge-linux-x64-musl@0.17.0':
     optional: true
 
-  '@boundaryml/baml-win32-arm64-msvc@0.226.2':
+  '@boundaryml/baml-bridge-win32-arm64-msvc@0.17.0':
     optional: true
 
-  '@boundaryml/baml-win32-x64-msvc@0.226.2':
+  '@boundaryml/baml-bridge-win32-x64-msvc@0.17.0':
     optional: true
 
-  '@boundaryml/baml@0.226.2':
+  '@boundaryml/baml-bridge@0.17.0':
     dependencies:
-      '@scarf/scarf': 1.4.0
+      protobufjs: 7.6.6
     optionalDependencies:
-      '@boundaryml/baml-darwin-arm64': 0.226.2
-      '@boundaryml/baml-darwin-x64': 0.226.2
-      '@boundaryml/baml-linux-arm64-gnu': 0.226.2
-      '@boundaryml/baml-linux-arm64-musl': 0.226.2
-      '@boundaryml/baml-linux-x64-gnu': 0.226.2
-      '@boundaryml/baml-linux-x64-musl': 0.226.2
-      '@boundaryml/baml-win32-arm64-msvc': 0.226.2
-      '@boundaryml/baml-win32-x64-msvc': 0.226.2
+      '@boundaryml/baml-bridge-darwin-arm64': 0.17.0
+      '@boundaryml/baml-bridge-darwin-x64': 0.17.0
+      '@boundaryml/baml-bridge-linux-arm64-gnu': 0.17.0
+      '@boundaryml/baml-bridge-linux-arm64-musl': 0.17.0
+      '@boundaryml/baml-bridge-linux-x64-gnu': 0.17.0
+      '@boundaryml/baml-bridge-linux-x64-musl': 0.17.0
+      '@boundaryml/baml-bridge-win32-arm64-msvc': 0.17.0
+      '@boundaryml/baml-bridge-win32-x64-msvc': 0.17.0
 
   '@ecies/ciphers@0.2.6(@noble/ciphers@1.3.0)':
     dependencies:
@@ -3631,8 +3643,6 @@ snapshots:
   '@fontsource-variable/source-serif-4@5.3.0': {}
 
   '@fontsource/jetbrains-mono@5.3.0': {}
-
-  '@gloo-ai/baml-schema-wasm-web@0.89.1': {}
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -3688,6 +3698,26 @@ snapshots:
   '@noble/hashes@1.8.0': {}
 
   '@oxc-project/types@0.147.0': {}
+
+  '@protobufjs/aspromise@1.1.2': {}
+
+  '@protobufjs/base64@1.1.2': {}
+
+  '@protobufjs/codegen@2.0.5': {}
+
+  '@protobufjs/eventemitter@1.1.1': {}
+
+  '@protobufjs/fetch@1.1.1':
+    dependencies:
+      '@protobufjs/aspromise': 1.1.2
+
+  '@protobufjs/float@1.0.2': {}
+
+  '@protobufjs/path@1.1.2': {}
+
+  '@protobufjs/pool@1.1.0': {}
+
+  '@protobufjs/utf8@1.1.2': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.6':
     optional: true
@@ -3853,8 +3883,6 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.63.1':
     optional: true
-
-  '@scarf/scarf@1.4.0': {}
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -4948,6 +4976,8 @@ snapshots:
 
   lodash.debounce@4.0.8: {}
 
+  long@5.3.2: {}
+
   lru-cache@11.5.2: {}
 
   lru-cache@5.1.1:
@@ -5069,6 +5099,20 @@ snapshots:
   pretty-bytes@5.6.0: {}
 
   pretty-bytes@6.1.1: {}
+
+  protobufjs@7.6.6:
+    dependencies:
+      '@protobufjs/aspromise': 1.1.2
+      '@protobufjs/base64': 1.1.2
+      '@protobufjs/codegen': 2.0.5
+      '@protobufjs/eventemitter': 1.1.1
+      '@protobufjs/fetch': 1.1.1
+      '@protobufjs/float': 1.0.2
+      '@protobufjs/path': 1.1.2
+      '@protobufjs/pool': 1.1.0
+      '@protobufjs/utf8': 1.1.2
+      '@types/node': 26.4.0
+      long: 5.3.2
 
   punycode@2.3.1: {}
 

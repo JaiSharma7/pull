@@ -1,0 +1,283 @@
+{
+  "schema_version": 2,
+  "files": [
+    {
+      "relative_path": ".gitignore",
+      "sha256": "66b47ca221280cb5ace576604a74cbc2f89d60e319cc1b85b4122ae43d003a9a"
+    },
+    {
+      "relative_path": "_inlinedbaml.ts",
+      "sha256": "91e779c9074ae6bda5ee7e0974de6d6d2fa69c90b6c923558f6ea06ff7068b16"
+    },
+    {
+      "relative_path": "_typemap.ts",
+      "sha256": "0276eb57a57cf9f8cf3f6484a76d7fe953efc391ae8c24c42aecce769954514a"
+    },
+    {
+      "relative_path": "ai/clients/index.ts",
+      "sha256": "1365e04a32e4fcba115af888071b4cbbee8ba31abf5b5655258c22033900af7d"
+    },
+    {
+      "relative_path": "ai/content/index.ts",
+      "sha256": "802539cf21ee4f822122dd4a974921bf6defdc3e1c377cfb0e38f61d92126edc"
+    },
+    {
+      "relative_path": "ai/errors/index.ts",
+      "sha256": "7d879780d7cc6a2334fb7b088383f664707d55cfe25880397677b4e6e05fda73"
+    },
+    {
+      "relative_path": "ai/events/index.ts",
+      "sha256": "c456cd1a2161329255b49bbc5bbd4be726bc58e8ed6d29c64563be8fd20f3c41"
+    },
+    {
+      "relative_path": "ai/index.ts",
+      "sha256": "b6b20fbfb18030d3378a07d79678391df65e84fc3d73249b4e1503f23e162a5b"
+    },
+    {
+      "relative_path": "ai/internal/index.ts",
+      "sha256": "6dcfc912f2eef3546c8bca246b7fbc773fe43b7121ed140a50fbaff86dd7d46e"
+    },
+    {
+      "relative_path": "ai/mcp/index.ts",
+      "sha256": "2b7272fc19f10143742a0bc51f4cf7279d2338c8d50f7d6e299c07e66d50cd6f"
+    },
+    {
+      "relative_path": "ai/stream/index.ts",
+      "sha256": "6e33a536e695d5e75d1f17acef3cd4ae75f0793d384699f8e045338f16a44e2e"
+    },
+    {
+      "relative_path": "ai/tools/index.ts",
+      "sha256": "507be6455dffaa2b2193e7c2cf5f754b6923d913914544d2f31610b10f29ebd6"
+    },
+    {
+      "relative_path": "ai/wire/index.ts",
+      "sha256": "704c4f5d2885344fb0da5cb953f80d569e93775ce276057fa62eadbd449e8f5a"
+    },
+    {
+      "relative_path": "baml/crypto/index.ts",
+      "sha256": "d013613e90c0f6271351fd6e8dcd5377281c8b1fe0645c639ff61c699dea8d19"
+    },
+    {
+      "relative_path": "baml/csv/index.ts",
+      "sha256": "eb02faea668818c3953d73c4308332bf547cec1c0c31c7f01bf96fdfe76dcb8d"
+    },
+    {
+      "relative_path": "baml/env/index.ts",
+      "sha256": "3b447c4ca3867e3904cfc96f715c761a9bf8f6c4cc82262433f350ae0c167814"
+    },
+    {
+      "relative_path": "baml/errors/index.ts",
+      "sha256": "2e4419f77de97bbfe9790f018d8716b09779d57c39584f2e14981210052e5b15"
+    },
+    {
+      "relative_path": "baml/fs/index.ts",
+      "sha256": "5882852b131f49211c1c6be849f73cf590472d48c6f44c1fdd4ed906a5b374d2"
+    },
+    {
+      "relative_path": "baml/future/index.ts",
+      "sha256": "c3fd61afceb89b1b1895c859d668aaadfa9f69ecb036925d18ce8dede0ce8170"
+    },
+    {
+      "relative_path": "baml/glob/index.ts",
+      "sha256": "d3826bf02cf7dbe7e005774c964dbc61cd98c288714b06f6d46ed8e70a00d451"
+    },
+    {
+      "relative_path": "baml/host/index.ts",
+      "sha256": "0dd982f9eab822c2ce625f318d01f6165df0e34ec8ffc0e3e140bf8d1e5caadd"
+    },
+    {
+      "relative_path": "baml/http/index.ts",
+      "sha256": "995a3567c2e62257a4433bb164c4369b0d65beb85093f24382cbd77198691da6"
+    },
+    {
+      "relative_path": "baml/id/index.ts",
+      "sha256": "1a56bde6f2277c7436eb05bc5e25c75d3ee7c58b3689812addfa5613de65256c"
+    },
+    {
+      "relative_path": "baml/index.ts",
+      "sha256": "99cfa22843d72bea51b7857504022c32309c245afb01c85038ddac0602d82cdf"
+    },
+    {
+      "relative_path": "baml/io/index.ts",
+      "sha256": "96226ae64f956c7805ccd3490eb49d5500cfa4bfc36dcb399e2ca2c7e530eebd"
+    },
+    {
+      "relative_path": "baml/iter/index.ts",
+      "sha256": "d07037e95f183c2b260b8f7078f34b864e193c95f07e1ce5e8bf9eefacc5ceab"
+    },
+    {
+      "relative_path": "baml/json/index.ts",
+      "sha256": "97685d5a47ae64b37afd8f0dc33c69596a0186968c8625e8a0d8483ee345160a"
+    },
+    {
+      "relative_path": "baml/media/index.ts",
+      "sha256": "ebb54f005d787cb57fb18b8aa5c7092f7f183a0b340d1e1461bc0f50cb681976"
+    },
+    {
+      "relative_path": "baml/net/index.ts",
+      "sha256": "1f9d42838b099da63926f4598c0f9793f207bf7db25baebe40dfaddab48ce774"
+    },
+    {
+      "relative_path": "baml/ops/index.ts",
+      "sha256": "c36ccb851115f3a0de8eb5a83413984d5b09dc9fb48b21fcacae895b8274335c"
+    },
+    {
+      "relative_path": "baml/panics/index.ts",
+      "sha256": "a397312468a7dbfdb4eb92ee4f1a0b7f0a8ff2f1101fe740e6b9362f9210efea"
+    },
+    {
+      "relative_path": "baml/random/index.ts",
+      "sha256": "507f497a486f7fd9254fe5f1875900634977dc6aca18c44de4a805f15af91060"
+    },
+    {
+      "relative_path": "baml/reflect/array/index.ts",
+      "sha256": "887c022b18c6e55c66aa660e600824323c9f613c777cb7f380f521d64c39851c"
+    },
+    {
+      "relative_path": "baml/reflect/class/index.ts",
+      "sha256": "0b497c55ef42ff1266c54adb1506c1c2d3853740411a6ed2772c3fbcb1d55b3d"
+    },
+    {
+      "relative_path": "baml/reflect/enum/index.ts",
+      "sha256": "3cf54b8ab5d9c41a11d7b6be01a69246153b850c4bbc757ad171a6bbb8b1215a"
+    },
+    {
+      "relative_path": "baml/reflect/errors/index.ts",
+      "sha256": "5e63f42ff12ddce4f9ca348440c17f8c9819f2cc0df310484f8be9e12bbf1ae1"
+    },
+    {
+      "relative_path": "baml/reflect/function/index.ts",
+      "sha256": "519623e8789a64eb9b2f86ef61ae0fb9aa412648fa4959582e0ef9e77a1420a2"
+    },
+    {
+      "relative_path": "baml/reflect/index.ts",
+      "sha256": "807760b86f72116a15d7a883a6bb3c9dbad2936d3e5676261edf5e9886abe17e"
+    },
+    {
+      "relative_path": "baml/reflect/interface/index.ts",
+      "sha256": "7bc21bbadca8811e474bc642541345649040f6f8f0ef6b4871277985bc76b5f6"
+    },
+    {
+      "relative_path": "baml/reflect/literal/index.ts",
+      "sha256": "2956c54e13f366b162f831667b439149d049f3c8e76ded44fc23263a40c63557"
+    },
+    {
+      "relative_path": "baml/reflect/map/index.ts",
+      "sha256": "1c5e610e7d253a704706f82bbe1b090fe9a65ccb0873a5fcad6b07960e5001fa"
+    },
+    {
+      "relative_path": "baml/reflect/primitive/index.ts",
+      "sha256": "e59b4ad10c276a25933d32f0d428f31981defe33be312e0f1f723c5815c5a431"
+    },
+    {
+      "relative_path": "baml/reflect/union/index.ts",
+      "sha256": "7f6d2571f0b7dff4149567925f673481a2bafa1ed062758bd58c04da714a0218"
+    },
+    {
+      "relative_path": "baml/sap/index.ts",
+      "sha256": "ffca347dd1f8ad381c529dd972d432d9d951b3462dbb910e2ba768dfa146c25b"
+    },
+    {
+      "relative_path": "baml/spawn/index.ts",
+      "sha256": "559e5cd6ee7f2319d12e2cb47f9da11f500c46b9af85b03c8d3ca36ffb4a204d"
+    },
+    {
+      "relative_path": "baml/sys/index.ts",
+      "sha256": "efd6986dac7aa63adf39d8639820ff3e89ceff86522bf53a211c9471b6d69a40"
+    },
+    {
+      "relative_path": "baml/time/index.ts",
+      "sha256": "3e0269f529714f46179c3c1c91a4156078d36ea93c91fd5d21f98a1dcb6aa40c"
+    },
+    {
+      "relative_path": "baml/toml/index.ts",
+      "sha256": "502efcb645a40f7a034f5431d9808bc45753c50cd0d2919c418f0bcb39aa3053"
+    },
+    {
+      "relative_path": "baml/type/index.ts",
+      "sha256": "7497c6dce89d809b533bd70efed7f828ca63364eeada8f766cca22fdac74a123"
+    },
+    {
+      "relative_path": "baml/ws/index.ts",
+      "sha256": "8f90f73a3a0a3b4e66a1fbd358af18dfd2311583dc74faa18d029d61d14c5722"
+    },
+    {
+      "relative_path": "baml/yaml/index.ts",
+      "sha256": "16840088df90af816d17eb733fa0e40e28acb7809b16cece3798e17bba32b54f"
+    },
+    {
+      "relative_path": "index.ts",
+      "sha256": "5ec3aad6cc05e03383c2bf002a02c63676fde719a3d636d1b7f438dc35adae0b"
+    },
+    {
+      "relative_path": "vendor/anthropic/index.ts",
+      "sha256": "a9b524961dcb5ed661c91797a53f2d1dc547036583908af34274061723dbdd56"
+    },
+    {
+      "relative_path": "vendor/anthropic/internal/index.ts",
+      "sha256": "be8f30b8b6ce3ac305572f8831ee4d5927841f35e0d33dd09d8c509a004a95db"
+    },
+    {
+      "relative_path": "vendor/assert/index.ts",
+      "sha256": "0ce08b6b1e5e6496f5b0d7bc74277c2b3c8d9ee86f78e2d2c3ffd31d62da6d61"
+    },
+    {
+      "relative_path": "vendor/aws/index.ts",
+      "sha256": "e9316a32a9189606f44e3d530c25759b24a793c04d0f69db0355429964e8c266"
+    },
+    {
+      "relative_path": "vendor/aws/internal/index.ts",
+      "sha256": "2cf3951aceaaf2cbfe191beaa0768c798ee00d10906d277a2f85a66797e3691e"
+    },
+    {
+      "relative_path": "vendor/boundary/id/index.ts",
+      "sha256": "f70c43f3dd19fc9a16a34805fca8e162fbc6f8476d3375d7e762bf672437e175"
+    },
+    {
+      "relative_path": "vendor/boundary/index.ts",
+      "sha256": "fbde657d4b17ee2225ab99f6650537261cb081caf887ed867ee8de0220a5d252"
+    },
+    {
+      "relative_path": "vendor/claude_code/index.ts",
+      "sha256": "a2c60639041dd8f8bed54232c6de8a3ed04b52388c689ceb846b81f1c0c049b3"
+    },
+    {
+      "relative_path": "vendor/claude_code/internal/index.ts",
+      "sha256": "54a97eeaf41378f53ec8915e9d20acbff42571173d445b6c53c1b76137e092f0"
+    },
+    {
+      "relative_path": "vendor/google/index.ts",
+      "sha256": "a164260dc1098df62e9111d2abefc2db63cb61a699e41488881f6500da5e4ce8"
+    },
+    {
+      "relative_path": "vendor/google/internal/index.ts",
+      "sha256": "081cc93ed56669064a61b393e6ac8946a32f9ee5402912c63d0e4c54e548f196"
+    },
+    {
+      "relative_path": "vendor/index.ts",
+      "sha256": "005eb76515bd37b9cd32088f9004db200091f2b87656e0f7d457f2988eec58a6"
+    },
+    {
+      "relative_path": "vendor/openai/index.ts",
+      "sha256": "28dadc7c48343370f20f5d8ac927cf631778699de3add01ea894dc8c16a6d267"
+    },
+    {
+      "relative_path": "vendor/openai/internal/index.ts",
+      "sha256": "09cdab5eb1b41d17a61a5887b92125718de608f6854915f7c953dceb4d8a79c8"
+    },
+    {
+      "relative_path": "vendor/testing/index.ts",
+      "sha256": "a8b8729b8e022e984cceb172b57516f3843261732841a136fca78710d886a80d"
+    },
+    {
+      "relative_path": "vendor/vercel/index.ts",
+      "sha256": "047e74af91ac6c63b75cf318b64876291d93a66b3c85ead3ff78057c64cf8fef"
+    },
+    {
+      "relative_path": "vendor/vercel/internal/index.ts",
+      "sha256": "41c789ef3b97e7db660a6f994d54f249e130b141d7c38b0f8259396e8a4c99aa"
+    }
+  ],
+  "committed_files": [],
+  "recovery_files": []
+}

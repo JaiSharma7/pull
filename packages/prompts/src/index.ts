@@ -11,5 +11,5 @@
  * isolates cannot load one. See docs/baml.md.
  */
 export { TOPIC_SLUG_BY_MEMBER, topicSlugOf } from './topics.js';
-export { TopicSlug } from '../baml_client/types.js';
-export type { CanonicalSummary, Pull, RecallQuestion } from '../baml_client/types.js';
+export { TopicSlug } from '../baml_sdk/index.js';
+export type { CanonicalSummary, Pull, RecallQuestion } from '../baml_sdk/index.js';

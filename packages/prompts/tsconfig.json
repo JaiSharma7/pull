@@ -4,7 +4,9 @@
     "outDir": "dist",
     "rootDir": ".",
     "composite": true,
-    "types": ["node"]
+    "types": ["node"],
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   },
-  "include": ["src/**/*", "baml_client/**/*"]
+  "include": ["src/**/*", "baml_sdk/**/*"]
 }
