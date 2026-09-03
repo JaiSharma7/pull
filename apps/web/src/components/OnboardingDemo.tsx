@@ -66,19 +66,28 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             </p>
           </div>
 
+          {/*
+            A real seeded Pull, word for word from `20260829131035_seed_pulls.sql`, and from a
+            public-domain work. `docs/design.md` requires exactly this of an illustrative card,
+            and says why: a repository whose rule is that only public-domain material is
+            committed should not reach for a title under copyright the moment it wants a
+            plausible example. What was here did reach for one — invented prose attributed to
+            *Thinking, Fast and Slow*, with an "example" describing the elderly-priming study
+            as an established finding.
+          */}
           <PullCard
-            headline="Dual-process cognitive architecture: System 1 heuristic intuition vs System 2 deliberate calculation"
-            body="System 1 operates automatically and fast with little or no effort. System 2 allocates attention to effortful mental operations. Errors arise when System 1 substitutes a simple heuristic for complex probability."
-            whyItMatters="Most real-world blunders in investing, policy, and negotiation stem from uncritical reliance on System 1 heuristics when volatile conditions demand System 2 deliberate rigor."
-            example="In experimental trials, subjects primed with words associated with the elderly walked demonstrably slower down the hall—a subconscious ideomotor effect occurring without conscious awareness."
-            explanation="Kahneman and Tversky established bounded rationality through empirical cognitive biases, falsifying classical economics' Homo economicus assumption."
+            headline="Some things are up to you. Most are not."
+            body="Your judgements, intentions and effort are yours. Reputation, outcomes, other people and the past are not."
+            whyItMatters="Almost every practical philosophy since is a variation on where exactly this line falls."
+            example="You can control how thoroughly you prepare. You cannot control whether the panel likes you."
+            explanation="The distinction is not a comfort but a filter. Effort spent on the second category is spent at a loss, however sincerely it is spent."
             depth={depth}
             onDepthChange={setDepth}
             source={{
-              title: 'Thinking, Fast and Slow',
+              title: 'The Enchiridion',
               kind: 'book',
             }}
-            sourceTrail="Daniel Kahneman · 2011"
+            sourceTrail="Epictetus · public-domain translation"
           />
         </div>
       )}
@@ -128,7 +137,11 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               backgroundColor: 'var(--surface)',
             }}
           >
-            <p className="meta">Source Analysis: Antifragile by Nassim Nicholas Taleb (18 Ideas)</p>
+            {/* Illustrative, and said so rather than implied. The figures below are a
+                worked example of how the Delta reads, not a measurement of anything: this
+                screen runs before the reader has a knowledge model to measure. The source
+                is a seeded public-domain work for the same reason the card above is. */}
+            <p className="meta">Worked example · Walden (12 ideas) — illustration, not your data</p>
             <div
               style={{
                 display: 'flex',
@@ -140,7 +153,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
             >
               <div>
                 <span style={{ fontSize: 'var(--step-3)', fontFamily: 'var(--font-mono)' }}>
-                  {simulatedPriorKnowledge ? '3' : '18'}
+                  {simulatedPriorKnowledge ? '3' : '12'}
                 </span>
                 <span className="meta"> ideas to read</span>
               </div>
@@ -152,7 +165,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                     color: 'var(--accent)',
                   }}
                 >
-                  {simulatedPriorKnowledge ? '15' : '0'}
+                  {simulatedPriorKnowledge ? '9' : '0'}
                 </span>
                 <span className="meta"> ideas already held</span>
               </div>
@@ -172,8 +185,8 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
 
             <p style={{ color: 'var(--text-soft)', margin: 0 }}>
               {simulatedPriorKnowledge
-                ? '✓ The Delta detected your mastery of Black Swan theory and Stoic resilience. Only the 3 novel antifragility mechanisms are shown.'
-                : 'Reading all 18 ideas linearly without accounting for your existing mental models.'}
+                ? 'With nine of these ideas already in your knowledge model, the Delta shows the three that are new to you.'
+                : 'Without a knowledge model, all twelve are shown in order, including the ones you already hold.'}
             </p>
           </div>
         </div>

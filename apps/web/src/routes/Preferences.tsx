@@ -321,6 +321,46 @@ export function Preferences({
  * reader behind a settings screen because a query failed is a far worse outcome than
  * asking them again next session, and it is the failure mode a gate invites.
  */
+type OnboardingStage = 'preferences' | 'census' | 'demo';
+
+/*
+ * Where the reader got to, so a reload does not skip the rest of the gate.
+ *
+ * `savePreferences` writes `onboarded_at` on every save — deliberately, see its comment
+ * — and the preferences step is the first of three. So the moment that step finished,
+ * `onboardedAt` was non-null, and a reader who reloaded or closed the tab during the
+ * census or the demo came back to `needed === false` and could never reach either
+ * again. The census is the one that matters: it is the only thing that seeds a
+ * knowledge model, and it cannot be offered twice.
+ *
+ * Kept per device rather than in the profile because that is what it is: the position
+ * of a one-time tour, not a fact about the reader. A reader who onboards on their phone
+ * and reloads on their laptop is finished either way — `onboarded_at` still governs
+ * that, and this can only ever extend the gate within the session it started in.
+ */
+const STAGE_KEY_PREFIX = 'wap_onboarding_stage_';
+
+function readStage(userId: string): OnboardingStage | null {
+  try {
+    const raw = localStorage.getItem(`${STAGE_KEY_PREFIX}${userId}`);
+    return raw === 'census' || raw === 'demo' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStage(userId: string, stage: OnboardingStage | null): void {
+  try {
+    const key = `${STAGE_KEY_PREFIX}${userId}`;
+    if (stage === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, stage);
+  } catch {
+    // Private browsing, or a full quota. The gate then behaves as it did before: the
+    // reader keeps their preferences and misses the rest of the tour, which is a
+    // degraded outcome rather than a broken one.
+  }
+}
+
 export function OnboardingGate({
   userId,
   children,
@@ -329,13 +369,25 @@ export function OnboardingGate({
   children: React.ReactNode;
 }) {
   const [needed, setNeeded] = useState<boolean | null>(null);
-  const [stage, setStage] = useState<'preferences' | 'census' | 'demo'>('preferences');
+  const [stage, setStage] = useState<OnboardingStage>('preferences');
 
   useEffect(() => {
     let live = true;
     fetchPreferences(userId)
       .then((p) => {
-        if (live) setNeeded(p !== null && p.onboardedAt === null);
+        if (!live) return;
+        const resumed = readStage(userId);
+        if (p !== null && p.onboardedAt === null) {
+          setNeeded(true);
+          return;
+        }
+        // Onboarded, but a stage was left in flight on this device: finish it.
+        if (resumed !== null) {
+          setStage(resumed);
+          setNeeded(true);
+          return;
+        }
+        setNeeded(false);
       })
       .catch(() => {
         if (live) setNeeded(false);
@@ -345,6 +397,16 @@ export function OnboardingGate({
     };
   }, [userId]);
 
+  const goTo = (next: OnboardingStage) => {
+    writeStage(userId, next);
+    setStage(next);
+  };
+
+  const finish = () => {
+    writeStage(userId, null);
+    setNeeded(false);
+  };
+
   // Undecided renders the app, not a spinner: the gate is worth showing once, and
   // never worth making someone wait to find out whether they will see it.
   if (needed !== true) return <>{children}</>;
@@ -352,14 +414,12 @@ export function OnboardingGate({
   return (
     <main className="gate">
       {stage === 'preferences' && (
-        <Preferences userId={userId} mode="onboarding" onDone={() => setStage('census')} />
+        <Preferences userId={userId} mode="onboarding" onDone={() => goTo('census')} />
       )}
       {stage === 'census' && (
-        <KnowledgeCensus onComplete={() => setStage('demo')} onSkip={() => setStage('demo')} />
+        <KnowledgeCensus onComplete={() => goTo('demo')} onSkip={() => goTo('demo')} />
       )}
-      {stage === 'demo' && (
-        <OnboardingDemo onComplete={() => setNeeded(false)} onSkip={() => setNeeded(false)} />
-      )}
+      {stage === 'demo' && <OnboardingDemo onComplete={finish} onSkip={finish} />}
     </main>
   );
 }
