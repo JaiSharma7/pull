@@ -651,8 +651,9 @@ export function Library({ userId }: { userId: string }) {
                         className="btn btn--plain"
                         onClick={() => {
                           const next =
-                            window.prompt('A note on this idea', item.note ?? '')?.slice(0, 20000) ??
-                            null;
+                            window
+                              .prompt('A note on this idea', item.note ?? '')
+                              ?.slice(0, 20000) ?? null;
                           if (next === null) return;
                           patchSave(item, { note: next.trim() || null });
                         }}
