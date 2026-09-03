@@ -54,9 +54,14 @@ binary. So the generated SDK cannot be imported by `worker/index.ts`, and no
 
 There are three ways across, and they are not equally good:
 
-1. **`baml serve`** — BAML runs as an HTTP service; the Edge Function posts to it.
+1. **A sidecar** — BAML runs as an HTTP service; the Edge Function posts to it.
    Adds a hop, a deployment, and a place for the provider key to live that is neither
-   Edge Function secrets nor Vault. Law 7 has opinions about the third.
+   Edge Function secrets nor Vault. Law 7 has opinions about the third. This route was
+   `baml-cli serve` under v0, and **v1 has no `serve` subcommand at all** — 0.17.0
+   answers `unrecognized subcommand`. So costing it today means costing a hand-written
+   server, which is what the closed sidecar branch ended up being anyway, and for a
+   separate reason: `serve`'s `/call` dropped token usage, so it could never have fed
+   `cost_ledger`.
 2. **Move generation to a Node runtime** and leave Edge Functions holding only queue
    mechanics. The largest change, and the one that removes the 150s wall clock that
    forces the twelve-step split in the first place.
@@ -137,6 +142,14 @@ curl -fsSL https://pkg.boundaryml.com/install.sh | sh -s -- --version 0.17.0
 ```
 
 (or `install.ps1` via PowerShell on Windows).
+
+`scripts/cloud-setup.sh` does this and the three other things a container needs, pinned
+to `.baml-version`; a Claude Code cloud environment should call it from its **Setup
+script** field (`bash scripts/cloud-setup.sh`), because these containers ship without the
+toolchain and a session that cannot run `baml fmt` will fail the gate it cannot see. Note
+what that script does about PATH: the installer appends `. "$HOME/.baml/env"` to
+`~/.bashrc`, which a non-interactive shell never reads, so a successful install still
+reports `baml: command not found`. It symlinks into `/usr/local/bin` instead.
 
 **Install the pinned version, not the channel.** Left to itself the installer takes
 `canary`, which is re-cut under the same version string, so two toolchains that both
