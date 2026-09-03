@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PullCard, textAtDepth } from '@wap/ui';
+import { PullCard, SynapseMap, type SynapseNode, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
+
 import { groupByWork, type WorkGroup } from '../lib/library.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
@@ -77,6 +78,7 @@ export function Library({ userId }: { userId: string }) {
   /* One depth for the screen, for the reason the Feed keeps one: it is a reading
      preference, not a property of any single saved idea. */
   const [depth, setDepth] = useState(1);
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
 
   /*
    * Everything the reader has marked or written, as a file they keep.
@@ -159,6 +161,23 @@ export function Library({ userId }: { userId: string }) {
     [items, filter, stashId],
   );
   const groups = useMemo(() => groupByWork(visible), [visible]);
+
+  const graphNodes: SynapseNode[] = useMemo(() => {
+    return (visible ?? []).map((item) => {
+      const d = item.work.id ? delta[item.work.id] : undefined;
+      return {
+        pullId: item.id,
+        workId: item.work.id,
+        workTitle: item.work.title,
+        workKind: item.work.kind ?? 'book',
+        headline: item.headline,
+        body: item.body,
+        retrievability: d ? d.known / Math.max(1, d.total) : 0.9,
+        stability: 14,
+        status: 'solid' as const,
+      };
+    });
+  }, [visible, delta]);
 
   const activeStash = useMemo(
     () => (stashId === null ? null : (flat.find((n) => n.id === stashId) ?? null)),
@@ -506,121 +525,149 @@ export function Library({ userId }: { userId: string }) {
             Export highlights
           </button>
         </div>
+
+        <div className="library__filters" role="group" aria-label="View mode">
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={viewMode === 'list'}
+            onClick={() => setViewMode('list')}
+          >
+            List
+          </button>
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={viewMode === 'graph'}
+            onClick={() => setViewMode('graph')}
+          >
+            Graph
+          </button>
+        </div>
       </div>
 
       {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
 
-      {groups.map((group) => {
-        const open = openWork === group.key;
-        const d = group.workId ? delta[group.workId] : undefined;
-        return (
-          <section key={group.key} className="stack">
-            <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
-              <button
-                type="button"
-                className="btn btn--plain"
-                aria-expanded={open}
-                onClick={() => toggle(group)}
-                style={{ textAlign: 'left' }}
-              >
-                {group.title}
-              </button>
-            </h2>
+      {viewMode === 'graph' ? (
+        <SynapseMap
+          nodes={graphNodes}
+          edges={[]}
+          height="540px"
+          onSelectNode={(n) => n && setOpenWork(n.workId)}
+        />
+      ) : (
+        groups.map((group) => {
+          const open = openWork === group.key;
+          const d = group.workId ? delta[group.workId] : undefined;
+          return (
+            <section key={group.key} className="stack">
+              <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  aria-expanded={open}
+                  onClick={() => toggle(group)}
+                  style={{ textAlign: 'left' }}
+                >
+                  {group.title}
+                </button>
+              </h2>
 
-            <p className="meta">
-              {group.items.length} kept
-              {d && (
-                <>
-                  {' · '}
-                  <span style={{ color: 'var(--accent)' }}>
-                    {d.new} of {d.total} still new to you
-                  </span>
-                </>
-              )}
-            </p>
+              <p className="meta">
+                {group.items.length} kept
+                {d && (
+                  <>
+                    {' · '}
+                    <span style={{ color: 'var(--accent)' }}>
+                      {d.new} of {d.total} still new to you
+                    </span>
+                  </>
+                )}
+              </p>
 
-            {open &&
-              group.items.map((item) => (
-                <div key={item.id} className="library__item">
-                  <PullCard
-                    source={{ title: group.title, kind: group.kind }}
-                    headline={item.headline}
-                    body={item.body}
-                    whyItMatters={item.whyItMatters}
-                    example={item.example}
-                    explanation={item.explanation}
-                    sourceTrail={group.title}
-                    saved
-                    depth={depth}
-                    onDepthChange={setDepth}
-                    onListen={() => speak(textAtDepth(item, depth))}
-                    onShare={() => void share(item, group.title)}
-                    shareLabel={shareLabel(shareCapability(navigator))}
-                  />
+              {open &&
+                group.items.map((item) => (
+                  <div key={item.id} className="library__item">
+                    <PullCard
+                      source={{ title: group.title, kind: group.kind }}
+                      headline={item.headline}
+                      body={item.body}
+                      whyItMatters={item.whyItMatters}
+                      example={item.example}
+                      explanation={item.explanation}
+                      sourceTrail={group.title}
+                      saved
+                      depth={depth}
+                      onDepthChange={setDepth}
+                      onListen={() => speak(textAtDepth(item, depth))}
+                      onShare={() => void share(item, group.title)}
+                      shareLabel={shareLabel(shareCapability(navigator))}
+                    />
 
-                  {shareStatus?.saveId === item.saveId ? (
-                    <p className="meta" role="status">
-                      {shareStatus.note}
-                    </p>
-                  ) : null}
+                    {shareStatus?.saveId === item.saveId ? (
+                      <p className="meta" role="status">
+                        {shareStatus.note}
+                      </p>
+                    ) : null}
 
-                  <div className="library__actions">
-                    <label className="library__assign">
-                      <span className="meta">Collection</span>{' '}
-                      <select
-                        className="field__input library__select"
-                        value={item.stashId ?? ''}
-                        onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
+                    <div className="library__actions">
+                      <label className="library__assign">
+                        <span className="meta">Collection</span>{' '}
+                        <select
+                          className="field__input library__select"
+                          value={item.stashId ?? ''}
+                          onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
+                        >
+                          <option value="">None</option>
+                          {flat.map((n) => (
+                            <option key={n.id} value={n.id}>
+                              {'— '.repeat(n.depth)}
+                              {n.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <button
+                        type="button"
+                        className="btn btn--plain library__filter"
+                        aria-pressed={item.readLater}
+                        onClick={() => patchSave(item, { readLater: !item.readLater })}
                       >
-                        <option value="">None</option>
-                        {flat.map((n) => (
-                          <option key={n.id} value={n.id}>
-                            {'— '.repeat(n.depth)}
-                            {n.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        {item.readLater ? 'For later ✓' : 'Read later'}
+                      </button>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain library__filter"
-                      aria-pressed={item.readLater}
-                      onClick={() => patchSave(item, { readLater: !item.readLater })}
-                    >
-                      {item.readLater ? 'For later ✓' : 'Read later'}
-                    </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain library__filter"
+                        aria-pressed={item.archived}
+                        onClick={() => patchSave(item, { archived: !item.archived })}
+                      >
+                        {item.archived ? 'Archived ✓' : 'Archive'}
+                      </button>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain library__filter"
-                      aria-pressed={item.archived}
-                      onClick={() => patchSave(item, { archived: !item.archived })}
-                    >
-                      {item.archived ? 'Archived ✓' : 'Archive'}
-                    </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => {
+                          const next =
+                            window.prompt('A note on this idea', item.note ?? '')?.slice(0, 20000) ??
+                            null;
+                          if (next === null) return;
+                          patchSave(item, { note: next.trim() || null });
+                        }}
+                      >
+                        {item.note ? 'Edit note' : 'Add note'}
+                      </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      onClick={() => {
-                        const next =
-                          window.prompt('A note on this idea', item.note ?? '')?.slice(0, 20000) ??
-                          null;
-                        if (next === null) return;
-                        patchSave(item, { note: next.trim() || null });
-                      }}
-                    >
-                      {item.note ? 'Edit note' : 'Add note'}
-                    </button>
+                    {item.note ? <p className="library__note">{item.note}</p> : null}
                   </div>
-
-                  {item.note ? <p className="library__note">{item.note}</p> : null}
-                </div>
-              ))}
-          </section>
-        );
-      })}
+                ))}
+            </section>
+          );
+        })
+      )}
     </div>
   );
 }

@@ -18,6 +18,20 @@ export { Enough } from './components/Enough.js';
 export type { EnoughProps } from './components/Enough.js';
 export { Mark, brimPath, hatGeometry } from './components/Mark.js';
 export type { HatGeometry, MarkProps } from './components/Mark.js';
+export { SynapseMap } from './components/SynapseMap.js';
+export type { SynapseEdge, SynapseMapProps, SynapseNode } from './components/SynapseMap.js';
+export {
+  DEFAULT_CONFIG,
+  computeGraphBounds,
+  initializePositions,
+  stepSimulation,
+} from './synapse-physics.js';
+export type {
+  SimulationBounds,
+  SimulationConfig,
+  SimulationEdge,
+  SimulationNode,
+} from './synapse-physics.js';
 
 /** Identifier for the design system these components implement. */
 export const DESIGN_SYSTEM = 'the-archive';

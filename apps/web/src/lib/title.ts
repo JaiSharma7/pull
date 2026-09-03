@@ -34,6 +34,7 @@ const TAB_TITLES: Record<TitleTab, string> = {
 const PATH_TITLES: Record<string, string> = {
   '/explore': 'Explore',
   '/search': 'Search',
+  '/graph': 'Synapse Graph',
   '/appearance': 'Appearance',
   '/account': 'Account',
   '/privacy': 'Privacy Policy',
