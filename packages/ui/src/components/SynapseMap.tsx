@@ -48,6 +48,8 @@ interface ResolvedTokens {
   surfaceRaised: string;
   rule: string;
   ruleStrong: string;
+  labelSize: string;
+  labelFamily: string;
 }
 
 function resolveTokens(element: HTMLElement | null): ResolvedTokens {
@@ -61,6 +63,8 @@ function resolveTokens(element: HTMLElement | null): ResolvedTokens {
       surfaceRaised: 'transparent',
       rule: 'currentColor',
       ruleStrong: 'currentColor',
+      labelSize: '11px',
+      labelFamily: 'serif',
     };
   }
 
@@ -74,6 +78,11 @@ function resolveTokens(element: HTMLElement | null): ResolvedTokens {
     surfaceRaised: style.getPropertyValue('--surface-raised').trim() || 'transparent',
     rule: style.getPropertyValue('--rule').trim() || 'currentColor',
     ruleStrong: style.getPropertyValue('--rule-strong').trim() || 'currentColor',
+    /* The *computed* values, not the raw custom properties: `--step--1` is a `clamp()`
+       and `--font-display` is a multi-line stack, neither of which `ctx.font` can parse.
+       `.synapse-canvas` sets both in CSS so they can be read back resolved. */
+    labelSize: style.fontSize || '11px',
+    labelFamily: style.fontFamily || 'serif',
   };
 }
 
@@ -100,6 +109,16 @@ export function neighborsOf(
     if (e.toPullId === selectedNodeId) s.add(e.fromPullId);
   }
   return s;
+}
+
+/**
+ * The rAF physics loop is the largest motion in the app and the only one CSS does not
+ * govern, so it has to ask. `design-laws.test.ts` greps the CSS bundle for the media
+ * query and passes vacuously here.
+ */
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 export function SynapseMap({
@@ -191,7 +210,61 @@ export function SynapseMap({
     }));
 
     alphaRef.current = 1.0;
+
+    /*
+     * Reduced motion gets a settled layout, not a frozen one.
+     *
+     * Suppressing the animation alone would leave every node where
+     * `initializePositions` put it — a ring — because the force simulation is what turns
+     * that into a graph. So the same simulation runs here, to convergence, in one
+     * synchronous pass: the reader gets the arrangement without watching it arrive.
+     */
+    if (prefersReducedMotion()) {
+      let a = 1.0;
+      for (let i = 0; i < 300 && a > 0.005; i++) {
+        stepSimulation(
+          simNodesRef.current,
+          simEdgesRef.current,
+          { width, height: heightPx },
+          DEFAULT_CONFIG,
+          a,
+        );
+        a *= 0.985;
+      }
+      alphaRef.current = 0;
+    }
   }, [filteredNodes, filteredEdges]);
+
+  /*
+   * Repaint on a resize or a theme change.
+   *
+   * The loop stops once `alpha` decays, and `resolveTokens` is read only inside `draw`,
+   * so after the graph settled nothing repainted it. A window resize left the backing
+   * store at its old size — the canvas stretched and blurred — and an OS light-to-dark
+   * switch left a bone-white canvas sitting inside a dark app, which is the exact failure
+   * docs/design.md warns about.
+   */
+  useEffect(() => {
+    const repaint = () => {
+      alphaRef.current = Math.max(alphaRef.current, 0.006);
+      setDragTick((t) => t + 1);
+    };
+    window.addEventListener('resize', repaint);
+    const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+    scheme?.addEventListener?.('change', repaint);
+    // The in-app theme toggle writes `data-theme` on the root rather than changing the OS
+    // preference, so the media query alone would miss it.
+    const observer = new MutationObserver(repaint);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class'],
+    });
+    return () => {
+      window.removeEventListener('resize', repaint);
+      scheme?.removeEventListener?.('change', repaint);
+      observer.disconnect();
+    };
+  }, []);
 
   // Render loop
   const draw = useCallback(() => {
@@ -219,7 +292,7 @@ export function SynapseMap({
     ctx.fillRect(0, 0, width, heightPx);
 
     // 2. Physics step if alpha is active
-    if (alphaRef.current > 0.005) {
+    if (alphaRef.current > 0.005 && !prefersReducedMotion()) {
       stepSimulation(
         simNodesRef.current,
         simEdgesRef.current,
@@ -355,7 +428,9 @@ export function SynapseMap({
 
       // Label (rendered for selected, hovered, or prominent nodes)
       if (isSelected || isHovered || zoom >= 1.25) {
-        ctx.font = '500 11px Fraunces, serif';
+        // Read from the tokens like everything else: this was `11px Fraunces, serif`, the one
+        // piece of type in the app that ignored the large-text setting and named its own family.
+        ctx.font = `500 ${tokens.labelSize} ${tokens.labelFamily}`;
         ctx.fillStyle = isSelected ? tokens.accent : tokens.text;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
@@ -376,7 +451,7 @@ export function SynapseMap({
     let frameId: number;
     const loop = () => {
       draw();
-      if (alphaRef.current > 0.005) {
+      if (alphaRef.current > 0.005 && !prefersReducedMotion()) {
         frameId = requestAnimationFrame(loop);
       }
     };
@@ -423,6 +498,17 @@ export function SynapseMap({
 
   // Mouse & Touch events
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    /*
+     * Capture the pointer, or a node released outside the canvas stays welded to the
+     * cursor: `onPointerUp` is a React handler on the canvas, so a `pointerup` elsewhere
+     * never fires, `draggedNodeIdRef` stays set and the node stays `pinned`. The next
+     * plain hover then re-enters the drag branch with no button held.
+     */
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Older engines, or a pointer that has already been released.
+    }
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     didMoveRef.current = false;
 
@@ -462,6 +548,31 @@ export function SynapseMap({
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
   };
 
+  /*
+   * Arrow keys step through the nodes in the order they are drawn; Enter and Space select
+   * the focused one; Escape clears. Not a spatial traversal — the layout is a physics
+   * simulation and moves — but a total order over the same set, which is what makes the
+   * graph answerable without a pointer at all.
+   */
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (filteredNodes.length === 0) return;
+    const current = filteredNodes.findIndex((n) => n.pullId === selectedNodeId);
+
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = filteredNodes[(current + 1 + filteredNodes.length) % filteredNodes.length];
+      if (next) onSelectNode?.(next);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIndex = current <= 0 ? filteredNodes.length - 1 : current - 1;
+      const prev = filteredNodes[prevIndex];
+      if (prev) onSelectNode?.(prev);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onSelectNode?.(null);
+    }
+  };
+
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (draggedNodeIdRef.current) {
       const node = simNodesRef.current.find((n) => n.id === draggedNodeIdRef.current);
@@ -484,12 +595,27 @@ export function SynapseMap({
   };
 
   // Wheel zoom
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    setZoom((z) => Math.min(3.0, Math.max(0.4, z * zoomFactor)));
-    alphaRef.current = Math.max(alphaRef.current, 0.05);
-  };
+  /*
+   * Attached natively, because React registers `wheel` as a *passive* listener on the
+   * root — so `e.preventDefault()` inside a React `onWheel` cannot cancel anything, and
+   * wheeling over the map zoomed the graph *and* scrolled the page under it.
+   *
+   * Ctrl+wheel is left alone: that is the browser's page zoom, and taking it is worse
+   * than the scroll it would prevent.
+   */
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) return;
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+      setZoom((z) => Math.min(3.0, Math.max(0.4, z * zoomFactor)));
+      alphaRef.current = Math.max(alphaRef.current, 0.05);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   // Zoom control buttons
   const zoomIn = () => setZoom((z) => Math.min(3.0, z * 1.25));
@@ -504,12 +630,7 @@ export function SynapseMap({
   const fadingCount = useMemo(() => nodes.filter((n) => n.retrievability < 0.6).length, [nodes]);
 
   return (
-    <div
-      ref={containerRef}
-      className={`synapse-container ${className}`}
-      style={{ height }}
-      aria-label="Knowledge Synapse Graph"
-    >
+    <div ref={containerRef} className={`synapse-container ${className}`} style={{ height }}>
       {/* Filter Tabs */}
       <div className="synapse-filter-bar" role="toolbar" aria-label="Filter graph nodes">
         <button
@@ -551,18 +672,41 @@ export function SynapseMap({
         </button>
       </div>
 
-      {/* Main Interactive Canvas */}
+      {/*
+        Main interactive canvas.
+
+        Focusable, and steppable with the arrow keys. `docs/design.md` promises "full
+        keyboard navigation with a visible, non-colour-only focus state", and a canvas is
+        the one control `jsx-a11y` has no rule for — which is why lint was green over a
+        region a keyboard reader could not enter and a screen reader found empty. The
+        list below is the same nodes as text: it is what assistive tech reads, and it is
+        what the canvas draws.
+      */}
       <canvas
         ref={canvasRef}
         className="synapse-canvas"
+        tabIndex={0}
+        aria-label={`Knowledge graph, ${filteredNodes.length} ideas. Use arrow keys to move between them.`}
+        onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onWheel={handleWheel}
       />
 
+      <ul className="sr-only">
+        {filteredNodes.map((n) => (
+          <li key={n.pullId}>
+            {n.headline} — {n.workTitle}, {n.status}, {Math.round(n.retrievability * 100)}%
+            retrievable
+          </li>
+        ))}
+      </ul>
+
       {/* Legend */}
-      <div className="synapse-legend" aria-hidden="true">
+      {/* Not aria-hidden. It is the only text explaining what solid, fading and a
+          dashed chord mean, so hiding it left the encoding available to sighted readers
+          only. */}
+      <div className="synapse-legend">
         <span className="synapse-legend-item">
           <span className="synapse-legend-dot synapse-legend-dot--solid" /> Solid (≥80%)
         </span>

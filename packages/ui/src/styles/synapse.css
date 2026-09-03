@@ -9,12 +9,22 @@
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 480px;
+  /* No `min-height: 480px`. It silently beat the `height` prop for anything smaller — the
+     onboarding demo asks for 380px and got 480 — and on a 667px phone it made the map
+     most of the viewport. */
+  min-height: 240px;
   background-color: var(--surface);
   border: 1px solid var(--rule);
   overflow: hidden;
   user-select: none;
-  touch-action: none;
+}
+
+/* `pan-y`, not `none`. `touch-action: none` on the container meant a reader on a phone
+   could not scroll the page past the map at all — a 580px element they were stuck inside.
+   This keeps horizontal drags for panning the graph and hands vertical ones back to the
+   page, which is the gesture someone needs to get out. */
+.synapse-canvas {
+  touch-action: pan-y;
 }
 
 .synapse-canvas {
@@ -22,6 +32,18 @@
   width: 100%;
   height: 100%;
   cursor: grab;
+  /* Set here so the canvas can read it back computed. `ctx.font` cannot parse a
+     `clamp()`, which is what `--step--1` is, but `getComputedStyle` resolves it to px —
+     so the node labels track the reader's large-text setting and the display family
+     instead of the hardcoded `11px Fraunces, serif` they used to carry. */
+  font: 500 var(--step--1) / 1 var(--font-display);
+}
+
+/* Focus is visible and not colour-only: the canvas is keyboard-reachable, and
+   docs/design.md requires the state to be visible without relying on hue. */
+.synapse-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .synapse-canvas:active {
