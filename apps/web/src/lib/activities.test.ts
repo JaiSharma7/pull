@@ -261,6 +261,85 @@ describe('gradeCloze', () => {
     expect(result.similarity).toBeLessThan(1);
   });
 
+  it('refuses a short word that a slip turns into a different word', () => {
+    // The kind-of-difference rule alone moved the boundary rather than removing
+    // the class: in a short word an inserted, dropped or swapped letter lands on
+    // another real word about as often as on a typo. All of these graded `easy`
+    // — stability multiplied, out of review for a fortnight, and
+    // `confidentlyWrong` false so nothing downstream looked again.
+    for (const [typed, correctAnswer] of [
+      ['casual', 'causal'],
+      ['trail', 'trial'],
+      ['ion', 'iron'],
+      ['aid', 'acid'],
+      ['cost', 'coast'],
+      ['sale', 'scale'],
+      ['form', 'from'],
+      ['untied', 'united'],
+      ['hat', 'heat'],
+      ['at', 'art'],
+      ['rat', 'rate'],
+    ] as const) {
+      const result = gradeCloze(typed, correctAnswer, 'sure', 1000);
+      expect(result.correct, `${typed} for ${correctAnswer}`).toBe(false);
+      expect(result.grade).toBe('forgot');
+    }
+
+    // And the floor does not cost the cases worth forgiving.
+    expect(gradeCloze('color', 'colour').correct).toBe(true);
+    expect(gradeCloze('ocurrence', 'occurrence').correct).toBe(true);
+    expect(gradeCloze('mitochondira', 'mitochondria').correct).toBe(true);
+  });
+
+  it('does not tell a British reader they hold a false belief', () => {
+    // `-ise`/`-ize` and `-yse`/`-yze` are substitutions, so the slip rule refused
+    // them: `organisation` for `organization` graded `forgot` AND
+    // `confidentlyWrong`, which routes a correct speller into the misconception
+    // loop. Folding `z` to `s` makes that family exact instead. It is only that
+    // family: `sceptic`/`skeptic`, `grey`/`gray` and `catalogue`/`catalog` are
+    // different axes and are still refused, which the module says plainly rather
+    // than pretending the split is closed.
+    for (const [typed, correctAnswer] of [
+      ['organisation', 'organization'],
+      ['analyse', 'analyze'],
+      ['emphasise', 'emphasize'],
+      ['ionised', 'ionized'],
+      ['organise', 'organize'],
+    ] as const) {
+      const result = gradeCloze(typed, correctAnswer, 'sure', 1000);
+      expect(result.correct, `${typed} for ${correctAnswer}`).toBe(true);
+      expect(result.confidentlyWrong).toBe(false);
+    }
+  });
+
+  it('never grades a slip as easy, however fast it came', () => {
+    // `easy` multiplies stability by more than three. An accepted one-character
+    // difference is not evidence of easy retrieval — it is evidence the rule
+    // could not tell a typo from a different word.
+    const slip = gradeCloze('mitochondia', 'mitochondria', 'sure', 100);
+    expect(slip.correct).toBe(true);
+    expect(slip.grade).toBe('good');
+
+    // Typed exactly, fast and sure, is still easy.
+    const exact = gradeCloze('mitochondria', 'mitochondria', 'sure', 100);
+    expect(exact.grade).toBe('easy');
+  });
+
+  it('does not let two absences agree', () => {
+    // The branch protecting an answer that IS a mark reintroduced, in this
+    // function, the defect fixed one function above in `gradeMcq`: an empty box
+    // against an empty or punctuation-only answer graded `easy`.
+    for (const [typed, correctAnswer] of [
+      ['', ''],
+      ['   ', ''],
+      ['!', '.'],
+    ] as const) {
+      const result = gradeCloze(typed, correctAnswer, 'sure', 500);
+      expect(result.correct, `"${typed}" for "${correctAnswer}"`).toBe(false);
+      expect(result.grade).toBe('forgot');
+    }
+  });
+
   it('accepts an answer that is only a mark', () => {
     // `normaliseAnswer` reduces these to nothing, which used to fail them.
     for (const mark of ['+', '=', '<', '^']) {
@@ -454,17 +533,24 @@ describe('whyWrong', () => {
     });
   });
 
-  it('matches a distractor loosely when the verbatim one is not there', () => {
+  it('does not guess at a distractor it was not given verbatim', () => {
+    // There was a loose pass here, matching on normalised text. It was narrowed
+    // twice and removed: given the pick and the rationales but never the option
+    // list, this function cannot tell a reader's near-miss from a sibling option
+    // that happens to normalise the same way — so `the market` was answered with
+    // the reason written for `market`. The options come from `mcqOptions`
+    // verbatim, so an exact match after trimming covers every real pick, and a
+    // wrong account of your own mistake is worse than none.
     expect(whyWrong(q, 'a sign of bad luck!')).toEqual({
-      why: 'Luck is not a category the Stoics grant.',
-      source: 'distractor',
+      why: q.explanation,
+      source: 'answer',
     });
   });
 
   it('never explains one wrong answer with another one’s reason', () => {
     // `normaliseAnswer` strips exactly the characters `semanticMarks` keeps, so
-    // `C++` and `C` both reduced to `c` and a reader who picked `C` was told a
-    // true fact about C++ as an account of their own mistake.
+    // `C++` and `C` both reduced to `c`, and `the market` and `market` both to
+    // `market`. Neither is answered with the other's reason now.
     const languages = mcq({
       answer: 'Rust',
       explanation: null,
@@ -476,30 +562,30 @@ describe('whyWrong', () => {
       source: 'distractor',
     });
 
-    // Nor the article-stripped neighbour.
     const markets = mcq({
       answer: 'The state',
       explanation: null,
       rationale: [{ distractor: 'the market', why: 'Markets clear; they do not decide.' }],
     });
-    expect(whyWrong(markets, 'market')).toEqual({
+    expect(whyWrong(markets, 'market')).toBeNull();
+    expect(whyWrong(markets, 'the market')).toEqual({
       why: 'Markets clear; they do not decide.',
       source: 'distractor',
     });
+  });
 
-    // And when two rationales collapse to the same loose key it says nothing,
-    // because it cannot tell which the reader meant.
-    const ambiguous = mcq({
-      answer: 'Rust',
-      explanation: null,
-      rationale: [
-        { distractor: 'C', why: 'C has no ownership model.' },
-        { distractor: 'c', why: 'Lower case c is a different option entirely.' },
-      ],
-    });
-    // The pick has to miss the exact pass to reach the loose one; an exact
-    // match is never ambiguous.
-    expect(whyWrong(ambiguous, 'C.')).toBeNull();
+  it('survives a rationale element the column has no shape for', () => {
+    // `rationale` is jsonb and not a column until 3a, so the elements are as
+    // unvalidated as the array. Each of these used to throw inside the feedback
+    // path after a reader answered, taking the render with it.
+    for (const junk of [[null], [{ why: 'x' }], [{ distractor: 'B' }], ['B'], [42]]) {
+      const broken = mcq({ rationale: junk as never, explanation: 'The answer stands.' });
+      expect(() => whyWrong(broken, 'anything')).not.toThrow();
+      expect(whyWrong(broken, 'anything')).toEqual({
+        why: 'The answer stands.',
+        source: 'answer',
+      });
+    }
   });
 
   it('labels the answer’s own explanation as what it is', () => {

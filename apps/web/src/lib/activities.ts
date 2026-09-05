@@ -299,6 +299,26 @@ export function normaliseAnswer(text: string): string {
       // demand` a two-word answer against a three-word one, so a reader who wrote
       // the ampersand out was graded as having written something else.
       .replace(/&/gu, ' and ')
+      // AND `z` FOLDS TO `s`, which is the one orthographic split worth naming.
+      //
+      // `-ise`/`-ize`, `-isation`/`-ization` and `-yse`/`-yze` are substitutions,
+      // so the slip rule below refuses them — and review reproduced the result: a
+      // British reader typing `organisation`, `analyse`, `emphasise` or
+      // `sceptical` was graded `forgot` AND flagged `confidentlyWrong`, told they
+      // held a false belief for spelling their own language. No ratio separates
+      // that case from a wrong answer either: `grey`/`gray` and
+      // `increase`/`decrease` are both 0.75 per word.
+      //
+      // Folding the axis makes the whole family an exact match instead, so those
+      // readers are graded on what they knew. The cost is `prize`/`prise`, two
+      // words this now treats as one; a cloze whose answer turns on that
+      // distinction is rarer than a reader who spells the way they were taught.
+      //
+      // The remaining variants — `sceptic`/`skeptic`, `grey`/`gray`,
+      // `catalogue`/`catalog` — are still
+      // refused and still flagged. That is a real residual, and no threshold fixes
+      // it; closing it needs a variant list, which is a different change.
+      .replace(/z/gu, 's')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -457,10 +477,28 @@ function isTypingSlip(a: string, b: string): boolean {
   if (a === b) return true;
   if (/\p{N}/u.test(a) || /\p{N}/u.test(b)) return false;
 
+  // AND A LENGTH FLOOR, because the kind-of-difference rule alone moved the
+  // boundary rather than removing the class. Review reproduced twelve short
+  // pairs that the ratio used to refuse and this rule accepted as `easy`:
+  // `casual`/`causal`, `trail`/`trial`, `ion`/`iron`, `aid`/`acid`,
+  // `cost`/`coast`, `sale`/`scale`, `form`/`from`, `untied`/`united`,
+  // `hat`/`heat`, `at`/`art`, `rat`/`rate`. In a short word an inserted,
+  // dropped or swapped letter lands on another real word about as often as on a
+  // typo, so the shape of the difference stops carrying the meaning.
+  //
+  // Six for an indel and seven for a transposition, which is where the twelve
+  // stop and where the cases worth forgiving begin: `colour`/`color` is six,
+  // `ocurrence`/`occurrence` ten, `mitochondira`/`mitochondria` twelve. One of
+  // the twelve survives — `train`/`strain`, six letters, one insertion — and it
+  // is the honest residual of any rule drawn here rather than a case this
+  // missed.
+  const longest = Math.max(a.length, b.length);
+
   // An insertion or a deletion: the longer word is the shorter one with one
   // character put back. Walked once from each end rather than spliced, so the
   // repeated-letter case (`ocurrence`/`occurrence`) needs no special handling.
   if (Math.abs(a.length - b.length) === 1) {
+    if (longest < 6) return false;
     const [short, long] = a.length < b.length ? [a, b] : [b, a];
     let i = 0;
     while (i < short.length && short[i] === long[i]) i += 1;
@@ -474,6 +512,7 @@ function isTypingSlip(a: string, b: string): boolean {
   // A transposition: same length, two adjacent positions differ, and they are
   // each other's. Anything else of the same length is a substitution.
   if (a.length === b.length) {
+    if (longest < 7) return false;
     const differing: number[] = [];
     for (let i = 0; i < a.length; i += 1) {
       if (a[i] !== b[i]) differing.push(i);
@@ -507,8 +546,14 @@ function wordsAreClose(typed: string, answer: string): boolean {
   // `normaliseAnswer` strips it to nothing. The old bail on an empty typed
   // answer graded those wrong when they were exactly right, which is the one
   // class `semanticMarks` exists to protect. The caller has already compared the
-  // marks, so agreeing here is the whole answer.
-  if (a.length === 0 && b.length === 0) return true;
+  // marks, so agreeing here is the whole answer -- PROVIDED THERE IS A MARK.
+  //
+  // Without that condition this was the defect the same commit fixed one
+  // function above, reintroduced: `gradeCloze('', '')` graded `easy`, and so did
+  // an empty box against a malformed `answer: '.'`, because two absences were
+  // taken to agree. `gradeMcq` says it plainly and this now says it too: two
+  // absences agreeing is not a right answer.
+  if (a.length === 0 && b.length === 0) return semanticMarks(answer).length > 0;
   if (a.length === 0 || a.length !== b.length) return false;
   return a.every((word, i) => isTypingSlip(word, b[i] as string));
 }
@@ -528,8 +573,21 @@ export function gradeCloze(
   latencyMs: number | null | undefined = null,
 ): GradeResult & { similarity: number } {
   const similarity = answerSimilarity(typed, answer);
+  const exact = normaliseAnswer(typed) === normaliseAnswer(answer);
   const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);
-  return { ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.cloze), similarity };
+  const result = gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.cloze);
+  // AN ACCEPTED SLIP IS NEVER `easy`. That grade multiplies stability by more
+  // than three and takes the idea out of review for a fortnight, and this rule
+  // cannot promise an accepted one-character difference is the reader's word
+  // rather than a different one — `train`/`strain` is the residual the length
+  // floor leaves, and there will be others. Capping at `good` takes the
+  // multiplier off every accepted-but-inexact answer, and costs a reader who
+  // typed it correctly nothing, because they took the exact branch.
+  return {
+    ...result,
+    grade: result.correct && !exact && result.grade === 'easy' ? 'good' : result.grade,
+    similarity,
+  };
 }
 
 /**
@@ -627,38 +685,32 @@ export function whyWrong(
   if (chosen === q.answer.trim()) return null;
 
   // `rationale` is not a column on `quiz_questions` yet -- 3a adds it -- so a row
-  // read today arrives without it and `find` would throw on undefined.
-  const rationale = Array.isArray(q.rationale) ? q.rationale : [];
+  // read today arrives without it, and when it does arrive it is jsonb: the
+  // elements are as unvalidated as the array. Guarding only the array left
+  // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing inside the
+  // feedback path after a reader answered, taking the render with them. Both
+  // halves are narrowed here so nothing below can.
+  const rationale = (Array.isArray(q.rationale) ? q.rationale : []).filter(
+    (r): r is DistractorRationale =>
+      typeof (r as DistractorRationale | null)?.distractor === 'string' &&
+      typeof (r as DistractorRationale | null)?.why === 'string',
+  );
   const match = rationale.find((r) => r.distractor.trim() === chosen);
   if (match?.why.trim()) return { why: match.why.trim(), source: 'distractor' };
 
-  // The loose pass exists for drift -- a client that trimmed differently, a
-  // stored option that lost its case -- and it used to key on `normaliseAnswer`
-  // alone, which strips exactly the characters `semanticMarks` was added to
-  // keep. So `C++` and `C` both reduced to `c`, and a reader who picked `C`
-  // was shown the rationale written for `C++`: a true sentence about an option
-  // they did not choose, presented as an account of their own mistake. Article
-  // stripping did the same to `the market` and `market`.
-  //
-  // Matching on both halves separates those. When more than one rationale still
-  // matches, the loose pass cannot tell which the reader meant, and saying
-  // nothing is the only honest answer available -- the point of this function is
-  // to explain THIS reader's choice.
-  const key = normaliseAnswer(chosen);
-  const marks = semanticMarks(chosen);
-  const loose = key
-    ? rationale.filter(
-        (r) => normaliseAnswer(r.distractor) === key && semanticMarks(r.distractor) === marks,
-      )
-    : [];
-  const only = loose.length === 1 ? loose[0] : undefined;
-  if (only?.why.trim()) return { why: only.why.trim(), source: 'distractor' };
+  // THERE IS NO LOOSE PASS ANY MORE, and removing it is the fix rather than a
+  // simplification. It existed for drift -- a client that trimmed differently, a
+  // stored option that lost its case -- which is speculative; what it actually
+  // did was attribute one option's reason to another. Round 1 narrowed it to
+  // require the semantic marks to agree AND exactly one match, and round 2
+  // showed the residual: options `the market` and `market`, a rationale on only
+  // one of them, and a reader who picks the other is still told a true sentence
+  // about an option they did not choose. This function is given the pick and the
+  // rationales, never the option list, so it cannot tell a near-miss from a
+  // sibling option -- and a wrong explanation of your own mistake is worse than
+  // none. The options come from `mcqOptions` verbatim, so an exact match after
+  // trimming already covers every real pick.
 
-  // The last resort is why the ANSWER is the answer, which is not the same thing
-  // and must not be labelled as though it were: under a heading like "Why that's
-  // wrong" it reads as an account of the reader's error, and a screen that also
-  // renders `explanation` prints the same paragraph twice. The source says which
-  // sentence this is so the screen can head it honestly, or drop it.
   const explanation = q.explanation?.trim();
   return explanation ? { why: explanation, source: 'answer' } : null;
 }
