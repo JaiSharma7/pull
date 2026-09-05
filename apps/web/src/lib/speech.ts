@@ -132,7 +132,19 @@ function begin(text: string, from: number, options: SpeakOptions, token: SpeechT
 
   const utterance = new SpeechSynthesisUtterance(from > 0 ? text.slice(from) : text);
   utterance.rate = rate;
-  const voice = voiceURI ? findVoice(voiceURI) : null;
+  // WITH NO USABLE VOICE, PICK ONE — do not leave it to the browser. Both a
+  // reader who has chosen nothing and a reader whose chosen voice has gone
+  // (picked on another device, removed by an update) land here. `listVoices`
+  // sorts local voices first for three reasons stated in the header, and all
+  // three are properties of the utterance rather than of the list: a local voice
+  // works offline, sends nothing to a server, and fires `onboundary` so pause
+  // and resume keep their place. On Chrome Android the browser's own default is
+  // a remote Google voice, which has none of them — so a reader who cached the
+  // feed for a flight, tapped Listen and heard nothing was hitting a default
+  // this file had already argued against. Falling back to the browser only when
+  // the device has no local voice at all.
+  const voice =
+    (voiceURI ? findVoice(voiceURI) : null) ?? listVoices().find((v) => v.localService) ?? null;
   if (voice) utterance.voice = voice;
 
   const record: Live = {
@@ -180,6 +192,15 @@ export function speak(text: string, options: SpeakOptions = {}): SpeechToken {
  */
 export function pauseSpeaking(): void {
   if (!speechSupported() || !live) return;
+  // Nothing is speaking, so there is nothing to pause — and saying so matters,
+  // because `end` is delivered as an ordinary task in the spec (and in Firefox
+  // and Safari; desktop Chrome happens to deliver it synchronously from
+  // `cancel`). A pause landing in the gap after the engine finished an utterance
+  // but before its queued `end` ran would set `silenced`, `finish` would swallow
+  // the ending, `onEnd` would never fire, the player would never advance, and
+  // Resume would re-speak the tail of a track the listener had already heard to
+  // the end. The window is sub-frame; the interleaving is legal everywhere.
+  if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) return;
   const record = live;
   record.silenced = true;
   suspended = {

@@ -242,6 +242,17 @@ function fakeSynthesis(voices: FakeVoice[] = []) {
         current.onend?.();
       }
     },
+    // The two flags `pauseSpeaking` reads. Derived from the utterance rather
+    // than stored, so they cannot drift from what the fake actually did — and
+    // `speaking` goes false the moment the engine finishes, which is what makes
+    // the queued-delivery gap below reachable at all.
+    get speaking(): boolean {
+      const current = spoken.at(-1);
+      return current !== undefined && !current.ended;
+    },
+    get pending(): boolean {
+      return false;
+    },
     getVoices: () => voices,
     addEventListener(_type: string, l: () => void) {
       listeners.push(l);
@@ -261,8 +272,20 @@ function fakeSynthesis(voices: FakeVoice[] = []) {
       current.onend?.();
     }
   };
+  /*
+   * The engine finishing with `end` delivered as a QUEUED task, which is what
+   * the spec says and what Firefox and Safari do; desktop Chrome happens to
+   * deliver it synchronously from `cancel`, which is what `finishCurrent`
+   * models. Returns the delivery, so a test can run something in the gap.
+   */
+  const finishCurrentQueued = (): (() => void) => {
+    const current = spoken.at(-1);
+    if (!current || current.ended) return () => undefined;
+    current.ended = true;
+    return () => current.onend?.();
+  };
   const boundary = (charIndex: number) => spoken.at(-1)?.onboundary?.({ charIndex });
-  return { spoken, log, listeners, finishCurrent, boundary };
+  return { spoken, log, listeners, finishCurrent, finishCurrentQueued, boundary };
 }
 
 const voice = (over: Partial<FakeVoice> & { voiceURI: string }): FakeVoice => ({
@@ -288,14 +311,27 @@ describe('speak', () => {
     expect(spoken[0]!.voice?.voiceURI).toBe('urn:b');
   });
 
-  it('leaves the voice to the browser when the URI is unknown', () => {
-    // A voice chosen on another device, or removed by an update, must not become
-    // a different voice the reader never picked.
-    const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:a' })]);
+  it('falls back to a local voice rather than to whatever the browser defaults to', () => {
+    // A chosen voice that is gone — picked on another device, or removed by an
+    // update — and no choice at all both land here. Leaving it to the browser
+    // meant a remote voice on Chrome Android: it sends the card's text to a
+    // server, does not work offline, and fires no `onboundary`, so pause and
+    // resume restart the paragraph. All three are the reasons `listVoices` sorts
+    // local first, and they are properties of the utterance, not of the list.
+    const { spoken } = fakeSynthesis([
+      voice({ voiceURI: 'urn:remote', localService: false }),
+      voice({ voiceURI: 'urn:local' }),
+    ]);
     speak('x', { voiceURI: 'urn:gone' });
-    expect(spoken[0]!.voice).toBeNull();
+    expect(spoken[0]!.voice?.voiceURI).toBe('urn:local');
     speak('y');
-    expect(spoken[1]!.voice).toBeNull();
+    expect(spoken[1]!.voice?.voiceURI).toBe('urn:local');
+  });
+
+  it('leaves it to the browser only when the device has no local voice', () => {
+    const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:remote', localService: false })]);
+    speak('x');
+    expect(spoken[0]!.voice).toBeNull();
   });
 
   it('cancels the previous utterance, whose onEnd fires during the call', () => {
@@ -319,6 +355,24 @@ describe('speak', () => {
     spoken[1]!.ended = true;
     spoken[1]!.onerror?.();
     expect(ended).toBe(2);
+  });
+
+  it('does not turn a natural ending into a pause while `end` is still queued', () => {
+    // Both are ordinary tasks, so a pause can land after the engine finished an
+    // utterance and before its `end` is delivered. Without the guard, `silenced`
+    // swallowed the ending: `onEnd` never fired, the player never advanced, and
+    // Resume re-spoke the tail of a track the listener had heard to the end.
+    const { spoken, finishCurrentQueued } = fakeSynthesis();
+    let ended = 0;
+    speak('One two three', { onEnd: () => ended++ });
+
+    const deliver = finishCurrentQueued();
+    pauseSpeaking();
+    deliver();
+
+    expect(ended).toBe(1);
+    resumeSpeaking();
+    expect(spoken).toHaveLength(1);
   });
 
   it('does nothing when unsupported', () => {
