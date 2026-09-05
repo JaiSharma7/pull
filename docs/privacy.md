@@ -71,8 +71,9 @@ because the session lives in the tab rather than in the browser:
   while you are still reading. A day is short on purpose: a guest account is an identity
   nobody can prove they own, holding a reader's stashes, notes and history, so the shorter
   it exists the less there is to lose. Plan on a day, not on a weekend. What that does not
-  reach is the copy your own browser keeps for offline reading; clearing the site's data
-  removes that, and we are working on clearing it for you when a session ends.
+  reach is the copy your own browser keeps for offline reading. That copy is keyed to the
+  session it was made for, so nobody who uses the browser after you is shown it; clearing
+  the site's data removes it outright.
 
 Signing in afterwards starts a fresh account. A guest session is not carried over — there is
 no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
@@ -197,8 +198,10 @@ What the app does put on your device, all of it first-party and all of it necess
 
 - **Your sign-in token**, in `localStorage`, so you stay signed in.
 - **A small amount of interface state**, in `localStorage`.
-- **Your offline library**, in IndexedDB, plus a queue of writes made while disconnected —
-  which is how offline reading is free rather than a paid tier.
+- **Your offline library**, in IndexedDB — the Pulls cached for reading without a
+  connection, a practice pack if you download one, and a queue of writes made while
+  disconnected — which is how offline reading is free rather than a paid tier. Each is
+  keyed to the account that made it.
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all four, and signs you out.
@@ -254,13 +257,15 @@ no address, so nobody can come back to it and nobody can ask us to delete it. Ke
 indefinitely would be hoarding reading history belonging to people we cannot contact.
 
 The sweep reaches our database and not your device. The offline copy the app keeps in your
-browser — the Pulls it cached to read without a connection, and anything you wrote while
-offline that had not yet been sent — is not cleared when the session ends, and it is not
-scoped to one reader, so on a shared computer an offline load can show the previous
-person's cached feed. That is a gap we are closing rather than a design decision, and it is
-recorded here because a policy that said "everything" while that was true would be the
-kind of claim this document exists not to make. Clearing the site's data in your browser
-removes it today.
+browser — the Pulls it cached to read without a connection, a practice pack if you
+downloaded one, and anything you wrote while offline that had not yet been sent — is not
+cleared when the session ends. It is keyed to the account that made it, so an offline load
+shows a reader only their own copy: on a shared computer the next person is never shown
+the previous person's cached feed, and the queue of unsent writes was kept apart the same
+way from the start. Earlier versions of the app kept the cached feed without recording
+whose it was, and this document said so; those rows are discarded the first time the
+current version opens, because nothing in them could say which reader they belonged to.
+Clearing the site's data in your browser removes all of it.
 
 Anything published under a future community feature is covered in the Terms.
 

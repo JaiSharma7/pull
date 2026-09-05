@@ -224,7 +224,7 @@ export function Feed({
         // event, which never fires when the failure happened with `onLine` true —
         // so a transport failure would raise it and nothing would lower it again.
         setOffline(false);
-        void cachePulls(f.rows);
+        void cachePulls(userId, f.rows);
       })
       .catch(async (e: unknown) => {
         if (cancelled) return;
@@ -242,7 +242,7 @@ export function Feed({
          * is worse than none: it hides the failures most worth seeing early, and
          * tells the reader to go check their wifi instead.
          */
-        const cached = isOfflineFailure(e) ? await readCachedPulls() : [];
+        const cached = isOfflineFailure(e) ? await readCachedPulls(userId) : [];
 
         // Re-checked after the await, not only before it. Opening IndexedDB and
         // reading it is a real gap, and this branch is now reachable twice over:
@@ -392,7 +392,7 @@ export function Feed({
         lastPlaced: feed.lastPlaced,
       })
       .then((next) => {
-        void cachePulls(next.rows);
+        void cachePulls(userId, next.rows);
         setFeed((prev) => (prev ? appendPage(prev, next, cardsBefore) : prev));
       })
       .catch((e: unknown) => {
@@ -404,7 +404,7 @@ export function Feed({
         );
       })
       .finally(() => setLoadingMore(false));
-  }, [feed, loadingMore, session.seed, session.cardsSeen, session.interruptsShown]);
+  }, [feed, loadingMore, session.seed, session.cardsSeen, session.interruptsShown, userId]);
 
   const items = useMemo(() => (feed ? weave(feed.rows, feed.slots) : []), [feed]);
 

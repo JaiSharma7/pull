@@ -1,9 +1,15 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import {
+  openDB,
+  type DBSchema,
+  type IDBPDatabase,
+  type IDBPTransaction,
+  type StoreNames,
+} from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
 import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
 import type { SavePatch } from './stash-api.js';
-import type { FeedRow } from './types.js';
+import type { DueReview, FeedRow } from './types.js';
 
 /**
  * Offline reading, free forever (CLAUDE.md law 3).
@@ -12,6 +18,15 @@ import type { FeedRow } from './types.js';
  * runs entirely in the browser: the service worker caches the bundle, and
  * IndexedDB holds the reader's own content plus a queue of writes made while
  * disconnected.
+ *
+ * Everything in IndexedDB is keyed by account. The queue always was; the page
+ * cache was not, and for a while that was a documented gap rather than a
+ * design: on a shared computer an offline load could show whoever sat down
+ * next the previous reader's feed. Schema version 2 closed it — the cache is
+ * keyed `userId:pullId` and read through a `by-user` index, and the rows the
+ * old schema held were dropped at upgrade because nothing recorded whose they
+ * were. A downloaded review pack, added in the same version, is keyed the same
+ * way from the start.
  *
  * Built on the web before any native wrapper, so Capacitor later becomes an
  * enhancement rather than a rescue operation.
@@ -67,7 +82,23 @@ export type PendingWrite =
    * grade of a review session done on a plane — offline being one of the five things
    * law 3 promises free forever.
    */
-  | { kind: 'recall'; pullId: string; grade: RecallGrade }
+  | {
+      kind: 'recall';
+      pullId: string;
+      grade: RecallGrade;
+      /**
+       * Minted once per submission, so a replay whose first response was lost
+       * can be recognised by the server as the same grade rather than applied
+       * twice. Optional only until `grade_recall` takes it: an entry queued
+       * before this field existed is given one at the schema upgrade
+       * (`stampQueuedGrades`), so every entry in the store carries one, and the
+       * review PR makes both fields required and threads them to the RPC once
+       * the migration lands.
+       */
+      mutationId?: string;
+      /** When the reader answered, for the same server-side record. */
+      submittedAt?: number;
+    }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
   | {
       kind: 'conviction';
@@ -179,8 +210,34 @@ export function writeScope(write: PendingWrite): string {
   return `unknown:${String((unknown as { kind?: unknown }).kind)}`;
 }
 
+/** A feed row as the cache holds it: the row, whose it is, and when it arrived. */
+interface CachedPull extends FeedRow {
+  /** `userId:pullId` — one row per reader per pull, so two accounts never share one. */
+  key: string;
+  userId: string;
+  cachedAt: number;
+}
+
+/**
+ * One due card, downloaded for practising without a connection.
+ *
+ * `item` is whatever `get_due_reviews` returned, stored whole rather than
+ * projected, so the pack follows the engine: when the RPC starts carrying a
+ * question with a kind and a rationale, the pack carries it too without a
+ * schema bump here.
+ */
+interface PackEntry {
+  key: string;
+  userId: string;
+  pullId: string;
+  item: DueReview;
+  /** When this pack was fetched — the number a screen turns into "synced 2 h ago". */
+  syncedAt: number;
+}
+
 interface WapDB extends DBSchema {
-  pulls: { key: string; value: FeedRow & { cachedAt: number } };
+  pulls: { key: string; value: CachedPull; indexes: { 'by-user': string } };
+  reviewPack: { key: string; value: PackEntry; indexes: { 'by-user': string } };
   /**
    * Writes made offline, drained in order once the connection returns.
    *
@@ -199,42 +256,279 @@ interface WapDB extends DBSchema {
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<WapDB>> | null = null;
+/**
+ * Schema versions:
+ *
+ *   1  `pulls` keyed by pull id, unscoped; `pending` keyed by an autoincrement.
+ *   2  `pulls` keyed `userId:pullId` with a `by-user` index; `reviewPack`, keyed
+ *      the same way; every queued `recall` carries a mutation id.
+ */
+const SCHEMA_VERSION = 2;
 
-function db() {
-  dbPromise ??= openDB<WapDB>('what-a-pull', 1, {
-    upgrade(database) {
-      if (!database.objectStoreNames.contains('pulls')) {
-        database.createObjectStore('pulls', { keyPath: 'id' });
-      }
-      if (!database.objectStoreNames.contains('pending')) {
-        database.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
-      }
-    },
-  });
+/**
+ * The connection, or `null` for "there is no store right now".
+ *
+ * `null` is a real answer rather than a failure, and every caller treats it as
+ * "cache unavailable" — the same way it treats a rejection. It exists for the
+ * one case a rejection does not cover: another tab holding the database open at
+ * an older version (see `blocked` below), where the open would otherwise stay
+ * pending forever and so would everything awaiting it.
+ */
+type Handle = IDBPDatabase<WapDB> | null;
+
+let dbPromise: Promise<Handle> | null = null;
+/** The open connection behind `dbPromise`, so it can be closed synchronously when asked to yield. */
+let live: IDBPDatabase<WapDB> | null = null;
+
+function db(): Promise<Handle> {
+  dbPromise ??= open();
   return dbPromise;
 }
 
-/** Best-effort throughout: storage can be unavailable (private windows, blocked
- *  site data), and reading must never fail because caching did. */
-export async function cachePulls(rows: FeedRow[]): Promise<void> {
+/**
+ * Open the store, and never leave a caller waiting on another tab.
+ *
+ * The PWA updates itself, and an updated page opens the database at a version
+ * the page in the next tab — still running the previous release — has not
+ * heard of. IndexedDB then asks that older connection to close, and if it does
+ * not, the new open stays `blocked` until it does. The first release had no
+ * answer to that request, so with a memoised promise the whole module would
+ * wait on a tab the reader may never revisit: Review would wedge after its
+ * first grade and the offline feed would render nothing at all. Three
+ * callbacks close that off:
+ *
+ *   blocked    an older tab will not yield. Answer `null` now — no store — and
+ *              if the tab does go away later, the open completes and the
+ *              connection is taken up for whoever calls next, without a reload.
+ *   blocking   a newer tab wants in. Close this connection, synchronously,
+ *              inside the `versionchange` event, so the newer open never even
+ *              sees `blocked`; and drop the memo so the next call reopens. If
+ *              this tab's code is too old to open what the newer one made, that
+ *              reopen rejects, and a rejection is what a missing store already
+ *              looks like to every caller — the page is one the PWA is already
+ *              replacing.
+ *   terminated the browser closed the connection on its own. Drop the memo so
+ *              the next call reopens rather than using a dead handle.
+ */
+function open(): Promise<Handle> {
+  return new Promise<Handle>((resolve, reject) => {
+    let yielded = false;
+    openDB<WapDB>('what-a-pull', SCHEMA_VERSION, {
+      async upgrade(database, oldVersion, _newVersion, transaction) {
+        if (oldVersion < 2) {
+          /*
+           * Dropped, not migrated. A v1 row is a feed row and a timestamp; nothing
+           * in it says which account fetched it, and guessing "the current one"
+           * would attribute a previous reader's feed to whoever upgraded. Losing a
+           * page of cache costs one refetch; keeping it wrong costs the property
+           * this version exists to establish.
+           */
+          if (database.objectStoreNames.contains('pulls')) database.deleteObjectStore('pulls');
+          database.createObjectStore('pulls', { keyPath: 'key' }).createIndex('by-user', 'userId');
+          database
+            .createObjectStore('reviewPack', { keyPath: 'key' })
+            .createIndex('by-user', 'userId');
+        }
+        if (!database.objectStoreNames.contains('pending')) {
+          database.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
+        } else if (oldVersion < 2) {
+          await stampQueuedGrades(transaction);
+        }
+      },
+      blocked() {
+        yielded = true;
+        resolve(null);
+      },
+      blocking() {
+        live?.close();
+        live = null;
+        dbPromise = null;
+      },
+      terminated() {
+        live = null;
+        dbPromise = null;
+      },
+    }).then(
+      (database) => {
+        live = database;
+        if (yielded) dbPromise = Promise.resolve(database);
+        else resolve(database);
+      },
+      (error: unknown) => {
+        if (!yielded) reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
+ * Give every queued grade from before version 2 the mutation id it was queued
+ * without.
+ *
+ * A `recall` entry replays whenever its response was lost, and `grade_recall`
+ * applies each replay it receives. The id is what will let the server tell a
+ * replay from a new grade; minting it here, once, at upgrade, means an entry
+ * queued by the old code replays under one stable id from now on rather than
+ * being the one write in the store that still cannot be recognised. Done inside
+ * the upgrade transaction so it commits with the schema or not at all.
+ */
+async function stampQueuedGrades(
+  transaction: IDBPTransaction<WapDB, StoreNames<WapDB>[], 'versionchange'>,
+): Promise<void> {
+  let cursor = await transaction.objectStore('pending').openCursor();
+  while (cursor) {
+    const entry = cursor.value;
+    if (entry.kind === 'recall' && !entry.mutationId) {
+      await cursor.update({
+        ...entry,
+        mutationId: globalThis.crypto.randomUUID(),
+        submittedAt: entry.submittedAt ?? Date.now(),
+      });
+    }
+    cursor = await cursor.continue();
+  }
+}
+
+/** One key per reader per row, for both stores. Ids are uuids, so the colon is unambiguous. */
+function scopedKey(userId: string, id: string): string {
+  return `${userId}:${id}`;
+}
+
+/**
+ * Best-effort throughout: storage can be unavailable (private windows, blocked
+ * site data, a tab that will not yield), and reading must never fail because
+ * caching did.
+ *
+ * `userId` is the account the rows were fetched for, and `null` means there is
+ * none — a signed-out visitor has no feed and nothing to scope a copy to, so
+ * nothing is written rather than something written to nobody.
+ */
+export async function cachePulls(userId: string | null, rows: FeedRow[]): Promise<void> {
+  if (!userId) return;
   try {
     const database = await db();
+    if (!database) return;
     const tx = database.transaction('pulls', 'readwrite');
-    await Promise.all(rows.map((r) => tx.store.put({ ...r, cachedAt: Date.now() })));
+    const cachedAt = Date.now();
+    await Promise.all(
+      rows.map((r) => tx.store.put({ ...r, key: scopedKey(userId, r.id), userId, cachedAt })),
+    );
     await tx.done;
   } catch {
     /* offline caching is an enhancement, never a requirement */
   }
 }
 
-export async function readCachedPulls(limit = 20): Promise<FeedRow[]> {
+/** This account's cached rows, newest first — and only this account's. */
+export async function readCachedPulls(userId: string | null, limit = 20): Promise<FeedRow[]> {
+  if (!userId) return [];
   try {
     const database = await db();
-    const all = await database.getAll('pulls');
-    return all.sort((a, b) => b.cachedAt - a.cachedAt).slice(0, limit);
+    if (!database) return [];
+    const mine = await database.getAllFromIndex('pulls', 'by-user', userId);
+    return mine
+      .sort((a, b) => b.cachedAt - a.cachedAt)
+      .slice(0, limit)
+      .map(({ key: _key, userId: _userId, cachedAt: _cachedAt, ...row }) => row);
   } catch {
     return [];
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * The review pack
+ * -------------------------------------------------------------------------- */
+
+/** What is on the device to practise from, and when it was fetched. */
+export interface ReviewPack {
+  items: DueReview[];
+  syncedAt: number;
+}
+
+/**
+ * Replace this account's pack with what the server just returned.
+ *
+ * Replace, not merge: the pack is a copy of "what is due", and a card the
+ * server no longer lists — graded elsewhere, or no longer due — must leave the
+ * device too, or offline practice would keep asking questions the model has
+ * already moved on from. Answers whether the copy is actually on disk, for the
+ * screen that tells the reader "N ideas ready offline".
+ */
+export async function storeReviewPack(
+  userId: string,
+  items: readonly DueReview[],
+  syncedAt = Date.now(),
+): Promise<boolean> {
+  try {
+    const database = await db();
+    if (!database) return false;
+    const tx = database.transaction('reviewPack', 'readwrite');
+    const stale = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(stale.map((key) => tx.store.delete(key)));
+    await Promise.all(
+      items.map((item) =>
+        tx.store.put({
+          key: scopedKey(userId, item.pullId),
+          userId,
+          pullId: item.pullId,
+          item,
+          syncedAt,
+        }),
+      ),
+    );
+    await tx.done;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * This account's pack, in the order the server would have asked — weakest
+ * memory first, which is how `get_due_reviews` orders it. The index returns
+ * rows by key, so the order is restored here rather than trusted. `null` when
+ * nothing is downloaded, which includes a pack the reader has worked through
+ * to the end: that is the state a screen offers a fresh download from.
+ */
+export async function readReviewPack(userId: string): Promise<ReviewPack | null> {
+  try {
+    const database = await db();
+    if (!database) return null;
+    const entries = await database.getAllFromIndex('reviewPack', 'by-user', userId);
+    if (entries.length === 0) return null;
+    const items = entries
+      .sort(
+        (a, b) => a.item.retrievability - b.item.retrievability || a.pullId.localeCompare(b.pullId),
+      )
+      .map((e) => e.item);
+    return { items, syncedAt: Math.max(...entries.map((e) => e.syncedAt)) };
+  } catch {
+    return null;
+  }
+}
+
+/** A card answered offline leaves the pack, so it is not asked twice before the next sync. */
+export async function removeFromPack(userId: string, pullId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    await database.delete('reviewPack', scopedKey(userId, pullId));
+  } catch {
+    /* best effort, as above */
+  }
+}
+
+/** Everything this account downloaded — and nothing another account did. */
+export async function clearReviewPack(userId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    const tx = database.transaction('reviewPack', 'readwrite');
+    const keys = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(keys.map((key) => tx.store.delete(key)));
+    await tx.done;
+  } catch {
+    /* best effort, as above */
   }
 }
 
@@ -268,6 +562,7 @@ export function onPendingQueued(handler: () => void): () => void {
 export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
   try {
     const database = await db();
+    if (!database) return false;
     await database.add('pending', { ...write, userId, at: Date.now() });
   } catch {
     /* Lost, which is the honest outcome — and now the honest return value too. */
@@ -282,6 +577,7 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 export async function hasPending(userId: string): Promise<boolean> {
   try {
     const database = await db();
+    if (!database) return false;
     return (await database.getAll('pending')).some((item) => item.userId === userId);
   } catch {
     return false;
@@ -356,6 +652,7 @@ async function runDrain(
   const blocked = new Set<string>();
   try {
     const database = await db();
+    if (!database) return drained;
     const items = (await database.getAll('pending'))
       // Only this account's writes. Another user's stay queued for them.
       .filter((item) => item.userId === userId)
