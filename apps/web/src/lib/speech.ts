@@ -176,8 +176,13 @@ function begin(text: string, from: number, options: SpeakOptions, token: SpeechT
   // and resume keep their place. On Chrome Android the browser's own default is
   // a remote Google voice, which has none of them — so a reader who cached the
   // feed for a flight, tapped Listen and heard nothing was hitting a default
-  // this file had already argued against. Falling back to the browser only when
-  // the device has no local voice at all.
+  // this file had already argued against. Falling back to the browser when the
+  // device has no local voice IN A LANGUAGE THE READER READS -- which is narrower
+  // than "no local voice at all", because a device can carry local voices in
+  // languages they do not, and an English Pull read in an Afrikaans voice is
+  // neither intelligible nor a kindness. `docs/privacy.md` says the same, and it
+  // matters there: handing the choice back can mean a remote voice, and a remote
+  // voice sends the text of the Pull to the browser's vendor.
   const voice = (voiceURI ? findVoice(voiceURI) : null) ?? preferredLocalVoice();
   if (voice) utterance.voice = voice;
 

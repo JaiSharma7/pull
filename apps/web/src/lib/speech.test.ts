@@ -363,7 +363,7 @@ describe('speak', () => {
     expect(spoken[0]!.voice).toBeNull();
   });
 
-  it('leaves it to the browser only when the device has no local voice', () => {
+  it('leaves it to the browser when the device has no local voice at all', () => {
     const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:remote', localService: false })]);
     speak('x');
     expect(spoken[0]!.voice).toBeNull();

@@ -214,8 +214,13 @@ of the Pull being read is sent to them**. That is between your browser and its v
 neither see it nor control it, but it is not the same as fetching a voice file, and the
 earlier wording implied it was.
 
-So the app prefers a local voice, in your own language, and only leaves the choice to your
-browser when your device has no local voice at all. Choosing a voice for yourself is coming
+So the app prefers a local voice **in a language you read** — your own, or failing that
+another variety of it — and leaves the choice to your browser when your device has none it
+could pick. That is a narrower promise than "when your device has no local voice at all",
+and the difference is deliberate: a device may carry local voices in languages you do not
+read, and reading an English Pull in an Afrikaans voice is not a kindness. When we hand the
+choice back, your browser may well reach for a remote voice, so the paragraph above applies
+— on that reading, the text is sent to your browser's vendor. Choosing a voice for yourself is coming
 — the Listening settings are being built and will list local voices first — and when they
 land, picking a remote voice will be a trade you make knowingly. Today the app makes the
 quieter choice on your behalf.
