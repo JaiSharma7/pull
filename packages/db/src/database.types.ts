@@ -1485,11 +1485,11 @@ export type Database = {
             referencedColumns: ["id", "pull_id"]
           },
           {
-            foreignKeyName: "recall_events_user_question_id_fkey"
-            columns: ["user_question_id"]
+            foreignKeyName: "recall_events_user_question_is_theirs"
+            columns: ["user_question_id", "user_id", "pull_id"]
             isOneToOne: false
             referencedRelation: "user_questions"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "user_id", "pull_id"]
           },
         ]
       }

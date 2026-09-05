@@ -158,11 +158,29 @@ create trigger user_questions_updated_at
 -- A grade against a reader's own question needs somewhere to say so, and it cannot be
 -- `quiz_question_id`: that column carries a composite foreign key into `quiz_questions`,
 -- so a user-question id there would be refused -- correctly, and uselessly.
+--
+-- COMPOSITE, for the reason 20260905100000 gives for the canonical column and one more.
+-- A plain reference would check only that the question exists, so a client writing to
+-- `recall_events` directly -- which `recall_events_insert_own` permits, on the strength of
+-- the row's `user_id` alone -- could file an answer against a question belonging to a
+-- different pull, permanently, in a table with no update or delete policy. That is exactly
+-- the per-question evidence the neighbouring composite key was added to protect. This one
+-- carries `user_id` as well, because a user question is a reader's own writing and a
+-- stranger's id on this pull would otherwise pass.
+alter table public.user_questions
+  add constraint user_questions_id_user_pull_key unique (id, user_id, pull_id);
+
 alter table public.recall_events
-  add column user_question_id uuid references public.user_questions (id) on delete set null;
+  add column user_question_id uuid;
+
+alter table public.recall_events
+  add constraint recall_events_user_question_is_theirs
+  foreign key (user_question_id, user_id, pull_id)
+  references public.user_questions (id, user_id, pull_id)
+  on delete set null (user_question_id);
 
 comment on column public.recall_events.user_question_id is
-  'Set instead of quiz_question_id when the reader answered their own question.';
+  'Set instead of quiz_question_id when the reader answered their own question. Checked against user and pull together.';
 
 create index recall_events_user_question_idx
   on public.recall_events (user_question_id);
@@ -198,6 +216,51 @@ create policy user_questions_update_own on public.user_questions
   with check ((select auth.uid()) = user_id);
 create policy user_questions_delete_own on public.user_questions
   for delete using ((select auth.uid()) = user_id);
+
+-- ------------------------------------------ and the door attribution left open
+--
+-- Review finding, and it defeats the point of the migration above it. `commit_import`
+-- calls `attribute_work` when an imported book names an author, which inserts a
+-- `contributors` row and a `work_contributors` row joining it to the work. Both tables
+-- have carried `using (true)` since 20260829124730, and both are selectable by `anon` --
+-- so one `GET /rest/v1/work_contributors?select=work_id,contributor_id` handed any
+-- visitor the UUID of every private imported work and the author it is by. The `works`
+-- policy from 20260905101000 was hiding the title while the join table published the row.
+--
+-- Superseded rather than skipped, because the attribution itself is right: an imported
+-- book by Marcus Aurelius should reach the same contributor row the seeded one does, so
+-- that a reader's own copy and the catalogue's agree about who wrote it. What was wrong
+-- was that the join was world-readable. It is now readable exactly when the work is,
+-- which is the same sentence the `works` policy makes and reuses its answer: the
+-- subquery runs under the caller's own RLS, so a work they cannot see yields no row.
+--
+-- `contributors` follows, one step further out. A name on its own looks harmless, but a
+-- row created by an import exists only because somebody imported that author, so an
+-- obscure one is a signal about a reader. A contributor is visible when at least one work
+-- they are on is -- which keeps every seeded contributor visible, since seeded works are
+-- public, and hides one that exists only behind somebody's private book.
+drop policy work_contributors_read_all on public.work_contributors;
+create policy work_contributors_read_readable on public.work_contributors
+  for select using (
+    exists (select 1 from public.works w where w.id = work_contributors.work_id)
+  );
+
+comment on policy work_contributors_read_readable on public.work_contributors is
+  'A work''s contributors are visible exactly when the work is. See 20260905101000.';
+
+drop policy contributors_read_all on public.contributors;
+create policy contributors_read_readable on public.contributors
+  for select using (
+    exists (
+      select 1
+      from public.work_contributors wc
+      join public.works w on w.id = wc.work_id
+      where wc.contributor_id = contributors.id
+    )
+  );
+
+comment on policy contributors_read_readable on public.contributors is
+  'A contributor is visible when at least one work they are on is. Keeps an imported author out of a stranger''s reach.';
 
 -- ------------------------------------------------------------------ commit_import
 --
@@ -290,13 +353,13 @@ begin
 
   perform pg_advisory_xact_lock(pg_catalog.hashtextextended(uid::text, 1));
 
+  -- Read once, then charged per row actually inserted inside the loop, and NOT refused
+  -- here. Refusing on the incoming count turned away a chunk that was mostly duplicates
+  -- and would have added almost nothing; refusing on the held count alone turns away a
+  -- reader at the ceiling who is re-uploading a file that would add nothing at all. The
+  -- ceiling is a bound on what is stored, so the only honest place to charge it is the
+  -- moment a row is about to be stored.
   select count(*) into v_held from public.import_items where user_id = uid;
-  if v_held + jsonb_array_length(p_items) > max_items_per_user then
-    raise exception
-      'commit_import: that would hold % highlights, and the ceiling is %',
-      v_held + jsonb_array_length(p_items), max_items_per_user
-      using errcode = '54000';
-  end if;
 
   -- One batch per file, even when the file arrives in six calls. Outside the window a
   -- fresh batch is right: re-importing a clippings file that has grown since is a new
@@ -366,6 +429,34 @@ begin
            8
          );
 
+    v_hash := encode(sha256(convert_to(v_slug || '|' || lower(v_clean), 'UTF8')), 'hex');
+
+    -- THE DEDUPE CHECK COMES FIRST, before anything is created. Review found this the
+    -- wrong way round: with the work and summary made ahead of it, re-uploading a file
+    -- whose highlights were all already held -- or all removed by an Undo, which keeps
+    -- the hashes precisely so a re-import stays a no-op -- created an empty private
+    -- summary anyway, which put the book back in the reader's library with nothing in
+    -- it and made the work readable to them again. A duplicate now costs one hash
+    -- lookup and touches nothing.
+    if exists (
+      select 1 from public.import_items ii
+       where ii.user_id = uid and ii.content_hash = v_hash
+    ) then
+      v_duplicates := v_duplicates + 1;
+      continue;
+    end if;
+
+    -- And the ceiling is charged per row actually written, for the same reason. Counted
+    -- against the whole incoming chunk it refused a reader at 19,800 highlights who
+    -- re-uploaded a 500-item file of which 498 were duplicates -- an operation that
+    -- would have added two rows.
+    v_held := v_held + 1;
+    if v_held > max_items_per_user then
+      raise exception
+        'commit_import: that would hold more than % highlights', max_items_per_user
+        using errcode = '54000';
+    end if;
+
     -- The work is shared: two readers who import the same book land on the same row, and
     -- see each other's nothing, because 20260905101000 makes a work visible only behind a
     -- summary the caller can read and each holds only their own.
@@ -414,16 +505,6 @@ begin
       end if;
     end if;
 
-    v_hash := encode(sha256(convert_to(v_slug || '|' || lower(v_clean), 'UTF8')), 'hex');
-
-    if exists (
-      select 1 from public.import_items ii
-       where ii.user_id = uid and ii.content_hash = v_hash
-    ) then
-      v_duplicates := v_duplicates + 1;
-      continue;
-    end if;
-
     v_words   := coalesce(array_length(regexp_split_to_array(v_clean, ' '), 1), 1);
     v_seconds := greatest(3, least(900, ceil(v_words / 4.0)::int));
 
@@ -440,6 +521,25 @@ begin
       (import_id, user_id, pull_id, work_id, locator, content_hash)
     values
       (v_import_id, uid, v_pull_id, v_work_id, v_locator, v_hash);
+
+    -- KEPT MEANS KEPT, and without these two rows it did not. `get_due_reviews` is driven
+    -- from `knowledge_states` and the Library screen reads `saved_items`, so a highlight
+    -- that landed as a pull and nothing else appeared in neither -- while this file's own
+    -- header and `docs/privacy.md` both say an import flows through the mechanics the
+    -- product already has. Review found it, and it was the difference between a feature
+    -- and a table.
+    --
+    -- The same two writes `remember_pull` makes, for the same reason and with the same
+    -- shape: acquired by saving rather than by reading, and due tomorrow at the default
+    -- stability, like anything else newly acquired.
+    insert into public.knowledge_states (user_id, pull_id, acquired_via)
+    values (uid, v_pull_id, 'saved')
+    on conflict (user_id, pull_id) do nothing;
+
+    insert into public.saved_items (user_id, pull_id)
+    values (uid, v_pull_id)
+    on conflict (user_id, pull_id) where pull_id is not null
+      do nothing;
 
     v_added := v_added + 1;
     if not (v_work_id = any(v_touched)) then

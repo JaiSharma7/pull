@@ -65,13 +65,17 @@ evidence a scheduler change is judged against.
 **An imported highlight is an ordinary pull.** `commit_import` writes the same
 works/summaries/pulls triple the pipeline does: a `works` row marked `user_owned`, a
 summary the reader authors at `visibility = 'private'`, and one pull per highlight. There
-is no second content path — Review schedules them, search finds them, the Delta can embed
-them — and there is no second privacy story either, because `get_feed` pools on
+is no second content path — Review schedules them, the Library holds them, the Delta can
+embed them — and there is no second privacy story either, because `get_feed` pools on
 `published AND public` and `works_read_readable` hides a work whose only summary is
 somebody else's. The `works` row is shared between two readers who import the same book;
 nothing else about it is. `import_items` carries the sha256 that makes a re-import a
 no-op, and it deliberately outlives the pull it created, so Undo does not hand back
-everything the reader just removed.
+everything the reader just removed. Search is the one mechanic that does not reach them
+yet: `search_catalogue` filters `visibility = 'public'` in all three of its branches, so a
+reader cannot find their own imported highlight through Search. A missing capability
+rather than a leak, and closing it means re-stating that function against its own large
+test file.
 
 **A reader's own question lives in its own table.** `user_questions` rather than a row in
 `quiz_questions`, because the pipeline upserts canonical questions with

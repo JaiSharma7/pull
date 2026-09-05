@@ -23,8 +23,17 @@
 --   * `get_due_reviews` prefers the reader's own question and says which it gave
 --   * `grade_recall` files a grade against a reader's own question in
 --     `user_question_id`, and a stranger's id never lands there
+--   * every kept highlight is scheduled and saved, so it reaches Review and the
+--     Library rather than sitting in a table nothing reads
+--   * a grade cannot be filed against a question belonging to another pull, or to
+--     another reader
+--   * attributing an imported author does not publish the private work through
+--     `work_contributors`, which was world-readable
 --   * Undo removes the pulls and everything that cascades from them, keeps the
---     dedupe record so a re-import stays a no-op, and is idempotent
+--     dedupe record so a re-import stays a no-op, and is idempotent -- and that
+--     re-import creates no empty summary, so the book does not come back
+--   * the 20,000 ceiling is charged per row stored, so a duplicate-only upload at
+--     the ceiling is still accepted
 --
 -- Everything that can run as a real reader under RLS does. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -103,6 +112,8 @@ declare
   n         int;
   refused   boolean;
   ks        public.knowledge_states;
+  bulk_user uuid := extensions.gen_random_uuid();
+  q_other   uuid;
 begin
   if (select count(*) from public.pulls) > 500 then
     raise exception
@@ -122,7 +133,10 @@ begin
      '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb),
     (guest, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
      null, '', now(), now(), now(), true,
-     '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb);
+     '{"provider":"anonymous","providers":["anonymous"]}'::jsonb, '{}'::jsonb),
+    (bulk_user, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'imp-bulk-' || left(bulk_user::text, 8) || '@example.test', '', now(), now(), now(), false,
+     '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
 
   items_a := jsonb_build_array(
     jsonb_build_object('title', 'Meditations', 'author', 'Marcus Aurelius',
@@ -192,6 +206,36 @@ begin
     join public.summaries s on s.id = p.summary_id
    where s.work_id = work_med;
   if n <> 2 then raise exception 'Meditations kept % pulls, expected 2', n; end if;
+
+  -- Kept means kept: in Review and in the Library, not only in a table.
+  select count(*) into n
+    from public.knowledge_states k
+    join public.pulls pl on pl.id = k.pull_id
+    join public.summaries sm on sm.id = pl.summary_id
+   where k.user_id = reader_a and sm.author_id = reader_a;
+  if n <> 3 then
+    raise exception 'only % of 3 kept highlights are scheduled for review', n;
+  end if;
+
+  select count(*) into n
+    from public.saved_items si
+    join public.pulls pl on pl.id = si.pull_id
+    join public.summaries sm on sm.id = pl.summary_id
+   where si.user_id = reader_a and sm.author_id = reader_a;
+  if n <> 3 then
+    raise exception 'only % of 3 kept highlights are in the library', n;
+  end if;
+
+  -- And due tomorrow rather than now, like anything else newly acquired.
+  select count(*) into n
+    from public.knowledge_states k
+    join public.pulls pl on pl.id = k.pull_id
+    join public.summaries sm on sm.id = pl.summary_id
+   where k.user_id = reader_a and sm.author_id = reader_a
+     and (k.acquired_via <> 'saved' or k.next_due_at <= now());
+  if n <> 0 then
+    raise exception '% kept highlights were scheduled wrongly', n;
+  end if;
 
   -- ------------------------------------------------ 2. the same file adds nothing
   res2 := public.commit_import('kindle', repeat('a', 64), items_a);
@@ -420,6 +464,66 @@ begin
     raise exception 'a grade against the reader''s own question filed % rows in user_question_id', n;
   end if;
 
+  -- A question belonging to another pull cannot be filed against this one. The plain
+  -- reference this replaced checked only that the question existed, and the log has no
+  -- update or delete policy, so a mis-filed answer would have stayed mis-filed.
+  insert into public.user_questions (user_id, pull_id, prompt)
+  values (reader_a, (select p2.id from public.pulls p2
+                      join public.summaries s2 on s2.id = p2.summary_id
+                     where s2.author_id = reader_a and p2.id <> pull_a limit 1),
+          'A question about a different idea')
+  returning id into strict q_other;
+
+  refused := false;
+  begin
+    insert into public.recall_events (user_id, pull_id, user_question_id, kind, grade)
+    values (reader_a, pull_a, q_other, 'review', 'good');
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a grade was filed against a question belonging to another pull';
+  end if;
+
+  -- ----------------------------------- 9b. attribution does not publish the work
+  --
+  -- `attribute_work` writes `contributors` and `work_contributors`, both of which were
+  -- `using (true)` and selectable by `anon` -- so one GET handed a visitor the UUID of
+  -- every private imported work and the author it is by, while the `works` policy was
+  -- busy hiding the title.
+  perform set_config('role', 'anon', true);
+  perform set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+
+  select count(*) into n
+    from public.work_contributors wc where wc.work_id in (work_med, work_wal);
+  if n <> 0 then
+    raise exception 'a visitor can see % contributor link(s) for a private work', n;
+  end if;
+
+  select count(*) into n
+    from public.contributors c
+   where lower(c.slug::text) in ('marcus-aurelius', 'henry-david-thoreau')
+     and not exists (
+       select 1 from public.work_contributors wc2
+        join public.works w2 on w2.id = wc2.work_id
+       where wc2.contributor_id = c.id
+     );
+  if n <> 0 then
+    raise exception 'a contributor is visible with no readable work behind them';
+  end if;
+
+  -- The catalogue keeps its own. `on-liberty` is seeded and public, so its contributors
+  -- must still be listed -- a policy that hid those would be a regression, not a fix.
+  select count(*) into n
+    from public.work_contributors wc
+    join public.works w on w.id = wc.work_id
+   where w.slug = 'on-liberty';
+  if n = 0 then
+    raise exception 'a visitor lost the contributors of a public seeded work';
+  end if;
+
+  perform pg_temp.become(reader_a);
+
   -- ------------------------------------------------------------ 10. Undo
   select count(*) into n
     from public.pulls p
@@ -456,6 +560,30 @@ begin
     raise exception 'Undo erased the dedupe record (% items left of 3)', n;
   end if;
 
+  -- And re-importing the same file afterwards really is a no-op. The summary used to be
+  -- created before the dedupe check ran, so a duplicate-only call put the book back in
+  -- the reader's library with nothing in it -- and made the work readable to them again,
+  -- which is the property Undo was supposed to have taken away.
+  res := public.commit_import('kindle', repeat('c', 64), items_a);
+  if (res ->> 'added')::int <> 0 or (res ->> 'duplicates')::int <> 3 then
+    raise exception 'a re-import after Undo added % and deduped %',
+      res ->> 'added', res ->> 'duplicates';
+  end if;
+  if jsonb_array_length(res -> 'works') <> 0 then
+    raise exception 'a duplicate-only import reported % works touched',
+      jsonb_array_length(res -> 'works');
+  end if;
+
+  select count(*) into n from public.summaries s where s.author_id = reader_a;
+  if n <> 0 then
+    raise exception 'a duplicate-only re-import recreated % empty summary(ies)', n;
+  end if;
+
+  select count(*) into n from public.works w where w.id in (work_med, work_wal);
+  if n <> 0 then
+    raise exception 'the undone books came back into view';
+  end if;
+
   -- Idempotent.
   res := public.undo_import(import_1);
   if (res ->> 'alreadyUndone')::boolean is not true then
@@ -486,9 +614,60 @@ begin
     raise exception 'reader B unwound reader A''s import';
   end if;
 
+  -- ------------------------------------------ 11. the ceiling counts what is stored
+  --
+  -- Charged per row inserted rather than against the incoming chunk. Counted the old
+  -- way, a reader at 19,800 highlights could not re-upload a 500-item file of which 498
+  -- were already held -- an operation that would have added two rows -- and a reader at
+  -- the ceiling exactly could not re-upload anything at all, even a file that would add
+  -- nothing.
+  perform pg_temp.become(bulk_user);
+  res := public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
+    jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody',
+      'text', 'The one real highlight this reader has.')
+  ));
+  import_2 := (res ->> 'importId')::uuid;
+
+  perform pg_temp.as_owner();
+  insert into public.import_items (import_id, user_id, content_hash)
+  select import_2, bulk_user, md5(g::text) || md5((g + 1)::text)
+    from generate_series(1, 19999) g;
+  perform pg_temp.become(bulk_user);
+
+  select count(*) into n from public.import_items where user_id = bulk_user;
+  if n <> 20000 then
+    raise exception 'the bulk fixture holds % items, expected 20000', n;
+  end if;
+
+  -- At the ceiling exactly, a file that adds nothing is still accepted.
+  res := public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
+    jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody',
+      'text', 'The one real highlight this reader has.')
+  ));
+  if (res ->> 'added')::int <> 0 or (res ->> 'duplicates')::int <> 1 then
+    raise exception 'a duplicate-only upload at the ceiling reported added=% duplicates=%',
+      res ->> 'added', res ->> 'duplicates';
+  end if;
+
+  -- One genuinely new highlight is refused, which is what the ceiling is for.
+  refused := false;
+  begin
+    perform public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
+      jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody',
+        'text', 'One more than this reader may hold.')
+    ));
+  exception when program_limit_exceeded then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a reader stored a highlight past the ceiling';
+  end if;
+
   raise notice 'imports: kept, deduped, shared by work and by nothing else, '
-    'invisible to everyone but their reader, never in the feed, refused to guests, '
-    'and reversible exactly once';
+    'invisible to everyone but their reader (contributors included), never in the feed, '
+    'refused to guests, scheduled and saved so Review and the Library see them, graded '
+    'only against their own questions, bounded by what is stored rather than what is '
+    'offered, and reversible exactly once with no empty book left behind';
 end $$;
 
 rollback;
