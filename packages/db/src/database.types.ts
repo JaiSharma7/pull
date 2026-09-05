@@ -2149,6 +2149,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      imported_work_slug: {
+        Args: { p_author: string; p_title: string }
+        Returns: string
+      }
       is_guest: { Args: never; Returns: boolean }
       job_step_outputs:
         | { Args: { p_job_id: string }; Returns: Json }

@@ -102,6 +102,8 @@ declare
   pull_b    uuid;
   public_pull uuid;
   q_id      uuid;
+  q_theirs  uuid;
+  q_both    uuid;
   mid       uuid := extensions.gen_random_uuid();
 
   seed      bigint := 424242;
@@ -114,7 +116,6 @@ declare
   ks        public.knowledge_states;
   bulk_user uuid := extensions.gen_random_uuid();
   q_other   uuid;
-  q_both    uuid;
 begin
   if (select count(*) from public.pulls) > 500 then
     raise exception
@@ -527,6 +528,68 @@ begin
   end;
   if not refused then
     raise exception 'a reader moved their question onto a pull they cannot read';
+  end if;
+
+  -- --------------------- 9a. the reader's own question wins WHERE THERE IS A CONTEST
+  --
+  -- Section 8 asserts this on an imported pull, which by construction has no canonical
+  -- question -- so `canon.id` is null there and reversing the preference is invisible.
+  -- A review mutant that swapped the coalesce left this whole file green. The only pull
+  -- carrying both is the seeded one, so the contest has to be staged here.
+  update public.knowledge_states
+     set next_due_at = now() - interval '1 hour'
+   where user_id = reader_a and pull_id = public_pull;
+  if not found then
+    insert into public.knowledge_states (user_id, pull_id, acquired_via, next_due_at)
+    values (reader_a, public_pull, 'saved', now() - interval '1 hour');
+  end if;
+
+  due := public.get_due_reviews(p_limit := 50);
+  select value into row_one
+    from jsonb_array_elements(due)
+   where (value ->> 'pullId')::uuid = public_pull;
+  if row_one is null then
+    raise exception 'the pull carrying both questions is not due';
+  end if;
+  if row_one ->> 'questionSource' <> 'user' then
+    raise exception 'with both available get_due_reviews chose the % question',
+      coalesce(row_one ->> 'questionSource', 'none');
+  end if;
+  if (row_one ->> 'questionId')::uuid <> q_both then
+    raise exception 'questionSource said user but the id returned was not the reader''s';
+  end if;
+  if row_one ->> 'question' <> 'My own question about this one' then
+    raise exception 'questionSource said user but the prompt returned was not theirs: %',
+      row_one ->> 'question';
+  end if;
+
+  -- --------------------- 9c. a stranger's question, on a pull you BOTH hold
+  --
+  -- The composite key is three columns -- `(user_question_id, user_id, pull_id)` -- and
+  -- nothing tested the middle one: a mutant that dropped `user_id` from it left this
+  -- file green. Two columns are enough to stop a question from ANOTHER PULL and not
+  -- enough to stop another READER's question on the same pull, which is reachable
+  -- precisely because a seeded public pull is one two readers can both hold.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_b, 'role', 'authenticated')::text, true);
+  perform public.remember_pull(public_pull, 'Reader B''s own question', 'B''s answer',
+                               'recall', extensions.gen_random_uuid());
+  select uq.id into strict q_theirs
+    from public.user_questions uq
+   where uq.user_id = reader_b and uq.pull_id = public_pull;
+
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader_a, 'role', 'authenticated')::text, true);
+  refused := false;
+  begin
+    insert into public.recall_events (user_id, pull_id, user_question_id, kind, grade)
+    values (reader_a, public_pull, q_theirs, 'review', 'good');
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a reader filed a grade against another reader''s question';
   end if;
 
   -- ----------------------------------- 9b. attribution does not publish the work

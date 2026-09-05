@@ -128,10 +128,18 @@ intentions:
 because the point of an Undo is that you decide. We keep a one-way fingerprint of each
 highlight's text, which cannot be turned back into the highlight; the book it came from;
 and where in the book it was. Two reasons, both of which cut in your favour. It is what
-lets an Undo be undone — upload the same file again and the highlights come back exactly
-as they were, rather than being gone for good because you tapped the wrong thing. And it
+lets an Undo be undone — upload the same file again and the highlights come back. And it
 is what stops an ordinary re-upload of a file you have already imported from duplicating
 everything in it.
+
+**The text comes back; the work you built on it does not.** This paragraph used to say the
+highlights came back "exactly as they were", and that was not true. A re-import creates the
+idea afresh, so anything attached to the old one — a question you wrote about it, your
+grades and review history for it, notes and highlights you made on it — is gone for good
+when you undo, and re-uploading does not bring it back. We would rather you knew that
+before you tapped it than discovered it afterwards, so an Undo will tell you what it is
+about to take. If what you want is the highlights out of the way but the work kept, an
+Undo is the wrong tool and we do not currently have the right one.
 
 All of it goes with your account. If you want an import gone rather than undone, deleting
 your account is currently the only way to reach that, and we would rather say so than
