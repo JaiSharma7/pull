@@ -806,3 +806,114 @@ describe('queueIfOffline answers whether it took responsibility', () => {
     await expect(hasPending(user)).resolves.toBe(false);
   });
 });
+
+/*
+ * The queue used to accept a write it was going to throw away.
+ *
+ * `queueMutation` answered "persisted", which was true of IndexedDB and useless to
+ * the reader: `runDrain` deletes a write the server refused for a reason no replay
+ * can change, so the entry lived exactly until the next drain. Every caller that
+ * reports success on a successful queue — the census counting a calibration as
+ * recorded, Review leaving `lostGrade` unset — was therefore reporting a write with
+ * no future, and the census is the expensive one because it is offered once.
+ *
+ * The refusal is now passed in and the write is declined, which turns each of those
+ * callers' existing "could not record" branch into the one that fires. These pin
+ * both halves: what is declined, and what must still be kept.
+ */
+describe('queueing a write the server has already refused', () => {
+  const refusal = (code: string) => {
+    const e = new Error('the server refused this write');
+    e.name = `PostgrestError ${code}`;
+    return e;
+  };
+
+  it.each(['23503', '23514', '22P02'])(
+    'declines a recall the server refused with %s, rather than losing it on the next drain',
+    async (code) => {
+      const user = `u-decline-${code}`;
+      const queued = await queueMutation(
+        user,
+        {
+          kind: 'recall',
+          pullId: 'gone',
+          grade: 'good',
+          mutationId: 'm1',
+          submittedAt: 1_700_000_000_000,
+          recallKind: 'calibration',
+        },
+        refusal(code),
+      );
+      expect(queued).toBe(false);
+      // And nothing was written, so `hasPending` does not hold a retry timer open
+      // for a write that has already been decided against.
+      await expect(hasPending(user)).resolves.toBe(false);
+    },
+  );
+
+  it('still queues a refusal a retry could survive', async () => {
+    const user = 'u-transient';
+    // 57014 is the server being unwell, and 42501 may be about the session rather
+    // than the account — `rpc-error.ts` keeps both off the permanent list on purpose.
+    for (const code of ['57014', '42501']) {
+      expect(
+        await queueMutation(
+          user,
+          {
+            kind: 'recall',
+            pullId: 'p1',
+            grade: 'good',
+            mutationId: `m-${code}`,
+            submittedAt: 1_700_000_000_000,
+            recallKind: 'review',
+          },
+          refusal(code),
+        ),
+      ).toBe(true);
+    }
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('still queues when no refusal is offered at all', async () => {
+    // The offline case: the request never left, so there is no server verdict to
+    // judge and the write is exactly the kind the queue exists for.
+    const user = 'u-no-refusal';
+    expect(
+      await queueMutation(user, {
+        kind: 'recall',
+        pullId: 'p1',
+        grade: 'good',
+        mutationId: 'm2',
+        submittedAt: 1_700_000_000_000,
+        recallKind: 'review',
+      }),
+    ).toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('still queues a collection write, whose target may be one entry behind it', async () => {
+    /*
+     * The one case `queueMutation` must not judge. A `stash-create` naming a parent,
+     * or an `organise` naming a destination, can fail 23503 against a collection that
+     * is itself still queued — and at queue time there is no queue to check yet. Only
+     * a drain can tell, so both are kept and `runDrain` decides with the set in hand.
+     * Declining them here would delete a collection the reader had just made.
+     */
+    const user = 'u-collection';
+    expect(
+      await queueMutation(
+        user,
+        { kind: 'stash-create', stashId: 's1', name: 'Later', parentId: 'p-queued' },
+        refusal('23503'),
+      ),
+    ).toBe(true);
+    expect(
+      await queueMutation(
+        user,
+        { kind: 'organise', saveId: 'sv', patch: { stashId: 's1' } },
+        refusal('23503'),
+      ),
+    ).toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+});

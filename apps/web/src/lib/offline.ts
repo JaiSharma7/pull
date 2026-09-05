@@ -288,8 +288,26 @@ export function onPendingQueued(handler: () => void): () => void {
  * the answer, which is right for them; the one that tells the reader their answer was
  * recorded needs to know the difference, because in a browser with site data blocked the
  * write reached neither Postgres nor IndexedDB and 'recorded' was untrue.
+ *
+ * `refusal` is the error that sent the caller here, when there was one, and passing it
+ * closes the second way this could report success it did not achieve. A write the server
+ * has already refused for a reason no retry can change is one `runDrain` deletes the
+ * moment it replays it — so accepting it here persisted something with no future, told
+ * the caller it was safe, and let the census advance onboarding over a calibration that
+ * was about to be thrown away. Refusing it instead makes every caller's existing
+ * "could not record" path the one that fires, which is what each of them already does
+ * correctly with the answer.
+ *
+ * Omitting it keeps the old behaviour, which is right for a caller that has no error to
+ * offer — a write queued because the reader is known to be offline, rather than because
+ * the server said no.
  */
-export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
+export async function queueMutation(
+  userId: string,
+  write: PendingWrite,
+  refusal?: unknown,
+): Promise<boolean> {
+  if (refusal !== undefined && refusedForGood(refusal, write, null)) return false;
   try {
     const database = await db();
     await database.add('pending', { ...write, userId, at: Date.now() });
@@ -459,14 +477,27 @@ async function runDrain(
  * whole classification exists to end. The honest fix is not to let the text get
  * that long: the inputs are bounded to the columns' limits in the components.
  */
-function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
+function refusedForGood(
+  error: unknown,
+  write: PendingWrite,
+  queuedStashes: Set<string> | null,
+): boolean {
   if (!isPermanentFailure(error)) return false;
   const code = sqlState(error);
   if (code === '23503') {
+    /*
+     * Judged against the queue, which only a drain has in hand. `null` is the
+     * caller saying it cannot see the queue — `queueMutation` is deciding whether
+     * to enqueue at all, and the collection this write points at may be sitting
+     * one entry behind it — so the answer there is the conservative one: keep the
+     * write, and let a pass that can tell make the call.
+     */
     if (write.kind === 'stash-create') {
+      if (queuedStashes === null) return false;
       return write.parentId === null || !queuedStashes.has(write.parentId);
     }
     if (write.kind === 'organise') {
+      if (queuedStashes === null) return false;
       const target = write.patch.stashId;
       return typeof target !== 'string' || !queuedStashes.has(target);
     }

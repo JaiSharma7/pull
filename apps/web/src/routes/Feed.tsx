@@ -608,17 +608,21 @@ export function Feed({
           // arrives after a newer decision is a no-op wherever it comes from.
           // Deciding that here meant scanning a queue that cannot yet contain
           // a request still in flight.
-          api.setConviction(item.row.id, stance, mutationId, submittedAt).catch(() => {
+          api.setConviction(item.row.id, stance, mutationId, submittedAt).catch((e: unknown) => {
             // Only queueable for a signed-in reader: a pending write has to
             // belong to someone, or the drain cannot tell whose it is.
             if (userId)
-              return queueMutation(userId, {
-                kind: 'conviction',
-                pullId: item.row.id,
-                stance,
-                mutationId,
-                submittedAt,
-              });
+              return queueMutation(
+                userId,
+                {
+                  kind: 'conviction',
+                  pullId: item.row.id,
+                  stance,
+                  mutationId,
+                  submittedAt,
+                },
+                e,
+              );
           }),
         );
       }
@@ -628,8 +632,8 @@ export function Feed({
         writes.push(
           api
             .saveExplanation(userId, item.row.id, text, mutationId)
-            .catch(() =>
-              queueMutation(userId, { kind: 'explain', pullId: item.row.id, text, mutationId }),
+            .catch((e: unknown) =>
+              queueMutation(userId, { kind: 'explain', pullId: item.row.id, text, mutationId }, e),
             ),
         );
       }

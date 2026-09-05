@@ -170,15 +170,24 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
           // IndexedDB failure and return normally, so in a browser with site data blocked
           // this counted a grade that had reached neither Postgres nor IndexedDB, and the
           // reader was told it was recorded.
+          // `e` is passed so a refusal no retry can change is declined here rather
+          // than persisted and deleted on the first drain. Without it this screen
+          // counted such a grade as recorded and advanced onboarding over it — the
+          // census is offered once and is the only thing that seeds a knowledge
+          // model, so that grade had nowhere else to come from.
           if (
-            await queueMutation(userId, {
-              kind: 'recall',
-              pullId,
-              grade,
-              mutationId,
-              submittedAt,
-              recallKind: 'calibration',
-            })
+            await queueMutation(
+              userId,
+              {
+                kind: 'recall',
+                pullId,
+                grade,
+                mutationId,
+                submittedAt,
+                recallKind: 'calibration',
+              },
+              e,
+            )
           ) {
             recorded.push([pullId, grade]);
             continue;

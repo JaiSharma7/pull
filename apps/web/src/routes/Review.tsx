@@ -166,15 +166,23 @@ export function Review() {
       const userId = getCurrentUserId();
       const queued =
         userId !== null &&
-        (await queueMutation(userId, {
-          kind: 'recall',
-          pullId: card.pullId,
-          grade: g,
-          mutationId,
-          submittedAt,
-          recallKind: 'review',
-          ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
-        }));
+        (await queueMutation(
+          userId,
+          {
+            kind: 'recall',
+            pullId: card.pullId,
+            grade: g,
+            mutationId,
+            submittedAt,
+            recallKind: 'review',
+            ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
+          },
+          // The refusal decides whether queueing is worth anything. A grade the
+          // server will refuse identically on every replay is dropped by the first
+          // drain, so queueing it silently loses it; declined here, `lostGrade`
+          // says so to the reader instead.
+          e,
+        ));
 
       /*
        * And when even the queue could not take it, the reader is told.
