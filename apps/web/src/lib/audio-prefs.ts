@@ -123,7 +123,13 @@ function readKey(key: string): string | null {
  * and ready to play. That module puts a guest's token in `sessionStorage` for
  * precisely that reason; this puts their queue there for the same one.
  *
- * `durable` is passed rather than derived, because it cannot be derived here. A
+ * `durable` is ANDed with `userId !== null` at both call sites, because the one
+ * thing it must never mean is durable storage for somebody with no address:
+ * `storePlayer(queue, null, true)` used to write a signed-out visitor's reading list
+ * to `localStorage`, which is precisely the state this module was changed to remove.
+ * That was a convention in a comment; it is a condition now.
+ *
+ * Beyond that it is passed rather than derived, because it cannot be derived here. A
  * null `userId` is a signed-out visitor and a non-null one may still be a guest —
  * an anonymous account with a real uuid — and only the caller holding the session
  * can tell a guest from a reader with an address. It defaults to `false` so a
@@ -180,7 +186,7 @@ export function readStoredPlayer(
   durable: boolean = false,
   now: number = Date.now(),
 ): PlayerState {
-  const store = queueStore(durable);
+  const store = queueStore(durable && userId !== null);
   if (store === null) return hydrate(null, userId, now);
   try {
     return hydrate(store.getItem(playerStorageKey(userId)), userId, now);
@@ -194,12 +200,20 @@ export function storePlayer(
   userId: string | null,
   durable: boolean = false,
 ): void {
-  const store = queueStore(durable);
+  // An emptied queue is a forget, so it clears BOTH stores -- the same reasoning
+  // `clearStoredPlayer` gives. Clearing only the store this call names left a copy
+  // behind whenever `durable` had changed since it was written, which a guest
+  // signing in with an address does without changing their id: Supabase keeps the
+  // uuid, so the key is identical and only the flag flips. The queue then looked
+  // cleared and came back on the next read.
+  if (state.queue.length === 0) {
+    clearStoredPlayer(userId);
+    return;
+  }
+  const store = queueStore(durable && userId !== null);
   if (store === null) return;
   try {
-    const key = playerStorageKey(userId);
-    if (state.queue.length === 0) store.removeItem(key);
-    else store.setItem(key, serialize(state, userId));
+    store.setItem(playerStorageKey(userId), serialize(state, userId));
   } catch {
     // The queue still plays; it just will not survive a reload on this device.
   }
@@ -217,7 +231,17 @@ export function storePlayer(
  * that was never there costs nothing.
  */
 export function clearStoredPlayer(userId: string | null): void {
-  const key = playerStorageKey(userId);
+  // The visitor key too, whoever is signing out. Every signed-out visitor shares
+  // `wap:player:guest`, and the build before this one wrote it to `localStorage` --
+  // so on a shared machine that reading list, the whole point of the change, was
+  // still sitting there after a sign-out that cleared a different key. Nothing
+  // writes it any more, which makes removing it unambiguous.
+  for (const key of new Set([playerStorageKey(userId), playerStorageKey(null)])) {
+    forget(key);
+  }
+}
+
+function forget(key: string): void {
   for (const durable of [true, false]) {
     const store = queueStore(durable);
     if (store === null) continue;

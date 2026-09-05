@@ -205,6 +205,40 @@ describe('a queue belonging to nobody with an address', () => {
     expect(readStoredPlayer('u1', true).queue).toHaveLength(1);
   });
 
+  it('takes the visitor key on any sign-out, wherever an earlier build left it', () => {
+    // Every signed-out visitor shares `wap:player:guest`, and the build before this
+    // one wrote it to `localStorage` — so the reading list this change exists to
+    // protect was still on a shared machine after a sign-out that cleared a
+    // different key.
+    const { local } = stubStorage({
+      [playerStorageKey(null)]: 'a visitor queue an older build left behind',
+    });
+    clearStoredPlayer('u1');
+    expect(local.has(playerStorageKey(null))).toBe(false);
+  });
+
+  it('clears both stores when the queue is emptied, not just the one named', () => {
+    // A guest signing in with an address keeps their uuid, so the key is unchanged
+    // and only `durable` flips. Clearing one store left the other's copy to come
+    // back on the next read.
+    const { local, session } = stubStorage();
+    storePlayer(queued, 'u1', true);
+    storePlayer(queued, 'u1', false);
+    expect(local.has(playerStorageKey('u1'))).toBe(true);
+    expect(session.has(playerStorageKey('u1'))).toBe(true);
+
+    storePlayer(INITIAL_PLAYER, 'u1', false);
+    expect(local.has(playerStorageKey('u1'))).toBe(false);
+    expect(session.has(playerStorageKey('u1'))).toBe(false);
+  });
+
+  it('refuses durable storage to somebody with no address, whatever it is asked', () => {
+    const { local, session } = stubStorage();
+    storePlayer(queued, null, true);
+    expect(local.has(playerStorageKey(null))).toBe(false);
+    expect(session.has(playerStorageKey(null))).toBe(true);
+  });
+
   it('forgets both copies on sign-out, wherever an earlier build left one', () => {
     // A build before this one wrote every queue to localStorage. Sign-out has to
     // take that copy too, or the reading list it was written to protect outlives

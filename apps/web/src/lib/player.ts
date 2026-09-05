@@ -27,11 +27,19 @@
  *     finished session that lingers as "Paused · 5 of 5" on the next visit is a
  *     feed that never ends, wearing headphones.
  *
- * THE EFFECT LAYER'S CONTRACT, so it can be written once and not re-derived:
- * when `epoch` changes while the status is `playing`, call `speak` on the
- * current track and hand that epoch back in `ended`; when the status becomes
- * `paused`, pause; when it returns to `playing` under the same epoch, resume;
- * when it becomes `idle`, stop. A rate or voice change while something is
+ * THE EFFECT LAYER'S CONTRACT, so it can be written once and not re-derived, and
+ * keyed on THE EPOCH IT IS SPEAKING rather than on the previous state's — which is
+ * the only reading that works, and review found the ambiguity the hard way. Track
+ * the epoch you last called `speak` under. Whenever the status is `playing` and the
+ * state's epoch differs from that one, call `speak` on the current track and hand
+ * the new epoch back in `ended`; when the status becomes `paused`, pause; when it
+ * returns to `playing` with the epoch you are already speaking, resume; when it
+ * becomes `idle`, stop.
+ *
+ * Read instead as "the epoch changed at this transition", a restore from storage
+ * (hydrated at epoch 0, then Resume) would call `resume()` on an utterance that was
+ * never started — so that reading was never implementable, and the sleep-timer pause
+ * is simply the case that made it obvious. A rate or voice change while something is
  * playing is applied to the live utterance in place (`adjustSpeaking` in
  * `lib/speech.ts` keeps the reader's position) and does not touch the epoch.
  */
@@ -138,16 +146,30 @@ export function clampRate(rate: number): number {
  * to pick up where the evening left off.
  */
 function advance(state: PlayerState, now: number | undefined): PlayerState {
-  if (state.sleepUntil !== null && now !== undefined && now >= state.sleepUntil) {
-    // The epoch has to move, and this is the one paused state in the machine
-    // reached FROM A FINISHED UTTERANCE. By the contract in the header the
-    // effect layer resumes when the status returns to `playing` under the same
-    // epoch — so without this, the morning's Resume called
-    // `speechSynthesis.resume()` on an utterance that had already fired `end`.
-    // Nothing speaks, no further `ended` arrives, and the player is wedged until
-    // the reader presses Next. Nothing in the state distinguished this pause
-    // from a pause mid-sentence; the epoch is what does.
-    return { ...state, status: 'paused', sleepUntil: null, epoch: state.epoch + 1 };
+  // THE END OF THE QUEUE WINS OVER THE TIMER, and it did not. With the deadline
+  // checked first, the last track finishing past it left the player `paused` with
+  // the queue intact — so a reader came back to "Paused · 5 of 5", which the header
+  // above names as forbidden: a finished session that lingers is a feed that never
+  // ends, wearing headphones. There is nothing for a sleep timer to pause when
+  // there is nothing left to play, so the end is an end either way.
+  const last = state.index + 1 >= state.queue.length;
+
+  if (!last && state.sleepUntil !== null && now !== undefined && now >= state.sleepUntil) {
+    // The index MOVES ON, and the epoch with it. This branch is dispatched from
+    // `ended`, so the track under the cursor is the one that just finished:
+    // parking on it meant the morning replayed last night's last track from the
+    // top, where the comment above promises to pick up where the evening left
+    // off. And the epoch has to move because this is the one paused state in the
+    // machine reached FROM A FINISHED UTTERANCE — under an unchanged epoch the
+    // effect layer resumes an utterance that already fired `end`, nothing speaks,
+    // no further `ended` arrives, and the player is wedged until Next.
+    return {
+      ...state,
+      index: state.index + 1,
+      status: 'paused',
+      sleepUntil: null,
+      epoch: state.epoch + 1,
+    };
   }
   if (state.index + 1 < state.queue.length) {
     return { ...state, index: state.index + 1, status: 'playing', epoch: state.epoch + 1 };

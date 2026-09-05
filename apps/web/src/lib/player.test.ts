@@ -272,13 +272,45 @@ describe('ended, and the epoch that makes it safe', () => {
     ]);
     const s = playerReducer(sleepy, { type: 'ended', token: sleepy.epoch, now: 100 });
     expect(s.status).toBe('paused');
-    expect(s.index).toBe(0);
+    // On the NEXT track: this is dispatched from `ended`, so track 1 is done.
+    expect(s.index).toBe(1);
     // The epoch MOVES, and this test asserted that it did not. This is the one
     // paused state reached from a finished utterance: under the same epoch the
     // effect layer would call `resume()` on an utterance that had already ended,
     // nothing would speak, and the morning's Resume would wedge the player.
     expect(s.epoch).toBe(sleepy.epoch + 1);
     expect(playerReducer(s, { type: 'resume' }).status).toBe('playing');
+  });
+
+  it('ends the session when the timer fires on the last track', () => {
+    // The deadline used to be checked before the end of the queue, so the last
+    // track finishing past it left the reader on "Paused · 2 of 2" — which this
+    // file's header names as forbidden: a finished session that lingers is a feed
+    // that never ends, wearing headphones. There is nothing to pause when there is
+    // nothing left to play.
+    const sleepy = run([
+      { type: 'enqueue', tracks: [track('a'), track('b')] },
+      { type: 'next' },
+      { type: 'setSleep', until: 1_000 },
+    ]);
+    const s = playerReducer(sleepy, { type: 'ended', token: sleepy.epoch, now: 1_500 });
+    expect(s).toMatchObject({ queue: [], index: 0, status: 'idle', sleepUntil: null });
+  });
+
+  it('parks on the next track, not the one that just finished', () => {
+    // Dispatched from `ended`, so the cursor is on the completed track. Parking
+    // there meant the morning replayed last night's last track from the top, where
+    // the comment promises to pick up where the evening left off.
+    const sleepy = run([
+      { type: 'enqueue', tracks: three },
+      { type: 'setSleep', until: 1_000 },
+    ]);
+    const s = playerReducer(sleepy, { type: 'ended', token: sleepy.epoch, now: 1_500 });
+    expect(s.status).toBe('paused');
+    expect(s.index).toBe(1);
+    expect(currentTrack(s)?.id).toBe('b');
+    expect(s.sleepUntil).toBeNull();
+    expect(s.epoch).toBe(sleepy.epoch + 1);
   });
 
   it('drops the deadline when removing the last track empties the queue', () => {
@@ -449,7 +481,9 @@ describe('the sleep timer', () => {
       { type: 'next', now: 1_000 },
     ]);
     expect(s.status).toBe('paused');
-    expect(s.index).toBe(0);
+    // On the track it was about to move to, not the one it was on: the deadline
+    // stops the reading, it does not rewind it.
+    expect(s.index).toBe(1);
     expect(s.sleepUntil).toBeNull();
   });
 
