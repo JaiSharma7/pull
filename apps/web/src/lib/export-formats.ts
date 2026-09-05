@@ -210,6 +210,23 @@ function listed(options: readonly string[]): string[] {
   return out.sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * An ordering's steps in a fixed order that is never the right one.
+ *
+ * Alphabetical alone gives the answer away whenever the authored order happens
+ * to be alphabetical already — "Collect, Plan, Review" is a real sequence and a
+ * sorted list of itself — and the reader would be shown the answer on the front
+ * of the card. Sorting and then rotating by one keeps the export reproducible
+ * with no seed while guaranteeing a different sequence for any two or more
+ * steps. A single step cannot be given away by its order and is left alone.
+ */
+function scrambled(stepsInOrder: readonly string[]): string[] {
+  const sorted = listed(stepsInOrder);
+  if (sorted.length < 2) return sorted;
+  const rotated = [...sorted.slice(1), sorted[0] as string];
+  return rotated.join('\n') === stepsInOrder.join('\n') ? sorted : rotated;
+}
+
 /** An ordering's steps: its `answer`, one per line. Mirrors `orderingSteps`. */
 function steps(answer: string): string[] {
   return answer
@@ -240,7 +257,7 @@ function faces(q: AnkiQuestion): { front: string; back: string } {
     }
     case 'ordering': {
       const ordered = steps(q.answer);
-      const shown = listed(ordered).map((s) => `• ${s}`);
+      const shown = scrambled(ordered).map((s) => `• ${s}`);
       const answer = ordered.map((s, i) => `${i + 1}. ${s}`).join('\n');
       return { front: [prompt, ...shown].join('\n'), back: withExplanation(answer) };
     }
@@ -310,14 +327,19 @@ export interface StashExportItem {
   body: string;
   whyItMatters: string | null;
   note: string | null;
-  work: { title: string };
+  work: { id: string | null; title: string };
 }
 
 /**
  * One stash as a Markdown file, in the shape and voice of `toMarkdown`.
  *
- * Grouped by source in the order the stash first mentions each, so a stash
- * arranged by hand exports in the order it was arranged. A Pull's body and
+ * Grouped by source identity in the order the stash first mentions each, so a
+ * stash arranged by hand exports in the order it was arranged. Identity is the
+ * work's id and not its title: titles are not unique in the schema, so keying by
+ * one merges two different books that share a name — and merges every source
+ * whose work row is gone under a single "Unknown source". `groupByWork` in
+ * `lib/library.ts` falls back to the pull's own identity for exactly this, and
+ * this does the same. A Pull's body and
  * "why it matters" are this product's commentary and are written plain; the
  * reader's note is marked as theirs, because an export that blurred whose
  * words were whose would be the wrong kind of keepsake.
@@ -337,15 +359,18 @@ export function toStashMarkdown(
     return lines.join('\n');
   }
 
-  const byWork = new Map<string, StashExportItem[]>();
-  for (const item of items) {
-    const title = item.work.title.trim() || 'Untitled';
-    const group = byWork.get(title);
-    if (group) group.push(item);
-    else byWork.set(title, [item]);
+  const byWork = new Map<string, { title: string; items: StashExportItem[] }>();
+  for (const [index, item] of items.entries()) {
+    // A work with no id is its own group: two deleted sources are two sources,
+    // and collapsing them under one heading would misattribute both.
+    const key = item.work.id ?? `orphan:${index}`;
+    const title = item.work.title.trim() || 'Unknown source';
+    const group = byWork.get(key);
+    if (group) group.items.push(item);
+    else byWork.set(key, { title, items: [item] });
   }
 
-  for (const [title, group] of byWork) {
+  for (const { title, items: group } of byWork.values()) {
     lines.push(`## ${title}`, '');
     for (const item of group) {
       lines.push(`### ${item.headline.trim()}`, '');

@@ -202,10 +202,21 @@ describe('toAnkiTsv', () => {
     expect(back).toBe('The material of the work');
   });
 
+  it('never shows an ordering in its right order, even when that order sorts', () => {
+    // "Collect, Plan, Review" is already alphabetical, so sorting alone would
+    // have printed the answer on the front of the card.
+    const q = question({ kind: 'ordering', answer: 'Collect\nPlan\nReview' });
+    const [front, back] = record(toAnkiTsv([q], [])).split('\t');
+    expect(front).not.toContain('• Collect\n• Plan\n• Review');
+    expect(back).toContain('1. Collect\n2. Plan\n3. Review');
+  });
+
   it('shows an ordering out of order on the front and in order on the back', () => {
     const q = question({ kind: 'ordering', answer: 'Observe\nHypothesise\nTest' });
     const [front, back] = record(toAnkiTsv([q], [])).split('\t');
-    expect(front).toBe('"What does an obstacle become?\n• Hypothesise\n• Observe\n• Test"');
+    // Sorted, then rotated by one: reproducible with no seed, and never the
+    // authored order.
+    expect(front).toBe('"What does an obstacle become?\n• Observe\n• Test\n• Hypothesise"');
     expect(back).toBe('"1. Observe\n2. Hypothesise\n3. Test"');
   });
 
@@ -252,7 +263,7 @@ describe('toStashMarkdown', () => {
     body: 'An obstruction is not only an interruption of the work.',
     whyItMatters: 'It reframes friction as material.',
     note: 'Re-read in winter.',
-    work: { title: 'Meditations' },
+    work: { id: 'w-meditations', title: 'Meditations' },
   };
 
   it('is titled for the stash, dated, and carries the description', () => {
@@ -270,9 +281,9 @@ describe('toStashMarkdown', () => {
     const out = toStashMarkdown(
       { name: 'Mixed', description: null },
       [
-        { ...item, work: { title: 'Walden' }, headline: 'Alone' },
+        { ...item, work: { id: 'w-walden', title: 'Walden' }, headline: 'Alone' },
         item,
-        { ...item, work: { title: 'Walden' }, headline: 'The cost' },
+        { ...item, work: { id: 'w-walden', title: 'Walden' }, headline: 'The cost' },
       ],
       when,
     );
@@ -285,6 +296,38 @@ describe('toStashMarkdown', () => {
       '## Meditations',
       '### What blocks the way becomes the way',
     ]);
+  });
+
+  it('keeps two sources that share a title apart', () => {
+    const out = toStashMarkdown(
+      { name: 'Essays', description: null },
+      [
+        { ...item, work: { id: 'w-one', title: 'Selected Essays' }, headline: 'The first' },
+        { ...item, work: { id: 'w-two', title: 'Selected Essays' }, headline: 'The second' },
+      ],
+      when,
+    );
+    const headings = out.split('\n').filter((l) => l.startsWith('#'));
+    // Two works, two headings — titles are not unique in the schema.
+    expect(headings).toEqual([
+      '# What a Pull — Essays',
+      '## Selected Essays',
+      '### The first',
+      '## Selected Essays',
+      '### The second',
+    ]);
+  });
+
+  it('does not collapse every deleted source into one', () => {
+    const out = toStashMarkdown(
+      { name: 'Orphans', description: null },
+      [
+        { ...item, work: { id: null, title: '' }, headline: 'One' },
+        { ...item, work: { id: null, title: '' }, headline: 'Two' },
+      ],
+      when,
+    );
+    expect(out.split('## Unknown source').length - 1).toBe(2);
   });
 
   it("keeps the product's words plain and the reader's marked", () => {
