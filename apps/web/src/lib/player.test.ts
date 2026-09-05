@@ -98,19 +98,78 @@ describe('playNow', () => {
     expect(s.status).toBe('playing');
   });
 
-  it('jumps to a track that is already queued rather than adding it again', () => {
+  it('moves a track that is already queued rather than adding it again', () => {
     const s = run([
       { type: 'enqueue', tracks: three },
       { type: 'playNow', track: track('c') },
     ]);
     expect(s.queue).toHaveLength(3);
-    expect(s.index).toBe(2);
+    // Moved to just after the current track, not jumped to. Jumping the cursor
+    // would strand `b`: the end of the queue clears it, so `b` would never play
+    // despite the reader having queued it and never having removed it.
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'c', 'b']);
+    expect(s.index).toBe(1);
+    expect(currentTrack(s)?.id).toBe('c');
+  });
+
+  it('leaves the tracks it skipped still in the queue, and plays them', () => {
+    let s = run([
+      { type: 'enqueue', tracks: three },
+      { type: 'playNow', track: track('c') },
+    ]);
+    s = playerReducer(s, { type: 'ended', token: s.epoch });
+    expect(currentTrack(s)?.id).toBe('b');
+    expect(s.status).toBe('playing');
+  });
+
+  it('restarts the current track rather than reordering around it', () => {
+    const s = run([
+      { type: 'enqueue', tracks: three },
+      { type: 'playNow', track: track('a') },
+    ]);
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    expect(s.index).toBe(0);
+    expect(s.status).toBe('playing');
   });
 
   it('works on an empty player', () => {
     const s = run([{ type: 'playNow', track: track('a') }]);
     expect(s.queue.map((t) => t.id)).toEqual(['a']);
     expect(s.status).toBe('playing');
+  });
+});
+
+describe('hydrate: the cursor keeps pointing at the track it named', () => {
+  it('rebases the index past entries this rebuild dropped', () => {
+    // `[invalid, a, b]` at index 1 means `a`. Clamping alone would land the
+    // cursor on `b` — a different track, silently.
+    const raw = JSON.stringify({
+      v: 1,
+      owner: 'reader-1',
+      queue: [{ nonsense: true }, track('a'), track('b')],
+      index: 1,
+      rate: 1,
+      voiceURI: null,
+      sleepUntil: null,
+    });
+    const s = hydrate(raw, 'reader-1');
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(currentTrack(s)?.id).toBe('a');
+  });
+
+  it('rebases past a duplicate that was collapsed', () => {
+    const raw = JSON.stringify({
+      v: 1,
+      owner: 'reader-1',
+      queue: [track('a'), track('a'), track('b')],
+      index: 2,
+      rate: 1,
+      voiceURI: null,
+      sleepUntil: null,
+    });
+    const s = hydrate(raw, 'reader-1');
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(currentTrack(s)?.id).toBe('b');
   });
 });
 
@@ -129,6 +188,19 @@ describe('walking the queue', () => {
     expect(done.status).toBe('idle');
     expect(done.queue).toEqual([]);
     expect(done.index).toBe(0);
+  });
+
+  it('does not carry a sleep deadline into the next queue', () => {
+    // The deadline is an absolute timestamp belonging to the session that set
+    // it, unlike the remembered duration in audio-prefs. Spread into idle, it
+    // would pause tomorrow's first queue at a boundary nobody asked for.
+    let s = run([
+      { type: 'enqueue', tracks: [track('a')] },
+      { type: 'setSleep', until: 9_999 },
+    ]);
+    s = playerReducer(s, { type: 'next', now: 1 });
+    expect(s.status).toBe('idle');
+    expect(s.sleepUntil).toBeNull();
   });
 
   it('ignores next and prev while idle', () => {

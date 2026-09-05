@@ -144,8 +144,11 @@ function advance(state: PlayerState, now: number | undefined): PlayerState {
   if (state.index + 1 < state.queue.length) {
     return { ...state, index: state.index + 1, status: 'playing', epoch: state.epoch + 1 };
   }
-  // The end is an end. See the header.
-  return { ...state, queue: [], index: 0, status: 'idle' };
+  // The end is an end. See the header — and the deadline ends with it: it is an
+  // absolute timestamp belonging to the session that set it, unlike the
+  // remembered duration in `lib/audio-prefs.ts`. Carried into idle, it would
+  // pause the next queue started in this tab at a boundary nobody asked for.
+  return { ...state, queue: [], index: 0, status: 'idle', sleepUntil: null };
 }
 
 /**
@@ -181,13 +184,26 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
 
     case 'playNow': {
       const at = state.queue.findIndex((t) => t.id === action.track.id);
-      if (at >= 0) return { ...state, index: at, status: 'playing', epoch: state.epoch + 1 };
+
+      // Already the one playing: start it again rather than reordering around it.
+      if (at >= 0 && at === state.index) {
+        return { ...state, status: 'playing', epoch: state.epoch + 1 };
+      }
 
       // After the current track rather than at the head: the reader chose
-      // something else over *this one*, not over everything after it.
-      const position = state.queue.length === 0 ? 0 : state.index + 1;
+      // something else over *this one*, not over everything after it. A track
+      // already further down the queue is MOVED here rather than jumped to —
+      // moving the cursor instead would leave everything between skipped, and
+      // since the end of the queue clears it, those tracks would never play.
       const queue = [...state.queue];
-      queue.splice(position, 0, action.track);
+      let anchor = state.index;
+      const existing = at >= 0 ? (state.queue[at] as Track) : action.track;
+      if (at >= 0) {
+        queue.splice(at, 1);
+        if (at < anchor) anchor -= 1;
+      }
+      const position = Math.min(anchor + (state.queue.length === 0 ? 0 : 1), queue.length);
+      queue.splice(position, 0, existing);
       return { ...state, queue, index: position, status: 'playing', epoch: state.epoch + 1 };
     }
 
@@ -357,18 +373,22 @@ export function hydrate(
 
   const seen = new Set<string>();
   const queue: Track[] = [];
-  for (const entry of Array.isArray(s.queue) ? s.queue : []) {
+  // The stored cursor counts positions in the payload, and the payload may hold
+  // entries this rebuild drops. Clamping alone would silently move the cursor
+  // onto a different track — `[invalid, a, b]` at index 1 means `a`, and a clamp
+  // lands it on `b`. Count how many entries before it survived instead, so the
+  // cursor keeps pointing at the track it named.
+  const storedIndex =
+    typeof s.index === 'number' && Number.isInteger(s.index) ? Math.max(0, s.index) : 0;
+  let retainedBefore = 0;
+  for (const [position, entry] of (Array.isArray(s.queue) ? s.queue : []).entries()) {
     if (!isTrack(entry) || seen.has(entry.id)) continue;
     seen.add(entry.id);
+    if (position < storedIndex) retainedBefore += 1;
     queue.push({ id: entry.id, title: entry.title, text: entry.text });
   }
 
-  const index =
-    queue.length === 0
-      ? 0
-      : typeof s.index === 'number' && Number.isInteger(s.index)
-        ? Math.min(queue.length - 1, Math.max(0, s.index))
-        : 0;
+  const index = queue.length === 0 ? 0 : Math.min(queue.length - 1, retainedBefore);
 
   const rate = typeof s.rate === 'number' && Number.isFinite(s.rate) ? clampRate(s.rate) : 1;
   const voiceURI = typeof s.voiceURI === 'string' && s.voiceURI.length > 0 ? s.voiceURI : null;
