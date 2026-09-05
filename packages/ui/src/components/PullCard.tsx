@@ -74,6 +74,14 @@ export interface PullCardProps {
    * carries a body — the claim, why it matters, the full argument — with the
    * field named, so a caller with marks on more than the claim can place them.
    * The headline is never passed: it is the title, not a passage.
+   *
+   * INLINE CONTENT ONLY. What comes back is rendered inside the card's own
+   * `<p class="pull-card__body">`, so a block element — a `div`, another `p`, a
+   * list — is closed out of it by the HTML parser, and the text loses the card's
+   * measure, leading and spacing. `renderToStaticMarkup` shows nothing wrong,
+   * which is exactly why this needs saying rather than testing. `<mark>`,
+   * `<span>`, `<em>` and a plain string are all fine, and are what the highlight
+   * caller returns.
    */
   renderBody?: (text: string, field: PullCardTextField) => ReactNode;
   /**

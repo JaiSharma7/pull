@@ -75,6 +75,54 @@ describe('The Archive design laws', () => {
    * `scripts/gen-icons.mjs` is deliberately out of scope: a favicon is a file on
    * disk with no page to inherit from, so it has to name its own two colours.
    */
+  it('lets no gradient, shadow or radius into an inline style either', () => {
+    // The gradient, box-shadow and radius checks read `styles/*.css`, and the
+    // component walk below reads only for colour literals — so an inline
+    // `style={{ borderRadius: '12px' }}` passed all four. Mutation-tested during
+    // review: only the colour one failed. `renderBody` widens the surface, since
+    // it is a supported path for an `apps/web` caller to put markup inside the
+    // card.
+    const roots = [
+      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
+      join(import.meta.dirname, 'components'),
+    ].filter(existsSync);
+    expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
+
+    const banned: [RegExp, string][] = [
+      [/\bbox-?[Ss]hadow\b/, 'a shadow'],
+      [/\b(?:linear|radial|conic)-gradient\b/, 'a gradient'],
+      [/\bborderRadius\s*:/, 'a radius'],
+    ];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          const src = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+          // Only inside a `style={{ … }}` literal: prose and prop names are not
+          // the concern, an actual declaration is.
+          for (const match of src.matchAll(/style=\{\{([^}]*)\}\}/g)) {
+            // `noUncheckedIndexedAccess`: a capture group is `string | undefined`
+            // even when the pattern guarantees it.
+            const inline = match[1] ?? '';
+            for (const [pattern, what] of banned) {
+              if (pattern.test(inline)) offenders.push(`${entry.name}: ${what} in an inline style`);
+            }
+          }
+        }
+      }
+    };
+    for (const r of roots) walk(r);
+
+    expect(
+      offenders,
+      `law 1 has no gradients and no shadows, and a radius belongs to a token:\n  ` +
+        `${offenders.join('\n  ')}\n` +
+        `Put the rule in styles/*.css against a var(--token).`,
+    ).toEqual([]);
+  });
+
   it('lets no colour literal into component source either', () => {
     const roots = [
       join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
