@@ -1,6 +1,15 @@
 import { useId, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { clampDepth, defaultDepth, depthLevels, HEADLINE_SCALE } from '../depth.js';
 
+/**
+ * The three bodies of text a card can render through `renderBody`.
+ *
+ * Mirrors `HIGHLIGHTABLE_FIELDS` in `apps/web/src/lib/highlights.ts`, which this
+ * package cannot import; the names are the database columns, so a caller
+ * holding highlights keyed by field can place them without a translation.
+ */
+export type PullCardTextField = 'body' | 'why_it_matters' | 'explanation';
+
 export interface PullCardSource {
   title: string;
   creator?: string | null;
@@ -46,6 +55,27 @@ export interface PullCardProps {
    */
   listening?: boolean;
   onAsk?: () => void;
+  /**
+   * Add this Pull to the listening queue, or take it out.
+   *
+   * Optional for the reason `onListen` is: the control is drawn only where a
+   * screen has a queue to add to. `queued` drives the label and `aria-pressed`
+   * rather than being inferred from a click, because whether this card is
+   * already in the queue is the queue's knowledge, not the card's — the same
+   * card can be queued from the Library and seen again in the feed.
+   */
+  onQueue?: () => void;
+  queued?: boolean;
+  /**
+   * Render a body of text in place of the plain string.
+   *
+   * The source page keeps a reader's highlight marks inside the text, which is
+   * markup a card cannot produce from a string. Called for each stop that
+   * carries a body — the claim, why it matters, the full argument — with the
+   * field named, so a caller with marks on more than the claim can place them.
+   * The headline is never passed: it is the title, not a passage.
+   */
+  renderBody?: (text: string, field: PullCardTextField) => ReactNode;
   /**
    * Hand this idea to somebody else.
    *
@@ -105,6 +135,9 @@ export function PullCard({
   onListen,
   listening = false,
   onAsk,
+  onQueue,
+  queued = false,
+  renderBody,
   onShare,
   shareLabel = 'Share',
   onOpenSource,
@@ -171,6 +204,8 @@ export function PullCard({
 
   const chip = [source.title, source.creator, source.kind].filter(Boolean) as string[];
   const atSource = levels[depth]?.key === 'source';
+  const passage = (text: string, field: PullCardTextField) =>
+    renderBody ? renderBody(text, field) : text;
 
   return (
     <article className="pull-card" data-depth={depth}>
@@ -231,14 +266,16 @@ export function PullCard({
           <div className="pull-card__depth-panel" id={panelId} aria-live="polite">
             {shown.has('claim') && (
               <div className="pull-card__stop">
-                <p className="pull-card__body">{body}</p>
+                <p className="pull-card__body">{passage(body, 'body')}</p>
               </div>
             )}
 
             {shown.has('why') && (
               <div className="pull-card__stop">
                 <p className="pull-card__movement">Why this matters</p>
-                {whyItMatters && <p className="pull-card__body">{whyItMatters}</p>}
+                {whyItMatters && (
+                  <p className="pull-card__body">{passage(whyItMatters, 'why_it_matters')}</p>
+                )}
                 {example && (
                   <p className="pull-card__body">
                     <span className="meta">Example</span>
@@ -252,7 +289,9 @@ export function PullCard({
             {shown.has('full') && (
               <div className="pull-card__stop">
                 <p className="pull-card__movement">In full</p>
-                <p className="pull-card__body">{explanation}</p>
+                <p className="pull-card__body">
+                  {explanation ? passage(explanation, 'explanation') : null}
+                </p>
               </div>
             )}
 
@@ -371,6 +410,17 @@ export function PullCard({
             aria-label={listening ? `Stop reading: ${headline}` : `Listen to: ${headline}`}
           >
             {listening ? 'Stop' : 'Listen'}
+          </button>
+        )}
+        {onQueue && (
+          <button
+            type="button"
+            className="btn"
+            onClick={onQueue}
+            aria-pressed={queued}
+            aria-label={queued ? `Queued: ${headline}` : `Queue: ${headline}`}
+          >
+            {queued ? 'Queued' : 'Queue'}
           </button>
         )}
       </div>
