@@ -13,6 +13,10 @@
 --   * its author sees it, through the same policy, with no special case
 --   * a seeded public work is still visible to a reader and to a visitor -- the
 --     narrowing must not cost the catalogue a single row
+--   * and the attack the narrowing invites: a reader holding a private work's UUID
+--     cannot author a summary onto it to make it readable. That insert is refused,
+--     and the work stays hidden. A summary on an already-public work is still
+--     allowed, because that is the feature the author policy exists for
 --
 -- Everything runs as the roles that reach the table. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -48,6 +52,7 @@ declare
   private_work uuid;
   public_work  uuid;
   seen       int;
+  refused    boolean;
 begin
   if (select count(*) from public.pulls) > 500 then
     raise exception
@@ -97,6 +102,33 @@ begin
     raise exception 'a reader lost a seeded public work (saw %)', seen;
   end if;
 
+  -- The work_id is not a secret -- work_topics_read_all is still `using (true)` --
+  -- so the policy has to hold against a reader who simply has it. Authoring a
+  -- summary onto a stranger's private work would satisfy summary_is_readable for a
+  -- row this reader owns, and the EXISTS above would then hand over the title.
+  refused := false;
+  begin
+    insert into public.summaries (work_id, author_id, title, status, visibility)
+    values (private_work, reader, 'Mine now', 'draft', 'private');
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'a reader authored a summary onto a private work they do not own; '
+      'summaries_author_insert must require the work to be public already.';
+  end if;
+
+  select count(*) into seen from public.works where id = private_work;
+  if seen <> 0 then
+    raise exception 'a reader reached a private work by authoring a summary onto it';
+  end if;
+
+  -- The other direction: commentary on something already in the catalogue is what
+  -- the author policy is for, and it still works.
+  insert into public.summaries (work_id, author_id, title, status, visibility)
+  values (public_work, reader, 'My notes on a public work', 'draft', 'private');
+
   -- ------------------------------------------------------------- as the author
   perform set_config('request.jwt.claims',
     json_build_object('sub', author, 'role', 'authenticated')::text, true);
@@ -127,7 +159,8 @@ begin
     raise exception 'a visitor lost a seeded public work (saw %)', seen;
   end if;
 
-  raise notice 'works: visible only behind a readable summary; the catalogue kept every row';
+  raise notice 'works: visible only behind a readable summary, unreachable by authoring '
+    'onto one, and the catalogue kept every row';
 end $$;
 
 rollback;
