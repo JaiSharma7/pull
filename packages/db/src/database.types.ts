@@ -772,6 +772,7 @@ export type Database = {
       }
       interrupt_events: {
         Row: {
+          client_mutation_id: string | null
           grade: Database["public"]["Enums"]["recall_grade"] | null
           id: string
           kind: Database["public"]["Enums"]["interrupt_kind"]
@@ -785,6 +786,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          client_mutation_id?: string | null
           grade?: Database["public"]["Enums"]["recall_grade"] | null
           id?: string
           kind: Database["public"]["Enums"]["interrupt_kind"]
@@ -798,6 +800,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          client_mutation_id?: string | null
           grade?: Database["public"]["Enums"]["recall_grade"] | null
           id?: string
           kind?: Database["public"]["Enums"]["interrupt_kind"]
@@ -1319,6 +1322,75 @@ export type Database = {
           window_start?: string
         }
         Relationships: []
+      }
+      recall_events: {
+        Row: {
+          answer: string | null
+          applied_at: string
+          client_mutation_id: string | null
+          confidence: string | null
+          grade: Database["public"]["Enums"]["recall_grade"]
+          id: string
+          kind: string
+          latency_ms: number | null
+          pull_id: string
+          quiz_question_id: string | null
+          scheduler_version: number
+          stability_after: number | null
+          stability_before: number | null
+          submitted_at: string | null
+          user_id: string
+        }
+        Insert: {
+          answer?: string | null
+          applied_at?: string
+          client_mutation_id?: string | null
+          confidence?: string | null
+          grade: Database["public"]["Enums"]["recall_grade"]
+          id?: string
+          kind?: string
+          latency_ms?: number | null
+          pull_id: string
+          quiz_question_id?: string | null
+          scheduler_version?: number
+          stability_after?: number | null
+          stability_before?: number | null
+          submitted_at?: string | null
+          user_id: string
+        }
+        Update: {
+          answer?: string | null
+          applied_at?: string
+          client_mutation_id?: string | null
+          confidence?: string | null
+          grade?: Database["public"]["Enums"]["recall_grade"]
+          id?: string
+          kind?: string
+          latency_ms?: number | null
+          pull_id?: string
+          quiz_question_id?: string | null
+          scheduler_version?: number
+          stability_after?: number | null
+          stability_before?: number | null
+          submitted_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recall_events_pull_id_fkey"
+            columns: ["pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recall_events_quiz_question_id_fkey"
+            columns: ["quiz_question_id"]
+            isOneToOne: false
+            referencedRelation: "quiz_questions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       reports: {
         Row: {
@@ -1891,8 +1963,15 @@ export type Database = {
       get_user_knowledge_graph: { Args: { p_limit?: number }; Returns: Json }
       grade_recall: {
         Args: {
+          p_answer?: string
+          p_confidence?: string
           p_grade: Database["public"]["Enums"]["recall_grade"]
+          p_kind?: string
+          p_latency_ms?: number
+          p_mutation_id?: string
           p_pull_id: string
+          p_question_id?: string
+          p_submitted_at?: string
         }
         Returns: {
           acquired_via: Database["public"]["Enums"]["acquisition"]
@@ -1973,13 +2052,16 @@ export type Database = {
       }
       record_interrupt: {
         Args: {
+          p_confidence?: string
           p_grade?: Database["public"]["Enums"]["recall_grade"]
           p_kind: Database["public"]["Enums"]["interrupt_kind"]
           p_latency?: number
+          p_mutation_id?: string
           p_pull_id: string
           p_response: Database["public"]["Enums"]["interrupt_response"]
           p_session?: string
           p_slot: number
+          p_submitted_at?: string
         }
         Returns: undefined
       }
