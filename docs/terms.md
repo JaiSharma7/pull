@@ -149,8 +149,18 @@ built — publishing extends that licence to what publication plainly requires: 
 to others, and allowing them to reference or fork it with attribution intact. Deleting
 published content withdraws it going forward; it cannot retract copies others already made.
 
+**Highlights you import.** Keeping a Kindle or Readwise export stores the text of each
+highlight as it is, privately, so that we can schedule it for review and let you search it.
+That copy is yours in exactly the sense the rest of this section means: we claim no
+ownership, we do not show it to other readers, we do not send it to a model to write
+anything public, and it is deleted with your account or with a single Undo of the batch,
+whichever comes first. What we keep after an Undo is a one-way fingerprint of the text, so
+re-uploading the same file does not hand back what you just removed.
+
 You are responsible for having the right to upload what you upload, and you keep that
-responsibility even after we have processed it.
+responsibility even after we have processed it. Importing your own highlights of a book you
+own is ordinarily fine; uploading somebody else's copy of a work so that others can read it
+is not, and is what the acceptable-use section below is about.
 
 ## 5. Acceptable use
 
