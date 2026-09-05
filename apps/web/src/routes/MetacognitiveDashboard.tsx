@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
+import { PROGRESS_COPY } from '../lib/progress.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
 
@@ -58,10 +59,7 @@ export function MetacognitiveDashboard({
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
           What you are holding on to
         </h1>
-        <p className="meta">
-          What you have read, and how well you are still holding on to it. Every number here is
-          computed from your own recall history — nothing is estimated.
-        </p>
+        <p className="meta">{PROGRESS_COPY.provenance}</p>
       </header>
 
       {error ? (

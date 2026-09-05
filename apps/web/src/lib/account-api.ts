@@ -157,11 +157,41 @@ const EXPORTED: { table: string; column: string }[] = [
   { table: 'convictions', column: 'user_id' },
   { table: 'explanations', column: 'user_id' },
   { table: 'interrupt_events', column: 'user_id' },
+  // Every recall attempt as it happened, which is the evidence behind
+  // `knowledge_states` rather than a duplicate of it: the grade, the stated
+  // confidence, what was typed, and the stability before and after. An export
+  // that carried only the derived numbers would hand a reader the conclusions
+  // and keep the working.
+  { table: 'recall_events', column: 'user_id' },
   { table: 'feed_impressions', column: 'user_id' },
   { table: 'feed_recipes', column: 'user_id' },
   { table: 'follows', column: 'follower_id' },
   { table: 'generation_jobs', column: 'requester_id' },
+  // Two more that `docs/privacy.md` names as the reader's own and this list did
+  // not carry, which made "every row stored against your account" untrue of it.
+  // `user_knowledge_vectors` is the centroid the Delta compares candidates
+  // against — the policy calls it personal data and says it is deleted with the
+  // account, so it is the reader's to take. `session_seeds` is what decides the
+  // order they were shown things in.
+  { table: 'session_seeds', column: 'user_id' },
+  { table: 'user_knowledge_vectors', column: 'user_id' },
 ];
+
+/*
+ * WHAT IS DELIBERATELY NOT HERE, so a future reader does not assume an omission.
+ *
+ *   mfa_recovery_codes  A list of unspent second factors. Writing them into a
+ *                       file the reader will email themselves is the opposite of
+ *                       what they are for; the account screen shows them once, at
+ *                       the moment they are generated, and that is the only place
+ *                       they should ever appear.
+ *   rate_limits         Operational counters keyed to the account rather than
+ *                       anything the reader did. Nothing in them is theirs.
+ *
+ * `imports`, `import_items` and `user_questions` are the reader's and belong
+ * here; they arrive with the PR that lets a reader create one, so that this list
+ * and the tables it names land together.
+ */
 
 export interface AccountExport {
   exportedAt: string;

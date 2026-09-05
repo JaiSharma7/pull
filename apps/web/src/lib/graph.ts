@@ -184,8 +184,13 @@ export function filterConnectedEdges(edges: GraphEdge[], activeNodeIds: Set<stri
  * is inserted as `descendant` and again as `ancestor`, the Mill/Thoreau tension as
  * `opposes` twice (`20260829131109_seed_relations_and_daily.sql`). Counting rows therefore
  * reported one debate as "2 dialectical tensions" and one lineage link as two connections,
- * under a header promising that nothing is estimated. It also made the canvas stroke the
+ * under a header promising counts taken from the reader's own history. It also made the canvas stroke the
  * same segment twice, so those edges rendered darker than the alpha intends.
+ *
+ * (The header no longer says "nothing is estimated" — it never was true of
+ * retrievability, which is read off a decay curve. What it says now is that the
+ * COUNTS come from the reader's own history, which is the promise this function
+ * exists to keep.)
  */
 export function undirectedEdges(edges: readonly GraphEdge[]): GraphEdge[] {
   const seen = new Set<string>();

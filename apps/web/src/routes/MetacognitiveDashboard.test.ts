@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { computeGraphStats, SAMPLE_GRAPH } from '../lib/graph.js';
+import { PROGRESS_COPY } from '../lib/progress.js';
+
+/*
+ * The screen's own promise, checked against the screen.
+ *
+ * The header said "Every number here is computed from your own recall history —
+ * nothing is estimated", and retrievability is exactly an estimate: it is read
+ * off a decay curve from `stability` and `last_seen_at` by `public.retrievability`,
+ * never stored and never measured by asking the reader today. "Solid",
+ * "Refreshing" and "Fading" are bands of it, so the sentence disclaimed the
+ * dashboard's three headline numbers.
+ *
+ * A source check rather than a render: this route reads a live session and a
+ * network call, and the claim lives in one paragraph of copy that a future edit
+ * could quietly restore.
+ */
+describe('what the dashboard promises about its own numbers', () => {
+  it('does not claim that nothing is estimated', () => {
+    expect(PROGRESS_COPY.provenance).not.toContain('nothing is estimated');
+  });
+
+  it('says where the counts come from, and that retrievability is an estimate', () => {
+    expect(PROGRESS_COPY.provenance).toContain('from your own recall history');
+    expect(PROGRESS_COPY.provenance).toContain('is an estimate');
+  });
+});
 
 describe('MetacognitiveDashboard stats calculations', () => {
   it('computes retention health over a graph', () => {
