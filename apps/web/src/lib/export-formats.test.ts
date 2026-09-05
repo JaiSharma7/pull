@@ -325,6 +325,41 @@ describe('toStashMarkdown', () => {
     expect(out).toContain('What I keep coming back to.');
   });
 
+  /*
+   * A setext underline is *a sequence of* `=` or `-`, and CommonMark says one is
+   * enough. The escaper required two, so a lone marker on its own line survived —
+   * and a public stash's description is written by whoever made the stash, not by
+   * the reader downloading it. Left alone, `Read this first` followed by `=` renders
+   * as an <h1> sibling of the document title and files the whole export under a
+   * stranger's sentence.
+   */
+  it.each(['=', '-', '==', '--', '=  ', ' -'])(
+    'escapes a %s underline so a description cannot become a heading',
+    (underline) => {
+      const out = toStashMarkdown(
+        { name: 'Stoics', description: `Read this first\n${underline}\nrest` },
+        [item],
+        when,
+      );
+      // No line in the file is a bare run of `=` or `-`, which is what a setext
+      // underline has to be to promote the line above it.
+      const structural = out.split('\n').filter((l) => /^\s*[-=]+\s*$/u.test(l));
+      expect(structural).toEqual([]);
+      // The reader still sees both the sentence and the characters they typed.
+      expect(out).toContain('Read this first');
+      expect(out).toContain(`\\${underline.trim()[0]}`);
+    },
+  );
+
+  it('still escapes the fences and leaves ordinary prose alone', () => {
+    const out = toStashMarkdown(
+      { name: 'Stoics', description: 'Fine prose — with an em dash, 2 - 3 items, a = b.' },
+      [item],
+      when,
+    );
+    expect(out).toContain('Fine prose — with an em dash, 2 - 3 items, a = b.');
+  });
+
   it('says so plainly when the stash is empty', () => {
     expect(toStashMarkdown(stash, [], when)).toContain('Nothing in this stash yet.');
   });

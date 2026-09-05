@@ -403,7 +403,15 @@ function mdText(value: string): string {
       // underline), which is the same hijack the `#` escape closes by another
       // character, and a fence swallows every section after it. Escaping the first
       // character is enough to stop all three being read that way.
-      if (/^\s*(-{2,}|={2,}|`{3,}|~{3,})\s*$/u.test(line)) {
+      // `-+` and `=+`, not `{2,}`. A setext underline in CommonMark is *a sequence
+      // of* `=` or `-`, and one is enough (spec example 50) — so a lone `-` or `=`
+      // on its own line walked past this untouched, and the bullet rule below could
+      // not catch it either because there is no whitespace after it. A public
+      // stash's description is written by somebody else, so that was enough to make
+      // their text an `<h1>` sibling of the document title and file the rest of the
+      // file underneath it: exactly the hijack this function exists to close. The
+      // fences stay `{3,}` because three is what opens a fence.
+      if (/^\s*(-+|=+|`{3,}|~{3,})\s*$/u.test(line)) {
         return line.replace(/^(\s*)(.)/u, '$1\\$2');
       }
       // Line-initial markers. `*` and `+` are the other two bullet characters and
