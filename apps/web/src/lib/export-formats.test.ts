@@ -147,6 +147,19 @@ describe('summariseHistory', () => {
   });
 });
 
+describe('summariseHistory across mixed timestamps', () => {
+  it('reads the latest by instant, not by string', () => {
+    // `2026-09-06T00:30:00+02:00` is 22:30 UTC and sorts after
+    // `2026-09-05T23:00:00+00:00`, which is 23:00.
+    const summary = summariseHistory({ id: 'q1', pullId: 'p1' }, [
+      { pullId: 'p1', questionId: 'q1', grade: 'good', appliedAt: '2026-09-06T00:30:00+02:00' },
+      { pullId: 'p1', questionId: 'q1', grade: 'forgot', appliedAt: '2026-09-05T23:00:00+00:00' },
+    ]);
+    expect(summary.last).toBe('forgot');
+    expect(summary.reps).toBe(2);
+  });
+});
+
 describe('ankiTag', () => {
   it('has no whitespace, no case and no punctuation', () => {
     expect(ankiTag('Walden, or Life in the Woods')).toBe('walden-or-life-in-the-woods');
@@ -255,6 +268,36 @@ describe('toAnkiTsv', () => {
   });
 });
 
+describe('toAnkiTsv: what a spreadsheet and an importer each do with a field', () => {
+  it('quotes a field that begins with #, which Anki would otherwise read as metadata', () => {
+    // The file stays valid and the card is silently dropped on import, which is
+    // the worst shape of failure an export can have.
+    const line = record(
+      toAnkiTsv([question({ prompt: '#1 — what does an obstacle become?' })], []),
+    );
+    expect(line.startsWith('#')).toBe(false);
+    expect(line.startsWith('"#1')).toBe(true);
+  });
+
+  it('defuses a formula field, the same as the CSV beside it', () => {
+    // `.tsv` is a file Excel and LibreOffice open.
+    const line = record(toAnkiTsv([question({ prompt: '+1+1', answer: '@SUM(A1)' })], []));
+    expect(line).toContain("'+1+1");
+    expect(line).toContain("'@SUM(A1)");
+  });
+
+  it('orders options the same way on every machine', () => {
+    // `localeCompare` with no locale reads the runtime's, so the same deck came
+    // out in two orders on two machines — and for an ordering card that changes
+    // what is printed on the front. Codepoint order puts every capital before
+    // every lowercase, on any runtime.
+    const line = record(
+      toAnkiTsv([question({ kind: 'mcq', answer: 'apple', distractors: ['Banana'] })], []),
+    );
+    expect(line.indexOf('Banana')).toBeLessThan(line.indexOf('apple'));
+  });
+});
+
 describe('toStashMarkdown', () => {
   const when = new Date('2026-09-05T12:00:00Z');
   const stash = { name: 'Stoics', description: 'What I keep coming back to.' };
@@ -334,7 +377,37 @@ describe('toStashMarkdown', () => {
     const out = toStashMarkdown(stash, [item], when);
     expect(out).toContain('\nAn obstruction is not only an interruption of the work.\n');
     expect(out).toContain('**Why it matters:** It reframes friction as material.');
-    expect(out).toContain('**Note:** Re-read in winter.');
+    expect(out).toContain('**Note:**\n> Re-read in winter.');
+  });
+
+  it('says whose words are whose rather than leaving it to the absence of a marker', () => {
+    const out = toStashMarkdown(stash, [item], when);
+    expect(out).toContain('are What a Pull’s commentary on the source, not the source itself');
+  });
+
+  it('cannot be restructured by text the reader typed', () => {
+    // A note containing a line of `## ` opened a peer of the source heading, so
+    // everything after it in the file was filed under the reader's own words.
+    const out = toStashMarkdown(
+      stash,
+      [{ ...item, note: 'First para.\n\n## A heading I typed\n\nSecond para.' }],
+      when,
+    );
+    expect(out).not.toMatch(/^## A heading I typed$/m);
+    expect(out).toContain('> \\## A heading I typed');
+
+    // And a headline with a newline in it no longer breaks its own `###`.
+    const broken = toStashMarkdown(stash, [{ ...item, headline: 'One line\n# Another' }], when);
+    expect(broken).toContain('### One line \\# Another');
+    expect(broken).not.toMatch(/^# Another$/m);
+  });
+
+  it('exports without a date rather than throwing on one it cannot read', () => {
+    // `toISOString` raises RangeError on an Invalid Date, and it was the only
+    // throw in a module of pure string builders.
+    const out = toStashMarkdown(stash, [item], new Date(Number.NaN));
+    expect(out).toContain('Exported.');
+    expect(out).toContain('## Meditations');
   });
 
   it('leaves out an empty note or reason rather than printing a blank one', () => {

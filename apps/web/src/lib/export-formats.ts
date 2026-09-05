@@ -158,12 +158,24 @@ export function summariseHistory(
   let reps = 0;
   let lapses = 0;
   let last: ReviewEvent | null = null;
+  // An unparseable stamp sorts before everything rather than becoming NaN, which
+  // compares false against both sides and would silently keep whichever came
+  // first.
+  const instant = (at: string): number => {
+    const parsed = Date.parse(at);
+    return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+  };
   for (const event of history) {
     if (event.pullId !== question.pullId) continue;
     if (event.questionId && event.questionId !== question.id) continue;
     reps += 1;
     if (event.grade === 'forgot') lapses += 1;
-    if (!last || event.appliedAt > last.appliedAt) last = event;
+    // Parsed, not compared as strings. `2026-09-06T00:30:00+02:00` is 22:30 UTC
+    // and sorts after `2026-09-05T23:00:00+00:00`, which is 23:00 — so a mix of
+    // offsets or precisions reports the wrong grade as the latest. Uniform UTC
+    // from one PostgREST query happens to sort right; a client-stamped `…Z` from
+    // the offline path does not.
+    if (!last || instant(event.appliedAt) > instant(last.appliedAt)) last = event;
   }
   return { reps, lapses, last: last?.grade ?? null };
 }
@@ -207,7 +219,12 @@ function listed(options: readonly string[]): string[] {
     seen.add(o);
     out.push(o);
   }
-  return out.sort((a, b) => a.localeCompare(b));
+  // Codepoint order, not `localeCompare`. This module's own rationale is that an
+  // export must be reproducible without a seed, and `localeCompare` with no
+  // locale argument reads the runtime's — so the same deck exported on two
+  // machines came out in two orders, and for an `ordering` card that changes
+  // what is printed on the FRONT, since `scrambled()` derives it from this sort.
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -252,7 +269,12 @@ function faces(q: AnkiQuestion): { front: string; back: string } {
   switch (q.kind) {
     case 'mcq': {
       const options = listed([q.answer, ...q.distractors]);
-      const lettered = options.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`);
+      // Letters while there are letters, then numbers. `String.fromCharCode(65 + i)`
+      // alone walked past `Z` into `[`, `\` and `]` at 27 options — unlikely from
+      // generation, and not something an export should produce if it happens.
+      const lettered = options.map(
+        (o, i) => `${i < 26 ? String.fromCharCode(65 + i) : String(i + 1)}. ${o}`,
+      );
       return { front: [prompt, ...lettered].join('\n'), back: withExplanation(q.answer.trim()) };
     }
     case 'ordering': {
@@ -278,8 +300,17 @@ function faces(q: AnkiQuestion): { front: string; back: string } {
  * for tab-separated files too.
  */
 function tsvField(value: string): string {
-  const field = value.replace(/\t/g, ' ');
-  return /["\r\n]/.test(field) ? `"${field.replace(/"/g, '""')}"` : field;
+  // Defused like a CSV cell, for the reason `defuse` gives above it: `.tsv` is a
+  // file Excel and LibreOffice open, and a cell they evaluate is worth a stray
+  // apostrophe. This was inconsistent with the CSV beside it, which is not a
+  // defensible place for a security decision to differ.
+  const field = defuse(value).replace(/\t/g, ' ');
+  // And quoted when it begins with `#`, which is not cosmetic: Anki's importer
+  // reads every line starting with `#` as metadata (it is how `ANKI_HEADER`
+  // works), so a card whose front began "#1 — what did Mill argue?" was dropped
+  // on import, silently, from an otherwise valid file. A quoted field's first
+  // byte is `"`, so the record stops being a comment.
+  return /^#|["\r\n]/.test(field) ? `"${field.replace(/"/g, '""')}"` : field;
 }
 
 /**
@@ -344,13 +375,53 @@ export interface StashExportItem {
  * reader's note is marked as theirs, because an export that blurred whose
  * words were whose would be the wrong kind of keepsake.
  */
+/**
+ * Reader-authored text, kept as text.
+ *
+ * A headline or a note is interpolated straight into a Markdown document, so a
+ * line beginning `#` opens a heading, `>` opens a quote and `-` opens a list —
+ * and a `## ` inside a note made a peer of the source heading, filing everything
+ * after it in the file under the reader's typed words instead of the book. Only
+ * the line-initial characters that change block structure are escaped: escaping
+ * every `*` and `_` would make ordinary prose unreadable, and inline emphasis
+ * cannot move a paragraph out from under its source.
+ *
+ * A newline inside a headline breaks its own `###` the same way, so those are
+ * folded to spaces here — a headline is one line by definition.
+ */
+function mdText(value: string): string {
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/^(\s*)([#>]|-(?=\s)|\d+\.(?=\s))/u, '$1\\$2'))
+    .join('\n');
+}
+
+/** One line of text as a Markdown blockquote, blank lines included. */
+function quoted(value: string): string[] {
+  return value.split('\n').map((line) => (line ? `> ${line}` : '>'));
+}
+
 export function toStashMarkdown(
   stash: StashHeader,
   items: readonly StashExportItem[],
   generatedAt: Date,
 ): string {
-  const lines: string[] = [`# What a Pull — ${stash.name.trim() || 'a stash'}`, ''];
-  lines.push(`Exported ${generatedAt.toISOString().slice(0, 10)}.`, '');
+  const lines: string[] = [`# What a Pull — ${mdText(stash.name.trim() || 'a stash')}`, ''];
+  // `toISOString` THROWS a RangeError on an Invalid Date — the only throw in a
+  // module of pure string builders, and the caller passing `new Date(undefined)`
+  // would take the download with it. A file with no date is better than no file.
+  const day = Number.isNaN(generatedAt.getTime()) ? null : generatedAt.toISOString().slice(0, 10);
+  lines.push(day ? `Exported ${day}.` : 'Exported.', '');
+  // Whose words are whose, said once rather than left to the absence of a
+  // marker. The note is labelled `**Note:**` and everything else is plain — and
+  // "plain" is not a signal. Six months on in somebody's vault, a paragraph
+  // under a book's name reads as the book.
+  lines.push(
+    '_Summaries and “why it matters” are What a Pull’s commentary on the source, not the ' +
+      'source itself. Notes are yours._',
+    '',
+  );
   const description = stash.description?.trim();
   if (description) lines.push(description, '');
 
@@ -371,15 +442,20 @@ export function toStashMarkdown(
   }
 
   for (const { title, items: group } of byWork.values()) {
-    lines.push(`## ${title}`, '');
+    lines.push(`## ${mdText(title).replace(/\n+/g, ' ')}`, '');
     for (const item of group) {
-      lines.push(`### ${item.headline.trim()}`, '');
+      lines.push(`### ${mdText(item.headline.trim()).replace(/\n+/g, ' ')}`, '');
       const body = item.body.trim();
-      if (body) lines.push(body, '');
+      if (body) lines.push(mdText(body), '');
       const why = item.whyItMatters?.trim();
-      if (why) lines.push(`**Why it matters:** ${why}`, '');
+      if (why) lines.push(`**Why it matters:** ${mdText(why)}`, '');
       const note = item.note?.trim();
-      if (note) lines.push(`**Note:** ${note}`, '');
+      // The reader's own note is quoted, which is both the attribution the
+      // header promises and the escape: a `>` block cannot open a sibling
+      // heading, so a note containing a line of `## ` can no longer file the
+      // rest of the file under text the reader typed. `toMarkdown` in
+      // `lib/highlights.ts` blockquotes for the first of those reasons already.
+      if (note) lines.push('**Note:**', ...quoted(mdText(note)), '');
     }
   }
   return lines.join('\n');
