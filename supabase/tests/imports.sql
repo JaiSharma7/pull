@@ -114,6 +114,7 @@ declare
   ks        public.knowledge_states;
   bulk_user uuid := extensions.gen_random_uuid();
   q_other   uuid;
+  q_both    uuid;
 begin
   if (select count(*) from public.pulls) > 500 then
     raise exception
@@ -485,6 +486,49 @@ begin
     raise exception 'a grade was filed against a question belonging to another pull';
   end if;
 
+  -- One question or the other, never both. `grade_recall` writes only one, but the
+  -- insert policy admits a direct write on the strength of `user_id` alone, and the
+  -- log has no update or delete policy — so such a row would be permanent and would
+  -- mean two things at once.
+  -- Needs a pull carrying BOTH, so a seeded public one the reader also wrote about:
+  -- an imported pull has no canonical question, and the composite keys refuse a
+  -- question from anywhere else.
+  select p2.id into strict public_pull
+    from public.pulls p2
+   where exists (select 1 from public.quiz_questions q where q.pull_id = p2.id)
+   limit 1;
+  perform public.remember_pull(public_pull, 'My own question about this one',
+                               'My own answer', 'recall', extensions.gen_random_uuid());
+  select uq.id into strict q_both
+    from public.user_questions uq
+   where uq.user_id = reader_a and uq.pull_id = public_pull;
+
+  refused := false;
+  begin
+    insert into public.recall_events
+      (user_id, pull_id, quiz_question_id, user_question_id, kind, grade)
+    values (reader_a, public_pull,
+            (select q.id from public.quiz_questions q where q.pull_id = public_pull limit 1),
+            q_both, 'review', 'good');
+  exception when check_violation then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a grade named a canonical question and the reader''s own at once';
+  end if;
+
+  -- A question cannot be MOVED onto a pull the reader cannot read either. Guarding only
+  -- the insert leaves the guard one statement from useless.
+  refused := false;
+  begin
+    update public.user_questions set pull_id = pull_b where id = q_id;
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a reader moved their question onto a pull they cannot read';
+  end if;
+
   -- ----------------------------------- 9b. attribution does not publish the work
   --
   -- `attribute_work` writes `contributors` and `work_contributors`, both of which were
@@ -531,10 +575,33 @@ begin
    where s.work_id in (work_med, work_wal) and s.author_id = reader_a;
   if n <> 3 then raise exception 'reader A holds % pulls before Undo, expected 3', n; end if;
 
+  -- A private draft about a DIFFERENT book, started by hand and not yet written into.
+  -- Undoing an unrelated batch must not take it: the cleanup used to match every empty
+  -- private summary the reader authored on any user_owned work.
+  -- On the very book being undone, and a second summary of it, which is allowed:
+  -- `summaries` is unique per (work, version, author). Scoping the cleanup by WORK
+  -- would still have taken this; only the summary a deleted pull hung from is the
+  -- batch's to clean up.
+  insert into public.summaries (work_id, version, author_id, title, status, visibility)
+  values (work_med, 2, reader_a, 'My own notes on Meditations', 'draft', 'private');
+  select count(*) into n
+    from public.summaries s
+   where s.author_id = reader_a and s.title = 'My own notes on Meditations';
+  if n <> 1 then raise exception 'the fixture draft was not created'; end if;
+
   res := public.undo_import(import_1);
   if (res ->> 'removed')::int <> 3 then
     raise exception 'Undo removed % pulls, expected 3', res ->> 'removed';
   end if;
+
+  select count(*) into n
+    from public.summaries s
+   where s.author_id = reader_a and s.title = 'My own notes on Meditations';
+  if n <> 1 then
+    raise exception 'Undo deleted an unrelated draft the reader was writing';
+  end if;
+  delete from public.summaries s
+   where s.author_id = reader_a and s.title = 'My own notes on Meditations';
   if (res ->> 'alreadyUndone')::boolean is not false then
     raise exception 'a first Undo reported itself as a repeat';
   end if;
@@ -560,28 +627,43 @@ begin
     raise exception 'Undo erased the dedupe record (% items left of 3)', n;
   end if;
 
-  -- And re-importing the same file afterwards really is a no-op. The summary used to be
-  -- created before the dedupe check ran, so a duplicate-only call put the book back in
-  -- the reader's library with nothing in it -- and made the work readable to them again,
-  -- which is the property Undo was supposed to have taken away.
+  -- Undo is REVERSIBLE, and uploading the same file again is how you reverse it. The
+  -- items survive as tombstones so an accidental re-upload of something still held is a
+  -- no-op (asserted in section 2), and stop blocking once the reader has explicitly said
+  -- they do not want them -- so this restores exactly what was taken.
   res := public.commit_import('kindle', repeat('c', 64), items_a);
-  if (res ->> 'added')::int <> 0 or (res ->> 'duplicates')::int <> 3 then
-    raise exception 'a re-import after Undo added % and deduped %',
+  if (res ->> 'added')::int <> 3 or (res ->> 'duplicates')::int <> 0 then
+    raise exception 'a re-import after Undo restored % and deduped %',
       res ->> 'added', res ->> 'duplicates';
   end if;
-  if jsonb_array_length(res -> 'works') <> 0 then
-    raise exception 'a duplicate-only import reported % works touched',
-      jsonb_array_length(res -> 'works');
+
+  select count(*) into n
+    from public.pulls p
+    join public.summaries s on s.id = p.summary_id
+   where s.author_id = reader_a;
+  if n <> 3 then raise exception 'Undo could not be undone (% pulls back of 3)', n; end if;
+
+  select count(*) into n from public.works w where w.id in (work_med, work_wal);
+  if n <> 2 then raise exception 'the restored books did not come back into view'; end if;
+
+  -- And the tombstones were revived rather than duplicated: the unique key is
+  -- (user_id, content_hash), so a second row would have raised rather than counted.
+  select count(*) into n from public.import_items where user_id = reader_a;
+  if n <> 3 then raise exception 'restoring left % item rows, expected 3', n; end if;
+
+  select count(*) into n
+    from public.import_items where user_id = reader_a and undone_at is not null;
+  if n <> 0 then raise exception '% restored items are still marked undone', n; end if;
+
+  -- Take it back again, so the assertions after this see an empty library.
+  res := public.undo_import((res ->> 'importId')::uuid);
+  if (res ->> 'removed')::int <> 3 then
+    raise exception 'the second Undo removed %, expected 3', res ->> 'removed';
   end if;
 
   select count(*) into n from public.summaries s where s.author_id = reader_a;
   if n <> 0 then
-    raise exception 'a duplicate-only re-import recreated % empty summary(ies)', n;
-  end if;
-
-  select count(*) into n from public.works w where w.id in (work_med, work_wal);
-  if n <> 0 then
-    raise exception 'the undone books came back into view';
+    raise exception 'Undo left % summary(ies) with nothing in them', n;
   end if;
 
   -- Idempotent.
@@ -649,18 +731,36 @@ begin
       res ->> 'added', res ->> 'duplicates';
   end if;
 
-  -- One genuinely new highlight is refused, which is what the ceiling is for.
-  refused := false;
-  begin
-    perform public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
-      jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody',
-        'text', 'One more than this reader may hold.')
-    ));
-  exception when program_limit_exceeded then
-    refused := true;
-  end;
-  if not refused then
-    raise exception 'a reader stored a highlight past the ceiling';
+  -- One genuinely new highlight is not stored, and the call says so rather than
+  -- raising: a raise would abort the transaction and roll back everything already
+  -- added in the same chunk, so a reader with room for two of five hundred stored
+  -- none of them.
+  res := public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
+    jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody',
+      'text', 'One more than this reader may hold.')
+  ));
+  if (res ->> 'added')::int <> 0 or (res ->> 'ceilingReached')::boolean is not true then
+    raise exception 'a reader stored % past the ceiling (ceilingReached=%)',
+      res ->> 'added', res ->> 'ceilingReached';
+  end if;
+
+  -- And a chunk that CROSSES the ceiling keeps what fits. The reader is at 20,000 with
+  -- one item undone below, so exactly one slot is free.
+  perform pg_temp.as_owner();
+  update public.import_items set undone_at = now()
+   where user_id = bulk_user and content_hash = (
+     select ii.content_hash from public.import_items ii
+      where ii.user_id = bulk_user order by ii.content_hash limit 1
+   );
+  perform pg_temp.become(bulk_user);
+
+  res := public.commit_import('kindle', repeat('d', 64), jsonb_build_array(
+    jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody', 'text', 'The one that fits.'),
+    jsonb_build_object('title', 'A Full Shelf', 'author', 'Nobody', 'text', 'The one that does not.')
+  ));
+  if (res ->> 'added')::int <> 1 or (res ->> 'ceilingReached')::boolean is not true then
+    raise exception 'a crossing chunk stored % of the 1 that fitted (ceilingReached=%)',
+      res ->> 'added', res ->> 'ceilingReached';
   end if;
 
   raise notice 'imports: kept, deduped, shared by work and by nothing else, '

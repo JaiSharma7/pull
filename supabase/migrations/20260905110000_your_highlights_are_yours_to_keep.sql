@@ -10,9 +10,18 @@
 --
 -- The shape of the thing: an import is a batch, an item is one highlight in it, and each
 -- item becomes a pull under a private summary the reader authors on a work marked
--- `user_owned`. Their own highlights then flow through every mechanic the product already
--- has -- Review schedules them, the Delta can embed them, search finds them, Undo removes
--- them -- with no second code path for "imported" content anywhere above this file.
+-- `user_owned`. Their own highlights then flow through the mechanics the product already
+-- has -- Review schedules them, the Library holds them, Undo removes them -- with no
+-- second code path for "imported" content anywhere above this file.
+--
+-- TWO MECHANICS DO NOT REACH THEM YET, and review was right to catch both claims. Search
+-- does not: `search_catalogue` (20260901090000:316-320) filters `visibility = 'public'` in
+-- all three of its branches, so a reader cannot find their own imported highlight through
+-- it. Nor does the Delta: nothing writes `pulls.embedding` outside the generation pipeline,
+-- which imports never enter, and `refresh_knowledge_vector` skips a null embedding. Neither
+-- is a leak -- nothing is exposed, something is absent -- and each is a change of its own
+-- size. The Delta one needs the privacy promise revisited first, because embedding a
+-- reader's verbatim highlight is a model call over their own text.
 --
 -- Three boundaries this migration is responsible for, and each is asserted in
 -- `supabase/tests/imports.sql`:
@@ -83,6 +92,22 @@ create table public.import_items (
   locator      text,
   content_hash text        not null,
   created_at   timestamptz not null default now(),
+  -- Set when Undo takes this highlight back, and it is what makes Undo REVERSIBLE.
+  --
+  -- The row has to survive an Undo or the dedupe key goes with it and the next
+  -- upload of an unchanged file hands back everything the reader just removed. But
+  -- a surviving row that still counts as "held" made Undo a one-way door: the
+  -- highlight was gone, re-importing the same file restored nothing, there is no
+  -- delete policy on this table, and the ceiling still charged for it -- so a
+  -- reader who imported 20,000 and undid was locked out holding nothing. In a
+  -- feature called "your highlights are yours to keep", one mis-tapped Undo
+  -- destroyed their own text for good.
+  --
+  -- With a timestamp instead, the row is a tombstone rather than a claim: it keeps
+  -- the fingerprint so an ACCIDENTAL re-upload of something still held is a no-op,
+  -- and stops counting and stops blocking once the reader has explicitly said they
+  -- do not want it. Uploading the file again is then how you undo an Undo.
+  undone_at    timestamptz,
   constraint import_items_locator_length
     check (locator is null or length(locator) <= 200),
   constraint import_items_hash_shape
@@ -179,6 +204,15 @@ alter table public.recall_events
   references public.user_questions (id, user_id, pull_id)
   on delete set null (user_question_id);
 
+-- One question or the other, never both. Nothing forbade it: `grade_recall` only ever
+-- writes one, but `recall_events_insert_own` admits a direct write on the strength of the
+-- row's `user_id`, and review demonstrated a row naming a canonical question and one of
+-- the reader's own for the same pull. The log has no update or delete policy, so that row
+-- would be permanent and would mean two things at once.
+alter table public.recall_events
+  add constraint recall_events_one_question
+  check (quiz_question_id is null or user_question_id is null);
+
 comment on column public.recall_events.user_question_id is
   'Set instead of quiz_question_id when the reader answered their own question. Checked against user and pull together.';
 
@@ -211,9 +245,18 @@ create policy user_questions_insert_own on public.user_questions
     (select auth.uid()) = user_id
     and exists (select 1 from public.pulls p where p.id = pull_id)
   );
+-- The UPDATE check repeats the INSERT check's readability clause, or the insert guard is
+-- one statement from useless: review demonstrated inserting a question against a readable
+-- pull and then moving it onto a pull the reader cannot read. Nothing leaks today, because
+-- `get_due_reviews` joins `pulls` under invoker RLS and drops it -- but "a user_questions
+-- row implies its pull was readable" is the kind of invariant the next feature will assume,
+-- and it was false. The same shape as 20260905101000's summaries pair, for the same reason.
 create policy user_questions_update_own on public.user_questions
   for update using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  with check (
+    (select auth.uid()) = user_id
+    and exists (select 1 from public.pulls p where p.id = pull_id)
+  );
 create policy user_questions_delete_own on public.user_questions
   for delete using ((select auth.uid()) = user_id);
 
@@ -251,10 +294,12 @@ comment on policy work_contributors_read_readable on public.work_contributors is
 drop policy contributors_read_all on public.contributors;
 create policy contributors_read_readable on public.contributors
   for select using (
+    -- No join to `works` here: `work_contributors` carries the policy above, which
+    -- already asks whether the work is readable, and this subquery runs under it. The
+    -- join evaluated `summary_is_readable` a second time for nothing.
     exists (
       select 1
       from public.work_contributors wc
-      join public.works w on w.id = wc.work_id
       where wc.contributor_id = contributors.id
     )
   );
@@ -313,6 +358,7 @@ declare
   v_seconds    int;
   v_added      int := 0;
   v_duplicates int := 0;
+  v_ceiling_reached boolean := false;
   v_held       int;
   v_touched    uuid[] := '{}';
   v_works_out  jsonb;
@@ -359,7 +405,13 @@ begin
   -- reader at the ceiling who is re-uploading a file that would add nothing at all. The
   -- ceiling is a bound on what is stored, so the only honest place to charge it is the
   -- moment a row is about to be stored.
-  select count(*) into v_held from public.import_items where user_id = uid;
+  --
+  -- `undone_at is null` because a highlight the reader has taken back is not one they
+  -- are holding. Counted without it, an Undo freed nothing and a reader who imported
+  -- 20,000 and undid every one could never import again.
+  select count(*) into v_held
+    from public.import_items
+   where user_id = uid and undone_at is null;
 
   -- One batch per file, even when the file arrives in six calls. Outside the window a
   -- fresh batch is right: re-importing a clippings file that has grown since is a new
@@ -388,6 +440,14 @@ begin
         using errcode = '22023';
     end if;
 
+    -- `->>` renders a non-string JSON value as its text, so an object arrived as a
+    -- title reading `{"a": {"b": "c"}}`. A title is a string or the item is malformed.
+    if v_item ? 'title' and jsonb_typeof(v_item -> 'title') <> 'string' then
+      raise exception 'commit_import: a title must be a string' using errcode = '22023';
+    end if;
+    if v_item ? 'text' and jsonb_typeof(v_item -> 'text') <> 'string' then
+      raise exception 'commit_import: a highlight must be a string' using errcode = '22023';
+    end if;
     v_title   := left(btrim(coalesce(v_item ->> 'title', '')), 200);
     v_author  := nullif(left(btrim(coalesce(v_item ->> 'author', '')), 200), '');
     v_raw     := coalesce(v_item ->> 'text', '');
@@ -396,7 +456,10 @@ begin
     -- Whitespace collapsed once, here, so the stored text, the headline and the dedupe
     -- key all agree. A highlight that survives a copy through three apps arrives with
     -- different line breaks and is the same highlight.
-    v_clean := regexp_replace(btrim(v_raw), '\s+', ' ', 'g');
+    -- Collapse first, then trim: `btrim` with one argument removes spaces only, so a
+    -- highlight of tabs and newlines survived the empty check below and stored a pull
+    -- whose body was a single space.
+    v_clean := btrim(regexp_replace(v_raw, '\s+', ' ', 'g'));
 
     if v_title = '' then
       raise exception 'commit_import: an item has no title' using errcode = '22023';
@@ -440,7 +503,7 @@ begin
     -- lookup and touches nothing.
     if exists (
       select 1 from public.import_items ii
-       where ii.user_id = uid and ii.content_hash = v_hash
+       where ii.user_id = uid and ii.content_hash = v_hash and ii.undone_at is null
     ) then
       v_duplicates := v_duplicates + 1;
       continue;
@@ -452,9 +515,14 @@ begin
     -- would have added two rows.
     v_held := v_held + 1;
     if v_held > max_items_per_user then
-      raise exception
-        'commit_import: that would hold more than % highlights', max_items_per_user
-        using errcode = '54000';
+      -- STOP, do not raise. A raise here aborts the transaction and rolls back every
+      -- row already added in this call, so a reader with room for two of a
+      -- five-hundred-item chunk stored none of them -- and with the client chunking
+      -- at 500, the last few hundred highlights they had room for were all lost with
+      -- a message that did not say how many would have fitted. Keeping what fits and
+      -- reporting the stop is the same bound with none of that.
+      v_ceiling_reached := true;
+      exit;
     end if;
 
     -- The work is shared: two readers who import the same book land on the same row, and
@@ -517,10 +585,20 @@ begin
       (v_summary_id, v_ordinal, left(v_clean, 80), v_clean, v_seconds)
     returning id into v_pull_id;
 
+    -- Revives a tombstone rather than colliding with it. The unique key is
+    -- `(user_id, content_hash)`, so an item the reader undid still occupies it; the
+    -- upsert re-points it at this batch, this pull and this work and clears
+    -- `undone_at`. That is what makes re-uploading the file the way to undo an Undo.
     insert into public.import_items
       (import_id, user_id, pull_id, work_id, locator, content_hash)
     values
-      (v_import_id, uid, v_pull_id, v_work_id, v_locator, v_hash);
+      (v_import_id, uid, v_pull_id, v_work_id, v_locator, v_hash)
+    on conflict (user_id, content_hash) do update
+      set import_id = excluded.import_id,
+          pull_id   = excluded.pull_id,
+          work_id   = excluded.work_id,
+          locator   = excluded.locator,
+          undone_at = null;
 
     -- KEPT MEANS KEPT, and without these two rows it did not. `get_due_reviews` is driven
     -- from `knowledge_states` and the Library screen reads `saved_items`, so a highlight
@@ -567,10 +645,13 @@ begin
    where w.id = any(v_touched);
 
   return jsonb_build_object(
-    'importId',   v_import_id,
-    'added',      v_added,
-    'duplicates', v_duplicates,
-    'works',      v_works_out
+    'importId',       v_import_id,
+    'added',          v_added,
+    'duplicates',     v_duplicates,
+    -- So the screen can say "we kept the first N; you are at your limit" rather than
+    -- leaving a reader to work out why a file half arrived.
+    'ceilingReached', v_ceiling_reached,
+    'works',          v_works_out
   );
 end;
 $$;
@@ -589,9 +670,16 @@ grant execute on function public.commit_import(text, text, jsonb) to authenticat
 --
 -- Deleting the pull is enough to take the whole idea back: `knowledge_states` and
 -- `saved_items` cascade from it, so a highlight that was scheduled for review stops being
--- scheduled. The `import_items` row deliberately survives with a null `pull_id` -- the
--- dedupe key is the record that this reader has seen this highlight, and erasing it would
--- make the next import hand back everything they just removed.
+-- scheduled. The `import_items` row survives with a null `pull_id` and an `undone_at` --
+-- the dedupe key is the record that this reader has seen this highlight, and erasing it
+-- would make the next import hand back everything they just removed.
+--
+-- AND IT IS REVERSIBLE. The timestamp is what makes it so: an undone item stops counting
+-- against the ceiling and stops blocking a re-import, so uploading the same file again
+-- restores exactly what was taken. Without it this was a one-way door -- no restore, no
+-- delete policy on `import_items`, and the ceiling still charging for highlights the
+-- reader no longer had. What survives an Undo is therefore the fingerprint, the book and
+-- the location, and `docs/privacy.md` says so rather than promising less.
 --
 -- The work is left standing. Nothing has to clean it up, because 20260905101000 already
 -- decides what a work with nothing readable behind it is worth: invisible.
@@ -605,6 +693,7 @@ declare
   uid       uuid := (select auth.uid());
   v_import  public.imports;
   v_removed int  := 0;
+  v_emptied uuid[] := '{}';
 begin
   if uid is null then
     raise exception 'undo_import requires an authenticated user';
@@ -636,20 +725,34 @@ begin
           and ii.user_id = uid
           and ii.pull_id is not null
      )
-    returning 1
+    returning p.summary_id
   )
-  select count(*) into v_removed from gone;
+  select count(*), coalesce(array_agg(distinct summary_id), '{}')
+    into v_removed, v_emptied
+    from gone;
+
+  -- The items become tombstones rather than claims: they keep the fingerprint, so an
+  -- accidental re-upload of something still held is a no-op, and stop counting against
+  -- the ceiling and stop blocking a deliberate re-import of what was just removed.
+  update public.import_items
+     set undone_at = now()
+   where import_id = p_import_id and user_id = uid and undone_at is null;
 
   -- A book with no highlights left is not a book the reader has. Their summary is the
-  -- only thing holding it in their library, so it goes too -- bounded to their own
-  -- private summaries on works nobody else authored into.
+  -- only thing holding it in their library, so it goes too -- bounded to THE SUMMARIES
+  -- THIS BATCH'S OWN PULLS BELONGED TO, and nothing else.
+  --
+  -- The bound is the fix for a real defect, and it took two goes to get right. The
+  -- first version matched every empty private summary the caller authored on any
+  -- `user_owned` work, so undoing a batch about book Y deleted an unrelated draft they
+  -- had started about book X. Scoping by WORK was not enough either: a reader can hold
+  -- a second summary of the same book (`summaries` is unique per work, version and
+  -- author), so a draft about the very book being undone would still have gone. Only
+  -- the summary a deleted pull actually hung from is this batch's to clean up.
   delete from public.summaries s
-   where s.author_id = uid
+   where s.id = any(v_emptied)
+     and s.author_id = uid
      and s.visibility = 'private'
-     and exists (
-       select 1 from public.works w
-        where w.id = s.work_id and w.rights_status = 'user_owned'
-     )
      and not exists (select 1 from public.pulls p where p.summary_id = s.id);
 
   update public.imports set undone_at = now() where id = p_import_id;

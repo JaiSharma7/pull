@@ -730,6 +730,7 @@ export type Database = {
           import_id: string
           locator: string | null
           pull_id: string | null
+          undone_at: string | null
           user_id: string
           work_id: string | null
         }
@@ -740,6 +741,7 @@ export type Database = {
           import_id: string
           locator?: string | null
           pull_id?: string | null
+          undone_at?: string | null
           user_id: string
           work_id?: string | null
         }
@@ -750,6 +752,7 @@ export type Database = {
           import_id?: string
           locator?: string | null
           pull_id?: string | null
+          undone_at?: string | null
           user_id?: string
           work_id?: string | null
         }

@@ -119,12 +119,23 @@ intentions:
   is invisible, so another reader listing our catalogue does not learn the titles of the
   books you have been reading.
 - It is deleted with your account, along with the batch record and the questions you wrote
-  about it. You can also remove any single batch yourself, at any time, from Library — one
-  Undo takes back the highlights, the review schedule and the saves that came with them.
+  about it. Undo will also let you take back a whole batch — the highlights, the review
+  schedule and the saves that came with them — in one action, from Library. The database
+  side of that is built; the screen it hangs off is not yet, so today an import is
+  something we can do and not yet something you can.
 
-We keep one thing after an Undo: a one-way fingerprint of each highlight's text, so that
-re-uploading the same file does not hand you back everything you just removed. It cannot
-be turned back into the highlight, and it goes with your account.
+**What an Undo leaves behind, exactly.** Not nothing, and it is worth being precise
+because the point of an Undo is that you decide. We keep a one-way fingerprint of each
+highlight's text, which cannot be turned back into the highlight; the book it came from;
+and where in the book it was. Two reasons, both of which cut in your favour. It is what
+lets an Undo be undone — upload the same file again and the highlights come back exactly
+as they were, rather than being gone for good because you tapped the wrong thing. And it
+is what stops an ordinary re-upload of a file you have already imported from duplicating
+everything in it.
+
+All of it goes with your account. If you want an import gone rather than undone, deleting
+your account is currently the only way to reach that, and we would rather say so than
+imply otherwise.
 
 `user_knowledge_vectors` deserves a sentence of its own. It is a vector — a list of numbers
 — averaged from the ideas you have engaged with. It is not readable prose and it is not
