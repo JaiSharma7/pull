@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { unappliedGrades, type KnowledgeLevel } from '../lib/calibration.js';
 import { isOfflineFailure, queueMutation } from '../lib/offline.js';
@@ -33,8 +33,15 @@ export type { KnowledgeLevel };
 const CENSUS_SIZE = 6;
 
 export interface KnowledgeCensusProps {
-  /** Called with the Pull ids that were successfully recorded. */
-  onComplete: (calibratedIds: string[]) => void;
+  /*
+   * Called once the census is finished with, however it finished.
+   *
+   * It used to carry the ids that were recorded, documented as meaningful, and its only
+   * caller discarded them — which cost three `[...map.keys()]` conversions feeding a
+   * parameter nobody read. What actually matters is already on the database; the gate
+   * only needs to know it can move on.
+   */
+  onComplete: () => void;
   onSkip: () => void;
 }
 
@@ -54,6 +61,30 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
    * initial stability would have fabricated one instead.
    */
   const [applied, setApplied] = useState<Map<string, 'good' | 'easy'>>(new Map());
+
+  /*
+   * Whether this screen is still mounted.
+   *
+   * "Skip calibration" is deliberately enabled while a save is in flight — it is the
+   * escape hatch for exactly that hang — so the sequential `gradeRecall` loop can outlive
+   * the component. Its `onComplete` then ran `goTo('demo')`, which writes the onboarding
+   * stage key; if the reader had reached the end by then, `finish()` had already cleared
+   * that key and the late write resurrected it, putting them back on the demo after a
+   * reload. The writes themselves must not be abandoned — they are the point of the
+   * screen — so the loop runs on and only the navigation is suppressed.
+   */
+  const liveRef = useRef(true);
+  useEffect(() => {
+    // Armed on setup as well as disarmed on cleanup, because `main.tsx` renders under
+    // `StrictMode`: development replays effects as setup → cleanup → setup, so an effect
+    // that only ever sets this false leaves it false for the life of a mounted component.
+    // Every `finishIfLive()` would then be suppressed and onboarding could not advance at
+    // all in development — a guard against a rare late write, turned into a wall.
+    liveRef.current = true;
+    return () => {
+      liveRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,18 +114,23 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
     setError(null);
   };
 
+  /* Advance the gate only if this screen is still the one on screen — see `liveRef`. */
+  const finishIfLive = () => {
+    if (liveRef.current) onComplete();
+  };
+
   const handleFinish = async () => {
     const marked = unappliedGrades(levels, new Set());
     // Anything already applied is excluded rather than retried — see `applied`.
     const claimed = unappliedGrades(levels, applied);
 
     if (marked.length === 0) {
-      onComplete([]);
+      finishIfLive();
       return;
     }
     if (claimed.length === 0) {
       // Everything marked has already landed; a retry has nothing left to send.
-      onComplete([...applied.keys()]);
+      finishIfLive();
       return;
     }
 
@@ -118,13 +154,15 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
          * puts offline among the five that stay free.
          */
         if (userId && isOfflineFailure(e)) {
-          try {
-            await queueMutation(userId, { kind: 'recall', pullId, grade });
+          // `queueMutation` answers whether it actually persisted. It used to swallow an
+          // IndexedDB failure and return normally, so in a browser with site data blocked
+          // this counted a grade that had reached neither Postgres nor IndexedDB, and the
+          // reader was told it was recorded.
+          if (await queueMutation(userId, { kind: 'recall', pullId, grade })) {
             recorded.push([pullId, grade]);
             continue;
-          } catch (queueError) {
-            console.error('Could not queue calibration for', pullId, queueError);
           }
+          console.error('Could not queue calibration for', pullId);
         }
         console.error('Could not record calibration for', pullId, e);
         lost.push(pullId);
@@ -161,7 +199,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       );
       return;
     }
-    onComplete([...settled.keys()]);
+    finishIfLive();
   };
 
   return (
@@ -285,11 +323,7 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
       ) : null}
 
       {error ? (
-        <button
-          type="button"
-          className="btn btn--plain"
-          onClick={() => onComplete([...applied.keys()])}
-        >
+        <button type="button" className="btn btn--plain" onClick={() => finishIfLive()}>
           {applied.size > 0 ? 'Continue without the rest' : 'Continue without saving'}
         </button>
       ) : null}

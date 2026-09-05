@@ -426,15 +426,27 @@ export function Library({ userId }: { userId: string }) {
     }
   }
 
+  /*
+   * Fetch a source's Delta unless it is already held.
+   *
+   * Extracted because there are two ways into an open group now, and only one of them
+   * used to do this: "Open in list" from the graph set `openWork` directly, so the group
+   * expanded with no Delta and its "N of M still new to you" line — the reason the
+   * Library groups by source at all — was simply missing until the reader collapsed it
+   * and opened it again.
+   */
+  function ensureDelta(workId: string | null | undefined) {
+    if (!workId || delta[workId]) return;
+    api
+      .fetchSourceDelta(workId)
+      .then((d) => setDelta((prev) => ({ ...prev, [workId]: d })))
+      .catch((e: unknown) => console.error('Could not load the source Delta', e));
+  }
+
   function toggle(group: WorkGroup) {
     const next = openWork === group.key ? null : group.key;
     setOpenWork(next);
-    if (next && group.workId && !delta[group.workId]) {
-      api
-        .fetchSourceDelta(group.workId)
-        .then((d) => setDelta((prev) => ({ ...prev, [group.workId]: d })))
-        .catch((e: unknown) => console.error('Could not load the source Delta', e));
-    }
+    if (next) ensureDelta(group.workId);
   }
 
   /*
@@ -655,7 +667,14 @@ export function Library({ userId }: { userId: string }) {
                   type="button"
                   className="btn btn--plain"
                   onClick={() => {
+                    // A graph node always carries a real `workId` — `get_user_knowledge_graph`
+                    // inner-joins `works` — and `groupByWork` keys a group by that id when
+                    // it has one, falling back to `orphan:<pull id>` when it does not. So
+                    // this opens the right group. Opening it is only half of it, though:
+                    // the Delta has to be asked for too, which `toggle` does and this
+                    // used not to.
                     setOpenWork(selectedNode.workId);
+                    ensureDelta(selectedNode.workId);
                     setViewMode('list');
                   }}
                 >

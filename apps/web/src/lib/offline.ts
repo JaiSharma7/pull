@@ -255,15 +255,26 @@ export function onPendingQueued(handler: () => void): () => void {
   };
 }
 
-export async function queueMutation(userId: string, write: PendingWrite): Promise<void> {
+/**
+ * Queue a write for the next drain. Answers whether it was actually persisted.
+ *
+ * The failure is still swallowed — a caller mid-gesture has nothing useful to do about a
+ * dead IndexedDB, and throwing here would turn a lost write into a broken screen. What
+ * changed is that it no longer *reports* success it did not achieve. Most callers ignore
+ * the answer, which is right for them; the one that tells the reader their answer was
+ * recorded needs to know the difference, because in a browser with site data blocked the
+ * write reached neither Postgres nor IndexedDB and 'recorded' was untrue.
+ */
+export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
   try {
     const database = await db();
     await database.add('pending', { ...write, userId, at: Date.now() });
   } catch {
-    /* nothing to do — the mutation is simply lost, which is the honest outcome */
-    return;
+    /* Lost, which is the honest outcome — and now the honest return value too. */
+    return false;
   }
   for (const listener of queuedListeners) listener();
+  return true;
 }
 
 /**
@@ -492,10 +503,13 @@ export function isOfflineFailure(error: unknown): boolean {
  * have applied, the local state may now be a lie, and the reader has to hear
  * about it.
  *
- * Returns whether the write was queued, so the caller knows whether it still has
- * an error on its hands. Callers that answer a failure by reloading must ask
- * this first — reloading offline replaces a working screen with a dead end, and
- * that is precisely the reload worth not doing.
+ * Returns whether this was an offline failure that has been taken off the caller's
+ * hands — NOT whether the write reached the store. It answers `true` for a write
+ * `queueMutation` could not persist, deliberately: see the note on the return below.
+ * Callers that answer a failure by reloading must ask this first — reloading offline
+ * replaces a working screen with a dead end, and that is precisely the reload worth
+ * not doing. A caller that needs to know the write is really on disk calls
+ * `queueMutation` directly.
  */
 export async function queueIfOffline(
   userId: string,
@@ -503,6 +517,22 @@ export async function queueIfOffline(
   write: PendingWrite,
 ): Promise<boolean> {
   if (!isOfflineFailure(error)) return false;
+  /*
+   * Deliberately NOT propagating `queueMutation`'s answer.
+   *
+   * The two functions answer different questions. `queueMutation` says whether the write
+   * is on disk, which is what a caller telling the reader "recorded" needs. This says
+   * whether the failure was an offline one that has been taken off the caller's hands —
+   * which is what its callers actually branch on, and all three of them reload the screen
+   * when it is false.
+   *
+   * Propagating persistence collapsed those into one value, and a dead IndexedDB then
+   * read as "the server refused this". A reader with site data blocked, moving a kept
+   * Pull into a collection in a tunnel, had their whole Library replaced by the error
+   * screen — the exact dead end `Library.tsx` and `queueMutation` above both say must not
+   * happen, and worse than the silent loss it replaced. A caller that needs the stronger
+   * answer calls `queueMutation` directly, as `KnowledgeCensus` does.
+   */
   await queueMutation(userId, write);
   return true;
 }
