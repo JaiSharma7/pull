@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api.js';
 import { unappliedGrades, type KnowledgeLevel } from '../lib/calibration.js';
-import { isOfflineFailure, queueMutation } from '../lib/offline.js';
+import { queueMutation } from '../lib/offline.js';
 import { getCurrentUserId } from '../lib/supabase.js';
+import { nextSubmissionStamp } from '../lib/submission.js';
 import type { FeedRow } from '../lib/types.js';
 
 export type { KnowledgeLevel };
@@ -141,24 +142,44 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
     const userId = getCurrentUserId();
 
     for (const [pullId, grade] of claimed) {
+      /*
+       * One id per idea, minted before the send, so the write has an identity
+       * whether it lands now or on a drain three days later. `kind: 'calibration'`
+       * because this is a declared level rather than a recall — the census asks
+       * "how well do you know this" and nothing is retrieved — and `recall_events`
+       * keeps the distinction so a later scheduler can weigh the two differently.
+       */
+      const mutationId = crypto.randomUUID();
+      const submittedAt = nextSubmissionStamp();
       try {
-        await api.gradeRecall(pullId, grade);
+        await api.gradeRecall(pullId, grade, { mutationId, submittedAt, kind: 'calibration' });
         recorded.push([pullId, grade]);
       } catch (e) {
         /*
-         * Queued when the request provably never left, dropped otherwise — the same rule
-         * `Review.tsx` applies to this same RPC, and for the same reason: `grade_recall`
-         * is not replay-safe, so a write that may already have applied must not be
-         * retried. This screen is offered exactly once, and it is the only thing that
-         * seeds a knowledge model, so losing it to a tunnel is not a small matter; law 3
-         * puts offline among the five that stay free.
+         * Queued on ANY failure now, where it used to be queued only when the request
+         * provably never left. The old rule was forced: `grade_recall` applied every
+         * call it received, so retrying a write that may already have landed would
+         * double-apply it, and dropping the grade was the cheaper mistake. This screen
+         * is offered exactly once and is the only thing that seeds a knowledge model,
+         * so that was an expensive cheaper mistake. 20260905100000 keyed the attempt,
+         * so a replay of one already recorded returns the state untouched and there is
+         * nothing left to protect against.
          */
-        if (userId && isOfflineFailure(e)) {
+        if (userId) {
           // `queueMutation` answers whether it actually persisted. It used to swallow an
           // IndexedDB failure and return normally, so in a browser with site data blocked
           // this counted a grade that had reached neither Postgres nor IndexedDB, and the
           // reader was told it was recorded.
-          if (await queueMutation(userId, { kind: 'recall', pullId, grade })) {
+          if (
+            await queueMutation(userId, {
+              kind: 'recall',
+              pullId,
+              grade,
+              mutationId,
+              submittedAt,
+              recallKind: 'calibration',
+            })
+          ) {
             recorded.push([pullId, grade]);
             continue;
           }

@@ -569,12 +569,25 @@ export function Feed({
       // Settled independently, not chained. `record_interrupt` is telemetry;
       // the stance and the explanation are the reader's own data. Awaiting them
       // behind it meant one failed telemetry write silently discarded both.
+      /*
+       * One id for the interrupt and the grade it carries.
+       *
+       * `record_interrupt` inserts its own row keyed by this id and only then
+       * calls `grade_recall`, so a replay stops at the interrupt row and never
+       * reaches the arithmetic — one interrupt, one event, one grade, one session
+       * bump, however many times the request is retried. Two ids would have made
+       * the interrupt idempotent and left the grade able to apply twice.
+       */
+      const interruptMutationId = crypto.randomUUID();
+      const interruptSubmittedAt = nextSubmissionStamp();
       const writes: Promise<unknown>[] = [
         api.recordInterrupt({
           pullId: item.row.id,
           kind: item.slot.kind,
           slot: item.slot.slotIndex,
           response: responded ? 'answered' : 'dismissed',
+          mutationId: interruptMutationId,
+          submittedAt: interruptSubmittedAt,
           ...(answer?.grade ? { grade: answer.grade } : {}),
         }),
       ];

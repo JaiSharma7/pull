@@ -3,6 +3,7 @@ import { Meter } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
 import { isOfflineFailure, queueMutation } from '../lib/offline.js';
+import { nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
 
@@ -29,6 +30,18 @@ export function Review() {
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  /*
+   * When the answer was shown, so a grade can carry how long the reader took.
+   *
+   * Latency is measured from the reveal rather than from the card appearing:
+   * the interval that means anything is between seeing the answer and judging
+   * whether you had it, not how long the card sat on a screen somebody had
+   * walked away from. Null until revealed, and a grade given without revealing
+   * carries no latency rather than a made-up one.
+   */
+  const [revealedAt, setRevealedAt] = useState<number | null>(null);
+  /** Set when a grade could not be sent AND could not be queued. */
+  const [lostGrade, setLostGrade] = useState(false);
   /** Bumped by the retry button, so the fetch re-runs without a second effect. */
   const [reloads, setReloads] = useState(0);
 
@@ -100,40 +113,86 @@ export function Review() {
 
   const card = due[0]!;
 
-  async function grade(g: RecallGrade) {
+  /**
+   * `latencyMs` is measured by the caller, not read here.
+   *
+   * Not a style choice: `react-hooks/purity` refuses a `Date.now()` in a function
+   * declared in the component body, because it cannot tell an event handler from
+   * something that runs during render — and it is right to refuse, since a value
+   * read at render time would change on every re-render. The click is the moment
+   * the reader answered, so the click is where the clock belongs.
+   */
+  async function grade(g: RecallGrade, latencyMs?: number) {
+    /*
+     * The attempt gets an identity before it is sent, and that changes what this
+     * function is allowed to do with a failure.
+     *
+     * It used to queue only a failure it could PROVE had never left the tab.
+     * `grade_recall` applied every call it received — it multiplies stability and
+     * increments `reps` — so a 500, a refusal or a timeout mid-flight had to be
+     * DROPPED, because the write may already have applied and double-applying one
+     * roughly squares the interval and takes the card out of review for months.
+     * Losing a grade was the cheaper of two bad outcomes.
+     *
+     * 20260905100000 removed the choice. The event is inserted first, keyed by
+     * this id, and a replay finds its own row and returns the state untouched. So
+     * a retry of a write that DID land is now a no-op, and there is no longer a
+     * reason to drop an ambiguous failure: every failure is queued.
+     */
+    const mutationId = crypto.randomUUID();
+    const submittedAt = nextSubmissionStamp();
     // Advance regardless. A grade that fails to reach the server is a lost
     // measurement, but leaving the card on screen with its answer already
     // revealed is worse: the reader cannot grade it honestly a second time, and
     // offline is one of the five things promised free, so this page has to keep
     // working without a connection rather than wedging on the first card.
     try {
-      await api.gradeRecall(card.pullId, g);
+      await api.gradeRecall(card.pullId, g, {
+        mutationId,
+        submittedAt,
+        kind: 'review',
+        // No `questionId` yet. `get_due_reviews` returns the prompt and not the id
+        // it came from, so there is nothing truthful to send; 2b is the PR that
+        // adds `questionId` and `questionSource` to that shape, and the screen
+        // starts sending it in the same change that starts receiving it.
+        ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
+      });
     } catch (e: unknown) {
       /*
-       * Queued only when the request demonstrably never reached the server.
-       *
-       * `grade_recall` is not replay-safe — it multiplies stability and increments
-       * `reps`, so applying one grade twice roughly squares the interval and the card
-       * silently drops out of review for months. There is no unique index and no
-       * mutation id to catch a replay with. So a 500, a refusal, or a timeout
-       * mid-flight is *dropped* rather than queued: the write may already have
-       * applied, and losing a grade is self-correcting where double-applying one is
-       * invisible. `isOfflineFailure` is the one condition under which the call
-       * provably did not land. The full argument is on `PendingWrite` in
-       * `lib/offline.ts`.
-       *
        * Read from the live auth session rather than a prop: this screen takes none,
        * and a queued write has to belong to someone or the drain cannot tell whose
        * it is. The queue is drained by `Feed.tsx`, which stays mounted.
        */
       const userId = getCurrentUserId();
-      if (userId && isOfflineFailure(e)) {
-        await queueMutation(userId, { kind: 'recall', pullId: card.pullId, grade: g });
-      } else {
+      const queued =
+        userId !== null &&
+        (await queueMutation(userId, {
+          kind: 'recall',
+          pullId: card.pullId,
+          grade: g,
+          mutationId,
+          submittedAt,
+          recallKind: 'review',
+          ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
+        }));
+
+      /*
+       * And when even the queue could not take it, the reader is told.
+       *
+       * `queueMutation` returns false when the store is unavailable — a browser
+       * blocking site data, a private window out of quota, an older tab holding
+       * the database at the previous version. That return was being ignored here,
+       * so a grade could vanish between the network and the disk with the card
+       * advancing as though it had been recorded. One line of copy is not much,
+       * but it is the difference between a lost measurement and a silent one.
+       */
+      if (!queued) {
+        setLostGrade(true);
         console.error('Recall grade was not recorded', e);
       }
     }
     setRevealed(false);
+    setRevealedAt(null);
     /*
      * When the page empties, ask for the next one instead of declaring victory.
      *
@@ -165,6 +224,22 @@ export function Review() {
         Review · {due.length} {due.length === 1 ? 'idea' : 'ideas'} fading
       </p>
 
+      {/*
+        Said once, and it stays said for the rest of the session.
+
+        A grade that reaches neither the server nor the queue is gone, and the
+        screen used to advance as though it had been recorded. This is the only
+        outcome in this file the reader cannot recover from by carrying on, so it
+        is the only one worth interrupting them about — and it is deliberately not
+        a blocking dialogue, because the session is still worth finishing.
+      */}
+      {lostGrade ? (
+        <p className="meta" role="alert">
+          Something went wrong saving a grade, and this device could not hold on to it either — your
+          browser may be blocking site data. Those ideas will come round again.
+        </p>
+      ) : null}
+
       <div className="pull-card">
         <p className="pull-card__chip">{card.workTitle}</p>
         <hr className="pull-card__rule" />
@@ -175,14 +250,31 @@ export function Review() {
             <p className="pull-card__body">{card.body}</p>
             <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
               {RECALL_GRADES.map((g) => (
-                <button key={g} type="button" className="btn" onClick={() => void grade(g)}>
+                <button
+                  key={g}
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    void grade(
+                      g,
+                      revealedAt === null ? undefined : Math.max(0, Date.now() - revealedAt),
+                    )
+                  }
+                >
                   {GRADE_LABELS[g]}
                 </button>
               ))}
             </div>
           </>
         ) : (
-          <button type="button" className="btn btn--primary" onClick={() => setRevealed(true)}>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => {
+              setRevealed(true);
+              setRevealedAt(Date.now());
+            }}
+          >
             Show answer
           </button>
         )}

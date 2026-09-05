@@ -67,7 +67,31 @@ export type PendingWrite =
    * grade of a review session done on a plane — offline being one of the five things
    * law 3 promises free forever.
    */
-  | { kind: 'recall'; pullId: string; grade: RecallGrade }
+  | {
+      kind: 'recall';
+      pullId: string;
+      grade: RecallGrade;
+      /**
+       * Minted once per attempt, so a replay whose first response was lost is
+       * recognised by the server as the same grade rather than applied twice.
+       *
+       * OPTIONAL, and it has to stay optional: an entry queued by a build before
+       * this one carries none, and refusing to replay it would lose exactly the
+       * grade this whole mechanism exists to keep. Without an id `grade_recall`
+       * applies the write, which is the old behaviour and the right one for a
+       * write that was queued under the old rules.
+       */
+      mutationId?: string;
+      /** When the reader answered — not when the queue gave up on the request. */
+      submittedAt?: number;
+      /** The reader's own confidence before the answer was shown. */
+      confidence?: 'sure' | 'unsure';
+      questionId?: string;
+      /** Which screen asked: `review`, an interrupt kind, or `calibration`. */
+      recallKind?: string;
+      latencyMs?: number;
+      answer?: string;
+    }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
   | {
       kind: 'conviction';
