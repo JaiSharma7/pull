@@ -63,3 +63,7 @@ logs/
 # beside it, each holding a stale duplicate of the reference it just replaced.
 *.baml-backup/
 baml-old_skills/
+
+# Recordings and reports from `pnpm record`. Video of a local stack, regenerated
+# on demand and never worth a diff.
+artifacts/

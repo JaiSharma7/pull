@@ -126,6 +126,9 @@ pnpm db:reset       # replay every migration from zero, then seed
 pnpm db:types       # regenerate packages/db/src/database.types.ts — never hand-edit
 pnpm db:lint        # the schema invariants CI check 4 runs
 pnpm db:test        # read-path behaviour, as a real reader under RLS
+pnpm personas       # build the four local test accounts — docs/testing-accounts.md
+pnpm personas:link  # a single-use sign-in link for one, to drive it by hand
+pnpm record         # walk each persona through the app on laptop and iPhone, on video
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
 pnpm baml:fmt       # format packages/prompts/baml_src — prettier has no .baml parser
 pnpm baml:generate  # regenerate packages/prompts/baml_sdk — never hand-edit

@@ -22,6 +22,9 @@
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
     "db:types": "node scripts/gen-types.mjs",
+    "personas": "node scripts/testkit/make-personas.mjs",
+    "personas:link": "node scripts/testkit/sign-in-link.mjs",
+    "record": "node scripts/testkit/record.mjs",
     "baml:check": "pnpm --filter @wap/prompts baml:check",
     "baml:fmt": "pnpm --filter @wap/prompts baml:fmt",
     "baml:generate": "pnpm --filter @wap/prompts baml:generate",
@@ -32,6 +35,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
     "eslint": "^10.9.1",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.1.1",
