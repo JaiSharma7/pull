@@ -13,10 +13,11 @@
 --   * its author sees it, through the same policy, with no special case
 --   * a seeded public work is still visible to a reader and to a visitor -- the
 --     narrowing must not cost the catalogue a single row
---   * and the attack the narrowing invites: a reader holding a private work's UUID
---     cannot author a summary onto it to make it readable. That insert is refused,
---     and the work stays hidden. A summary on an already-public work is still
---     allowed, because that is the feature the author policy exists for
+--   * and the attack the narrowing invites, by both its doors: a reader holding a
+--     private work's UUID can neither INSERT a summary onto it nor UPDATE one they
+--     already own onto it. Both are refused and the work stays hidden. A summary on
+--     an already-public work is still allowed, because that is the feature the
+--     author policy exists for
 --
 -- Everything runs as the roles that reach the table. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ declare
   public_work  uuid;
   seen       int;
   refused    boolean;
+  own_summary uuid;
 begin
   if (select count(*) from public.pulls) > 500 then
     raise exception
@@ -127,7 +129,34 @@ begin
   -- The other direction: commentary on something already in the catalogue is what
   -- the author policy is for, and it still works.
   insert into public.summaries (work_id, author_id, title, status, visibility)
-  values (public_work, reader, 'My notes on a public work', 'draft', 'private');
+  values (public_work, reader, 'My notes on a public work', 'draft', 'private')
+  returning id into strict own_summary;
+
+  -- The second door. Guarding only the insert would have moved the attack one
+  -- statement to the right: author onto a public work, then walk the row over.
+  refused := false;
+  begin
+    update public.summaries set work_id = private_work where id = own_summary;
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'a reader moved their own summary onto a private work; '
+      'summaries_author_update must check the work as well.';
+  end if;
+
+  select count(*) into seen from public.works where id = private_work;
+  if seen <> 0 then
+    raise exception 'a reader reached a private work by moving a summary onto it';
+  end if;
+
+  -- And an ordinary edit of their own summary, in place, is untouched.
+  update public.summaries set title = 'My notes, revised' where id = own_summary;
+  if not exists (select 1 from public.summaries where id = own_summary
+                 and title = 'My notes, revised') then
+    raise exception 'a reader could no longer edit their own summary';
+  end if;
 
   -- ------------------------------------------------------------- as the author
   perform set_config('request.jwt.claims',
@@ -160,7 +189,7 @@ begin
   end if;
 
   raise notice 'works: visible only behind a readable summary, unreachable by authoring '
-    'onto one, and the catalogue kept every row';
+    'or moving a summary onto one, and the catalogue kept every row';
 end $$;
 
 rollback;
