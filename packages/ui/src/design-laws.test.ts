@@ -79,35 +79,120 @@ describe('The Archive design laws', () => {
     // The gradient, box-shadow and radius checks read `styles/*.css`, and the
     // component walk below reads only for colour literals — so an inline
     // `style={{ borderRadius: '12px' }}` passed all four. Mutation-tested during
-    // review: only the colour one failed. `renderBody` widens the surface, since
-    // it is a supported path for an `apps/web` caller to put markup inside the
-    // card.
+    // review: only the colour one failed. `renderBody` widens the surface, since it
+    // is a supported path for an `apps/web` caller to put markup inside the card.
+    //
+    // Scanned by counting braces rather than by a regex, and that is the whole
+    // second round of this check. `/style=\{\{([^}]*)\}\}/` cannot match a style
+    // object that CONTAINS a brace — a template literal, or the
+    // `} as CSSProperties}` idiom this repo uses — so it was blind to 8 of the 131
+    // inline styles in the tree, including this component's own and `Meter.tsx`'s.
+    // A drop-shadowed, gradient-filled, 16px-rounded headline shipped green.
+    //
+    // The rewrite was then mutation-tested over 27 style objects — every banned
+    // thing in every spelling and both brace-carrying idioms, against everything
+    // the law actually sanctions — and three of those mutations passed a check
+    // that should have caught them. Each is recorded beside the line that closed
+    // it. Widening a check is not the same as fixing it, and the difference is
+    // only ever visible from a violation you wrote on purpose.
     const roots = [
       join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
       join(import.meta.dirname, 'components'),
     ].filter(existsSync);
     expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
 
-    const banned: [RegExp, string][] = [
-      [/\bbox-?[Ss]hadow\b/, 'a shadow'],
-      [/\b(?:linear|radial|conic)-gradient\b/, 'a gradient'],
-      [/\bborderRadius\s*:/, 'a radius'],
+    /** Every `style={{ … }}` body in a file, brace-matched rather than pattern-matched. */
+    const inlineStyles = (src: string): string[] => {
+      const found: string[] = [];
+      for (let at = src.indexOf('style={{'); at >= 0; at = src.indexOf('style={{', at + 1)) {
+        let depth = 0;
+        for (let i = at + 'style='.length; i < src.length; i += 1) {
+          const ch = src[i];
+          if (ch === '{') depth += 1;
+          else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+              found.push(src.slice(at + 'style={'.length, i));
+              break;
+            }
+          }
+        }
+      }
+      return found;
+    };
+
+    /**
+     * One declaration's own value, ending where the next declaration begins.
+     *
+     * The scope is the whole point. The exemption was first written against
+     * everything following the offending property, so `style={{ borderRadius:
+     * '16px', boxShadow: 'var(--focus-ring)' }}` excused the 16px corner on the
+     * strength of the shadow's token three characters away. Mutation-tested: that
+     * object passed before this helper existed and fails with it.
+     *
+     * Commas inside quotes and parentheses do not end a value — `0 0 0 2px
+     * var(--accent), 0 0 0 4px var(--surface)` is one shadow, not two.
+     */
+    const valueAfter = (inline: string, from: number): string => {
+      let quote = '';
+      let depth = 0;
+      for (let i = from; i < inline.length; i += 1) {
+        const ch = inline[i]!;
+        if (quote) {
+          if (ch === quote) quote = '';
+        } else if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+        else if (ch === '(') depth += 1;
+        else if (ch === ')') depth -= 1;
+        else if ((ch === ',' || ch === ';') && depth === 0) return inline.slice(from, i);
+      }
+      return inline.slice(from);
+    };
+
+    // Only two of the four have a sanctioned form, and they are the two the
+    // stylesheet checks above already exempt by name: `--focus-ring` is the single
+    // shadow `docs/design.md` law 2 carves out — flagging it would tell a
+    // contributor to delete an accessibility affordance — and `--radius` /
+    // `--radius-sm` are the block and control radii. A gradient has no token that
+    // makes it legal, and a `drop-shadow()` filter is a shadow the focus ring
+    // cannot be written as, so neither carries an exemption at all.
+    //
+    // A property is matched by every spelling it has rather than by the camelCase
+    // one, and unanchored on purpose. `\bbox-?[Ss]hadow` read `boxShadow` and
+    // `WebkitBoxShadow` and not `'box-shadow'`, which is a quoted key React
+    // accepts in the same object — so the plainest spelling of the banned thing,
+    // the one lifted straight out of a stylesheet, was the one it could not see.
+    // The optional closing quote is what lets a quoted key reach its colon.
+    const declared = (name: string) => new RegExp(`${name}['"\`]?\\s*:`, 'giu');
+    const banned: [RegExp, string, RegExp | null][] = [
+      [declared('box-?shadow'), 'a shadow', /var\(--focus-ring\)/u],
+      [/\b(?:linear|radial|conic)-gradient\b/gu, 'a gradient', null],
+      [/\bdrop-shadow\s*\(/gu, 'a shadow', null],
+      [declared('border-?radius'), 'a radius', /var\(--radius(?:-sm)?\)/u],
     ];
+
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
         else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-          const src = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-          // Only inside a `style={{ … }}` literal: prose and prop names are not
-          // the concern, an actual declaration is.
-          for (const match of src.matchAll(/style=\{\{([^}]*)\}\}/g)) {
-            // `noUncheckedIndexedAccess`: a capture group is `string | undefined`
-            // even when the pattern guarantees it.
-            const inline = match[1] ?? '';
-            for (const [pattern, what] of banned) {
-              if (pattern.test(inline)) offenders.push(`${entry.name}: ${what} in an inline style`);
+          const src = readFileSync(full, 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            // Line comments too: a commented-out `borderRadius` inside a style
+            // object was flagged, which is a false failure on a diff that removed
+            // the very thing this checks for.
+            .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+          for (const inline of inlineStyles(src)) {
+            for (const [pattern, what, sanctioned] of banned) {
+              // Every occurrence, not the first. `.match` stopped at one, so a
+              // sanctioned `boxShadow: 'var(--focus-ring)'` written ahead of a
+              // decorative `WebkitBoxShadow` hid it — the same laundering as
+              // above, one property along.
+              for (const declaration of inline.matchAll(pattern)) {
+                const value = valueAfter(inline, (declaration.index ?? 0) + declaration[0].length);
+                if (sanctioned?.test(value)) continue;
+                offenders.push(`${entry.name}: ${what} in an inline style`);
+              }
             }
           }
         }
