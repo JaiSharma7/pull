@@ -148,17 +148,27 @@ export async function unusedRecoveryCodeCount(): Promise<number> {
  * Every table holding rows that belong to a reader, the column that says so, and a
  * column that ORDERS them.
  *
- * The order is not decoration. Pages are walked with `.range(from, from + 99)`, and a
- * range over an unordered result is only a partition of the set if the order is total.
- * This used to order by `column` — which is the same value on every row that survived
- * the filter, so it ordered nothing, and PostgREST was free to return page 2 overlapping
- * page 1. A row inserted by another tab mid-export (a grade, in the very table this PR
- * adds) shifts every later offset by one, so the file silently carries one event twice
- * and omits another, while `incomplete` stays empty and the document claims to be whole.
+ * The order is not decoration, and neither is what is done with it. This used to order
+ * by `column` — the same value on every row that survived the filter, so it ordered
+ * nothing, and PostgREST was free to return page 2 overlapping page 1.
  *
- * `key` is therefore a column unique WITHIN one reader's rows, which makes the order
- * total without a tie-breaker: the primary key where it is a single `id`, and the other
- * half of a composite key where it is not.
+ * A TOTAL ORDER WAS NECESSARY AND NOT SUFFICIENT, and the first version of this comment
+ * claimed otherwise: it said the ordering fixed the case where another tab inserts a row
+ * mid-export. It does not. `.range(from, from + 99)` is `LIMIT/OFFSET`, and an offset is
+ * unstable under concurrent writes however well ordered the rows are — a row that lands
+ * before the current offset shifts every later page by one, so the file carries one row
+ * twice and omits another while `incomplete` stays empty. Measured on 250 rows: row 109
+ * duplicated, the concurrently inserted row absent, and the document still claiming to
+ * be whole. Because `id` is `gen_random_uuid()`, an inserted row lands at a random
+ * position, so roughly half of all mid-export writes do this.
+ *
+ * So the walk is keyset now: order by `key`, ask for what sorts after the last one seen,
+ * and carry that forward. Nothing shifts under a cursor that names a row rather than
+ * counting from the start.
+ *
+ * `key` is therefore a column unique WITHIN one reader's rows, which makes it both a
+ * total order and a usable cursor: the primary key where it is a single `id`, and the
+ * other half of a composite key where it is not.
  */
 const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'profiles', column: 'id', key: 'id' },
@@ -232,20 +242,34 @@ export async function buildAccountExport(
   for (const { table, column, key } of EXPORTED) {
     const rows: unknown[] = [];
     try {
-      for (let from = 0; ; from += PAGE) {
-        const { data: page, error } = await supabase
+      // The cursor: the `key` of the last row taken, or nothing on the first page.
+      let after: string | null = null;
+      for (;;) {
+        let query = supabase
           .from(table as never)
           .select('*')
           .eq(column, userId)
-          // Ordered by a column unique within this reader's rows, so the ranges below
-          // really do partition the set. Ordering by `column` — the filter column —
-          // ordered nothing, because every surviving row holds the same value.
+          // A column unique within this reader's rows, so this is a total order and
+          // every row has a distinct place in it — which is what makes it usable as a
+          // cursor as well as an order.
           .order(key, { ascending: true })
-          .range(from, from + PAGE - 1);
+          .limit(PAGE);
+        if (after !== null) query = query.gt(key, after);
+        const { data: page, error } = await query;
         if (error) throw rpcError(error);
         const got = (page ?? []) as unknown[];
         rows.push(...got);
         if (got.length < PAGE) break;
+        const last = got[got.length - 1] as Record<string, unknown>;
+        const cursor = last[key];
+        // A page of rows whose key cannot be read is a walk that cannot continue, and
+        // looping on the same cursor would repeat that page forever. Recorded as an
+        // incomplete table, which is what this function does with everything it
+        // cannot finish.
+        if (typeof cursor !== 'string') {
+          throw new Error(`the ${key} of the last row on a page was not readable`);
+        }
+        after = cursor;
       }
       data[table] = rows;
     } catch (e) {

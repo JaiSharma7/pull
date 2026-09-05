@@ -22,7 +22,13 @@ describe('what the dashboard promises about its own numbers', () => {
   });
 
   it('says where the counts come from, and that retrievability is an estimate', () => {
-    expect(PROGRESS_COPY.provenance).toContain('from your own recall history');
+    // Narrowed with the claim it was pinning. Asserting the old wording would now
+    // hold the copy to something false about five of the six figures on the screen —
+    // see `PROGRESS_COPY`. What has to survive is that the reader is told where the
+    // numbers come from, and that the three kinds are not run together.
+    expect(PROGRESS_COPY.provenance).toContain('comes from your own history');
+    expect(PROGRESS_COPY.provenance).toContain('readings off that curve');
+    expect(PROGRESS_COPY.provenance).toContain('describe the library itself, not you');
     expect(PROGRESS_COPY.provenance).toContain('is an estimate');
   });
 
