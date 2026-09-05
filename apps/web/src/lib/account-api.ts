@@ -144,37 +144,56 @@ export async function unusedRecoveryCodeCount(): Promise<number> {
  * `mfa_recovery_codes` is deliberately absent. It holds hashes of a live credential;
  * putting them in a file the reader downloads and forwards is a way to leak one.
  */
-const EXPORTED: { table: string; column: string }[] = [
-  { table: 'profiles', column: 'id' },
-  { table: 'preference_profiles', column: 'user_id' },
-  { table: 'stashes', column: 'user_id' },
-  { table: 'saved_items', column: 'user_id' },
-  { table: 'notes', column: 'user_id' },
-  { table: 'highlights', column: 'user_id' },
-  { table: 'history_events', column: 'user_id' },
-  { table: 'progress', column: 'user_id' },
-  { table: 'knowledge_states', column: 'user_id' },
-  { table: 'convictions', column: 'user_id' },
-  { table: 'explanations', column: 'user_id' },
-  { table: 'interrupt_events', column: 'user_id' },
+/*
+ * Every table holding rows that belong to a reader, the column that says so, and a
+ * column that ORDERS them.
+ *
+ * The order is not decoration. Pages are walked with `.range(from, from + 99)`, and a
+ * range over an unordered result is only a partition of the set if the order is total.
+ * This used to order by `column` — which is the same value on every row that survived
+ * the filter, so it ordered nothing, and PostgREST was free to return page 2 overlapping
+ * page 1. A row inserted by another tab mid-export (a grade, in the very table this PR
+ * adds) shifts every later offset by one, so the file silently carries one event twice
+ * and omits another, while `incomplete` stays empty and the document claims to be whole.
+ *
+ * `key` is therefore a column unique WITHIN one reader's rows, which makes the order
+ * total without a tie-breaker: the primary key where it is a single `id`, and the other
+ * half of a composite key where it is not.
+ */
+const EXPORTED: { table: string; column: string; key: string }[] = [
+  { table: 'profiles', column: 'id', key: 'id' },
+  { table: 'preference_profiles', column: 'user_id', key: 'user_id' },
+  { table: 'stashes', column: 'user_id', key: 'id' },
+  { table: 'saved_items', column: 'user_id', key: 'id' },
+  { table: 'notes', column: 'user_id', key: 'id' },
+  { table: 'highlights', column: 'user_id', key: 'id' },
+  { table: 'history_events', column: 'user_id', key: 'id' },
+  { table: 'progress', column: 'user_id', key: 'summary_id' },
+  { table: 'knowledge_states', column: 'user_id', key: 'pull_id' },
+  { table: 'convictions', column: 'user_id', key: 'id' },
+  { table: 'explanations', column: 'user_id', key: 'id' },
+  { table: 'interrupt_events', column: 'user_id', key: 'id' },
   // Every recall attempt as it happened, which is the evidence behind
   // `knowledge_states` rather than a duplicate of it: the grade, the stated
   // confidence, what was typed, and the stability before and after. An export
   // that carried only the derived numbers would hand a reader the conclusions
   // and keep the working.
-  { table: 'recall_events', column: 'user_id' },
-  { table: 'feed_impressions', column: 'user_id' },
-  { table: 'feed_recipes', column: 'user_id' },
-  { table: 'follows', column: 'follower_id' },
-  { table: 'generation_jobs', column: 'requester_id' },
-  // Two more that `docs/privacy.md` names as the reader's own and this list did
+  { table: 'recall_events', column: 'user_id', key: 'id' },
+  { table: 'feed_impressions', column: 'user_id', key: 'id' },
+  { table: 'feed_recipes', column: 'user_id', key: 'id' },
+  { table: 'follows', column: 'follower_id', key: 'followee_id' },
+  { table: 'generation_jobs', column: 'requester_id', key: 'id' },
+  // Three more that `docs/privacy.md` names as the reader's own and this list did
   // not carry, which made "every row stored against your account" untrue of it.
   // `user_knowledge_vectors` is the centroid the Delta compares candidates
   // against — the policy calls it personal data and says it is deleted with the
   // account, so it is the reader's to take. `session_seeds` is what decides the
-  // order they were shown things in.
-  { table: 'session_seeds', column: 'user_id' },
-  { table: 'user_knowledge_vectors', column: 'user_id' },
+  // order they were shown things in. `reports` is what they have told us about
+  // somebody else's content, which is their own writing and readable by them
+  // through `reports_own`.
+  { table: 'session_seeds', column: 'user_id', key: 'id' },
+  { table: 'user_knowledge_vectors', column: 'user_id', key: 'user_id' },
+  { table: 'reports', column: 'reporter_id', key: 'id' },
 ];
 
 /*
@@ -210,7 +229,7 @@ export async function buildAccountExport(
   const data: Record<string, unknown[]> = {};
   const incomplete: { table: string; reason: string }[] = [];
 
-  for (const { table, column } of EXPORTED) {
+  for (const { table, column, key } of EXPORTED) {
     const rows: unknown[] = [];
     try {
       for (let from = 0; ; from += PAGE) {
@@ -218,10 +237,10 @@ export async function buildAccountExport(
           .from(table as never)
           .select('*')
           .eq(column, userId)
-          // Ordered so the pages partition the set rather than overlapping: without
-          // it PostgREST may return rows in any order and a range walk can repeat or
-          // skip. `column` is on every table here and is never null for these rows.
-          .order(column, { ascending: true })
+          // Ordered by a column unique within this reader's rows, so the ranges below
+          // really do partition the set. Ordering by `column` — the filter column —
+          // ordered nothing, because every surviving row holds the same value.
+          .order(key, { ascending: true })
           .range(from, from + PAGE - 1);
         if (error) throw rpcError(error);
         const got = (page ?? []) as unknown[];

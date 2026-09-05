@@ -25,6 +25,14 @@ describe('what the dashboard promises about its own numbers', () => {
     expect(PROGRESS_COPY.provenance).toContain('from your own recall history');
     expect(PROGRESS_COPY.provenance).toContain('is an estimate');
   });
+
+  it('does not tell a reader the curve moves only when they recall something', () => {
+    // `record_read` stamps `last_seen_at` on every read, so reopening an idea moves
+    // the estimate without answering anything. Copy that named recall alone would
+    // explain a number that had just gone up for a reason it does not contain.
+    expect(PROGRESS_COPY.provenance).toContain('open or recall');
+    expect(PROGRESS_COPY.provenance).not.toContain('when you last recalled it');
+  });
 });
 
 describe('MetacognitiveDashboard stats calculations', () => {
