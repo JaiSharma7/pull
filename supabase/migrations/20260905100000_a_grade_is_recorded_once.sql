@@ -54,13 +54,21 @@
 
 -- ------------------------------------------------------------------ the event log
 
+-- `recall_events` references (question, pull) as a pair, and a foreign key can only
+-- point at a unique constraint. `id` alone is already the primary key; this adds the
+-- pair beside it rather than replacing anything.
+alter table public.quiz_questions
+  add constraint quiz_questions_id_pull_key unique (id, pull_id);
+
 create table public.recall_events (
   id                 uuid        primary key default extensions.gen_random_uuid(),
   user_id            uuid        not null references auth.users (id) on delete cascade,
   pull_id            uuid        not null references public.pulls (id) on delete cascade,
   -- The canonical question that was asked, when one was. Nullable because a free
-  -- recall against the card, the census and the delta probe ask nothing stored.
-  quiz_question_id   uuid        references public.quiz_questions (id) on delete set null,
+  -- recall against the card, the census and the delta probe ask nothing stored. The
+  -- reference is composite (see the constraint below) so it cannot name a question
+  -- belonging to a different pull.
+  quiz_question_id   uuid,
   -- Where the grade came from. `review` is the Review screen; the interrupt kinds are
   -- the feed; `calibration` is the onboarding census, which grades from a declared
   -- level rather than a recall and is worth being able to tell apart later.
@@ -71,7 +79,8 @@ create table public.recall_events (
   -- supply this half of it.
   confidence         text,
   -- What they typed, for question kinds that take an answer. Bounded like every other
-  -- reader-composed column so a queued write cannot be refused forever.
+  -- reader-composed column, and to the same limit as `explanations`, so a queued write
+  -- cannot be refused forever.
   answer             text,
   latency_ms         int,
   scheduler_version  smallint    not null default 1,
@@ -85,10 +94,26 @@ create table public.recall_events (
                     'delta_probe', 'calibration')),
   constraint recall_events_confidence_known
     check (confidence is null or confidence in ('sure', 'unsure')),
+  -- 20,000 to match `explanations_text_length` and the textarea in `Interrupt.tsx`,
+  -- which already accepts that much. A shorter bound here would not truncate a long
+  -- Say It Back answer, it would raise inside `record_interrupt` and roll back the
+  -- interrupt row and the grade along with it, losing an answer the reader gave and
+  -- the product had already accepted elsewhere.
   constraint recall_events_answer_length
-    check (answer is null or length(answer) <= 2000),
+    check (answer is null or length(answer) <= 20000),
   constraint recall_events_latency_bounds
-    check (latency_ms is null or latency_ms between 0 and 3600000)
+    check (latency_ms is null or latency_ms between 0 and 3600000),
+  -- Two independent foreign keys would each be satisfied by a real question and a real
+  -- pull that have nothing to do with each other, and the log is append-only, so an
+  -- answer filed against the wrong question would stay wrong for good -- which is
+  -- precisely the per-question evaluation this table exists to make possible. The pair
+  -- is checked together instead. MATCH SIMPLE means a null question skips the check
+  -- entirely, which is what a free recall needs, and the SET NULL names its column
+  -- because `pull_id` is NOT NULL and must not be nulled with it.
+  constraint recall_events_question_belongs_to_pull
+    foreign key (quiz_question_id, pull_id)
+    references public.quiz_questions (id, pull_id)
+    on delete set null (quiz_question_id)
 );
 
 comment on table public.recall_events is

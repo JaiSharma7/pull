@@ -19,6 +19,9 @@
 --   * a reader cannot read, change or delete another reader's events, and cannot
 --     change or delete their own: the log is append-only through the API
 --   * an unknown `kind` is refused by the table, not silently stored
+--   * a question belonging to another pull cannot be filed against this one -- the
+--     pair is one foreign key, and the log is append-only, so a mis-filed answer
+--     would stay mis-filed
 --
 -- Everything runs as a real reader under RLS. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -43,6 +46,8 @@ declare
   reader_b  uuid := extensions.gen_random_uuid();
   guest     uuid := extensions.gen_random_uuid();
   pull      uuid;
+  other_pull uuid;
+  question  uuid;
   session   uuid;
   mid_1     uuid := extensions.gen_random_uuid();
   mid_2     uuid := extensions.gen_random_uuid();
@@ -62,6 +67,13 @@ begin
   end if;
 
   select p.id into strict pull from public.pulls p where p.headline like 'Silencing an opinion%';
+  select p.id into strict other_pull from public.pulls p where p.headline like 'Living deliberately%';
+  select q.id into question from public.quiz_questions q where q.pull_id = other_pull limit 1;
+  if question is null then
+    insert into public.quiz_questions (pull_id, prompt, answer)
+    values (other_pull, 'A question about another idea', 'An answer')
+    returning id into question;
+  end if;
 
   -- Two readers and a guest, all through the real signup trigger.
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
@@ -197,7 +209,21 @@ begin
     raise exception 'a reader could delete % of their own recall events', touched;
   end if;
 
-  -- 7. An unknown kind is refused, not stored.
+  -- 7. A question that belongs to another pull cannot be filed against this one.
+  refused := false;
+  begin
+    perform public.grade_recall(p_pull_id := pull, p_grade := 'good',
+                                p_mutation_id := extensions.gen_random_uuid(),
+                                p_question_id := question);
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'an answer was filed against a question belonging to a different pull';
+  end if;
+
+  -- 8. An unknown kind is refused, not stored.
   refused := false;
   begin
     perform public.grade_recall(p_pull_id := pull, p_grade := 'good',
@@ -242,7 +268,8 @@ begin
     raise exception 'a guest''s grade was not recorded (found %)', n;
   end if;
 
-  raise notice 'recall_events: replay-safe, append-only, self-only, guests may grade';
+  raise notice 'recall_events: replay-safe, append-only, self-only, filed against the '
+    'right question, guests may grade';
 end $$;
 
 rollback;
