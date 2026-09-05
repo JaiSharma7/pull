@@ -279,11 +279,20 @@ describe('toAnkiTsv: what a spreadsheet and an importer each do with a field', (
     expect(line.startsWith('"#1')).toBe(true);
   });
 
-  it('defuses a formula field, the same as the CSV beside it', () => {
-    // `.tsv` is a file Excel and LibreOffice open.
-    const line = record(toAnkiTsv([question({ prompt: '+1+1', answer: '@SUM(A1)' })], []));
-    expect(line).toContain("'+1+1");
-    expect(line).toContain("'@SUM(A1)");
+  it('does not defuse a formula field, because the card would show the apostrophe', () => {
+    // Round 1 made this match the CSV, and consistency was the wrong goal: an
+    // apostrophe a spreadsheet swallows is text that Anki renders, so the parity
+    // fix put `'-40` and `'+1` on the face of a card a reader studies forever.
+    const line = record(
+      toAnkiTsv([question({ prompt: 'Celsius and Fahrenheit meet at ___', answer: '-40' })], []),
+    );
+    expect(line).toContain('\t-40\t');
+    expect(line).not.toContain("'-40");
+
+    // The CSV, whose consumer really is a spreadsheet, still defuses.
+    expect(
+      toCsvHighlights([{ source: 'A', idea: 'B', highlight: '=HYPERLINK("x")', note: null }]),
+    ).toContain("'=HYPERLINK");
   });
 
   it('orders options the same way on every machine', () => {
@@ -383,6 +392,49 @@ describe('toStashMarkdown', () => {
   it('says whose words are whose rather than leaving it to the absence of a marker', () => {
     const out = toStashMarkdown(stash, [item], when);
     expect(out).toContain('are What a Pull’s commentary on the source, not the source itself');
+  });
+
+  it('does not print a backslash in the reader’s own numbered list', () => {
+    // CommonMark honours a backslash only before ASCII punctuation, so escaping the
+    // DIGIT left `\1.` visible — in the one part of the file the export goes out of
+    // its way to attribute to the reader. Escaping the period suppresses the list
+    // and renders as `1.`.
+    const out = toStashMarkdown(
+      stash,
+      [{ ...item, note: 'Three things:\n1. Name it.\n2. Ask what it is made of.' }],
+      when,
+    );
+    expect(out).toContain('> 1\\. Name it.');
+    expect(out).not.toContain('\\1.');
+  });
+
+  it('cannot be restructured by a setext underline, a fence, or any bullet', () => {
+    // `---` and `===` make the PRECEDING line a heading, which is the same hijack
+    // the `#` escape closes by a different character; a fence swallows every
+    // section after it; and `*` and `+` are the other two bullet markers, missed
+    // while `-` was escaped.
+    const out = toStashMarkdown(
+      stash,
+      [{ ...item, note: 'A claim\n---\n```\nnot code\n```\n* star\n+ plus' }],
+      when,
+    );
+    expect(out).not.toMatch(/^> ---$/m);
+    expect(out).not.toMatch(/^> ```$/m);
+    expect(out).toContain('> \\* star');
+    expect(out).toContain('> \\+ plus');
+  });
+
+  it('escapes a description somebody else wrote', () => {
+    // `stashes_read` is `visibility = 'public' or user_id = auth.uid()`, so a public
+    // stash's description is not always the exporter's own words — and `## ` in it
+    // opened a heading that is a sibling of every source heading in the file.
+    const out = toStashMarkdown(
+      { name: 'Shared', description: '## Injected heading' },
+      [item],
+      when,
+    );
+    expect(out).not.toMatch(/^## Injected heading$/m);
+    expect(out).toContain('\\## Injected heading');
   });
 
   it('cannot be restructured by text the reader typed', () => {

@@ -300,11 +300,15 @@ function faces(q: AnkiQuestion): { front: string; back: string } {
  * for tab-separated files too.
  */
 function tsvField(value: string): string {
-  // Defused like a CSV cell, for the reason `defuse` gives above it: `.tsv` is a
-  // file Excel and LibreOffice open, and a cell they evaluate is worth a stray
-  // apostrophe. This was inconsistent with the CSV beside it, which is not a
-  // defensible place for a security decision to differ.
-  const field = defuse(value).replace(/\t/g, ' ');
+  // NOT defused, and the difference from the CSV beside it is the point rather
+  // than an oversight. Round 1 made these two consistent, and consistency was the
+  // wrong goal: `defuse` prepends an apostrophe that a spreadsheet swallows and
+  // Anki RENDERS, so the parity fix put `'-40` and `'+1` on the face of a card a
+  // reader then studies forever. The CSV is the spreadsheet artefact and keeps it;
+  // this file's consumer is Anki, and protecting a reader from Excel by writing
+  // into their flashcards is not a trade worth making. If the "Excel opens .tsv"
+  // risk needs covering it belongs in how the file is offered, not on the card.
+  const field = value.replace(/\t/g, ' ');
   // And quoted when it begins with `#`, which is not cosmetic: Anki's importer
   // reads every line starting with `#` as metadata (it is how `ANKI_HEADER`
   // works), so a card whose front began "#1 — what did Mill argue?" was dropped
@@ -393,7 +397,25 @@ function mdText(value: string): string {
   return value
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((line) => line.replace(/^(\s*)([#>]|-(?=\s)|\d+\.(?=\s))/u, '$1\\$2'))
+    .map((line) => {
+      // A line that is only dashes, equals signs or a fence is structural on its
+      // own: `---` and `===` make the PRECEDING line a heading (a setext
+      // underline), which is the same hijack the `#` escape closes by another
+      // character, and a fence swallows every section after it. Escaping the first
+      // character is enough to stop all three being read that way.
+      if (/^\s*(-{2,}|={2,}|`{3,}|~{3,})\s*$/u.test(line)) {
+        return line.replace(/^(\s*)(.)/u, '$1\\$2');
+      }
+      // Line-initial markers. `*` and `+` are the other two bullet characters and
+      // were missed while `-` was escaped. The ordered-list escape moved from the
+      // digit to the PERIOD: CommonMark only honours a backslash before ASCII
+      // punctuation, so `\1.` printed a literal backslash in the reader's own
+      // note — in the one part of the file the export goes out of its way to
+      // attribute to them — while `1\.` renders as `1.` and still opens no list.
+      return line
+        .replace(/^(\s*)([#>]|[-*+](?=\s))/u, '$1\\$2')
+        .replace(/^(\s*)(\d+)([.)])(?=\s)/u, '$1$2\\$3');
+    })
     .join('\n');
 }
 
@@ -422,8 +444,14 @@ export function toStashMarkdown(
       'source itself. Notes are yours._',
     '',
   );
+  // Escaped like every other reader-authored field. It was the one between the
+  // stash name above and the headline below that was interpolated raw, and a
+  // stash is not always self-authored: `stashes_read` is
+  // `visibility = 'public' or user_id = auth.uid()`, so a public stash's
+  // description was written by somebody else, and `## ` in it opened a heading
+  // that is a SIBLING of every source heading in the file.
   const description = stash.description?.trim();
-  if (description) lines.push(description, '');
+  if (description) lines.push(mdText(description), '');
 
   if (items.length === 0) {
     lines.push('Nothing in this stash yet.', '');
