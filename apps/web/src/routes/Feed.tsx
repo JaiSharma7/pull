@@ -273,12 +273,22 @@ export function Feed({
     return () => {
       cancelled = true;
     };
-    // Deliberately keyed on the seed alone. Including the interrupt budget
-    // would refetch page 0 every time a question is answered, replacing the
-    // list while the reader is partway down it — and cards already seen are by
-    // then recorded as impressions, so they would not even come back.
+    // Deliberately keyed on the seed and the account. Including the interrupt
+    // budget would refetch page 0 every time a question is answered, replacing
+    // the list while the reader is partway down it — and cards already seen are
+    // by then recorded as impressions, so they would not even come back.
+    //
+    // `userId` IS in the list, and the disable above it is only about the budget.
+    // This effect reads it (the cache write, and the cache read in the `catch`),
+    // and `loadMore` already depends on it. Today `App.tsx` unmounts this
+    // component on a session change so the id cannot move under a stable seed —
+    // but nothing in this file enforces that, and the failure if it ever stops
+    // being true is the offline path rendering the previous account's cached rows
+    // to the next reader, which is the property this whole PR exists to
+    // establish. It never changes on a stable session, so listing it costs
+    // nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.seed, reloads, refreshKey]);
+  }, [session.seed, reloads, refreshKey, userId]);
 
   useEffect(() => {
     if (!userId) return;

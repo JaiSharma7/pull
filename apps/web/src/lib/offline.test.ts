@@ -161,6 +161,13 @@ describe('schema version 1 → 2', () => {
       fresh.queueMutation(USER_A, { kind: 'read', pullId: 'while-blocked' }),
     ).resolves.toBe(false);
 
+    // AN UNAVAILABLE STORE IS NOT AN EMPTY ONE. Two entries are on disk right
+    // now. `Feed.tsx` uses `hasPending` to decide whether to keep the drain
+    // timer alive, so answering `false` here would reset the backoff and
+    // schedule nothing — and the queue would sit undrained after the old tab
+    // closed, until a reload.
+    await expect(fresh.hasPending(USER_A)).resolves.toBe(true);
+
     // The old tab goes away. The open that was waiting completes, runs the
     // upgrade, and the module takes the connection up without a reload.
     oldTab.close();
@@ -217,6 +224,63 @@ describe('schema version 1 → 2', () => {
     } finally {
       vi.resetModules();
     }
+  });
+});
+
+describe('an upgrade that cannot finish', () => {
+  it('leaves the store at version 1 rather than half-stamped', async () => {
+    // `idb` calls `upgrade(...)` and discards the promise, so an async upgrade
+    // that rejects used to let the version bump commit anyway: `openDB`
+    // resolved, the module reported success, and the entries the cursor had not
+    // reached kept no mutation id — permanently, because the stamping only runs
+    // at `oldVersion < 2`. `crypto.randomUUID` throwing is not hypothetical: it
+    // is undefined in a non-secure context.
+    await rawDelete();
+    const oldTab = await rawOpen(1, (db) => {
+      db.createObjectStore('pulls', { keyPath: 'id' });
+      db.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
+    });
+    const seed = oldTab.transaction('pending', 'readwrite');
+    seed.objectStore('pending').add({ kind: 'recall', pullId: 'p1', grade: 'good', at: 1 });
+    seed.objectStore('pending').add({ kind: 'recall', pullId: 'p2', grade: 'good', at: 2 });
+    await settled(seed);
+    oldTab.close();
+
+    const realUuid = globalThis.crypto.randomUUID;
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      configurable: true,
+      value: () => {
+        throw new Error('randomUUID is unavailable in an insecure context');
+      },
+    });
+
+    try {
+      vi.resetModules();
+      const fresh = await import('./offline.js');
+      // The store is unavailable, and says so rather than reporting an empty queue.
+      await expect(fresh.hasPending(USER_A)).resolves.toBe(true);
+    } finally {
+      Object.defineProperty(globalThis.crypto, 'randomUUID', {
+        configurable: true,
+        value: realUuid,
+      });
+      vi.resetModules();
+    }
+
+    // Still version 1, and both entries still unstamped: nothing was half-done.
+    const check = await rawOpen(1);
+    expect(check.version).toBe(1);
+    const queued: { mutationId?: string }[] = await rawRequest(
+      check.transaction('pending', 'readonly').objectStore('pending').getAll(),
+    );
+    expect(queued).toHaveLength(2);
+    expect(queued.every((e) => e.mutationId === undefined)).toBe(true);
+    check.close();
+
+    // And the failure is not remembered: a fresh open, with a working
+    // `randomUUID`, upgrades and stamps both.
+    await rawDelete();
+    vi.resetModules();
   });
 });
 
@@ -299,6 +363,31 @@ describe('an upgrade from another tab', () => {
 describe('review pack', () => {
   it('is null until something is downloaded', async () => {
     expect(await readReviewPack('pack-nobody')).toBeNull();
+  });
+
+  it('drops an entry an older build wrote in a shape this one cannot order', async () => {
+    // The entry is stored whole precisely so its shape can drift, which makes a
+    // pack written by an older build the expected case rather than a corruption.
+    // Without the guard, an item missing `retrievability` makes the comparator
+    // NaN and the promised "weakest memory first" order arbitrary, and a missing
+    // headline reaches the screen as `undefined`.
+    const user = 'pack-drift';
+    await storeReviewPack(user, [due('good')], 2_000);
+
+    const raw = await rawOpen(2);
+    const tx = raw.transaction('reviewPack', 'readwrite');
+    tx.objectStore('reviewPack').put({
+      key: `${user}:drifted`,
+      userId: user,
+      pullId: 'drifted',
+      syncedAt: 2_000,
+      item: { pullId: 'drifted', body: 'written by a build that named things differently' },
+    });
+    await settled(tx);
+    raw.close();
+
+    const pack = await readReviewPack(user);
+    expect(pack?.items.map((i) => i.pullId)).toEqual(['good']);
   });
 
   it('stores a pack for one account and reads it back with when it was synced', async () => {

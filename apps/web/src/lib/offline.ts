@@ -89,11 +89,14 @@ export type PendingWrite =
       /**
        * Minted once per submission, so a replay whose first response was lost
        * can be recognised by the server as the same grade rather than applied
-       * twice. Optional only until `grade_recall` takes it: an entry queued
-       * before this field existed is given one at the schema upgrade
-       * (`stampQueuedGrades`), so every entry in the store carries one, and the
-       * review PR makes both fields required and threads them to the RPC once
-       * the migration lands.
+       * twice.
+       *
+       * Optional, and genuinely so: entries queued before this field existed are
+       * given one at the schema upgrade (`stampQueuedGrades`), but the screens
+       * that queue a grade are 1b's to change and still write none, and nothing
+       * sends it to the RPC yet. So an entry in the store may or may not carry
+       * one, and any consumer must treat it as absent-by-default until 1b makes
+       * both fields required and threads them through.
        */
       mutationId?: string;
       /** When the reader answered, for the same server-side record. */
@@ -261,7 +264,19 @@ interface WapDB extends DBSchema {
  *
  *   1  `pulls` keyed by pull id, unscoped; `pending` keyed by an autoincrement.
  *   2  `pulls` keyed `userId:pullId` with a `by-user` index; `reviewPack`, keyed
- *      the same way; every queued `recall` carries a mutation id.
+ *      the same way; every `recall` queued BEFORE the upgrade is given a mutation
+ *      id it was queued without.
+ *
+ * The narrower wording is the true one. Version 2 backfills the entries already
+ * on disk; it does not make the field an invariant of the store, because the two
+ * screens that queue a grade — `Review.tsx` and `KnowledgeCensus.tsx` — still
+ * queue `{kind, pullId, grade}` and are 1b's to change. Nothing sends the id to
+ * the server yet either: `replayWrite` calls `gradeRecall(pullId, grade)` and
+ * `api.gradeRecall` posts two arguments. `grade_recall` HAS taken `p_mutation_id`
+ * since 20260905100000, so the de-duplication exists server-side and is simply
+ * not reached until 1b threads it through. Stamping now means the entries already
+ * queued are ready for that, rather than being the one class of write that can
+ * never be recognised.
  */
 const SCHEMA_VERSION = 2;
 
@@ -281,7 +296,17 @@ let dbPromise: Promise<Handle> | null = null;
 let live: IDBPDatabase<WapDB> | null = null;
 
 function db(): Promise<Handle> {
-  dbPromise ??= open();
+  dbPromise ??= open().catch((error: unknown) => {
+    // A FAILED OPEN IS NOT REMEMBERED. Every reason one fails is transient — an
+    // upgrade that aborted, a version another tab raised past this build,
+    // storage pressure, a private window running out of quota — and a memoised
+    // rejection means this tab answers "no store" for the rest of its life and
+    // never tries again. `terminated`, `blocking` and the blocked-then-failed
+    // branch in `open` all clear the memo for the same reason; this is the
+    // remaining path that did not.
+    dbPromise = null;
+    throw error;
+  });
   return dbPromise;
 }
 
@@ -332,7 +357,38 @@ function open(): Promise<Handle> {
         if (!database.objectStoreNames.contains('pending')) {
           database.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
         } else if (oldVersion < 2) {
-          await stampQueuedGrades(transaction);
+          // Aborted by hand on failure, because `idb` does not await this
+          // callback -- it calls `upgrade(...)` and discards the promise
+          // (`idb@8` build/index.js:171-173). So an `async upgrade` that
+          // rejects never touches the versionchange transaction: it commits,
+          // `openDB` resolves, and the rejection escapes to `window` as an
+          // unhandled rejection while the store sits permanently half-stamped
+          // and every caller is told the upgrade succeeded. Reachable without
+          // a bug in here: `crypto.randomUUID` is undefined in a non-secure
+          // context, and a versionchange transaction that commits before the
+          // cursor walk finishes raises `TransactionInactiveError`.
+          //
+          // Aborting instead means the version bump does not land, `openDB`
+          // rejects, and the next open tries the whole thing again from v1 --
+          // which is what "commits with the schema or not at all" was always
+          // supposed to mean.
+          try {
+            await stampQueuedGrades(transaction);
+          } catch {
+            // Aborted rather than rethrown, and both halves matter.
+            //
+            // `transaction.done` rejects with `AbortError` the moment the abort
+            // lands and nothing in `idb`'s upgrade path awaits it, so it is
+            // claimed here rather than left to surface on `window`. And the
+            // original error is NOT rethrown, for the same reason this block
+            // exists at all: `idb` discards whatever this callback returns, so a
+            // throw becomes a second unhandled rejection and changes nothing.
+            // The abort is the mechanism — it fails the version bump, `openDB`
+            // rejects with `AbortError`, `db()` drops the memo, and the next
+            // open tries the whole upgrade again from v1.
+            transaction.done.catch(() => undefined);
+            transaction.abort();
+          }
         }
       },
       blocked() {
@@ -355,7 +411,19 @@ function open(): Promise<Handle> {
         else resolve(database);
       },
       (error: unknown) => {
-        if (!yielded) reject(error instanceof Error ? error : new Error(String(error)));
+        if (yielded) {
+          // The `blocked` path already answered `null`, so there is nobody left
+          // to reject to -- but the memo is a promise resolved to `null`, and
+          // the success path above is the only thing that ever replaced it. A
+          // tab whose open both blocked AND then failed (an older tab holding a
+          // connection, then a newer one raising the version past this build)
+          // would answer "no store" for the rest of its life, never retrying
+          // even after the blocker closed. Clearing it makes the next call
+          // reopen, which is what `terminated` and `blocking` already do.
+          dbPromise = null;
+          return;
+        }
+        reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });
@@ -377,6 +445,12 @@ function open(): Promise<Handle> {
  * upgrade. The server orders a late replay against the reader's current state
  * by this value, so stamping it with the upgrade time would tell it a grade
  * from three days offline had just been given.
+ *
+ * It backfills what is already on disk and nothing more. Grades queued after
+ * this upgrade arrive without an id until 1b changes the screens that queue
+ * them, and nothing carries the id to the RPC until 1b does that either — so
+ * this does not yet close the double-apply hazard, it makes the entries that
+ * predate the fix ready for it.
  */
 async function stampQueuedGrades(
   transaction: IDBPTransaction<WapDB, StoreNames<WapDB>[], 'versionchange'>,
@@ -496,11 +570,34 @@ export async function storeReviewPack(
  * nothing is downloaded, which includes a pack the reader has worked through
  * to the end: that is the state a screen offers a fresh download from.
  */
+/**
+ * Enough of a `DueReview` to render and to order by.
+ *
+ * The entry is stored whole precisely so its shape can drift, which makes a pack
+ * written by an older build the expected case rather than a corruption. An entry
+ * missing `retrievability` makes the comparator below `NaN` and the promised
+ * "weakest memory first" order arbitrary; one missing `headline` reaches the
+ * screen as `undefined`. Dropping it costs the reader one card they can fetch
+ * again; keeping it costs them a wrong order and a blank.
+ */
+function isDueReview(item: unknown): item is DueReview {
+  if (typeof item !== 'object' || item === null) return false;
+  const row = item as Partial<DueReview>;
+  return (
+    typeof row.pullId === 'string' &&
+    typeof row.headline === 'string' &&
+    typeof row.retrievability === 'number' &&
+    Number.isFinite(row.retrievability)
+  );
+}
+
 export async function readReviewPack(userId: string): Promise<ReviewPack | null> {
   try {
     const database = await db();
     if (!database) return null;
-    const entries = await database.getAllFromIndex('reviewPack', 'by-user', userId);
+    const entries = (await database.getAllFromIndex('reviewPack', 'by-user', userId)).filter(
+      (entry) => isDueReview(entry.item),
+    );
     if (entries.length === 0) return null;
     const items = entries
       .sort(
@@ -583,10 +680,18 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 export async function hasPending(userId: string): Promise<boolean> {
   try {
     const database = await db();
-    if (!database) return false;
+    // AN UNAVAILABLE STORE IS NOT AN EMPTY ONE, and this is the one place the
+    // difference decides a policy. `Feed.tsx` uses this to decide whether to
+    // keep the drain timer alive; answering `false` while the store is merely
+    // blocked -- an older tab holding the previous version open, which THIS
+    // release makes reachable for the first time, since it is the store's first
+    // version bump -- resets the backoff and schedules no retry, so a queue that
+    // really is on disk sits undrained until a reload. Answering `true` costs
+    // one more scheduled attempt that finds nothing.
+    if (!database) return true;
     return (await database.getAll('pending')).some((item) => item.userId === userId);
   } catch {
-    return false;
+    return true;
   }
 }
 

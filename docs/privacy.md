@@ -72,8 +72,10 @@ because the session lives in the tab rather than in the browser:
   nobody can prove they own, holding a reader's stashes, notes and history, so the shorter
   it exists the less there is to lose. Plan on a day, not on a weekend. What that does not
   reach is the copy your own browser keeps for offline reading. That copy is keyed to the
-  session it was made for, so nobody who uses the browser after you is shown it; clearing
-  the site's data removes it outright.
+  session it was made for, so a different session is never shown it — with the same
+  caveat as the bullet above: a browser set to reopen your last tabs can bring the session
+  itself back, and whoever restarts it is then inside it. Clearing the site's data removes
+  the copy outright.
 
 Signing in afterwards starts a fresh account. A guest session is not carried over — there is
 no address to attach it to, and guessing which anonymous session belongs to a new sign-in is
@@ -199,9 +201,10 @@ What the app does put on your device, all of it first-party and all of it necess
 - **Your sign-in token**, in `localStorage`, so you stay signed in.
 - **A small amount of interface state**, in `localStorage`.
 - **Your offline library**, in IndexedDB — the Pulls cached for reading without a
-  connection, a practice pack if you download one, and a queue of writes made while
-  disconnected — which is how offline reading is free rather than a paid tier. Each is
-  keyed to the account that made it.
+  connection and a queue of writes made while disconnected — which is how offline reading
+  is free rather than a paid tier. Each is keyed to the account that made it. (A
+  downloadable practice pack is being built; when it lands it goes here too, and this
+  line will say so once it is something you can actually do.)
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all four, and signs you out.
