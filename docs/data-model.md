@@ -112,7 +112,9 @@ not that it grants anything.
   Wrapping `auth.uid()` in a scalar subquery lets Postgres evaluate it once per
   query instead of once per row.
 - **Canonical content** — world-readable once `status = 'published'`; written
-  only by the service role, which bypasses RLS.
+  only by the service role, which bypasses RLS. A `works` row is visible only when
+  one of its summaries is readable by the caller (published and public, or their
+  own), so a source with nothing readable behind it is not enumerable.
 - **Write policies are split** into INSERT/UPDATE/DELETE rather than `for all`
   wherever a separate read policy exists, so no read pays for two overlapping
   permissive policies. Enforced by invariant 5 in `supabase/tests/lint.sql`.
