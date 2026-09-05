@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
+import { openDB } from 'idb';
 import {
   cachePulls,
   clearReviewPack,
@@ -1179,6 +1180,66 @@ describe('queueIfOffline answers whether it took responsibility', () => {
       queueIfOffline(user, new Error('server said no'), { kind: 'read', pullId: 'p3' }),
     );
     expect(queued).toBe(false);
+    await expect(hasPending(user)).resolves.toBe(false);
+  });
+});
+
+/*
+ * A grade that reached the server and stayed in the queue.
+ *
+ * `blocking()` fires when another tab opens the database at a higher version, and
+ * the first version of it closed this tab's handle synchronously. `runDrain`
+ * captured that handle before its loop and its post-apply `delete('pending', id)`
+ * is the last thing it does with it — outside the inner try, so an
+ * `InvalidStateError` there was swallowed by the outer catch and the entry
+ * survived a write the server had already taken.
+ *
+ * Harmless for a save or a read. For a recall grade it is what this file's own
+ * comments call unaffordable: `grade_recall` multiplies stability and increments
+ * `reps`, so applying it twice roughly squares the interval.
+ */
+describe('a connection that yields mid-drain', () => {
+  it('does not leave an applied grade in the queue for the next pass', async () => {
+    const user = 'u-yield';
+    await queueMutation(user, {
+      kind: 'recall',
+      pullId: 'p1',
+      grade: 'good',
+      mutationId: 'm1',
+      submittedAt: 1_700_000_000_000,
+    });
+    await queueMutation(user, {
+      kind: 'recall',
+      pullId: 'p2',
+      grade: 'good',
+      mutationId: 'm2',
+      submittedAt: 1_700_000_000_001,
+    });
+
+    const applied: string[] = [];
+    // Another tab asks for a higher version while the first write is being applied.
+    // NOT awaited here, deliberately: in a browser the upgrade happens in a
+    // different tab, and awaiting it in this one would simply deadlock against the
+    // deferral being tested. What matters is that `versionchange` fires on this
+    // connection mid-drain, which is the moment the old `blocking()` closed it.
+    const bumps: Promise<{ close: () => void }>[] = [];
+    await drainPending(user, async (m) => {
+      applied.push(`${m.kind}:${'pullId' in m ? m.pullId : ''}`);
+      if (applied.length === 1) {
+        bumps.push(openDB('what-a-pull', 3, { upgrade() {} }));
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    });
+    for (const b of bumps) (await b).close();
+
+    // Second pass: nothing left to replay.
+    const second: string[] = [];
+    await drainPending(user, async (m) => {
+      second.push(`${m.kind}:${'pullId' in m ? m.pullId : ''}`);
+    });
+
+    expect(applied).toEqual(['recall:p1', 'recall:p2']);
+    expect(second).toEqual([]);
     await expect(hasPending(user)).resolves.toBe(false);
   });
 });

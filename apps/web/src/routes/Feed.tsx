@@ -267,6 +267,20 @@ export function Feed({
           });
           setOffline(true);
         } else {
+          /*
+           * Offline with nothing cached is still offline.
+           *
+           * `isOfflineFailure(e)` was computed above to decide whether to read the
+           * cache and then thrown away, so an empty cache fell through to the generic
+           * "Could not load your feed just now." with a Try again button that can only
+           * fail. `Review.tsx` already distinguishes the two.
+           *
+           * This branch is newly common because of this very PR: the v2 upgrade drops
+           * every v1 cache row, and a second account on a shared device — the case the
+           * change exists for — starts with nothing cached at all. So the first reader
+           * to go into a tunnel after it lands is the one told the wrong thing.
+           */
+          setOffline(isOfflineFailure(e));
           setError(e instanceof Error ? e.message : String(e));
         }
       });
@@ -660,7 +674,19 @@ export function Feed({
   if (error) {
     return (
       <div className="stack measure" role="alert">
-        <p>Could not load your feed just now.</p>
+        {/*
+          Two sentences, because they ask for two different things. A reader in a
+          tunnel with an empty cache needs to know it is the connection and that
+          nothing is wrong with their account; a reader whose request was refused
+          needs the retry. `Review.tsx` already drew this distinction and this
+          screen did not, so the offline reader got the generic sentence and a
+          button that could only fail.
+        */}
+        <p>
+          {offline
+            ? 'You appear to be offline, and there is nothing downloaded on this device yet.'
+            : 'Could not load your feed just now.'}
+        </p>
         <button
           type="button"
           className="btn btn--primary"

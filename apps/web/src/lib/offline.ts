@@ -295,6 +295,15 @@ let dbPromise: Promise<Handle> | null = null;
 /** The open connection behind `dbPromise`, so it can be closed synchronously when asked to yield. */
 let live: IDBPDatabase<WapDB> | null = null;
 
+/**
+ * A close another tab asked for, held until the drain using this handle is done.
+ *
+ * See `blocking()`. Set there, honoured in `drainPending`'s `finally` — the only
+ * two places that know, respectively, that a close is wanted and that it is now
+ * safe.
+ */
+let closeWhenIdle = false;
+
 function db(): Promise<Handle> {
   dbPromise ??= open().catch((error: unknown) => {
     // A FAILED OPEN IS NOT REMEMBERED. Every reason one fails is transient — an
@@ -432,9 +441,31 @@ function open(): Promise<Handle> {
       },
       blocking() {
         if (!current()) return;
+        /*
+         * The handle is dropped so the next caller reopens at the new version — but
+         * it is CLOSED only if no drain is using it.
+         *
+         * `runDrain` captured this handle before its loop, and its post-apply
+         * `delete('pending', id)` is the last thing it does with it. Closing here,
+         * synchronously inside `versionchange`, made that delete throw
+         * `InvalidStateError` on a write that had ALREADY reached the server; the
+         * drain's outer catch swallowed it and the entry survived. For a save or a
+         * read that is harmless. For a recall grade it is the failure this file
+         * spends thirty lines saying it cannot afford: `grade_recall` multiplies
+         * stability and increments `reps`, so the replay roughly squares the interval
+         * and the card leaves review for months.
+         *
+         * Deferring the close costs the upgrading tab a moment and costs nothing
+         * else: the drain is bounded by the queue it snapshotted, and `dbPromise` is
+         * already null so nothing new joins this connection.
+         */
+        dbPromise = null;
+        if (inFlight.size > 0) {
+          closeWhenIdle = true;
+          return;
+        }
         live?.close();
         live = null;
-        dbPromise = null;
       },
       terminated() {
         if (!current()) return;
@@ -784,6 +815,12 @@ export function drainPending(
   const started = withCrossTabLock(userId, () => runDrain(userId, apply, isStillCurrent)).finally(
     () => {
       inFlight.delete(userId);
+      // The other tab is waiting to upgrade. Let it, now that nothing is mid-write.
+      if (inFlight.size === 0 && closeWhenIdle) {
+        closeWhenIdle = false;
+        live?.close();
+        live = null;
+      }
     },
   );
   inFlight.set(userId, started);
@@ -860,13 +897,46 @@ async function runDrain(
         blocked.add(scope);
         continue;
       }
-      if (item.id !== undefined) await database.delete('pending', item.id);
+      if (item.id !== undefined) await forget(database, item.id);
       drained += 1;
     }
   } catch {
     /* IndexedDB itself is unavailable — nothing to drain */
   }
   return drained;
+}
+
+/**
+ * Remove a queued write that has already applied, even if the handle died first.
+ *
+ * `terminated()` fires when the browser evicts the database, and no amount of
+ * deferring covers it — so this is the second half of the same guarantee. An entry
+ * left here is a write the server has ALREADY taken and that the next drain would
+ * send again; reopening to delete it costs one connection and closes the window.
+ * If even that fails there is nothing further to try, and it is logged rather than
+ * swallowed, because the next drain will double-apply and somebody should be able
+ * to find out why.
+ */
+async function forget(database: Handle, id: number): Promise<void> {
+  try {
+    // Non-null on the caller's path — `runDrain` bails before its loop when `db()`
+    // yields nothing — but `Handle` carries the null and the fresh open below is
+    // the whole point, so it is asked rather than asserted.
+    if (!database) throw new Error('no handle');
+    await database.delete('pending', id);
+    return;
+  } catch {
+    /* the handle went away under us; try a fresh one */
+  }
+  try {
+    const fresh = await db();
+    // `db()` yields null when the store is blocked or broken; there is nothing
+    // further to try, and the log below is the whole remaining recourse.
+    if (fresh) await fresh.delete('pending', id);
+    else throw new Error('the offline store is unavailable');
+  } catch (error) {
+    console.error('[offline] a write applied but could not be removed from the queue', error);
+  }
 }
 
 /**
