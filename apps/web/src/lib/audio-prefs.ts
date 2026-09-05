@@ -20,7 +20,9 @@
  * This module also remembers the QUEUE, because it is the one place that touches
  * storage on the player's behalf and a second module with the same try/catch
  * would be a copy. The queue's shape and its owner check live in `lib/player.ts`;
- * this only reads and writes the string.
+ * this only reads and writes the string — and decides WHICH store it goes in,
+ * which is a different decision from the three settings above and is made at
+ * `queueStore` below.
  *
  * Every storage access is guarded. `localStorage` throws rather than returning
  * null in a browser set to block site data, and an unguarded read here would be
@@ -105,6 +107,47 @@ function readKey(key: string): string | null {
   }
 }
 
+/**
+ * Where a QUEUE is kept, which is not the same question as where a preference is.
+ *
+ * A rate, a voice and a sleep timer are facts about the device — the machine is
+ * fast, the machine has this voice installed, this is the machine by the bed —
+ * so `localStorage` is right for them and a second person at the same machine
+ * learns nothing from finding them.
+ *
+ * A queue is not. It is a list of titles and their text: what someone chose to
+ * listen to. `lib/guest-storage.ts` already decided what to do with material
+ * belonging to a reader who has no address, and the reasoning transfers exactly:
+ * `localStorage` survives a browser restart, so on a shared machine the next
+ * person to open the browser would find the previous one's reading list loaded
+ * and ready to play. That module puts a guest's token in `sessionStorage` for
+ * precisely that reason; this puts their queue there for the same one.
+ *
+ * `durable` is passed rather than derived, because it cannot be derived here. A
+ * null `userId` is a signed-out visitor and a non-null one may still be a guest —
+ * an anonymous account with a real uuid — and only the caller holding the session
+ * can tell a guest from a reader with an address. It defaults to `false` so a
+ * caller who forgets loses persistence rather than leaks a reading list; that is
+ * the direction this has to fail in.
+ */
+function queueStore(durable: boolean): KeyValueStore | null {
+  try {
+    // Read through `globalThis` at call time. A browser configured to block site
+    // data throws on the property access itself, not on the method, so the guard
+    // has to be around this.
+    return durable ? globalThis.localStorage : globalThis.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** The parts of `Storage` used here. Narrowed so a test can pass a plain fake. */
+interface KeyValueStore {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
 export function readStoredAudioPrefs(): AudioPrefs {
   return {
     rate: narrowRate(readKey(RATE_KEY)),
@@ -128,26 +171,57 @@ export function storeAudioPrefs(next: AudioPrefs): void {
 /* --- The queue ------------------------------------------------------------ */
 
 /** The reader's queue, or an empty player when there is none or it cannot be read. */
-export function readStoredPlayer(userId: string | null, now: number = Date.now()): PlayerState {
-  return hydrate(readKey(playerStorageKey(userId)), userId, now);
+export function readStoredPlayer(
+  userId: string | null,
+  durable: boolean = false,
+  now: number = Date.now(),
+): PlayerState {
+  const store = queueStore(durable);
+  if (store === null) return hydrate(null, userId, now);
+  try {
+    return hydrate(store.getItem(playerStorageKey(userId)), userId, now);
+  } catch {
+    return hydrate(null, userId, now);
+  }
 }
 
-export function storePlayer(state: PlayerState, userId: string | null): void {
+export function storePlayer(
+  state: PlayerState,
+  userId: string | null,
+  durable: boolean = false,
+): void {
+  const store = queueStore(durable);
+  if (store === null) return;
   try {
     const key = playerStorageKey(userId);
-    if (state.queue.length === 0) localStorage.removeItem(key);
-    else localStorage.setItem(key, serialize(state, userId));
+    if (state.queue.length === 0) store.removeItem(key);
+    else store.setItem(key, serialize(state, userId));
   } catch {
     // The queue still plays; it just will not survive a reload on this device.
   }
 }
 
-/** Forget a reader's queue — on sign-out, so the next account on this device starts silent. */
+/**
+ * Forget a reader's queue — on sign-out, so the next account on this device
+ * starts silent.
+ *
+ * Clears BOTH stores unconditionally, rather than the one the caller would have
+ * written to. Whether this reader's queue was durable is a fact about the session
+ * that is ending, and by sign-out it is exactly the thing that has just stopped
+ * being knowable; a copy left behind by an earlier build, or by a conversion from
+ * guest to member, is still a reading list on a shared machine. Removing a key
+ * that was never there costs nothing.
+ */
 export function clearStoredPlayer(userId: string | null): void {
-  try {
-    localStorage.removeItem(playerStorageKey(userId));
-  } catch {
-    // Nothing to forget, or nowhere it could have been kept.
+  const key = playerStorageKey(userId);
+  for (const durable of [true, false]) {
+    const store = queueStore(durable);
+    if (store === null) continue;
+    try {
+      store.removeItem(key);
+    } catch {
+      // Nothing to forget, or nowhere it could have been kept.
+    }
   }
 }
 

@@ -292,6 +292,14 @@ export function currentTrack(state: PlayerState): Track | null {
  * lookup is already scoped, and the payload carries it again so that a copy
  * moved between keys — by an older build, or by hand — is still refused. Belt
  * and braces, because the failure is a stranger's reading list starting to play.
+ *
+ * NEITHER OF THOSE SCOPES A READER WHO HAS NO ID, and the review of this PR
+ * found it: every signed-out visitor keys to the same `wap:player:guest`, and
+ * `hydrate`'s owner check accepts a payload whose owner is null when `userId` is
+ * null too, because `null !== null` is false. Both are correct — a visitor's
+ * queue does belong to the visitor using the tab — but only once the store
+ * itself is per-session. `lib/audio-prefs.ts` `queueStore` is what makes that
+ * true; this key scheme is safe under it and is not safe without it.
  */
 export const PLAYER_KEY = 'wap:player';
 
