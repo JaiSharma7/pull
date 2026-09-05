@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   answerSimilarity,
-  CLOZE_ACCEPT,
   FAST_ANSWER_MS,
   gradeCloze,
   gradeMcq,
@@ -206,32 +205,88 @@ describe('gradeCloze', () => {
     expect(gradeCloze('MITOCHONDRIA', answer).correct).toBe(true);
   });
 
-  it('accepts a typo within the threshold', () => {
-    // One letter wrong in twelve is a slip of the hand, not of memory.
-    const result = gradeCloze('mitochondrea', answer);
-    expect(result.similarity).toBeGreaterThanOrEqual(CLOZE_ACCEPT);
-    expect(result.correct).toBe(true);
+  it('accepts a dropped letter, which is a hand and not a memory', () => {
+    expect(gradeCloze('mitochondia', answer).correct).toBe(true);
+    expect(gradeCloze('color', 'colour').correct).toBe(true);
+    expect(gradeCloze('ocurrence', 'occurrence').correct).toBe(true);
   });
 
   it('charges a swapped pair as one slip, not two', () => {
-    // The commonest typing error. Plain Levenshtein would score it 10/12 and
-    // fail it; the distance here counts an adjacent transposition once.
+    // The commonest typing error.
     const result = gradeCloze('mitochondira', answer);
-    expect(result.similarity).toBeCloseTo(11 / 12);
     expect(result.correct).toBe(true);
+  });
+
+  it('refuses a substituted letter, however near the ratio says it is', () => {
+    // The four the review reproduced grading `easy` at 0.875-0.900. A hand
+    // slipping off a key drops, doubles or swaps a letter; it does not put a
+    // different letter in and land on the opposite structure of the nervous
+    // system.
+    for (const [typed, correctAnswer] of [
+      ['efferent', 'afferent'],
+      ['absorption', 'adsorption'],
+      ['intension', 'intention'],
+      ['inductive', 'deductive'],
+    ] as const) {
+      const result = gradeCloze(typed, correctAnswer, 'sure', 1000);
+      expect(result.correct).toBe(false);
+      expect(result.grade).toBe('forgot');
+    }
+  });
+
+  it('holds a number to the letter', () => {
+    // 0.875 similar and an order of magnitude apart.
+    expect(gradeCloze('10000000', '1000000').correct).toBe(false);
+    expect(gradeCloze('1000000', '1000000').correct).toBe(true);
   });
 
   it('rejects a different word, and says how close it came', () => {
     const result = gradeCloze('chloroplast', answer);
     expect(result.correct).toBe(false);
     expect(result.grade).toBe('forgot');
-    expect(result.similarity).toBeLessThan(CLOZE_ACCEPT);
+    expect(result.similarity).toBeLessThan(1);
     expect(result.similarity).toBeGreaterThanOrEqual(0);
   });
 
   it('rejects a short word with one letter wrong', () => {
-    // 0.85 on four letters allows no slip at all; "mass" is not "mast".
+    // A substitution: "mass" is not "mast".
     expect(gradeCloze('mast', 'mass').correct).toBe(false);
+  });
+
+  it('never reports a wrong answer as identical', () => {
+    // `normaliseAnswer` strips both symbols, so this used to score 1 while
+    // grading wrong -- a screen saying "close" would show "100%" over "no".
+    const result = gradeCloze('Na-', 'Na+');
+    expect(result.correct).toBe(false);
+    expect(result.similarity).toBeLessThan(1);
+  });
+
+  it('accepts an answer that is only a mark', () => {
+    // `normaliseAnswer` reduces these to nothing, which used to fail them.
+    for (const mark of ['+', '=', '<', '^']) {
+      expect(gradeCloze(mark, mark).correct).toBe(true);
+    }
+  });
+
+  it('reads a hyphen the same way however the reader spaced it', () => {
+    expect(gradeCloze('well - known', 'well-known').correct).toBe(
+      gradeCloze('well known', 'well-known').correct,
+    );
+    expect(gradeCloze('cost - benefit', 'cost-benefit').correct).toBe(true);
+  });
+
+  it('does not send a typo to the misconception loop, by grading it right', () => {
+    // The review asked that a reader who mistypes a word they know is not
+    // recorded as confidently wrong. Suppressing the flag on a similarity band
+    // would have re-admitted `increase`/`decrease` (0.92 across the string), so
+    // the answer is that a slip is simply correct and never gets there.
+    const slip = gradeCloze('colour', 'color', 'sure', 1000);
+    expect(slip.correct).toBe(true);
+    expect(slip.confidentlyWrong).toBe(false);
+
+    // And a reader who wrote the ampersand out is not answering a different
+    // question.
+    expect(gradeCloze('supply and demand', 'supply & demand').correct).toBe(true);
   });
 
   it('rejects nothing typed', () => {
@@ -339,7 +394,8 @@ describe('gradeOrdering', () => {
     expect(gradeOrdering(['Observe', 'Hypothesise', 'Test', 'Revise'], q)).toMatchObject({
       correct: true,
       grade: 'good',
-      misplaced: 0,
+      positionsWrong: 0,
+      inSequence: 4,
     });
   });
 
@@ -347,19 +403,29 @@ describe('gradeOrdering', () => {
     const result = gradeOrdering(['Observe', 'Test', 'Hypothesise', 'Revise'], q);
     expect(result.correct).toBe(false);
     expect(result.grade).toBe('forgot');
-    expect(result.misplaced).toBe(2);
+    expect(result.positionsWrong).toBe(2);
+    expect(result.inSequence).toBe(3);
+  });
+
+  it('says how much of the order survived a rotation', () => {
+    // The commonest drag error, and the one `misplaced` misrepresented: every
+    // position is wrong, and three of the four steps are still in the right
+    // order relative to one another.
+    const result = gradeOrdering(['Hypothesise', 'Test', 'Revise', 'Observe'], q);
+    expect(result.positionsWrong).toBe(4);
+    expect(result.inSequence).toBe(3);
   });
 
   it('rejects a missing step', () => {
     const result = gradeOrdering(['Observe', 'Hypothesise', 'Revise'], q);
     expect(result.correct).toBe(false);
-    expect(result.misplaced).toBe(2);
+    expect(result.positionsWrong).toBe(2);
   });
 
   it('rejects an extra step', () => {
     const result = gradeOrdering(['Observe', 'Hypothesise', 'Test', 'Revise', 'Publish'], q);
     expect(result.correct).toBe(false);
-    expect(result.misplaced).toBe(1);
+    expect(result.positionsWrong).toBe(1);
   });
 
   it('is never right against a question with no steps', () => {
@@ -382,17 +448,76 @@ describe('whyWrong', () => {
   const q = mcq();
 
   it('answers with the rationale written for that distractor', () => {
-    expect(whyWrong(q, 'A reason to stop')).toBe(
-      'Stopping is the one response the passage rules out.',
-    );
+    expect(whyWrong(q, 'A reason to stop')).toEqual({
+      why: 'Stopping is the one response the passage rules out.',
+      source: 'distractor',
+    });
   });
 
   it('matches a distractor loosely when the verbatim one is not there', () => {
-    expect(whyWrong(q, 'a sign of bad luck!')).toBe('Luck is not a category the Stoics grant.');
+    expect(whyWrong(q, 'a sign of bad luck!')).toEqual({
+      why: 'Luck is not a category the Stoics grant.',
+      source: 'distractor',
+    });
   });
 
-  it('falls back to the explanation for a distractor with no rationale', () => {
-    expect(whyWrong(q, 'Someone else’s fault')).toBe(q.explanation);
+  it('never explains one wrong answer with another one’s reason', () => {
+    // `normaliseAnswer` strips exactly the characters `semanticMarks` keeps, so
+    // `C++` and `C` both reduced to `c` and a reader who picked `C` was told a
+    // true fact about C++ as an account of their own mistake.
+    const languages = mcq({
+      answer: 'Rust',
+      explanation: null,
+      rationale: [{ distractor: 'C++', why: 'C++ has manual memory management.' }],
+    });
+    expect(whyWrong(languages, 'C')).toBeNull();
+    expect(whyWrong(languages, 'C++')).toEqual({
+      why: 'C++ has manual memory management.',
+      source: 'distractor',
+    });
+
+    // Nor the article-stripped neighbour.
+    const markets = mcq({
+      answer: 'The state',
+      explanation: null,
+      rationale: [{ distractor: 'the market', why: 'Markets clear; they do not decide.' }],
+    });
+    expect(whyWrong(markets, 'market')).toEqual({
+      why: 'Markets clear; they do not decide.',
+      source: 'distractor',
+    });
+
+    // And when two rationales collapse to the same loose key it says nothing,
+    // because it cannot tell which the reader meant.
+    const ambiguous = mcq({
+      answer: 'Rust',
+      explanation: null,
+      rationale: [
+        { distractor: 'C', why: 'C has no ownership model.' },
+        { distractor: 'c', why: 'Lower case c is a different option entirely.' },
+      ],
+    });
+    // The pick has to miss the exact pass to reach the loose one; an exact
+    // match is never ambiguous.
+    expect(whyWrong(ambiguous, 'C.')).toBeNull();
+  });
+
+  it('labels the answer’s own explanation as what it is', () => {
+    // It says why the ANSWER is the answer, whatever was picked. Under a heading
+    // like "Why that's wrong" it reads as an account of the reader's error, and
+    // a screen rendering `explanation` separately would print it twice.
+    expect(whyWrong(q, 'Someone else’s fault')).toEqual({
+      why: q.explanation,
+      source: 'answer',
+    });
+  });
+
+  it('survives a question whose rationale column does not exist yet', () => {
+    // 3a adds `rationale`; a row read today arrives without it.
+    const legacy = { answer: 'Rust', explanation: 'Because of ownership.' } as Parameters<
+      typeof whyWrong
+    >[0];
+    expect(whyWrong(legacy, 'Go')).toEqual({ why: 'Because of ownership.', source: 'answer' });
   });
 
   it('has nothing to say about the right answer', () => {
@@ -407,6 +532,9 @@ describe('whyWrong', () => {
 
   it('ignores a rationale whose reason is blank', () => {
     const blank = mcq({ rationale: [{ distractor: 'A reason to stop', why: '  ' }] });
-    expect(whyWrong(blank, 'A reason to stop')).toBe(blank.explanation);
+    expect(whyWrong(blank, 'A reason to stop')).toEqual({
+      why: blank.explanation,
+      source: 'answer',
+    });
   });
 });

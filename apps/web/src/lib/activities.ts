@@ -24,7 +24,17 @@ import type { RecallGrade } from './grades.js';
  */
 
 /**
- * The kinds a question can be. Mirrors the `kind` check on `quiz_questions`.
+ * The kinds a question can be.
+ *
+ * NOT a mirror of a database constraint, and this comment claimed it was.
+ * `quiz_questions.kind` is plain `text not null default 'recall'` with no check
+ * on it — the only constraint the column carries is the unique `(pull_id, kind)`
+ * index from 20260901040000. 3a is the migration that adds the check; until it
+ * lands, this list is the *intended* set and nothing in Postgres enforces it, so
+ * a row can arrive with a kind that is not here. Every consumer must treat an
+ * unknown kind as ungraded rather than assume the set is closed. (The sibling
+ * claim about `confidence` mirroring `recall_events` is true: 20260905100000
+ * does check it.)
  *
  * Only three are graded here. `recall`, `short_answer` and `scenario` stay
  * self-graded: there is no deterministic way to mark a paragraph the reader
@@ -44,6 +54,21 @@ export type QuestionKind = (typeof QUESTION_KINDS)[number];
 export interface DistractorRationale {
   distractor: string;
   why: string;
+}
+
+/**
+ * What `whyWrong` found, and which question it answers.
+ *
+ * The two are not interchangeable and the screen has to head them differently.
+ * `distractor` is an account of the reader's own choice — "Why that's wrong".
+ * `answer` is the question's general explanation, which says why the ANSWER is
+ * the answer whatever was picked; headed as an account of the error it tells a
+ * reader a fact about an option they did not choose, and a screen that renders
+ * `explanation` separately would print the same paragraph twice.
+ */
+export interface WhyWrong {
+  why: string;
+  source: 'distractor' | 'answer';
 }
 
 export interface Question {
@@ -225,8 +250,12 @@ function gradeFrom(
  * the reader felt about it, and letting "hard" soften a miss would put a false
  * belief back on a normal schedule.
  */
-export function selfReportedHard(result: GradeResult): GradeResult {
+export function selfReportedHard<T extends GradeResult>(result: T): T {
   if (!result.correct) return result;
+  // Generic, so the caller keeps whatever the grader added — `similarity` and
+  // `similarity` from a cloze, `positionsWrong` and `inSequence` from an ordering.
+  // Typed as `GradeResult` it erased fields the runtime was still carrying, and
+  // a screen asking for them after this call would not compile.
   return { ...result, grade: 'hard' };
 }
 
@@ -244,7 +273,11 @@ export function gradeMcq(
   confidence: Confidence,
   latencyMs: number | null | undefined,
 ): GradeResult {
-  const correct = picked.trim() === q.answer.trim();
+  // An empty answer matched by an empty pick is not a right answer, it is two
+  // absences agreeing. A question with no answer is malformed and nothing the
+  // reader did should be graded `easy` on the strength of it.
+  const answer = q.answer.trim();
+  const correct = answer.length > 0 && picked.trim() === answer;
   return gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.mcq);
 }
 
@@ -257,14 +290,20 @@ export function gradeMcq(
  * teaches the reader to game the box rather than remember the idea.
  */
 export function normaliseAnswer(text: string): string {
-  return text
-    .normalize('NFKD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^(?:a|an|the) /, '');
+  return (
+    text
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      // `&` is a word before it is punctuation. Dropping it made `supply and
+      // demand` a two-word answer against a three-word one, so a reader who wrote
+      // the ampersand out was graded as having written something else.
+      .replace(/&/gu, ' and ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^(?:a|an|the) /, '')
+  );
 }
 
 /**
@@ -283,15 +322,21 @@ export function normaliseAnswer(text: string): string {
  * one-line answer by accident.
  */
 export function semanticMarks(text: string): string {
+  // Whitespace is removed BEFORE the scan, or the reader's spacebar decides
+  // whether a hyphen is semantic: `well - known` kept the mark and `well known`
+  // dropped it, so the first graded wrong against `well-known` and the second
+  // graded right. `normaliseAnswer` collapses whitespace for the same reason;
+  // this has to agree with it about what the reader wrote.
+  const compact = text.replace(/\s+/gu, '');
   const kept: string[] = [];
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
+  for (let i = 0; i < compact.length; i += 1) {
+    const ch = compact[i];
     // `noUncheckedIndexedAccess`: an index into a string is `string | undefined`,
     // and only the `=== '-'` comparison narrows it. Guarded once, for both branches.
     if (ch === undefined) continue;
     if (ch === '-') {
-      const before = text[i - 1];
-      const after = text[i + 1];
+      const before = compact[i - 1];
+      const after = compact[i + 1];
       const joins =
         before !== undefined &&
         after !== undefined &&
@@ -344,34 +389,109 @@ function editDistance(a: string, b: string): number {
  * an empty answer on either side is 0 rather than a division by nothing.
  */
 export function answerSimilarity(typed: string, answer: string): number {
-  const a = normaliseAnswer(typed);
-  const b = normaliseAnswer(answer);
+  // The marks are appended rather than compared separately, so the edit distance
+  // sees them. Without this `normaliseAnswer` strips both symbols and `Na-` for
+  // `Na+` scores 1 while grading wrong -- a screen using this to say "close"
+  // would show a reader "100%" over the word "no". Comparing `na+` with `na-`
+  // instead gives 0.67, and the useful property falls out of it: identical
+  // normalised-and-marked strings are exactly the ones `gradeCloze` calls
+  // correct, so a similarity of 1 can no longer accompany a wrong answer.
+  const a = normaliseAnswer(typed) + semanticMarks(typed);
+  const b = normaliseAnswer(answer) + semanticMarks(answer);
   if (!a || !b) return 0;
   const longest = Math.max(a.length, b.length);
   return 1 - editDistance(a, b) / longest;
 }
 
 /**
- * Below this a typed answer is a different answer. 0.85 lets one wrong letter
- * through on a seven-letter word and two on a thirteen-letter one — a typo, not
- * a synonym. A near miss is still reported as `similarity` so a screen can say
- * "close" rather than only "no".
- */
-export const CLOZE_ACCEPT = 0.85;
-
-/**
- * And no more than this many edits in any one word, however long the answer.
+ * WHAT COUNTS AS A SLIP, and why it is no longer a ratio.
  *
- * A proportional threshold alone is only safe on a single word. Spread over a
- * phrase it lets every edit pile into the word that carries the meaning:
- * "increase marginal utility" and "decrease marginal utility" are 0.92 similar
- * across the whole string, so the grader called the opposite answer `easy` and
- * the confidently-wrong repair loop never saw it. The comparison is per word
- * now — same number of words, and each one close to its own counterpart — which
- * puts "increase" against "decrease" at 0.75 and refuses it, while
- * "mitochondira" for "mitochondria" is still one transposition and still passes.
+ * Review also asked for the other half of this: a reader who types `color` for
+ * `colour` should not be recorded as `confidentlyWrong`, because that field
+ * means a false belief and routes them into the misconception loop. The first
+ * draft added a near-miss band that suppressed the flag above a similarity
+ * threshold, and it was wrong -- `increase marginal utility` against `decrease
+ * marginal utility` is 0.92 similar across the string, so the band quietly
+ * re-admitted the exact class this rule exists to catch, and the suite said so.
+ * The answer is the rule below rather than a second threshold on top of it: a
+ * typo IS the answer now, graded `good`, so it never reaches `confidentlyWrong`
+ * at all, and what still fails really is a different answer.
+ *
+ *
+ * The rule here was "within two edits, and at least 0.85 similar, per word". A
+ * ratio cannot separate the two things it was being asked to: `color` for
+ * `colour` is one edit in six letters and a typo, and `efferent` for `afferent`
+ * is one edit in eight and a different structure of the nervous system. Review
+ * reproduced four of that second kind grading `easy` at 0.875-0.900 --
+ * `efferent`/`afferent`, `absorption`/`adsorption`, `intension`/`intention`,
+ * `10000000`/`1000000` -- and `easy` is, by this module's own words, the grade a
+ * wrong heuristic does the most damage with. It multiplies stability by more
+ * than three and takes the idea out of review for a fortnight, and
+ * `confidentlyWrong` is false, so nothing downstream ever looks at it again.
+ *
+ * The distinction that does hold is not how far apart two words are but WHAT
+ * KIND of difference it is. A hand slips off a key and drops a letter, doubles
+ * one, or swaps two; it does not substitute one letter for another and land on
+ * a word that means something else. So an insertion, a deletion or a
+ * transposition is forgiven, and a substitution is not:
+ *
+ *   colour / color          deletion       -> correct
+ *   mitochondira            transposition  -> correct
+ *   occurrence / ocurrence  deletion       -> correct
+ *   efferent / afferent     substitution   -> not correct
+ *   absorption / adsorption substitution   -> not correct
+ *   intension / intention   substitution   -> not correct
+ *
+ * WHAT THIS COSTS, stated because it is a real regression for one class:
+ * `ionised` for `ionized` is a substitution and is now graded `forgot`, where
+ * the ratio rule accepted it. `similarity` still reports 0.857 so the screen can
+ * say how close it came, and the reader sees the idea again tomorrow rather than
+ * in three days. That is the cheap direction to be wrong in, and the alternative
+ * was letting the opposite of the answer through as `easy`.
+ *
+ * DIGITS ARE EXACT. A slip in a number is not a spelling variant: `10000000`
+ * for `1000000` is an order of magnitude and passed the old rule at 0.875. Any
+ * word containing a digit has to match exactly.
  */
-export const CLOZE_MAX_EDITS_PER_WORD = 2;
+function isTypingSlip(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (/\p{N}/u.test(a) || /\p{N}/u.test(b)) return false;
+
+  // An insertion or a deletion: the longer word is the shorter one with one
+  // character put back. Walked once from each end rather than spliced, so the
+  // repeated-letter case (`ocurrence`/`occurrence`) needs no special handling.
+  if (Math.abs(a.length - b.length) === 1) {
+    const [short, long] = a.length < b.length ? [a, b] : [b, a];
+    let i = 0;
+    while (i < short.length && short[i] === long[i]) i += 1;
+    let j = 0;
+    while (j < short.length - i && short[short.length - 1 - j] === long[long.length - 1 - j]) {
+      j += 1;
+    }
+    return i + j === short.length;
+  }
+
+  // A transposition: same length, two adjacent positions differ, and they are
+  // each other's. Anything else of the same length is a substitution.
+  if (a.length === b.length) {
+    const differing: number[] = [];
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] !== b[i]) differing.push(i);
+      if (differing.length > 2) return false;
+    }
+    const [first, second] = differing;
+    return (
+      differing.length === 2 &&
+      first !== undefined &&
+      second !== undefined &&
+      second === first + 1 &&
+      a[first] === b[second] &&
+      a[second] === b[first]
+    );
+  }
+
+  return false;
+}
 
 /**
  * Every word close to its own counterpart, and the same number of words.
@@ -383,14 +503,14 @@ export const CLOZE_MAX_EDITS_PER_WORD = 2;
 function wordsAreClose(typed: string, answer: string): boolean {
   const a = normaliseAnswer(typed).split(' ').filter(Boolean);
   const b = normaliseAnswer(answer).split(' ').filter(Boolean);
+  // Both empty is the answer that IS a mark -- `+` for `+`, `=` for `=` -- and
+  // `normaliseAnswer` strips it to nothing. The old bail on an empty typed
+  // answer graded those wrong when they were exactly right, which is the one
+  // class `semanticMarks` exists to protect. The caller has already compared the
+  // marks, so agreeing here is the whole answer.
+  if (a.length === 0 && b.length === 0) return true;
   if (a.length === 0 || a.length !== b.length) return false;
-  return a.every((word, i) => {
-    const other = b[i] as string;
-    const distance = editDistance(word, other);
-    if (distance > CLOZE_MAX_EDITS_PER_WORD) return false;
-    const longest = Math.max(word.length, other.length);
-    return longest === 0 || 1 - distance / longest >= CLOZE_ACCEPT;
-  });
+  return a.every((word, i) => isTypingSlip(word, b[i] as string));
 }
 
 /**
@@ -428,29 +548,63 @@ export function orderingSteps(q: Pick<Question, 'answer'>): string[] {
 }
 
 /**
+ * How many steps are in the right order relative to one another.
+ *
+ * The length of the longest common subsequence, which is the standard reading of
+ * "how much of this order is already right": the largest set of steps that could
+ * stay put while the rest moved. O(n·m) over sequences of a handful of steps.
+ */
+function longestOrderedRun(steps: readonly string[], given: readonly string[]): number {
+  // One row of the table, rebuilt per step: only the previous row is ever read.
+  let previous = new Array<number>(given.length + 1).fill(0);
+  for (const step of steps) {
+    const row = new Array<number>(given.length + 1).fill(0);
+    for (let j = 0; j < given.length; j += 1) {
+      row[j + 1] =
+        step === given[j] ? (previous[j] ?? 0) + 1 : Math.max(row[j] ?? 0, previous[j + 1] ?? 0);
+    }
+    previous = row;
+  }
+  return previous[given.length] ?? 0;
+}
+
+/**
  * Grade a sequence the reader arranged.
  *
  * All or nothing for the grade: an ordering with one pair swapped is not
  * remembered, it is nearly remembered, and the model has no grade for "nearly".
- * `misplaced` counts the positions that differ so the screen can show how near.
+ *
+ * TWO NUMBERS, because one of them was being asked to mean something it does not.
+ * `positionsWrong` counts positions that differ — it was called `misplaced` and
+ * read as nearness, which it is not: rotating a four-step sequence by one is the
+ * commonest drag error and puts every position wrong, so a screen showing "how
+ * near" told a reader who made one mistake that all four steps were out of place.
+ * `inSequence` is the honest companion — how many steps are already in the right
+ * order relative to each other — and on that rotation it is 3 of 4.
+ *
  * A sequence with a step missing or added is wrong at every position past the
- * fault, and reported as such.
+ * fault, and `positionsWrong` reports that; `inSequence` still says how much of
+ * the order survived.
  */
 export function gradeOrdering(
   order: readonly string[],
   q: Pick<Question, 'answer'>,
   confidence: Confidence = 'unsure',
   latencyMs: number | null | undefined = null,
-): GradeResult & { misplaced: number } {
+): GradeResult & { positionsWrong: number; inSequence: number } {
   const steps = orderingSteps(q);
   const given = order.map((s) => s.trim());
-  let misplaced = 0;
+  let positionsWrong = 0;
   const length = Math.max(steps.length, given.length);
   for (let i = 0; i < length; i += 1) {
-    if (steps[i] !== given[i]) misplaced += 1;
+    if (steps[i] !== given[i]) positionsWrong += 1;
   }
-  const correct = steps.length > 0 && misplaced === 0;
-  return { ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.ordering), misplaced };
+  const correct = steps.length > 0 && positionsWrong === 0;
+  return {
+    ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.ordering),
+    positionsWrong,
+    inSequence: longestOrderedRun(steps, given),
+  };
 }
 
 /* --------------------------------------------------------------------------
@@ -468,15 +622,43 @@ export function gradeOrdering(
 export function whyWrong(
   q: Pick<Question, 'answer' | 'explanation' | 'rationale'>,
   picked: string,
-): string | null {
+): WhyWrong | null {
   const chosen = picked.trim();
   if (chosen === q.answer.trim()) return null;
-  const match = q.rationale.find((r) => r.distractor.trim() === chosen);
-  if (match?.why.trim()) return match.why.trim();
-  const fallback = normaliseAnswer(chosen);
-  const loose = fallback
-    ? q.rationale.find((r) => normaliseAnswer(r.distractor) === fallback)
-    : undefined;
-  if (loose?.why.trim()) return loose.why.trim();
-  return q.explanation?.trim() || null;
+
+  // `rationale` is not a column on `quiz_questions` yet -- 3a adds it -- so a row
+  // read today arrives without it and `find` would throw on undefined.
+  const rationale = Array.isArray(q.rationale) ? q.rationale : [];
+  const match = rationale.find((r) => r.distractor.trim() === chosen);
+  if (match?.why.trim()) return { why: match.why.trim(), source: 'distractor' };
+
+  // The loose pass exists for drift -- a client that trimmed differently, a
+  // stored option that lost its case -- and it used to key on `normaliseAnswer`
+  // alone, which strips exactly the characters `semanticMarks` was added to
+  // keep. So `C++` and `C` both reduced to `c`, and a reader who picked `C`
+  // was shown the rationale written for `C++`: a true sentence about an option
+  // they did not choose, presented as an account of their own mistake. Article
+  // stripping did the same to `the market` and `market`.
+  //
+  // Matching on both halves separates those. When more than one rationale still
+  // matches, the loose pass cannot tell which the reader meant, and saying
+  // nothing is the only honest answer available -- the point of this function is
+  // to explain THIS reader's choice.
+  const key = normaliseAnswer(chosen);
+  const marks = semanticMarks(chosen);
+  const loose = key
+    ? rationale.filter(
+        (r) => normaliseAnswer(r.distractor) === key && semanticMarks(r.distractor) === marks,
+      )
+    : [];
+  const only = loose.length === 1 ? loose[0] : undefined;
+  if (only?.why.trim()) return { why: only.why.trim(), source: 'distractor' };
+
+  // The last resort is why the ANSWER is the answer, which is not the same thing
+  // and must not be labelled as though it were: under a heading like "Why that's
+  // wrong" it reads as an account of the reader's error, and a screen that also
+  // renders `explanation` prints the same paragraph twice. The source says which
+  // sentence this is so the screen can head it honestly, or drop it.
+  const explanation = q.explanation?.trim();
+  return explanation ? { why: explanation, source: 'answer' } : null;
 }
