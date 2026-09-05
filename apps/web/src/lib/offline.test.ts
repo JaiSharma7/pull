@@ -255,10 +255,19 @@ describe('an upgrade that cannot finish', () => {
     });
 
     try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       vi.resetModules();
       const fresh = await import('./offline.js');
-      // The store is unavailable, and says so rather than reporting an empty queue.
-      await expect(fresh.hasPending(USER_A)).resolves.toBe(true);
+      // A store that cannot be opened at all answers `false`: this does not resolve
+      // itself the way a tab holding the previous version does, and answering `true`
+      // would schedule a retry every five minutes for the life of the tab, each one
+      // a fresh open that fails again.
+      await expect(fresh.hasPending(USER_A)).resolves.toBe(false);
+      // And it is said out loud once. Nothing is rethrown and `openDB` rejects with
+      // an AbortError every caller reads as "no store", so without this the whole
+      // offline queue is permanently unavailable with nothing recorded anywhere.
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
     } finally {
       Object.defineProperty(globalThis.crypto, 'randomUUID', {
         configurable: true,

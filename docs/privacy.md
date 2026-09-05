@@ -202,7 +202,9 @@ What the app does put on your device, all of it first-party and all of it necess
 - **A small amount of interface state**, in `localStorage`.
 - **Your offline library**, in IndexedDB — the Pulls cached for reading without a
   connection and a queue of writes made while disconnected — which is how offline reading
-  is free rather than a paid tier. Each is keyed to the account that made it. (A
+  is free rather than a paid tier. The cached Pulls are keyed to the account that fetched
+  them; the queued writes carry their owner and are only ever sent for them. Two
+  mechanisms, one promise: a shared browser never shows one reader another's copy. (A
   downloadable practice pack is being built; when it lands it goes here too, and this
   line will say so once it is something you can actually do.)
 - **The app itself**, cached by a service worker.

@@ -335,7 +335,27 @@ function db(): Promise<Handle> {
  *   terminated the browser closed the connection on its own. Drop the memo so
  *              the next call reopens rather than using a dead handle.
  */
+/**
+ * Which open is current.
+ *
+ * `open()` writes `live` and `dbPromise` from callbacks that land whenever the
+ * browser gets round to them, and `blocking`/`terminated` can drop the memo in
+ * between — so an open that was superseded could still come back and overwrite a
+ * healthy connection with its own. Review drove both halves: a late FAILURE
+ * cleared a memo belonging to a newer, live connection, so the next call opened a
+ * third while the second was still open and unclosed; a late SUCCESS overwrote
+ * `live`, so the next `blocking` closed the wrong connection and left the one the
+ * callback exists to close open forever — blocking the next release's version
+ * bump on a connection nobody will ever close.
+ *
+ * A generation counter settles it: each open takes a number, and only touches the
+ * shared state if it is still the current one.
+ */
+let openGeneration = 0;
+
 function open(): Promise<Handle> {
+  const generation = ++openGeneration;
+  const current = () => generation === openGeneration;
   return new Promise<Handle>((resolve, reject) => {
     let yielded = false;
     openDB<WapDB>('what-a-pull', SCHEMA_VERSION, {
@@ -374,7 +394,7 @@ function open(): Promise<Handle> {
           // supposed to mean.
           try {
             await stampQueuedGrades(transaction);
-          } catch {
+          } catch (error) {
             // Aborted rather than rethrown, and both halves matter.
             //
             // `transaction.done` rejects with `AbortError` the moment the abort
@@ -387,7 +407,22 @@ function open(): Promise<Handle> {
             // rejects with `AbortError`, `db()` drops the memo, and the next
             // open tries the whole upgrade again from v1.
             transaction.done.catch(() => undefined);
-            transaction.abort();
+            try {
+              transaction.abort();
+            } catch {
+              // `abort()` throws when the transaction is already finished, which is
+              // the very case the comment above names as reachable: a versionchange
+              // transaction that commits before the cursor walk completes. In that
+              // state there is nothing left to abort — the version bump has landed —
+              // and letting this escape would be the second unhandled rejection the
+              // block exists to avoid.
+            }
+            // Said out loud, once. This is the only signal that anything went wrong:
+            // nothing is rethrown, `openDB` rejects with an AbortError that every
+            // caller treats as "no store", and with a deterministic cause — the
+            // `crypto.randomUUID` case above — the whole offline queue is
+            // permanently unavailable with nothing recorded anywhere.
+            console.warn('Offline store upgrade could not complete; retrying next open', error);
           }
         }
       },
@@ -396,21 +431,30 @@ function open(): Promise<Handle> {
         resolve(null);
       },
       blocking() {
+        if (!current()) return;
         live?.close();
         live = null;
         dbPromise = null;
       },
       terminated() {
+        if (!current()) return;
         live = null;
         dbPromise = null;
       },
     }).then(
       (database) => {
+        // A superseded open still has to close what it opened, or the connection
+        // leaks and blocks the next version bump — it just must not become `live`.
+        if (!current()) {
+          database.close();
+          return;
+        }
         live = database;
         if (yielded) dbPromise = Promise.resolve(database);
         else resolve(database);
       },
       (error: unknown) => {
+        if (!current()) return;
         if (yielded) {
           // The `blocked` path already answered `null`, so there is nobody left
           // to reject to -- but the memo is a promise resolved to `null`, and
@@ -680,18 +724,23 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 export async function hasPending(userId: string): Promise<boolean> {
   try {
     const database = await db();
-    // AN UNAVAILABLE STORE IS NOT AN EMPTY ONE, and this is the one place the
-    // difference decides a policy. `Feed.tsx` uses this to decide whether to
-    // keep the drain timer alive; answering `false` while the store is merely
-    // blocked -- an older tab holding the previous version open, which THIS
-    // release makes reachable for the first time, since it is the store's first
-    // version bump -- resets the backoff and schedules no retry, so a queue that
-    // really is on disk sits undrained until a reload. Answering `true` costs
-    // one more scheduled attempt that finds nothing.
+    // A BLOCKED STORE IS NOT AN EMPTY ONE, and this is the one place the
+    // difference decides a policy. `Feed.tsx` uses this to decide whether to keep
+    // the drain timer alive; answering `false` while an older tab holds the
+    // previous version open -- which THIS release makes reachable for the first
+    // time, being the store's first version bump -- resets the backoff and
+    // schedules no retry, so a queue that really is on disk sits undrained until a
+    // reload. `null` is exactly that case, and it is temporary: the other tab will
+    // close. Answering `true` costs one more scheduled attempt.
     if (!database) return true;
     return (await database.getAll('pending')).some((item) => item.userId === userId);
   } catch {
-    return true;
+    // A REJECTION IS NOT, and the first draft of this fix conflated them. `db()`
+    // rejects when the store is unusable rather than busy -- site data blocked, an
+    // upgrade that keeps failing -- and that does not resolve itself, so `true`
+    // here is not "one more attempt" but a retry every five minutes for the life
+    // of the tab, each one a fresh `openDB` that fails again.
+    return false;
   }
 }
 

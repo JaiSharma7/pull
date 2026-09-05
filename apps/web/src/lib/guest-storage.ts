@@ -15,9 +15,12 @@
  * it was until the review of #48. The gap it then named -- `lib/offline.ts` keeping the
  * cached feed unscoped, so an offline load could render the previous person's feed to
  * whoever was at the machine -- is CLOSED as of schema version 2: the cache and the review
- * pack are keyed `userId:pullId` and read only through a `by-user` index, the queue carries
- * its owner on every entry, and the upgrade deletes the v1 rows outright because nothing in
- * them said whose they were. `docs/privacy.md` and `docs/architecture.md` say so.
+ * pack are keyed `userId:pullId` and read only through a `by-user` index, and the schema
+ * version 2 upgrade deletes the v1 CACHE rows outright because nothing in them said whose
+ * they were. The queue was never in that position: `queueMutation` has stamped the owner on
+ * every entry since the function was written, so its rows are carried across the upgrade
+ * rather than dropped, and are filtered by owner on read. `docs/privacy.md` and
+ * `docs/architecture.md` name both mechanisms rather than implying one.
  *
  * What remains is narrower and belongs here rather than there: a browser set to restore its
  * last tabs brings a tab's `sessionStorage` back with them, so the session below can outlive
