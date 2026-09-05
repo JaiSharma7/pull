@@ -149,6 +149,79 @@ describe('walking the queue', () => {
   });
 });
 
+describe('ended, and the epoch that makes it safe', () => {
+  /*
+   * `speak` in lib/speech.ts cancels the previous utterance before starting the
+   * next, and the cancelled one's `onEnd` fires DURING that call. A reducer that
+   * advanced on a bare "ended" would hear that stale ending every time the reader
+   * pressed Next and skip a track. So the effect layer hands back the epoch it
+   * captured when it started the utterance, and anything else is ignored.
+   */
+  it('advances on the ending of the current utterance', () => {
+    const playing = run([{ type: 'enqueue', tracks: three }]);
+    const s = playerReducer(playing, { type: 'ended', token: playing.epoch });
+    expect(s.index).toBe(1);
+    expect(s.status).toBe('playing');
+    expect(s.epoch).toBe(playing.epoch + 1);
+  });
+
+  it('ignores a stale ending — the one speak fires for the previous utterance', () => {
+    const playing = run([{ type: 'enqueue', tracks: three }]);
+    const skipped = playerReducer(playing, { type: 'next' });
+    // The effect layer now calls speak() for track b, which cancels track a's
+    // utterance and fires its onEnd, carrying the epoch it was started under.
+    expect(playerReducer(skipped, { type: 'ended', token: playing.epoch })).toBe(skipped);
+    expect(skipped.index).toBe(1);
+  });
+
+  it('ignores an ending while paused or idle', () => {
+    const paused = run([{ type: 'enqueue', tracks: three }, { type: 'pause' }]);
+    expect(playerReducer(paused, { type: 'ended', token: paused.epoch })).toBe(paused);
+    const stopped = run([{ type: 'enqueue', tracks: three }, { type: 'stop' }]);
+    expect(playerReducer(stopped, { type: 'ended', token: stopped.epoch })).toBe(stopped);
+    expect(playerReducer(INITIAL_PLAYER, { type: 'ended', token: 0 })).toBe(INITIAL_PLAYER);
+  });
+
+  it('ends the queue on the last utterance, and honours the sleep timer', () => {
+    const last = run([{ type: 'enqueue', tracks: [track('a')] }]);
+    expect(playerReducer(last, { type: 'ended', token: last.epoch })).toMatchObject({
+      queue: [],
+      status: 'idle',
+    });
+    const sleepy = run([
+      { type: 'enqueue', tracks: three },
+      { type: 'setSleep', until: 100 },
+    ]);
+    const s = playerReducer(sleepy, { type: 'ended', token: sleepy.epoch, now: 100 });
+    expect(s.status).toBe('paused');
+    expect(s.index).toBe(0);
+    expect(s.epoch).toBe(sleepy.epoch);
+  });
+
+  it('starts a new epoch only for a new utterance', () => {
+    const playing = run([{ type: 'enqueue', tracks: three }]);
+    const e = playing.epoch;
+    expect(e).toBeGreaterThan(INITIAL_PLAYER.epoch);
+    expect(playerReducer(playing, { type: 'next' }).epoch).toBe(e + 1);
+    expect(run([{ type: 'next' }, { type: 'prev' }], playing).epoch).toBe(e + 2);
+    expect(playerReducer(playing, { type: 'playNow', track: track('x') }).epoch).toBe(e + 1);
+    expect(playerReducer(playing, { type: 'remove', id: 'a' }).epoch).toBe(e + 1);
+    // Nothing the listener would hear changes here.
+    expect(playerReducer(playing, { type: 'enqueue', tracks: [track('d')] }).epoch).toBe(e);
+    expect(playerReducer(playing, { type: 'remove', id: 'b' }).epoch).toBe(e);
+    // Pause and resume continue the same utterance; a rate or voice change is
+    // applied to it in place by lib/speech.ts.
+    const paused = playerReducer(playing, { type: 'pause' });
+    expect(paused.epoch).toBe(e);
+    expect(playerReducer(paused, { type: 'resume' }).epoch).toBe(e);
+    expect(playerReducer(playing, { type: 'setRate', rate: 1.5 }).epoch).toBe(e);
+    expect(playerReducer(playing, { type: 'setVoice', voiceURI: 'urn:v' }).epoch).toBe(e);
+    // Stopped, there is nothing to continue: resuming is a fresh utterance.
+    const stopped = playerReducer(playing, { type: 'stop' });
+    expect(playerReducer(stopped, { type: 'resume' }).epoch).toBe(e + 1);
+  });
+});
+
 describe('pause, resume, stop', () => {
   it('pauses only what is playing', () => {
     const s = run([{ type: 'enqueue', tracks: three }, { type: 'pause' }]);
@@ -335,7 +408,8 @@ describe('serialize and hydrate', () => {
     // A browser will not speak without a gesture, so a queue comes back with
     // its place kept and a Resume control, not mid-sentence.
     const back = hydrate(serialize(full, 'u1'), 'u1', 0);
-    expect(back).toEqual({ ...full, status: 'paused' });
+    // And under a fresh epoch: a restored queue has not started anything.
+    expect(back).toEqual({ ...full, status: 'paused', epoch: 0 });
   });
 
   it('comes back idle when there was nothing queued', () => {

@@ -116,7 +116,8 @@ describe('the stored queue', () => {
   it('round-trips under the reader’s own key, coming back paused', () => {
     stubStorage();
     storePlayer(queued, 'u1');
-    expect(readStoredPlayer('u1')).toEqual({ ...queued, status: 'paused' });
+    // Paused with its place kept, and under a fresh epoch: nothing has started.
+    expect(readStoredPlayer('u1')).toEqual({ ...queued, status: 'paused', epoch: 0 });
     expect(readStoredPlayer('u2')).toEqual(INITIAL_PLAYER);
     expect(readStoredPlayer(null)).toEqual(INITIAL_PLAYER);
   });

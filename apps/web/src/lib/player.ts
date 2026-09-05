@@ -26,6 +26,14 @@
  *     the player goes idle. Nothing is remembered to be replayed, because a
  *     finished session that lingers as "Paused · 5 of 5" on the next visit is a
  *     feed that never ends, wearing headphones.
+ *
+ * THE EFFECT LAYER'S CONTRACT, so it can be written once and not re-derived:
+ * when `epoch` changes while the status is `playing`, call `speak` on the
+ * current track and hand that epoch back in `ended`; when the status becomes
+ * `paused`, pause; when it returns to `playing` under the same epoch, resume;
+ * when it becomes `idle`, stop. A rate or voice change while something is
+ * playing is applied to the live utterance in place (`adjustSpeaking` in
+ * `lib/speech.ts` keeps the reader's position) and does not touch the epoch.
  */
 
 export interface Track {
@@ -54,6 +62,20 @@ export interface PlayerState {
    * has to read a clock: the caller that sets it does the addition.
    */
   sleepUntil: number | null;
+  /**
+   * Which utterance the effect layer should be speaking.
+   *
+   * Bumped by every transition that needs a fresh `speak` — a new track, a
+   * restart after a stop — and left alone by pause and resume, which continue
+   * the same one. It exists because of how `speak` ends things: it cancels the
+   * previous utterance first, and that utterance's `onEnd` fires DURING the
+   * call, before the new one has started. A reducer that advanced on a bare
+   * "ended" would hear that stale ending and skip a track every time the reader
+   * pressed Next. So the effect layer captures the epoch when it starts an
+   * utterance, hands it back in `ended`, and anything that is not current is
+   * ignored. Never persisted: a restored queue has not started anything.
+   */
+  epoch: number;
 }
 
 /**
@@ -73,6 +95,7 @@ export const INITIAL_PLAYER: PlayerState = {
   rate: 1,
   voiceURI: null,
   sleepUntil: null,
+  epoch: 0,
 };
 
 export type PlayerAction =
@@ -95,10 +118,34 @@ export type PlayerAction =
   | { type: 'clear' }
   | { type: 'setRate'; rate: number }
   | { type: 'setVoice'; voiceURI: string | null }
-  | { type: 'setSleep'; until: number | null };
+  | { type: 'setSleep'; until: number | null }
+  /**
+   * The effect layer's report that the utterance it started under `token` —
+   * the epoch it captured at the time — has ended on its own. Ignored when the
+   * token is not the current epoch or nothing is playing: see `epoch`.
+   */
+  | { type: 'ended'; token: number; now?: number };
 
 export function clampRate(rate: number): number {
   return Math.min(MAX_RATE, Math.max(MIN_RATE, rate));
+}
+
+/**
+ * Move to the next track, or honour the sleep timer, or end.
+ *
+ * The timer fires at a boundary rather than mid-sentence, and pauses rather
+ * than stops: the reader who set it was going to sleep, and the morning wants
+ * to pick up where the evening left off.
+ */
+function advance(state: PlayerState, now: number | undefined): PlayerState {
+  if (state.sleepUntil !== null && now !== undefined && now >= state.sleepUntil) {
+    return { ...state, status: 'paused', sleepUntil: null };
+  }
+  if (state.index + 1 < state.queue.length) {
+    return { ...state, index: state.index + 1, status: 'playing', epoch: state.epoch + 1 };
+  }
+  // The end is an end. See the header.
+  return { ...state, queue: [], index: 0, status: 'idle' };
 }
 
 /**
@@ -121,52 +168,52 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
       // Queueing onto silence is "listen, then keep going". Queueing onto a
       // paused player is just queueing — the reader paused for a reason.
       if (state.status === 'idle') {
-        return { ...state, queue, index: state.queue.length, status: 'playing' };
+        return {
+          ...state,
+          queue,
+          index: state.queue.length,
+          status: 'playing',
+          epoch: state.epoch + 1,
+        };
       }
       return { ...state, queue };
     }
 
     case 'playNow': {
       const at = state.queue.findIndex((t) => t.id === action.track.id);
-      if (at >= 0) return { ...state, index: at, status: 'playing' };
+      if (at >= 0) return { ...state, index: at, status: 'playing', epoch: state.epoch + 1 };
 
       // After the current track rather than at the head: the reader chose
       // something else over *this one*, not over everything after it.
       const position = state.queue.length === 0 ? 0 : state.index + 1;
       const queue = [...state.queue];
       queue.splice(position, 0, action.track);
-      return { ...state, queue, index: position, status: 'playing' };
+      return { ...state, queue, index: position, status: 'playing', epoch: state.epoch + 1 };
     }
 
-    case 'next': {
-      if (state.status === 'idle') return state;
+    case 'next':
+      return state.status === 'idle' ? state : advance(state, action.now);
 
-      // The timer fires at a boundary rather than mid-sentence, and pauses
-      // rather than stops: the reader who set it was going to sleep, and the
-      // morning wants to pick up where the evening left off.
-      if (state.sleepUntil !== null && action.now !== undefined && action.now >= state.sleepUntil) {
-        return { ...state, status: 'paused', sleepUntil: null };
-      }
-
-      if (state.index + 1 < state.queue.length) {
-        return { ...state, index: state.index + 1, status: 'playing' };
-      }
-      // The end is an end. See the header.
-      return { ...state, queue: [], index: 0, status: 'idle' };
-    }
+    case 'ended':
+      // A stale ending is not rare: it is what `speak` fires for the previous
+      // utterance while starting the next one. See `epoch`.
+      if (state.status !== 'playing' || action.token !== state.epoch) return state;
+      return advance(state, action.now);
 
     case 'prev': {
       if (state.status === 'idle' || state.index === 0) return state;
-      return { ...state, index: state.index - 1, status: 'playing' };
+      return { ...state, index: state.index - 1, status: 'playing', epoch: state.epoch + 1 };
     }
 
     case 'pause':
       return state.status === 'playing' ? { ...state, status: 'paused' } : state;
 
     case 'resume': {
+      // From paused the same utterance continues. From stopped there is nothing
+      // to continue, so this is a fresh one.
       if (state.status === 'paused') return { ...state, status: 'playing' };
       if (state.status === 'idle' && state.queue.length > 0) {
-        return { ...state, status: 'playing' };
+        return { ...state, status: 'playing', epoch: state.epoch + 1 };
       }
       return state;
     }
@@ -186,7 +233,7 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
 
       // The current track went. The one after it takes its place, and if there
       // was none the player stops rather than silently rewinding.
-      if (state.index < queue.length) return { ...state, queue };
+      if (state.index < queue.length) return { ...state, queue, epoch: state.epoch + 1 };
       return { ...state, queue, index: queue.length - 1, status: 'idle' };
     }
 
@@ -337,5 +384,6 @@ export function hydrate(
     rate,
     voiceURI,
     sleepUntil,
+    epoch: 0,
   };
 }
