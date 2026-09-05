@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -13,8 +13,32 @@ import { describe, expect, it } from 'vitest';
  */
 
 const STYLES = join(import.meta.dirname, 'styles');
-const cssFiles = readdirSync(STYLES).filter((f) => f.endsWith('.css'));
-const read = (f: string) => readFileSync(join(STYLES, f), 'utf8');
+const WEB = join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src');
+
+/**
+ * Every stylesheet the product ships, not just this package's.
+ *
+ * `cssFiles` was `readdirSync(packages/ui/src/styles)` and every assertion below
+ * loops it — so `apps/web/src/styles/design-preview.css`, 467 lines of real rules
+ * loaded by `routes/DesignPreview.tsx` on the reachable `/design-preview`, was
+ * invisible to all of them. Verified by writing a pastel gradient, a 24px drop
+ * shadow, an 18px radius, a hot-pink hex and `100vh` into it: 31 tests passed. A
+ * law that reads one of the two directories it applies to is a law with a
+ * documented way around it.
+ *
+ * Absolute paths, so a file is read by where it is; messages carry the basename,
+ * which is what a contributor recognises.
+ */
+const STYLE_DIRS = [STYLES, join(WEB, 'styles')].filter(existsSync);
+const cssFiles = STYLE_DIRS.flatMap((dir) =>
+  readdirSync(dir)
+    .filter((f) => f.endsWith('.css'))
+    .map((f) => join(dir, f)),
+);
+/** Bare names still resolve in this package, which is where the named files live. */
+const read = (f: string) => readFileSync(f.includes('/') ? f : join(STYLES, f), 'utf8');
+/** What to call a stylesheet in a failure message. */
+const label = (f: string) => basename(f);
 
 /** Strip comments so prose about gradients doesn't trip the checks. */
 const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, '');
@@ -22,11 +46,15 @@ const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, '');
 describe('The Archive design laws', () => {
   it('has stylesheets to check', () => {
     expect(cssFiles.length).toBeGreaterThan(0);
+    // Both directories, or the law is only half enforced. See `STYLE_DIRS`.
+    expect(STYLE_DIRS.length, 'apps/web/src/styles is not being read').toBe(2);
   });
 
   it('uses no gradients anywhere — flat ground plus grain, never a gradient', () => {
     for (const f of cssFiles) {
-      expect(code(f), `${f} contains a gradient`).not.toMatch(/(linear|radial|conic)-gradient/);
+      expect(code(f), `${label(f)} contains a gradient`).not.toMatch(
+        /(linear|radial|conic)-gradient/,
+      );
     }
   });
 
@@ -36,7 +64,7 @@ describe('The Archive design laws', () => {
       // accessibility affordance, not decoration.
       const shadows = [...code(f).matchAll(/box-shadow:\s*([^;]+);/g)].map((m) => m[1]!.trim());
       const decorative = shadows.filter((v) => !v.includes('--focus-ring'));
-      expect(decorative, `${f} uses box-shadow for elevation`).toEqual([]);
+      expect(decorative, `${label(f)} uses box-shadow for elevation`).toEqual([]);
     }
   });
 
@@ -53,12 +81,12 @@ describe('The Archive design laws', () => {
     /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix)\(/g;
 
   it('defines colour only in tokens.css', () => {
-    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
+    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
       // Data-URI SVGs carry their own encoded markup; strip them before looking
       // for colour, or the embedded paper-grain filter reads as a literal.
       const withoutDataUris = code(f).replace(/url\("data:[^"]*"\)/g, '');
       const found: string[] = withoutDataUris.match(COLOUR_LITERAL) ?? [];
-      expect(found, `${f} hardcodes ${found.join(', ')} outside tokens.css`).toEqual([]);
+      expect(found, `${label(f)} hardcodes ${found.join(', ')} outside tokens.css`).toEqual([]);
     }
   });
 
@@ -95,31 +123,12 @@ describe('The Archive design laws', () => {
     // that should have caught them. Each is recorded beside the line that closed
     // it. Widening a check is not the same as fixing it, and the difference is
     // only ever visible from a violation you wrote on purpose.
-    const roots = [
-      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
-      join(import.meta.dirname, 'components'),
-    ].filter(existsSync);
+    // `packages/ui/src`, not `packages/ui/src/components`: a component anywhere
+    // else in the package was unscanned, and a `Toast.tsx` at the package root with
+    // a 20px radius, a drop shadow, a gradient and a hex passed all 31 tests.
+    // `styles/` is skipped because the stylesheet checks above own it.
+    const roots = [WEB, join(import.meta.dirname)].filter(existsSync);
     expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
-
-    /** Every `style={{ … }}` body in a file, brace-matched rather than pattern-matched. */
-    const inlineStyles = (src: string): string[] => {
-      const found: string[] = [];
-      for (let at = src.indexOf('style={{'); at >= 0; at = src.indexOf('style={{', at + 1)) {
-        let depth = 0;
-        for (let i = at + 'style='.length; i < src.length; i += 1) {
-          const ch = src[i];
-          if (ch === '{') depth += 1;
-          else if (ch === '}') {
-            depth -= 1;
-            if (depth === 0) {
-              found.push(src.slice(at + 'style={'.length, i));
-              break;
-            }
-          }
-        }
-      }
-      return found;
-    };
 
     /**
      * One declaration's own value, ending where the next declaration begins.
@@ -182,17 +191,31 @@ describe('The Archive design laws', () => {
             // object was flagged, which is a false failure on a diff that removed
             // the very thing this checks for.
             .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-          for (const inline of inlineStyles(src)) {
-            for (const [pattern, what, sanctioned] of banned) {
-              // Every occurrence, not the first. `.match` stopped at one, so a
-              // sanctioned `boxShadow: 'var(--focus-ring)'` written ahead of a
-              // decorative `WebkitBoxShadow` hid it — the same laundering as
-              // above, one property along.
-              for (const declaration of inline.matchAll(pattern)) {
-                const value = valueAfter(inline, (declaration.index ?? 0) + declaration[0].length);
-                if (sanctioned?.test(value)) continue;
-                offenders.push(`${entry.name}: ${what} in an inline style`);
-              }
+          /*
+           * THE WHOLE FILE, not just what sits between `style={{` and its brace.
+           *
+           * `inlineStyles` finds an object literal written in place, and that is the
+           * only shape it finds. A style object bound to a name and passed as
+           * `style={cardStyle}` walked straight past — verified with a `borderRadius:
+           * '18px'`, a `boxShadow` and a `linear-gradient` on `PullCard`'s own
+           * `<article>`: 31 tests passed. So did the conditional form, which is
+           * already live at `apps/web/src/routes/Preferences.tsx` as
+           * `style={mode === 'onboarding' ? { … } : undefined}` — not `style={{` at all.
+           *
+           * These property names are CSS-in-JS and mean one thing in a component, so
+           * the honest scan is the file. It costs the ability to say which attribute
+           * carried it, which was never what the message was for: the law is about
+           * what reaches the page, not about how it was spelled on the way.
+           */
+          for (const [pattern, what, sanctioned] of banned) {
+            // Every occurrence, not the first. `.match` stopped at one, so a
+            // sanctioned `boxShadow: 'var(--focus-ring)'` written ahead of a
+            // decorative `WebkitBoxShadow` hid it — the same laundering as the
+            // value-scoping above, one property along.
+            for (const declaration of src.matchAll(pattern)) {
+              const value = valueAfter(src, (declaration.index ?? 0) + declaration[0].length);
+              if (sanctioned?.test(value)) continue;
+              offenders.push(`${entry.name}: ${what} in a style`);
             }
           }
         }
@@ -258,14 +281,14 @@ describe('The Archive design laws', () => {
       const value = tokens.match(new RegExp(`${name}:\\s*([\\d.]+)px`))?.[1];
       expect(Number(value), `${name} is too round`).toBeLessThanOrEqual(ceiling);
     }
-    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
+    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
       const literals = [...code(f).matchAll(/border-radius:\s*([\d.]+)px/g)].map((m) =>
         Number(m[1]),
       );
       for (const px of literals) {
         // The block ceiling, since a literal does not say which it is. A control
         // that needs 2px should say `var(--radius-sm)` and be judged above.
-        expect(px, `${f} sets a ${px}px radius literal`).toBeLessThanOrEqual(
+        expect(px, `${label(f)} sets a ${px}px radius literal`).toBeLessThanOrEqual(
           MAX_RADIUS['--radius'],
         );
       }
@@ -281,6 +304,41 @@ describe('The Archive design laws', () => {
    * drift silently: tightening `--radius-sm` does nothing for controls if the
    * ring stops using it, and nothing else in this file reads base.css.
    */
+  /**
+   * And the exemption has to be worth granting.
+   *
+   * Every shadow check in this file — the stylesheet one and the inline one — lets
+   * `--focus-ring` through unconditionally, and nothing looked at what the token
+   * actually is. So redefining it in `tokens.css` to
+   * `0 10px 30px rgba(0,0,0,.4), 0 0 0 2px var(--accent)` gives every focusable
+   * element in the product a real drop shadow, with all 31 tests green: one line,
+   * and the law is gone everywhere it is enforced.
+   *
+   * A ring is spread with no blur and no offset. Each layer must therefore read
+   * `0 0 0 <spread>` — two zero offsets, a zero blur, then the ring's thickness.
+   * That is what the token is today and what makes the exemption defensible.
+   */
+  it('keeps the focus ring a ring, since every shadow check exempts it', () => {
+    const value = read('tokens.css')
+      .match(/--focus-ring:\s*([^;]+);/)?.[1]
+      ?.trim();
+    expect(value, 'no --focus-ring token found in tokens.css').toBeTruthy();
+    for (const layer of (value ?? '').split(/,(?![^(]*\))/)) {
+      const lengths = layer.trim().match(/(^|\s)-?[\d.]+(px|rem|em)?(?=\s|$)/gu) ?? [];
+      expect(
+        lengths.length,
+        `"${layer.trim()}" is not a ring layer — expected offset, offset, blur, spread`,
+      ).toBeGreaterThanOrEqual(3);
+      const [x, y, blur] = lengths.map((n) => Number.parseFloat(n));
+      expect(
+        [x, y, blur],
+        `--focus-ring layer "${layer.trim()}" has an offset or a blur, which makes it ` +
+          `a drop shadow. Every shadow check in this file exempts this token by name, so ` +
+          `a blur here is a blur on every focusable element in the product.`,
+      ).toEqual([0, 0, 0]);
+    }
+  });
+
   it('draws the focus ring at the control radius, not the block radius', () => {
     const ring = read('base.css').match(/:focus-visible\s*\{[^}]*\}/)?.[0] ?? '';
     expect(ring, 'no :focus-visible rule found in base.css').not.toBe('');
@@ -311,7 +369,7 @@ describe('The Archive design laws', () => {
   it('allows a non-px radius only where the shape is the affordance', () => {
     const offenders: string[] = [];
 
-    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
+    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
       for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
         const radius = body!.match(/border-radius:\s*([^;]+)/)?.[1]?.trim();
         if (!radius) continue;
@@ -323,7 +381,7 @@ describe('The Archive design laws', () => {
 
         const sel = selector!.trim();
         if (sel.split(',').every((one) => ROUND_BY_NATURE.has(one.trim()))) continue;
-        offenders.push(`${f}: ${sel} sets border-radius: ${radius}`);
+        offenders.push(`${label(f)}: ${sel} sets border-radius: ${radius}`);
       }
     }
 
@@ -536,7 +594,7 @@ describe('The Archive design laws', () => {
       const blocks = code(f).split('}');
       for (const b of blocks) {
         if (/outline:\s*(none|0)/.test(b)) {
-          expect(b, `${f} removes focus without providing a ring`).toMatch(/box-shadow/);
+          expect(b, `${label(f)} removes focus without providing a ring`).toMatch(/box-shadow/);
         }
       }
     }
@@ -567,7 +625,7 @@ describe('The Archive viewport laws', () => {
     // measurements that describe what the reader can actually see.
     for (const f of cssFiles) {
       const vh = [...code(f).matchAll(/\b\d*\.?\d+vh\b/g)].map((m) => m[0]);
-      expect(vh, `${f} uses ${vh.join(', ')} — use dvh or svh`).toEqual([]);
+      expect(vh, `${label(f)} uses ${vh.join(', ')} — use dvh or svh`).toEqual([]);
     }
   });
 
@@ -594,8 +652,8 @@ describe('The Archive viewport laws', () => {
   it('defines --measure once, in tokens.css', () => {
     // A second definition is how a screen quietly acquires its own idea of a
     // comfortable line length.
-    for (const f of cssFiles.filter((name) => name !== 'tokens.css')) {
-      expect(code(f), `${f} redefines --measure`).not.toMatch(/--measure:\s*[^;]+;/);
+    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
+      expect(code(f), `${label(f)} redefines --measure`).not.toMatch(/--measure:\s*[^;]+;/);
     }
   });
 
@@ -1003,7 +1061,7 @@ describe('The Archive legibility laws', () => {
         const clearsTracking = /letter-spacing:\s*/.test(body!);
         if (!clearsTransform || !clearsTracking) {
           offenders.push(
-            `${f}: ${selector!.trim()} — ` +
+            `${label(f)}: ${selector!.trim()} — ` +
               [
                 clearsTransform ? null : 'inherits text-transform: uppercase from .btn',
                 clearsTracking ? null : 'inherits letter-spacing: 0.06em from .btn',
