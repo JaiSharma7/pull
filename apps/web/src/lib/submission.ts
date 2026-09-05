@@ -25,3 +25,37 @@ export function nextSubmissionStamp(): number {
   last = now > last ? now : last + 1;
   return last;
 }
+
+/**
+ * The longest answer the database will accept as a measurement.
+ *
+ * `recall_events_latency_bounds` in `20260905100000_a_grade_is_recorded_once.sql`
+ * is `latency_ms is null or latency_ms between 0 and 3600000`. Mirrored here as a
+ * named constant rather than repeated as a number, because it is a database fact
+ * and the check is the reason this function exists.
+ */
+export const MAX_LATENCY_MS = 3_600_000;
+
+/**
+ * How long since the answer was shown — or nothing, when that is not a measurement.
+ *
+ * Review sent `Date.now() - revealedAt` unbounded, so a reader who revealed an
+ * answer and came back after lunch sent something over the hour the column allows.
+ * Postgres refused it with `23514`, and because a check violation is permanent the
+ * grade was then queued and dropped by the first drain — the whole grade lost over
+ * a field that is only ever advisory.
+ *
+ * Omitted rather than clamped, and that is the substance of the fix. Clamping would
+ * record exactly one hour, which is a measurement, and a false one: someone who
+ * walked away did not take an hour to decide. `latency_ms` is nullable precisely so
+ * that "no useful timing" can be said, and a grade with no latency is worth far more
+ * than no grade at all.
+ */
+export function elapsedSince(revealedAt: number | null, now = Date.now()): number | undefined {
+  if (revealedAt === null) return undefined;
+  const elapsed = now - revealedAt;
+  // A clock that has gone backwards — an NTP correction mid-session — is not a
+  // negative answer time either; the column's floor is 0 and the honest value is none.
+  if (elapsed < 0 || elapsed > MAX_LATENCY_MS) return undefined;
+  return elapsed;
+}

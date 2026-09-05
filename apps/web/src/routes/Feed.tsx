@@ -580,16 +580,51 @@ export function Feed({
        */
       const interruptMutationId = crypto.randomUUID();
       const interruptSubmittedAt = nextSubmissionStamp();
+      const interruptGrade = answer?.grade;
       const writes: Promise<unknown>[] = [
-        api.recordInterrupt({
-          pullId: item.row.id,
-          kind: item.slot.kind,
-          slot: item.slot.slotIndex,
-          response: responded ? 'answered' : 'dismissed',
-          mutationId: interruptMutationId,
-          submittedAt: interruptSubmittedAt,
-          ...(answer?.grade ? { grade: answer.grade } : {}),
-        }),
+        api
+          .recordInterrupt({
+            pullId: item.row.id,
+            kind: item.slot.kind,
+            slot: item.slot.slotIndex,
+            response: responded ? 'answered' : 'dismissed',
+            mutationId: interruptMutationId,
+            submittedAt: interruptSubmittedAt,
+            ...(interruptGrade ? { grade: interruptGrade } : {}),
+          })
+          .catch((e: unknown) => {
+            /*
+             * The grade rides on telemetry, and only the telemetry was allowed to fail.
+             *
+             * This promise went straight into `allSettled` with no catch, so a lost
+             * response took the recall answer with it — the one thing in the interrupt
+             * that is a measurement of the reader rather than of the session. The
+             * stance and the explanation below were queued from the first version of
+             * this change; the grade in the middle was not.
+             *
+             * Queued as the grade alone, under the interrupt's OWN mutation id. That
+             * is what makes the replay safe in both directions: if the interrupt did
+             * land and only the response was lost, `grade_recall` finds the
+             * `recall_events` row already keyed by this id and returns the state
+             * untouched; if it never landed, the grade applies once. The interrupt row
+             * itself is not reconstructed, and should not be — an impression
+             * regenerates the moment the reader scrolls past the card again, which is
+             * the distinction the comment above already draws.
+             */
+            if (!userId || !interruptGrade) return;
+            return queueMutation(
+              userId,
+              {
+                kind: 'recall',
+                pullId: item.row.id,
+                grade: interruptGrade,
+                mutationId: interruptMutationId,
+                submittedAt: interruptSubmittedAt,
+                recallKind: item.slot.kind,
+              },
+              e,
+            );
+          }),
       ];
       // Both of the reader's own answers are queued on failure. Each exists
       // nowhere else — a stance is a considered judgement and an explanation is

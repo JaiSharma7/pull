@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Meter } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
 import { isOfflineFailure, queueMutation } from '../lib/offline.js';
-import { nextSubmissionStamp } from '../lib/submission.js';
+import { elapsedSince, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
 
@@ -42,6 +42,46 @@ export function Review() {
   const [revealedAt, setRevealedAt] = useState<number | null>(null);
   /** Set when a grade could not be sent AND could not be queued. */
   const [lostGrade, setLostGrade] = useState(false);
+  /*
+   * The other way a grade fails to be kept, and it is not the reader's browser.
+   *
+   * `queued` was `userId !== null && await queueMutation(...)`, so a session that
+   * expired mid-screen — the refresh fails, `getCurrentUserId()` goes null — landed
+   * on copy telling the reader their browser might be blocking site data. It is not;
+   * they are signed out, and the fix is to sign in, which that sentence never
+   * mentions. Two outcomes, two sentences.
+   */
+  const [signedOut, setSignedOut] = useState(false);
+  /*
+   * One grade in flight at a time.
+   *
+   * The buttons carried no `disabled`, and `grade()` no guard, for the whole round
+   * trip — so a second tap on a slow connection graded the same card again with a
+   * FRESH mutation id. The id makes a replay safe and does nothing about a genuine
+   * second click: `20260905100000` de-duplicates on `(user_id, client_mutation_id)`,
+   * so two ids are two grades, stability is multiplied twice, and this file's own
+   * header says that "roughly squares the interval and takes the card out of review
+   * for months". Both sibling screens in this change already guard it — `Feed.tsx`
+   * with `handledSlots`, `KnowledgeCensus` with `disabled={saving}` — and Review, the
+   * screen whose whole job is deliberate recall, had neither.
+   */
+  const [grading, setGrading] = useState(false);
+  /*
+   * Every pull graded on this screen, whether the write landed or was queued.
+   *
+   * The refetch below asks the server what is due, and a grade sitting in the queue
+   * has not applied yet — so the card just answered comes back still due, is shown
+   * again, and grading it a second time mints a new id and applies a second time.
+   * The reader answered it once; that is the fact this records, and it outlives any
+   * individual request's fate.
+   *
+   * A ref rather than state, because nothing renders from it. As state it was a
+   * dependency the fetch effect had to either declare — refetching on every grade,
+   * when the whole point of that effect is to run once per page of twenty — or omit
+   * and carry a lint warning for. A ref is read where it is needed and is always
+   * current, which is what this actually wants.
+   */
+  const graded = useRef<Set<string>>(new Set());
   /** Bumped by the retry button, so the fetch re-runs without a second effect. */
   const [reloads, setReloads] = useState(0);
 
@@ -51,7 +91,9 @@ export function Review() {
       .fetchDueReviews()
       .then((rows) => {
         if (cancelled) return;
-        setDue(rows);
+        // Filtered rather than trusted. A queued grade has not reached the server,
+        // so it answers this request with the card the reader already judged.
+        setDue(rows.filter((row) => !graded.current.has(row.pullId)));
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -123,6 +165,8 @@ export function Review() {
    * the reader answered, so the click is where the clock belongs.
    */
   async function grade(g: RecallGrade, latencyMs?: number) {
+    if (grading) return;
+    setGrading(true);
     /*
      * The attempt gets an identity before it is sent, and that changes what this
      * function is allowed to do with a failure.
@@ -195,10 +239,14 @@ export function Review() {
        * but it is the difference between a lost measurement and a silent one.
        */
       if (!queued) {
-        setLostGrade(true);
+        if (userId === null) setSignedOut(true);
+        else setLostGrade(true);
         console.error('Recall grade was not recorded', e);
       }
     }
+    setGrading(false);
+    // Answered, whatever became of the write. See `graded`.
+    graded.current.add(card.pullId);
     setRevealed(false);
     setRevealedAt(null);
     /*
@@ -241,6 +289,13 @@ export function Review() {
         is the only one worth interrupting them about — and it is deliberately not
         a blocking dialogue, because the session is still worth finishing.
       */}
+      {signedOut ? (
+        <p className="meta" role="alert">
+          Your session ended before that grade could be saved. Sign in again and those ideas will
+          come round as they were.
+        </p>
+      ) : null}
+
       {lostGrade ? (
         <p className="meta" role="alert">
           Something went wrong saving a grade, and this device could not hold on to it either — your
@@ -262,12 +317,8 @@ export function Review() {
                   key={g}
                   type="button"
                   className="btn"
-                  onClick={() =>
-                    void grade(
-                      g,
-                      revealedAt === null ? undefined : Math.max(0, Date.now() - revealedAt),
-                    )
-                  }
+                  disabled={grading}
+                  onClick={() => void grade(g, elapsedSince(revealedAt))}
                 >
                   {GRADE_LABELS[g]}
                 </button>
