@@ -177,6 +177,13 @@ export function seededShuffle<T>(items: readonly T[], seed: string | number): T[
  */
 export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: string | number) {
   const answer = q.answer.trim();
+  // A blank answer is a malformed row, and it used to be pushed anyway — so the
+  // reader was shown an empty option, and picking it graded `forgot` with
+  // `confidentlyWrong: true` while `whyWrong` returned null for the same reason.
+  // Judged and then given no reason, on a question that should not have rendered.
+  // `gradeMcq` already guards `answer.length > 0`; this is the same guard one step
+  // earlier, where it can stop the option existing at all.
+  if (!answer) return [];
   const seen = new Set<string>([answer]);
   const options = [answer];
   for (const raw of q.distractors) {
@@ -318,7 +325,26 @@ export function normaliseAnswer(text: string): string {
       // `catalogue`/`catalog` — are still
       // refused and still flagged. That is a real residual, and no threshold fixes
       // it; closing it needs a variant list, which is a different change.
-      .replace(/z/gu, 's')
+      //
+      // SCOPED TO THE SUFFIX, because the first version of this was `/z/g` and folded
+      // every `z` in the language. Two different answers then normalised to one string,
+      // which made them an EXACT match — so they skipped the inexact cap below and were
+      // graded `easy` at similarity 1 with `confidentlyWrong: false`. Measured: `Zn`
+      // answered `Sn`, `Hz` answered `Hs`, `zeal` answered `seal`, `fuzz` answered
+      // `fuss` — zinc answered as tin, recorded as a perfect recall. That is verbatim
+      // what `semanticMarks` calls the one outcome a grader must never produce, and it
+      // broke `answerSimilarity`'s stated invariant that a similarity of 1 cannot
+      // accompany a wrong answer. A whole-alphabet substitution cannot be bounded by a
+      // threshold; only by being the rule it claimed to be.
+      //
+      // Lookaheads rather than `\b`, because this runs before punctuation is stripped
+      // and the inflections matter: organize/organizing/organization, analyse/analyze.
+      // Three letters of stem before it, because `-ize` is a suffix and a suffix
+      // attaches to something. Without the lookbehind `prize` folded to `prise` and
+      // `size` to `sise` — the very collision the first version was measured on.
+      // `organise`, `realise`, `criticise` and `analyse` all have stems and still fold.
+      .replace(/(?<=[a-z]{3})iz(?=e|ing|ed|er|ation|abl)/gu, 'is')
+      .replace(/(?<=[a-z]{3})yz(?=e|ing|ed|er)/gu, 'ys')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -474,6 +500,29 @@ export function answerSimilarity(typed: string, answer: string): number {
  * word containing a digit has to match exactly.
  */
 function isTypingSlip(a: string, b: string): boolean {
+  return slipShape(a, b) && slipIsLongEnough(a, b);
+}
+
+/**
+ * Are these words short enough that one character apart is probably two words?
+ *
+ * Split from `slipShape` so the two questions can be asked separately, because they
+ * answer to different things. The shape decides whether one word could be a
+ * mistyping of the other at all; this decides whether we are willing to believe it
+ * of words this short. Refusing on length is right — `zeal` and `seal` are two
+ * words — but it is not evidence about what the reader believes, and `gradeCloze`
+ * has to tell those apart before it calls anybody confidently wrong.
+ */
+function slipIsLongEnough(a: string, b: string): boolean {
+  if (a === b) return true;
+  const longest = Math.max(a.length, b.length);
+  if (Math.abs(a.length - b.length) === 1) return longest >= 6;
+  if (a.length === b.length) return longest >= 7;
+  return true;
+}
+
+/** Could one of these be a mistyping of the other, length aside? */
+function slipShape(a: string, b: string): boolean {
   if (a === b) return true;
   if (/\p{N}/u.test(a) || /\p{N}/u.test(b)) return false;
 
@@ -492,13 +541,11 @@ function isTypingSlip(a: string, b: string): boolean {
   // the twelve survives — `train`/`strain`, six letters, one insertion — and it
   // is the honest residual of any rule drawn here rather than a case this
   // missed.
-  const longest = Math.max(a.length, b.length);
 
   // An insertion or a deletion: the longer word is the shorter one with one
   // character put back. Walked once from each end rather than spliced, so the
   // repeated-letter case (`ocurrence`/`occurrence`) needs no special handling.
   if (Math.abs(a.length - b.length) === 1) {
-    if (longest < 6) return false;
     const [short, long] = a.length < b.length ? [a, b] : [b, a];
     let i = 0;
     while (i < short.length && short[i] === long[i]) i += 1;
@@ -512,7 +559,6 @@ function isTypingSlip(a: string, b: string): boolean {
   // A transposition: same length, two adjacent positions differ, and they are
   // each other's. Anything else of the same length is a substitution.
   if (a.length === b.length) {
-    if (longest < 7) return false;
     const differing: number[] = [];
     for (let i = 0; i < a.length; i += 1) {
       if (a[i] !== b[i]) differing.push(i);
@@ -530,6 +576,27 @@ function isTypingSlip(a: string, b: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Is every difference here the shape of a typo, refused only for being short?
+ *
+ * The first attempt at this was `similarity >= 0.8`, which is the wrong question and
+ * re-opened the defect an existing test guards: `increase marginal utility` against
+ * `decrease marginal utility` scores high precisely because two of the three words
+ * agree, so the opposite answer would have stopped being flagged. A proportional
+ * threshold spread over a phrase is what let the meaning-bearing word hide in the
+ * first place.
+ *
+ * The right question is about the shape of the difference. `centre`/`center` is a
+ * transposition the floor refused; `increase`/`decrease` is a substitution in the one
+ * word that carries the meaning, and no length would make it a typo.
+ */
+function differsOnlyByAShortSlip(typed: string, answer: string): boolean {
+  const a = normaliseAnswer(typed).split(' ').filter(Boolean);
+  const b = normaliseAnswer(answer).split(' ').filter(Boolean);
+  if (a.length === 0 || a.length !== b.length) return false;
+  return a.every((word, i) => slipShape(word, b[i] as string));
 }
 
 /**
@@ -576,6 +643,25 @@ export function gradeCloze(
   const exact = normaliseAnswer(typed) === normaliseAnswer(answer);
   const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);
   const result = gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.cloze);
+  /*
+   * REFUSING AN ANSWER AND DIAGNOSING A MISCONCEPTION ARE TWO DIFFERENT CLAIMS.
+   *
+   * `isTypingSlip`'s length floors exist because a one-character difference between
+   * two short words is usually two words rather than one typo. That is a good reason
+   * to withhold credit and no reason at all to assert the reader believes something
+   * false — and `confidentlyWrong` routes them into the misconception loop.
+   *
+   * Measured on the `-re`/`-er` family, which the floor catches wholesale:
+   * `centre`/`center`, `metre`/`meter`, `litre`/`liter` and `fibre`/`fiber` were all
+   * graded `forgot` AND flagged, while `theatre`/`theater` passed for being one letter
+   * longer. A reader spelling the way they were taught was told they held a
+   * misconception, on a 7-character cliff.
+   *
+   * So a near miss stays wrong and stops being an accusation. The threshold is the
+   * same one `wordsAreClose` uses to accept, which keeps the two rules describing one
+   * idea rather than two.
+   */
+  const nearMiss = !result.correct && differsOnlyByAShortSlip(typed, answer);
   // AN ACCEPTED SLIP IS NEVER `easy`. That grade multiplies stability by more
   // than three and takes the idea out of review for a fortnight, and this rule
   // cannot promise an accepted one-character difference is the reader's word
@@ -586,6 +672,7 @@ export function gradeCloze(
   return {
     ...result,
     grade: result.correct && !exact && result.grade === 'easy' ? 'good' : result.grade,
+    confidentlyWrong: nearMiss ? false : result.confidentlyWrong,
     similarity,
   };
 }
@@ -682,7 +769,9 @@ export function whyWrong(
   picked: string,
 ): WhyWrong | null {
   const chosen = picked.trim();
-  if (chosen === q.answer.trim()) return null;
+  // Both empty is not agreement. See `mcqOptions`.
+  const expected = q.answer.trim();
+  if (!expected || chosen === expected) return null;
 
   // `rationale` is not a column on `quiz_questions` yet -- 3a adds it -- so a row
   // read today arrives without it, and when it does arrive it is jsonb: the

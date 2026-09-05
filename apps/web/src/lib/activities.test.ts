@@ -624,3 +624,81 @@ describe('whyWrong', () => {
     });
   });
 });
+
+/*
+ * Round 3 found the round-2 fixes doing harm of their own, which is why these are
+ * pinned as cases rather than as properties: each row is a measurement somebody made
+ * against the code, not a hypothesis about it.
+ */
+describe('the spelling fold is the rule it claims to be', () => {
+  // The fold was `/z/g`. Two different answers normalised to one string, which made
+  // them an exact match — so they skipped the inexact cap and graded `easy` at
+  // similarity 1, the one outcome `semanticMarks` says a grader must never produce.
+  it.each([
+    ['Zn', 'Sn'],
+    ['Hz', 'Hs'],
+    ['zeal', 'seal'],
+    ['fuzz', 'fuss'],
+    ['zinc', 'sinc'],
+    ['zap', 'sap'],
+    ['zip', 'sip'],
+    ['zero', 'sero'],
+    ['zest', 'sest'],
+    ['zone', 'sone'],
+    ['prize', 'prise'],
+  ])('does not accept %s answered as %s', (answer, typed) => {
+    const r = gradeCloze(typed, answer, 'sure');
+    expect(r.correct).toBe(false);
+    expect(r.similarity).toBeLessThan(1);
+  });
+
+  // And still does the job it was added for.
+  it.each([
+    ['organise', 'organize'],
+    ['organisation', 'organization'],
+    ['organising', 'organizing'],
+    ['analyse', 'analyze'],
+    ['recognised', 'recognized'],
+  ])('still folds %s and %s together', (answer, typed) => {
+    expect(gradeCloze(typed, answer).correct).toBe(true);
+    expect(gradeCloze(answer, typed).correct).toBe(true);
+  });
+});
+
+describe('a refused spelling is not a diagnosed misconception', () => {
+  /*
+   * The length floor is right to withhold credit — two short words one character
+   * apart are usually two words. It is not evidence the reader believes something
+   * false, and `confidentlyWrong` routes them into the misconception loop. The
+   * `-re`/`-er` family fell wholesale on a 7-character cliff: `theatre`/`theater`
+   * passed for being one letter longer than `centre`/`center`.
+   */
+  it.each([
+    ['centre', 'center'],
+    ['metre', 'meter'],
+    ['litre', 'liter'],
+    ['fibre', 'fiber'],
+  ])('refuses %s answered as %s without calling it a misconception', (answer, typed) => {
+    const r = gradeCloze(typed, answer, 'sure');
+    expect(r.confidentlyWrong).toBe(false);
+  });
+
+  it('still flags a confident answer that is simply a different idea', () => {
+    expect(
+      gradeCloze('the opposite of that', 'a considered judgement', 'sure').confidentlyWrong,
+    ).toBe(true);
+  });
+});
+
+describe('a question with no answer', () => {
+  it('renders no options rather than a blank one a reader can pick', () => {
+    expect(mcqOptions({ answer: '   ', distractors: ['a', 'b'] }, 'seed')).toEqual([]);
+  });
+
+  it('does not treat picking nothing as agreeing with nothing', () => {
+    // Blank answer, blank pick: graded wrong and flagged, while `whyWrong` returned
+    // null because the two empty strings matched — judged, then given no reason.
+    expect(whyWrong({ answer: '', explanation: 'e', rationale: [] }, '')).toBeNull();
+    expect(whyWrong({ answer: '  ', explanation: 'e', rationale: [] }, 'anything')).toBeNull();
+  });
+});
