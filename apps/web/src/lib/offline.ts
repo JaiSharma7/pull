@@ -371,6 +371,12 @@ function open(): Promise<Handle> {
  * queued by the old code replays under one stable id from now on rather than
  * being the one write in the store that still cannot be recognised. Done inside
  * the upgrade transaction so it commits with the schema or not at all.
+ *
+ * `submittedAt` is taken from the entry's own `at` — the moment the write was
+ * queued, which is the moment the reader answered — and not from the clock at
+ * upgrade. The server orders a late replay against the reader's current state
+ * by this value, so stamping it with the upgrade time would tell it a grade
+ * from three days offline had just been given.
  */
 async function stampQueuedGrades(
   transaction: IDBPTransaction<WapDB, StoreNames<WapDB>[], 'versionchange'>,
@@ -382,7 +388,7 @@ async function stampQueuedGrades(
       await cursor.update({
         ...entry,
         mutationId: globalThis.crypto.randomUUID(),
-        submittedAt: entry.submittedAt ?? Date.now(),
+        submittedAt: entry.submittedAt ?? entry.at ?? Date.now(),
       });
     }
     cursor = await cursor.continue();

@@ -189,7 +189,10 @@ describe('schema version 1 → 2', () => {
     expect(recall?.mutationId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
-    expect(typeof recall?.submittedAt).toBe('number');
+    // The moment the reader answered — the entry's own queue time — and not the
+    // moment of the upgrade. A device offline for days must not tell the server
+    // its stale grade was given just now.
+    expect(recall?.submittedAt).toBe(1);
     // Only a grade needed one; every other kind is replay-safe by construction.
     expect(queued.find((e) => e.kind === 'save')?.mutationId).toBeUndefined();
     stampedId = recall?.mutationId;
