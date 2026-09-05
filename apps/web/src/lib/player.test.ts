@@ -75,7 +75,12 @@ describe('enqueue', () => {
     expect(playerReducer(before, { type: 'enqueue', tracks: [] })).toBe(before);
   });
 
-  it('starts at the new track, not the old position, when queued onto a stopped player', () => {
+  it('resumes where a stopped player stopped rather than jumping to the new track', () => {
+    // This asserted the opposite, and the opposite stranded a queue: `stop`
+    // leaves the queue standing, so jumping the cursor to `d` meant `b` and `c`
+    // — queued by the reader and never removed — could never play, because the
+    // end of the queue clears it. `playNow` refuses the same move for the same
+    // reason, one function below.
     const s = run([
       { type: 'enqueue', tracks: three },
       { type: 'next' },
@@ -83,7 +88,8 @@ describe('enqueue', () => {
       { type: 'enqueue', tracks: [track('d')] },
     ]);
     expect(s.status).toBe('playing');
-    expect(currentTrack(s)?.id).toBe('d');
+    expect(currentTrack(s)?.id).toBe('b');
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b', 'c', 'd']);
   });
 });
 
@@ -267,7 +273,41 @@ describe('ended, and the epoch that makes it safe', () => {
     const s = playerReducer(sleepy, { type: 'ended', token: sleepy.epoch, now: 100 });
     expect(s.status).toBe('paused');
     expect(s.index).toBe(0);
-    expect(s.epoch).toBe(sleepy.epoch);
+    // The epoch MOVES, and this test asserted that it did not. This is the one
+    // paused state reached from a finished utterance: under the same epoch the
+    // effect layer would call `resume()` on an utterance that had already ended,
+    // nothing would speak, and the morning's Resume would wedge the player.
+    expect(s.epoch).toBe(sleepy.epoch + 1);
+    expect(playerReducer(s, { type: 'resume' }).status).toBe('playing');
+  });
+
+  it('drops the deadline when removing the last track empties the queue', () => {
+    // The only transition to idle that kept an armed timer. Remove the last
+    // track at 22:45 with a midnight timer and the next queue started in this
+    // tab — the following morning — paused itself at the first boundary.
+    const armed = run([
+      { type: 'enqueue', tracks: [track('a')] },
+      { type: 'setSleep', until: 100 },
+    ]);
+    const emptied = playerReducer(armed, { type: 'remove', id: 'a' });
+    expect(emptied).toMatchObject({ queue: [], index: 0, status: 'idle', sleepUntil: null });
+  });
+
+  it('does not strand a stopped queue when something new is added', () => {
+    // `stop` leaves the queue standing, so "queueing onto silence" jumped the
+    // cursor past three tracks the reader had queued and never removed — and
+    // since the end of the queue clears it, they could never play. `playNow`
+    // already refuses to do this for the same reason.
+    const stopped = run([{ type: 'enqueue', tracks: three }, { type: 'stop' }]);
+    const resumed = playerReducer(stopped, { type: 'enqueue', tracks: [track('d')] });
+    expect(resumed.queue.map((t) => t.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(resumed.index).toBe(0);
+    expect(resumed.status).toBe('playing');
+
+    // An empty player still starts on what was just added.
+    const fresh = playerReducer(INITIAL_PLAYER, { type: 'enqueue', tracks: [track('z')] });
+    expect(fresh.index).toBe(0);
+    expect(fresh.status).toBe('playing');
   });
 
   it('starts a new epoch only for a new utterance', () => {

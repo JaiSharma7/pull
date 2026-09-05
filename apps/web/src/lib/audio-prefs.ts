@@ -158,7 +158,11 @@ export function readStoredAudioPrefs(): AudioPrefs {
 
 export function storeAudioPrefs(next: AudioPrefs): void {
   try {
-    localStorage.setItem(RATE_KEY, String(clampRate(next.rate)));
+    // `clampRate` of a non-finite rate is still non-finite, and `String(NaN)` is
+    // the literal "NaN" on disk. `narrowRate` heals it on the way back, so this
+    // was invisible — but a stored key whose value means nothing is a key that
+    // should not be there.
+    localStorage.setItem(RATE_KEY, String(narrowRate(next.rate)));
     if (next.voiceURI) localStorage.setItem(VOICE_KEY, next.voiceURI);
     else localStorage.removeItem(VOICE_KEY);
     localStorage.setItem(SLEEP_KEY, next.sleep);

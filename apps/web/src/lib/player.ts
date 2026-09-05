@@ -139,7 +139,15 @@ export function clampRate(rate: number): number {
  */
 function advance(state: PlayerState, now: number | undefined): PlayerState {
   if (state.sleepUntil !== null && now !== undefined && now >= state.sleepUntil) {
-    return { ...state, status: 'paused', sleepUntil: null };
+    // The epoch has to move, and this is the one paused state in the machine
+    // reached FROM A FINISHED UTTERANCE. By the contract in the header the
+    // effect layer resumes when the status returns to `playing` under the same
+    // epoch — so without this, the morning's Resume called
+    // `speechSynthesis.resume()` on an utterance that had already fired `end`.
+    // Nothing speaks, no further `ended` arrives, and the player is wedged until
+    // the reader presses Next. Nothing in the state distinguished this pause
+    // from a pause mid-sentence; the epoch is what does.
+    return { ...state, status: 'paused', sleepUntil: null, epoch: state.epoch + 1 };
   }
   if (state.index + 1 < state.queue.length) {
     return { ...state, index: state.index + 1, status: 'playing', epoch: state.epoch + 1 };
@@ -170,11 +178,20 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
       const queue = [...state.queue, ...fresh];
       // Queueing onto silence is "listen, then keep going". Queueing onto a
       // paused player is just queueing — the reader paused for a reason.
+      //
+      // "Silence" has to mean an EMPTY player, not merely a stopped one, and it
+      // did not: `stop` leaves the queue standing, so enqueueing one track after
+      // stopping a queue of three jumped the cursor to the new track and — since
+      // the end of the queue clears it — the three the reader had queued and
+      // never removed could never play. That is verbatim the reasoning `playNow`
+      // gives below for moving a track rather than moving the cursor; the two
+      // paths had opposite answers to the same hazard. A stopped player with
+      // something still in it resumes from where it stopped.
       if (state.status === 'idle') {
         return {
           ...state,
           queue,
-          index: state.queue.length,
+          index: state.queue.length === 0 ? 0 : state.index,
           status: 'playing',
           epoch: state.epoch + 1,
         };
@@ -243,14 +260,22 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
       if (at < 0) return state;
 
       const queue = state.queue.filter((t) => t.id !== action.id);
-      if (queue.length === 0) return { ...state, queue, index: 0, status: 'idle' };
+      // Going idle drops the deadline, for the reason `advance` gives at the end
+      // of a queue: it is an absolute timestamp belonging to the session that set
+      // it. `remove` was the only transition to idle that kept one, so removing
+      // the last track at 22:45 with a midnight timer left it armed, and the next
+      // queue started in that tab — the following morning — paused itself on the
+      // first boundary.
+      if (queue.length === 0) {
+        return { ...state, queue, index: 0, status: 'idle', sleepUntil: null };
+      }
       if (at < state.index) return { ...state, queue, index: state.index - 1 };
       if (at > state.index) return { ...state, queue };
 
       // The current track went. The one after it takes its place, and if there
       // was none the player stops rather than silently rewinding.
       if (state.index < queue.length) return { ...state, queue, epoch: state.epoch + 1 };
-      return { ...state, queue, index: queue.length - 1, status: 'idle' };
+      return { ...state, queue, index: queue.length - 1, status: 'idle', sleepUntil: null };
     }
 
     case 'clear':
