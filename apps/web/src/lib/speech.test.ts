@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  adjustSpeaking,
   listVoices,
   onVoicesChanged,
   pauseSpeaking,
@@ -426,6 +427,94 @@ describe('pause and resume', () => {
     expect(order).toEqual(['first ended']);
     resumeSpeaking();
     expect(order).toEqual(['first ended']);
+  });
+});
+
+describe('the token', () => {
+  afterEach(() => {
+    stopSpeaking();
+    vi.unstubAllGlobals();
+  });
+
+  it('names each call to speak, and reaches onEnd with the right one', () => {
+    /*
+     * The case the player reducer is built around: the previous utterance's
+     * onEnd fires DURING the call that starts the next one. A caller holding
+     * the tokens can tell the two apart; a reducer keyed on a bare "ended"
+     * would skip a track every time the reader pressed Next.
+     */
+    fakeSynthesis();
+    const endings: number[] = [];
+    const first = speak('first', { onEnd: (t) => endings.push(t) });
+    const second = speak('second', { onEnd: (t) => endings.push(t) });
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+    expect(endings).toEqual([first]);
+  });
+
+  it('is kept across a pause and a resume', () => {
+    const { finishCurrent } = fakeSynthesis();
+    const endings: number[] = [];
+    const token = speak('The obstacle is the way.', { onEnd: (t) => endings.push(t) });
+    pauseSpeaking();
+    resumeSpeaking();
+    finishCurrent();
+    expect(endings).toEqual([token]);
+  });
+
+  it('is handed back for a paused utterance that is stopped or replaced', () => {
+    fakeSynthesis();
+    const endings: number[] = [];
+    const a = speak('a', { onEnd: (t) => endings.push(t) });
+    pauseSpeaking();
+    stopSpeaking();
+    const b = speak('b', { onEnd: (t) => endings.push(t) });
+    pauseSpeaking();
+    speak('c');
+    expect(endings).toEqual([a, b]);
+  });
+
+  it('is zero when unsupported', () => {
+    expect(speak('x')).toBe(0);
+  });
+});
+
+describe('adjustSpeaking', () => {
+  afterEach(() => {
+    stopSpeaking();
+    vi.unstubAllGlobals();
+  });
+
+  it('re-speaks from the last boundary at the new rate, as the same utterance', () => {
+    const { spoken, boundary, finishCurrent } = fakeSynthesis([voice({ voiceURI: 'urn:a' })]);
+    const endings: number[] = [];
+    const token = speak('aaaa bbbb cccc', { rate: 1, onEnd: (t) => endings.push(t) });
+    boundary(5);
+    adjustSpeaking({ rate: 1.5, voiceURI: 'urn:a' });
+    // Not an ending: the listener is hearing the same passage, faster.
+    expect(endings).toEqual([]);
+    expect(spoken).toHaveLength(2);
+    expect(spoken[1]!.text).toBe('bbbb cccc');
+    expect(spoken[1]!.rate).toBe(1.5);
+    expect(spoken[1]!.voice?.voiceURI).toBe('urn:a');
+    finishCurrent();
+    expect(endings).toEqual([token]);
+  });
+
+  it('takes effect on resume when applied to a paused utterance', () => {
+    const { spoken } = fakeSynthesis();
+    speak('x', { rate: 1 });
+    pauseSpeaking();
+    adjustSpeaking({ rate: 2 });
+    expect(spoken).toHaveLength(1);
+    resumeSpeaking();
+    expect(spoken[1]!.rate).toBe(2);
+  });
+
+  it('does nothing with nothing to adjust', () => {
+    const { log } = fakeSynthesis();
+    adjustSpeaking({ rate: 2 });
+    expect(log).toEqual([]);
   });
 });
 

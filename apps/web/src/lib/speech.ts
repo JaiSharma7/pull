@@ -66,9 +66,22 @@ export interface SpeakOptions {
    * header), but the caller is not told, because from where they stand nothing
    * has finished — and a player that heard "ended" on every pause would advance
    * to the next track while the reader was answering the door.
+   *
+   * Handed the token `speak` returned for this utterance, so a caller holding
+   * the token can tell its own ending from the previous utterance's — which,
+   * because of the cancel above, fires during the very call that starts the
+   * new one. A caller that ignores the argument keeps today's behaviour.
    */
-  onEnd?: () => void;
+  onEnd?: (token: SpeechToken) => void;
 }
+
+/**
+ * Names one call to `speak`. Pause and resume continue the same utterance and
+ * keep its token; only a new `speak` mints a new one.
+ */
+export type SpeechToken = number;
+
+let lastToken: SpeechToken = 0;
 
 /** What is being spoken right now, and where in the full text it began. */
 interface Live {
@@ -79,7 +92,11 @@ interface Live {
   /** The start of the last word heard, absolute in `text`. Resume picks up here. */
   offset: number;
   options: SpeakOptions;
-  /** Set by `pauseSpeaking` before it cancels, so the ending it causes is not reported. */
+  token: SpeechToken;
+  /**
+   * Set before a cancel that is not an ending — a pause, or a rate change
+   * applied in place — so the `onend` it causes is not reported.
+   */
   silenced: boolean;
   /** Both `onend` and `onerror` route through `finish`; this keeps `onEnd` to once. */
   done: boolean;
@@ -89,6 +106,7 @@ interface Suspended {
   text: string;
   offset: number;
   options: SpeakOptions;
+  token: SpeechToken;
 }
 
 let live: Live | null = null;
@@ -103,10 +121,10 @@ function finish(record: Live): void {
   record.done = true;
   if (live === record) live = null;
   if (record.silenced) return;
-  record.options.onEnd?.();
+  record.options.onEnd?.(record.token);
 }
 
-function begin(text: string, from: number, options: SpeakOptions): void {
+function begin(text: string, from: number, options: SpeakOptions, token: SpeechToken): void {
   const { rate = 1, voiceURI = null } = options;
   // Cancelling first means the previous utterance's own `onend` fires during this
   // call. Callers distinguish the two by the id they were speaking — see `Feed.tsx`.
@@ -117,7 +135,15 @@ function begin(text: string, from: number, options: SpeakOptions): void {
   const voice = voiceURI ? findVoice(voiceURI) : null;
   if (voice) utterance.voice = voice;
 
-  const record: Live = { text, base: from, offset: from, options, silenced: false, done: false };
+  const record: Live = {
+    text,
+    base: from,
+    offset: from,
+    options,
+    token,
+    silenced: false,
+    done: false,
+  };
   utterance.onboundary = (event) => {
     // Word boundaries only. A sentence boundary lands on the same index as the
     // first word of the sentence, so it is harmless, but resuming at a word is
@@ -131,14 +157,21 @@ function begin(text: string, from: number, options: SpeakOptions): void {
   window.speechSynthesis.speak(utterance);
 }
 
-export function speak(text: string, options: SpeakOptions = {}): void {
-  if (!speechSupported()) return;
+/**
+ * Speak, ending whatever was being spoken. Returns the token that names this
+ * utterance; `onEnd` is handed the same token. Zero when unsupported, which is
+ * never a token an utterance gets.
+ */
+export function speak(text: string, options: SpeakOptions = {}): SpeechToken {
+  if (!speechSupported()) return 0;
   // A paused utterance has no live object for `cancel` to end, so its ending is
   // reported here, before the new one starts — the same order the live case gets.
   const abandoned = suspended;
   suspended = null;
-  abandoned?.options.onEnd?.();
-  begin(text, 0, options);
+  abandoned?.options.onEnd?.(abandoned.token);
+  const token = ++lastToken;
+  begin(text, 0, options, token);
+  return token;
 }
 
 /**
@@ -149,7 +182,12 @@ export function pauseSpeaking(): void {
   if (!speechSupported() || !live) return;
   const record = live;
   record.silenced = true;
-  suspended = { text: record.text, offset: record.offset, options: record.options };
+  suspended = {
+    text: record.text,
+    offset: record.offset,
+    options: record.options,
+    token: record.token,
+  };
   live = null;
   window.speechSynthesis.cancel();
 }
@@ -160,9 +198,34 @@ export function pauseSpeaking(): void {
  */
 export function resumeSpeaking(): void {
   if (!speechSupported() || !suspended) return;
-  const { text, offset, options } = suspended;
+  const { text, offset, options, token } = suspended;
   suspended = null;
-  begin(text, offset, options);
+  begin(text, offset, options, token);
+}
+
+/**
+ * Change the rate or voice of what is being spoken, keeping the place.
+ *
+ * Neither can change on a live utterance, so this is a cancel and a fresh
+ * utterance from the last word boundary — the same move as a pause and a
+ * resume, and like a pause it is not an ending: `onEnd` stays silent and the
+ * token stays the same, because from where the listener stands it is the same
+ * passage, faster. Applied to a paused utterance it takes effect on resume. A
+ * no-op when nothing is live or paused.
+ */
+export function adjustSpeaking(changes: Pick<SpeakOptions, 'rate' | 'voiceURI'>): void {
+  if (!speechSupported()) return;
+  if (live) {
+    const record = live;
+    record.silenced = true;
+    live = null;
+    // `begin` cancels, which ends the silenced record without reporting it.
+    begin(record.text, record.offset, { ...record.options, ...changes }, record.token);
+    return;
+  }
+  if (suspended) {
+    suspended = { ...suspended, options: { ...suspended.options, ...changes } };
+  }
 }
 
 export function stopSpeaking(): void {
@@ -172,7 +235,7 @@ export function stopSpeaking(): void {
   const abandoned = suspended;
   suspended = null;
   window.speechSynthesis.cancel();
-  abandoned?.options.onEnd?.();
+  abandoned?.options.onEnd?.(abandoned.token);
 }
 
 function compare(a: string, b: string): number {
