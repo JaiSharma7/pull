@@ -94,13 +94,14 @@ own history to yourself, not about retaining it against your wishes.
 
 This is the category most services describe vaguely, so here it is precisely:
 
-| Data                                                            | Table                               | What it is                                                       |
-| --------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
-| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                  | Stops the feed repeating itself                                  |
-| What you opened and for how long                                | `history_events` (incl. `dwell_ms`) | Your history, and the reading-time signal                        |
-| Recall state per idea                                           | `knowledge_states`                  | Stability and last-seen, from which Half-Life is computed        |
-| A numeric summary of what you know                              | `user_knowledge_vectors`            | The centroid the Delta compares candidates against               |
-| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds` | Bounds interleaved questions and backs off when you dismiss them |
+| Data                                                            | Table                               | What it is                                                                          |
+| --------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                  | Stops the feed repeating itself                                                     |
+| What you opened and for how long                                | `history_events` (incl. `dwell_ms`) | Your history, and the reading-time signal                                           |
+| Recall state per idea                                           | `knowledge_states`                  | Stability and last-seen, from which Half-Life is computed                           |
+| A numeric summary of what you know                              | `user_knowledge_vectors`            | The centroid the Delta compares candidates against                                  |
+| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds` | Bounds interleaved questions and backs off when you dismiss them                    |
+| Each recall attempt, as it happened                             | `recall_events`                     | The grade, your stated confidence and what you typed, so a retry never counts twice |
 
 `user_knowledge_vectors` deserves a sentence of its own. It is a vector — a list of numbers
 — averaged from the ideas you have engaged with. It is not readable prose and it is not
@@ -222,8 +223,8 @@ this product refuses to charge for, so we are not going to quietly trim it.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,
-knowledge states, vectors, convictions and explanations. That is a foreign-key cascade in
-the schema, not a scheduled cleanup job.
+knowledge states, recall events, vectors, convictions and explanations. That is a foreign-key
+cascade in the schema, not a scheduled cleanup job.
 
 You do this yourself, from **Account → Delete this account**. It is not a request you
 send us and wait on: the deletion happens when you confirm it. Because it cannot be
