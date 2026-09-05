@@ -74,6 +74,11 @@ recording that only _looks_ right is a recording of the bugs you cannot see:
 - **Tap targets under 44px** (mobile only — Apple's HIG floor, and WCAG 2.5.5). The first
   run of this reported the masthead navigation at 39px tall on an iPhone 15 Pro.
 
+One artefact to know about when reading the frames: the bottom navigation is
+`position: sticky`, so in a full-page screenshot it appears wherever it was pinned when
+the shot was taken — usually partway down a long page rather than at the bottom. It is
+not a layout bug; the video shows where it actually sits.
+
 Useful flags:
 
 ```bash

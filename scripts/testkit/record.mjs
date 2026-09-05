@@ -70,7 +70,19 @@ const settle = async (page) => {
 const press = (page, name) =>
   page.getByRole('button', { name, exact: true }).filter({ visible: true }).first();
 
+/**
+ * A section, wherever this width keeps it.
+ *
+ * Above the rail's breakpoint every section has a slot of its own. Below it the tab bar
+ * keeps four and puts the rest behind "More" — so a tour that only knows how to press a
+ * label spent thirty seconds timing out on History and Preferences the moment the bar
+ * landed. Opening the disclosure first is what the reader does, so it is what this does.
+ */
 const section = (label) => async (page) => {
+  if ((await press(page, label).count()) === 0) {
+    await press(page, 'More').click();
+    await settle(page);
+  }
   await press(page, label).click();
   await settle(page);
 };
@@ -119,6 +131,17 @@ const shell = [
   { name: 'daily-pull', run: section('Daily Pull') },
   { name: 'review', run: section('Review') },
   { name: 'library', run: section('Library') },
+  {
+    // The bar's disclosure, on the widths that have one. A no-op against the rail,
+    // where every destination already has a slot, so both devices run one tour.
+    name: 'more-sheet',
+    run: async (page) => {
+      const more = press(page, 'More');
+      if ((await more.count()) === 0) return;
+      await more.click();
+      await settle(page);
+    },
+  },
   { name: 'history', run: section('History') },
   { name: 'preferences', run: section('Preferences') },
   { name: 'explore', run: destination('/explore') },
@@ -197,11 +220,32 @@ async function inspect(page, isMobile) {
      */
     const small = mobile
       ? [...document.querySelectorAll('button, a[href], input, select, [role="button"]')]
-          .map((el) => ({
-            el,
-            r: el.getBoundingClientRect(),
-            display: getComputedStyle(el).display,
-          }))
+          .map((el) => {
+            /*
+             * The target is the control plus its label, because pressing the label is
+             * what activates the control. Both shapes appear here: a wrapping `<label>`
+             * around the input, and Appearance's `<label for>` sitting beside it.
+             * Measuring the input alone reported every radio there as a 12×12 defect
+             * when what a thumb lands on is the whole row.
+             */
+            const label =
+              el.closest('label') ??
+              (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
+            const box = label ?? el;
+            const r = box.getBoundingClientRect();
+            // A separate label sits beside the control, so the pair is the real target.
+            const rect =
+              label && !label.contains(el)
+                ? (() => {
+                    const own = el.getBoundingClientRect();
+                    return {
+                      width: Math.max(r.right, own.right) - Math.min(r.left, own.left),
+                      height: Math.max(r.bottom, own.bottom) - Math.min(r.top, own.top),
+                    };
+                  })()
+                : r;
+            return { el, r: rect, display: getComputedStyle(box).display };
+          })
           .filter(({ r, display }) => r.width > 0 && r.height > 0 && display !== 'inline')
           .filter(({ r }) => r.width < 44 || r.height < 44)
           .slice(0, 60)
@@ -233,6 +277,44 @@ async function pass(browser, stack, persona, deviceKey, runDir) {
   });
   const page = await context.newPage();
 
+  /*
+   * Put the phone back after every full-page screenshot.
+   *
+   * `fullPage` captures beyond the viewport by overriding the page's device metrics,
+   * and what Playwright restores afterwards is not what went in: the mobile flag is
+   * dropped, so `(pointer: coarse)` reads false for the rest of the page's life and
+   * `page.setViewportSize` does not bring it back.
+   *
+   * This is worth the CDP call rather than dropping `fullPage`, because of what it
+   * silently did to the findings. Every rule this project keys on a coarse pointer —
+   * the 44px minimum, `.pull-card__stop-btn` — stopped applying from frame two onward,
+   * so the report measured a *desktop* rendering of every phone screen and confidently
+   * called a working 44px rule broken. A check that reports a fixed bug as unfixed is
+   * worse than no check.
+   */
+  const cdp = profile.isMobile ? await context.newCDPSession(page) : null;
+  const remobilise = async () => {
+    if (!cdp) return;
+    await cdp
+      .send('Emulation.setDeviceMetricsOverride', {
+        width: profile.viewport.width,
+        height: profile.viewport.height,
+        deviceScaleFactor: profile.deviceScaleFactor ?? 1,
+        mobile: true,
+      })
+      .catch(() => {});
+    /*
+     * This is the one that matters, and it is not obvious: the metrics override alone
+     * leaves `(pointer: coarse)` false. Chromium derives the primary pointer type from
+     * touch emulation rather than from the mobile flag, so restoring the viewport
+     * without restoring touch gives a phone-shaped page that answers every pointer
+     * query as a mouse.
+     */
+    await cdp
+      .send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+      .catch(() => {});
+  };
+
   const console_ = [];
   const failed = [];
   page.on('console', (m) => {
@@ -260,15 +342,17 @@ async function pass(browser, stack, persona, deviceKey, runDir) {
       // has things to say, and the frame taken here is usually what explains it.
       error = e instanceof Error ? e.message.split('\n')[0].slice(0, 200) : String(e);
     }
+    const findings = await inspect(page, Boolean(profile.isMobile)).catch(() => ({}));
     await page
       .screenshot({ path: join(outDir, `${label}-${step.name}.png`), fullPage: true, scale: 'css' })
       .catch(() => {});
+    await remobilise();
     steps.push({
       step: step.name,
       frame: `${label}-${step.name}.png`,
       url: page.url().replace(BASE, ''),
       error,
-      ...(await inspect(page, Boolean(profile.isMobile)).catch(() => ({}))),
+      ...findings,
       console: console_.slice(before.console),
       failedRequests: failed.slice(before.failed),
     });

@@ -75,9 +75,20 @@
   padding: 0;
 }
 
-.synapse-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+/* 2rem is a comfortable mouse target and an uncomfortable thumb one. */
+@media (pointer: coarse) {
+  .synapse-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Guarded: see the note on `.btn:hover` in components.css. */
+@media (hover: hover) {
+  .synapse-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
 }
 
 .synapse-filter-bar {
@@ -100,6 +111,16 @@
   color: var(--text-muted);
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
+}
+
+/* Text tabs, sized by their type: 31px tall, which is a thumb's problem and not a
+   mouse's. Centred so the rule under the active one still tracks the word. */
+@media (pointer: coarse) {
+  .synapse-filter-tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
 }
 
 .synapse-filter-tab[aria-pressed='true'],

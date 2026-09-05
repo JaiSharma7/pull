@@ -83,6 +83,19 @@
  * controls is not what it is measured against — a squared-off radio would be a
  * novel control, and a novel control is a worse outcome than a round one.
  */
+/*
+ * The label is the target here, not the 12px circle: pressing it is what selects the
+ * option, so it is what has to clear 44px. The radio keeps its size — a 44px dot would
+ * be a different design, and the row already reads as one control.
+ */
+@media (pointer: coarse) {
+  .appearance__label {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
 .appearance__radio {
   appearance: none;
   flex: none;
@@ -104,8 +117,11 @@
  * already-chosen option's ring in `--text` the moment a cursor crosses it, which
  * reads as the selection being undone.
  */
-.appearance__radio:hover {
-  border-color: var(--text);
+/* Guarded: see the note on `.btn:hover` in components.css. */
+@media (hover: hover) {
+  .appearance__radio:hover {
+    border-color: var(--text);
+  }
 }
 
 .appearance__radio:checked {

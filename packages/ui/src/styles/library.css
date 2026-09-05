@@ -68,6 +68,17 @@
   padding-right: var(--space-1);
 }
 
+/*
+ * A single glyph is 18px wide, and the shared 44px minimum only sets a height — so on a
+ * phone this was a full-height target a thumb still missed sideways. Width rather than
+ * padding, so the character stays where the line puts it.
+ */
+@media (pointer: coarse) {
+  .library__remove {
+    min-width: 44px;
+  }
+}
+
 .library__item {
   padding-bottom: var(--space-4);
 }

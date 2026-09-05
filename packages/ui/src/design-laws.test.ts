@@ -496,7 +496,7 @@ describe('The Archive viewport laws', () => {
 
     // The element's own rule, not a span of text containing both strings. A lazy
     // `[\s\S]*?` between them crosses rule boundaries, so it would pass on
-    // `.shell__rail { display: none } .shell__masthead-nav { display: block }` —
+    // `.shell__rail { display: none } .tabbar { display: block }` —
     // rails hidden, law broken, test green.
     const ownRule = (css: string, selector: string) =>
       css.match(new RegExp(`(^|[;}]|\\n)\\s*\\${selector}\\s*\\{[^}]*\\}`))?.[0] ?? '';
@@ -549,32 +549,49 @@ describe('The Archive viewport laws', () => {
     ).not.toMatch(/grid-template-columns/);
   });
 
-  it('lets the masthead navigation wrap', () => {
+  it('keeps the bottom navigation inside a narrow window whatever it holds', () => {
     /*
-     * The number of sections is not fixed, and this nav is the only copy of them below
-     * 60rem. It was a single unbreakable flex row: six buttons measured 517px inside a
-     * 375px window and gave the whole page a horizontal scrollbar. It fit at four
-     * sections and broke when Daily Pull and History were added — a layout bug shipped
-     * by a change that never touched this file, which is why it is pinned rather than
-     * left to the next person to notice.
+     * The same law as before, defended differently, and the history is why it is worth
+     * saying which.
+     *
+     * This used to be a wrapping row in the masthead. It began as a single unbreakable
+     * flex row — six buttons measuring 517px inside a 375px window, with a horizontal
+     * scrollbar on the whole page — and was fixed by letting it wrap. Wrapping did stop
+     * the overflow and it did nothing about the cost: at thirteen destinations it was
+     * four rows deep on a phone, about a fifth of the screen, above the fold, on every
+     * screen.
+     *
+     * So the count is capped instead. `splitNav` keeps four items and a "More", which
+     * is tested over the real lists in `apps/web/src/lib/tab-bar.test.ts`; what is
+     * pinned *here* is the half that lives in CSS, because a capped count still
+     * overflows if the five slots cannot shrink. Each takes an equal share and is
+     * allowed to fall below its content — `flex: 1 1 0` alone does not permit that,
+     * since a flex item's floor is its content width until `min-width: 0` says
+     * otherwise — and truncates rather than pushing its neighbours out of the viewport.
      */
-    const nav = read('components.css').match(/\.shell__masthead-nav\s*\{[^}]*\}/)?.[0] ?? '';
-    expect(nav, 'no .shell__masthead-nav rule found').not.toBe('');
-    expect(nav, 'the masthead navigation cannot wrap, so it overflows narrow windows').toMatch(
-      /flex-wrap:\s*wrap/,
+    const item = read('components.css').match(/\.tabbar__item\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(item, 'no .tabbar__item rule found').not.toBe('');
+    expect(item, 'the slots do not share the width equally, so a long label steals it').toMatch(
+      /flex:\s*1\s+1\s+0/,
     );
-    expect(nav, 'the nav cannot shrink below its content without min-width: 0').toMatch(
+    expect(item, 'a slot cannot shrink below its content without min-width: 0').toMatch(
       /min-width:\s*0/,
+    );
+    expect(item, 'a label that does not fit must truncate rather than widen its slot').toMatch(
+      /text-overflow:\s*ellipsis/,
     );
   });
 
   it('never leaves a width with no navigation on it', () => {
     /*
-     * The masthead nav hides because the rail takes over, so the width where one goes
+     * The bottom bar hides because the rail takes over, so the width where one goes
      * must be the width where the other arrives. They are one decision written in two
      * places, and they drifted the moment the rail moved from 60rem to 63rem to
      * protect the measure — leaving 960px to 1008px with the nav hidden and the rail
      * not yet shown, and no way to change section at all.
+     *
+     * The navigation the bar replaced was the masthead's wrapping row; the relationship
+     * it had with the rail is unchanged, and so is this test apart from the selector.
      *
      * Neither rule is wrong read on its own, which is why this is pinned as a
      * relationship rather than as two numbers.
@@ -582,10 +599,10 @@ describe('The Archive viewport laws', () => {
     const all = cssFiles.map(code).join('\n');
     const hidesNavAt = [
       ...all.matchAll(
-        /@media \(min-width: ([\d.]+)rem\)\s*\{[^{}]*\.shell__masthead-nav\s*\{[^}]*display:\s*none/g,
+        /@media \(min-width: ([\d.]+)rem\)\s*\{[^{}]*\.tabbar\s*\{[^}]*display:\s*none/g,
       ),
     ].map((m) => Number(m[1]));
-    expect(hidesNavAt.length, 'no rule hides the masthead navigation').toBe(1);
+    expect(hidesNavAt.length, 'no rule hides the bottom navigation').toBe(1);
 
     /*
      * `(?!@media)` matters, and it is the same flaw `ownRule` above is written to
@@ -605,7 +622,7 @@ describe('The Archive viewport laws', () => {
 
     expect(
       hidesNavAt[0],
-      `the masthead nav hides at ${hidesNavAt[0]}rem but the rail only appears at ${showsRailAt[0]}rem, leaving a band with no navigation`,
+      `the bottom bar hides at ${hidesNavAt[0]}rem but the rail only appears at ${showsRailAt[0]}rem, leaving a band with no navigation`,
     ).toBe(showsRailAt[0]);
   });
 

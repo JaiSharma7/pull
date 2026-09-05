@@ -4,7 +4,9 @@ import { Mark } from '@wap/ui';
 import { Appearance } from './routes/Appearance.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
+import { TabBar } from './components/TabBar.js';
 import { Daily } from './routes/Daily.js';
+import type { NavItem } from './lib/tab-bar.js';
 import { Explore } from './routes/Explore.js';
 import { History } from './routes/History.js';
 
@@ -67,11 +69,11 @@ import { supabase, tabAdopts } from './lib/supabase.js';
 
 type Tab = 'feed' | 'daily' | 'review' | 'library' | 'history' | 'preferences';
 
-const SECTIONS: { id: Tab; label: string }[] = [
+const SECTIONS: { id: Tab; label: string; short?: string }[] = [
   { id: 'feed', label: 'For You' },
   // Second, next to the ranked feed and ahead of the personal sections: it is the one
   // finite, curated thing in the app, and law 3 promises it free forever.
-  { id: 'daily', label: 'Daily Pull' },
+  { id: 'daily', label: 'Daily Pull', short: 'Daily' },
   { id: 'review', label: 'Review' },
   { id: 'library', label: 'Library' },
   { id: 'history', label: 'History' },
@@ -705,6 +707,41 @@ export function App() {
    */
   const destinations = DESTINATIONS.filter((d) => !d.signedIn || (!visitor && !guest));
 
+  /*
+   * The navigation, once, as data — and both navigations render this array rather than
+   * rebuilding it.
+   *
+   * The comment above says the two used to filter `DESTINATIONS` with the same
+   * predicate written out twice, which is how the masthead and the rail came to
+   * disagree about what a reader may reach. The order matters as much as the
+   * membership now that a phone shows only the first four: `splitNav` takes them off
+   * the front, so this array's order IS what a thumb gets, and the reader's own
+   * material has to come first.
+   */
+  const navItems: NavItem[] = [
+    ...(visitor
+      ? []
+      : SECTIONS.map((s) => ({
+          key: s.id,
+          label: s.label,
+          short: s.short,
+          /*
+           * A destination is current when its URL is open, and a section is current
+           * only when no route is. Without the `!routeOpen`, a reader on /search had
+           * two elements marked aria-current="page" — "For You" and "Search" — which a
+           * screen reader reports as two current locations in one navigation.
+           */
+          current: tab === s.id && !routeOpen,
+          select: () => goToTab(s.id),
+        }))),
+    ...destinations.map((d) => ({
+      key: d.path,
+      label: d.label,
+      current: isPath(path, d.path),
+      select: () => navigate(d.path),
+    })),
+  ];
+
   if (!ready)
     return (
       <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
@@ -769,43 +806,14 @@ export function App() {
         </span>
 
         {/*
-          The sections live in the masthead below 60rem and in the left rail
-          above it. Rendering both and hiding one would put two controls with
-          the same name in the accessibility tree, so the rail is the only
-          copy on wide screens and this one steps aside for it.
+          The masthead carries no navigation at all any more.
+
+          Below the rail's breakpoint it used to carry every one of them, wrapping four
+          rows deep on a phone; that list is now `TabBar`, at the bottom of the viewport
+          where a thumb is. Above the breakpoint the rail was always the only copy —
+          rendering both and hiding one would put two controls with the same name in the
+          accessibility tree — and that is still true, so nothing here replaces it.
         */}
-        <nav aria-label="Sections" className="shell__masthead-nav">
-          {!visitor &&
-            SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="btn btn--plain shell__masthead-item"
-                aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
-                onClick={() => goToTab(s.id)}
-              >
-                {s.label}
-              </button>
-            ))}
-          {/*
-              A destination is current when its URL is open, and a section is
-              current only when no route is. Without the `!routeOpen` above, a
-              reader on /search had two elements marked aria-current="page" —
-              "For You" and "Search" — which a screen reader reports as two
-              current locations in one navigation.
-            */}
-          {destinations.map((d) => (
-            <button
-              key={d.path}
-              type="button"
-              className="btn btn--plain shell__masthead-item"
-              aria-current={isPath(path, d.path) ? 'page' : undefined}
-              onClick={() => navigate(d.path)}
-            >
-              {d.label}
-            </button>
-          ))}
-        </nav>
 
         {/*
             In the masthead rather than in Preferences, because it is a reading control
@@ -923,27 +931,15 @@ export function App() {
         <aside className="shell__rail" aria-label="Sections">
           <p className="meta shell__group">{visitor ? 'Browse' : 'Reading'}</p>
           <nav className="shell__nav">
-            {!visitor &&
-              SECTIONS.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="btn btn--plain shell__nav-item"
-                  aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
-                  onClick={() => goToTab(s.id)}
-                >
-                  {s.label}
-                </button>
-              ))}
-            {destinations.map((d) => (
+            {navItems.map((item) => (
               <button
-                key={d.path}
+                key={item.key}
                 type="button"
                 className="btn btn--plain shell__nav-item"
-                aria-current={isPath(path, d.path) ? 'page' : undefined}
-                onClick={() => navigate(d.path)}
+                aria-current={item.current ? 'page' : undefined}
+                onClick={item.select}
               >
-                {d.label}
+                {item.label}
               </button>
             ))}
           </nav>
@@ -1309,6 +1305,15 @@ export function App() {
       </div>
 
       <Colophon onNavigate={navigate} />
+
+      {/*
+        Last in the shell, and after the Colophon rather than before it: the bar is
+        pinned to the viewport, so its place in the source is the reading order a screen
+        reader and the Tab key get — and navigation belongs after the content on a
+        screen where it is drawn under it. The skip link at the top is what serves
+        anybody who wants it first.
+      */}
+      <TabBar items={navItems} />
     </div>
   );
 

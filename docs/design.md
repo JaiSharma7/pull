@@ -104,6 +104,54 @@ by layout. So:
 A useful test: if a screenshot of this app could be mistaken for a video feed with the
 sound off, the layout is wrong.
 
+### Navigation is a rail on a laptop and a bar on a phone
+
+Above 63rem the rail carries every destination and is one of law 7's visible edges.
+Below it there is no room for a rail, and what used to happen instead was that all
+thirteen destinations wrapped across the masthead — four rows on a 393px viewport,
+roughly a fifth of the screen spent before the first sentence, and spent at the far end
+of the phone from the hand holding it.
+
+So below 63rem they move to a bar across the bottom: four slots and a "More"
+disclosure, which is what both mobile platforms settle on and for the same reason — five
+is what a thumb can reach across at the 44px minimum. `splitNav` decides the split;
+`DESTINATIONS` and `SECTIONS` in `App.tsx` decide the order, and the order is now
+load-bearing, because the first four are what a phone shows.
+
+**A bottom bar is the shape a video feed uses to dissolve its edges, so it has to earn
+its place against law 7 rather than beside it.** What separates the two: this one is
+opaque and separated by a hairline instead of floating over the content, it names places
+rather than offering gestures, it marks the one you are on, and it is `position: sticky`
+so it comes to rest after the colophon at the end of the document instead of hovering
+over an infinite runway. Sticky is also what keeps the reading column honest — a fixed
+bar would need bottom padding equal to its own height, which is exactly the fixed `rem`
+dimension the section below warns about, and which is wrong the moment a label wraps or
+a reader turns large type on.
+
+The two navigations are one array rendered twice, never two lists. They used to filter
+`DESTINATIONS` separately, which is how the masthead and the rail came to disagree about
+what a reader may reach.
+
+### Touch is not a narrow mouse
+
+Two rules, both keyed on the input rather than on the width — a narrow desktop window is
+still a mouse, and the laptop layout is not the one that needed changing.
+
+- **`@media (pointer: coarse)`: every control clears 44px**, the floor in Apple's HIG and
+  in WCAG 2.5.5. `.btn` took its height from type plus padding and landed at 39px, on
+  every control on every screen. Where a control is a single glyph or a short word, the
+  minimum applies to width too: a full-height target a thumb misses sideways is still a
+  miss. Where a control has a separate `<label for>`, the label is the target and the
+  label is what gets the minimum.
+- **`@media (hover: hover)`: every `:hover` rule is guarded.** iOS has no pointer to move
+  away, so Safari resolves `:hover` on tap and keeps it resolved until something else is
+  tapped — leaving the last thing pressed looking permanently selected, in contradiction
+  to the `aria-current` marker that actually means it. Where a rule pairs `:hover` with
+  `:focus-visible`, only the hover half is guarded.
+
+Neither is visible in a screenshot, which is why `pnpm record` measures for both on every
+phone-shaped pass. See `docs/testing-accounts.md`.
+
 ### Dimensions adapt to the machine, continuously
 
 A reader on a Surface Laptop, a MacBook and a 27-inch monitor should each get a layout

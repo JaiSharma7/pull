@@ -109,11 +109,19 @@
   cursor: pointer;
 }
 
-.pull-card__chip--link:hover,
 .pull-card__chip--link:focus-visible {
   color: var(--text);
   text-decoration: underline;
   text-underline-offset: 0.25em;
+}
+
+/* Only the hover half is guarded — keyboard focus must survive. */
+@media (hover: hover) {
+  .pull-card__chip--link:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 0.25em;
+  }
 }
 
 /*

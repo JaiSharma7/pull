@@ -43,10 +43,17 @@
   cursor: pointer;
 }
 
-.history__link:hover,
 .history__link:focus-visible {
   text-decoration: underline;
   text-underline-offset: 0.25em;
+}
+
+/* Only the hover half is guarded — keyboard focus must survive. */
+@media (hover: hover) {
+  .history__link:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.25em;
+  }
 }
 
 .history__source {

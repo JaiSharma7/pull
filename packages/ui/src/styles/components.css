@@ -90,9 +90,24 @@
     border-color var(--transition);
 }
 
-.btn:hover {
-  color: var(--text);
-  border-color: var(--text);
+/*
+ * Hover is guarded from here on, and the reason is a phone rather than a preference.
+ *
+ * iOS has no pointer to move away, so Safari resolves `:hover` on tap and keeps it
+ * resolved until something else is tapped. Every rule below therefore left a control
+ * looking permanently hovered after it was pressed — a bordered box under the last tab
+ * touched, an underlined link that stayed underlined — which reads as selection, and
+ * contradicts the `aria-current` marker that actually means it.
+ *
+ * `(hover: hover)` is the media query for "this input can hover at all", so a mouse
+ * keeps every one of these and a finger gets none. Where a rule pairs `:hover` with
+ * `:focus-visible`, only the hover half moves: keyboard focus must survive.
+ */
+@media (hover: hover) {
+  .btn:hover {
+    color: var(--text);
+    border-color: var(--text);
+  }
 }
 
 .btn[aria-pressed='true'] {
@@ -110,15 +125,55 @@
   color: var(--bone);
 }
 
-.btn--primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--bone);
+/* Guarded: see the note on `.btn:hover` in components.css. */
+@media (hover: hover) {
+  .btn--primary:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    color: var(--bone);
+  }
 }
 
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/*
+ * A control a thumb can actually hit.
+ *
+ * `.btn` takes its height from its type plus its padding, which lands at 39px — under
+ * the 44px floor in Apple's HIG and in WCAG 2.5.5, on every control on every screen.
+ * It is a defect that is invisible in a screenshot, which is why the recorder measures
+ * for it rather than leaving it to be noticed (`scripts/testkit/record.mjs`).
+ *
+ * Keyed on a coarse pointer rather than on a width, because what is being sized for is
+ * a finger and not a small window: a narrow desktop window is still a mouse, and the
+ * laptop layout was not the one that needed changing.
+ *
+ * A `<button>` centres its own content vertically, so the minimum alone is enough for
+ * one. An anchor is inline, where `min-height` does nothing at all — hence the display
+ * change, and `align-items` without `justify-content` so a control that was aligned
+ * left stays aligned left.
+ */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
+
+  a.btn,
+  .colophon__links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  /* "Terms" is 39px of word, so the height alone still leaves a target a thumb
+     misses sideways. Centred, so the extra width falls either side of the label. */
+  .colophon__links a {
+    justify-content: center;
+    min-width: 44px;
+  }
 }
 
 /* --- Depth dial --------------------------------------------------------- */
@@ -749,24 +804,106 @@
  * `min-width: 0` as well as the wrap: a flex item's floor is its content by default,
  * so without it the nav refuses to shrink inside the masthead however it wraps.
  */
-.shell__masthead-nav {
+/* Bottom navigation -------------------------------------------------------
+ *
+ * What the masthead used to carry in a wrapping row, moved to where a thumb is.
+ *
+ * Thirteen items wrapped four rows deep on a 393px viewport — about a fifth of the
+ * screen spent on navigation above the first sentence, and spent at the far end of the
+ * phone from the hand holding it. `splitNav` in the app keeps four and a "More"; this
+ * is only the drawing of it.
+ *
+ * Design law 7 is the thing to be careful about here, because a bar pinned to the
+ * bottom of the viewport is exactly the shape a video feed uses to dissolve its edges.
+ * What keeps this the opposite: it is opaque, it is separated by a hairline rather than
+ * floating over the content, it names places instead of gestures, and it marks the one
+ * the reader is on. There is no shadow, no gradient and no rounding on it — the row is
+ * flush to the edges of the screen, which is also why it takes no radius.
+ */
+.tabbar {
+  /*
+   * Sticky, not fixed, and that is a layout decision rather than a preference.
+   *
+   * A fixed bar is out of flow, so the content underneath needs bottom padding equal to
+   * the bar's height — a number that is wrong the moment a label wraps, the reader
+   * turns large type on, or the home indicator's inset changes. Sticky keeps the bar in
+   * flow as the last child of the shell's column: it pins to the bottom of the viewport
+   * while there is more to scroll, comes to rest after the colophon at the end, and
+   * never covers a word at any type size. docs/design.md — a fixed rem dimension in a
+   * layout rule is a smell, and the padding it would need is exactly that.
+   */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-top: 1px solid var(--rule);
+  /* The home indicator on a notched phone. Zero in a browser; real under Capacitor and
+     in an installed PWA, both of which are where this product is going. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tabbar__row {
   display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  gap: var(--space-2);
+  align-items: stretch;
 }
 
 /*
- * The masthead is the ONLY navigation below 63rem, so its current item cannot
- * be marked by colour alone — design law 5, and `aria-current` is not a visual
- * signal. Weight and a hairline underneath, the same treatment the rail already
- * gives `.shell__nav-item[aria-current]`, so the two navs agree and neither
- * depends on a reader distinguishing oxblood from ink.
+ * Equal slots, and `min-width: 0` so a long label truncates instead of widening its own
+ * slot at the expense of its neighbours — "Preferences" is nearly twice "Review".
  */
-.shell__masthead-item[aria-current='page'] {
+.tabbar__item {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  border-radius: 0;
+  border-color: transparent;
+  padding: var(--space-2) var(--space-1);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The same treatment the rail gives its current item — weight and a hairline, never
+ * colour alone (design law 5), and the two navigations agree because they are two
+ * drawings of one array.
+ */
+.tabbar__item[aria-current='page'],
+.tabbar__sheet-item[aria-current='page'] {
   color: var(--accent);
   font-weight: 500;
   border-bottom: 1px solid var(--accent);
+}
+
+/*
+ * A disclosure, opening upward from the bar it belongs to.
+ *
+ * Capped and scrollable rather than sized to its contents: nine items at 44px is fine
+ * on a phone at the default type size and is taller than a short landscape viewport
+ * with large type on, and a list that pushes its own bar off the screen has eaten the
+ * control that closes it.
+ */
+.tabbar__sheet {
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+  max-height: 60dvh;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-5);
+}
+
+.tabbar__sheet-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.tabbar__sheet-item {
+  min-height: 44px;
+  text-align: left;
+  border-radius: 0;
+  border-color: transparent;
+  padding-inline: 0;
 }
 
 /*
@@ -779,7 +916,7 @@
  * own; only the gap between them is.
  */
 @media (min-width: 63rem) {
-  .shell__masthead-nav {
+  .tabbar {
     display: none;
   }
 }
@@ -1080,9 +1217,12 @@
   text-decoration: none;
 }
 
-.colophon__links a:hover {
-  color: var(--accent);
-  text-decoration: underline;
+/* Guarded: see the note on `.btn:hover` in components.css. */
+@media (hover: hover) {
+  .colophon__links a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
 }
 
 /* A sentence, not a label, so body face: the same reason the consent line on

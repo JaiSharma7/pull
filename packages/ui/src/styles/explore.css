@@ -116,6 +116,14 @@
   letter-spacing: -0.015em;
 }
 
+/* A topic can be one short word — "Logic" is 42px — and the shared minimum only sets a
+   height. Left-aligned still, because these read as a list rather than as buttons. */
+@media (pointer: coarse) {
+  .explore__child-name {
+    min-width: 44px;
+  }
+}
+
 /*
  * The same muted grey as a parent's count, not a step fainter: it is the same kind
  * of fact one level down. `--text-faint` measures 2.72:1 on the light ground and
