@@ -214,9 +214,11 @@ of the Pull being read is sent to them**. That is between your browser and its v
 neither see it nor control it, but it is not the same as fetching a voice file, and the
 earlier wording implied it was.
 
-So the app prefers a local voice: it is what you get unless you pick something else, and the
-Listening settings list local voices first. If you choose a remote voice, that is the trade
-you are making, and it is yours to make.
+So the app prefers a local voice, in your own language, and only leaves the choice to your
+browser when your device has no local voice at all. Choosing a voice for yourself is coming
+— the Listening settings are being built and will list local voices first — and when they
+land, picking a remote voice will be a trade you make knowingly. Today the app makes the
+quieter choice on your behalf.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's

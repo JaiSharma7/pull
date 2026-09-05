@@ -10,8 +10,10 @@
  * on Google's servers, which means the text of the card goes there to be read. That is
  * a smaller thing than dictation (the text is a published summary, not a reader's
  * voice) but it is still a network round trip and it still does not work offline, so
- * the local voices come first in the list and a reader who picks nothing gets the
- * browser's default.
+ * the local voices come first in the list AND a reader who picks nothing gets one --
+ * in their own language, or the browser's default if the device has none. See
+ * `preferredLocalVoice`, which is where that stops being a claim about the list and
+ * becomes a property of the utterance.
  *
  * PAUSE IS CANCEL PLUS A REMEMBERED OFFSET, not `speechSynthesis.pause()`. The native
  * call is unreliable where it matters most: on Chrome for Android it either does
@@ -48,9 +50,14 @@ export interface SpeakOptions {
   /**
    * A `SpeechSynthesisVoice.voiceURI`, as returned by `listVoices()`.
    *
-   * Unknown or null means the browser's default rather than the nearest match:
-   * a voice the reader chose on another device, or one an update removed, must
-   * not become a different voice they never picked.
+   * Unknown or null falls back to a LOCAL voice in the reader's own language, and
+   * to the browser's default only when the device has none -- see
+   * `preferredLocalVoice` for why the language half is load-bearing.
+   *
+   * It never falls back to the nearest voice BY NAME: a voice the reader chose on
+   * another device, or one an update removed, must not silently become a
+   * particular different voice they never picked. Choosing a local one in their
+   * language is a different thing from guessing which voice they meant.
    */
   voiceURI?: string | null;
   /**
@@ -116,6 +123,34 @@ function findVoice(voiceURI: string): SpeechSynthesisVoice | null {
   return window.speechSynthesis.getVoices().find((v) => v.voiceURI === voiceURI) ?? null;
 }
 
+/**
+ * The local voice to fall back on, IN A LANGUAGE THE READER READS.
+ *
+ * `listVoices()` sorts local first, then the device default, then by language code
+ * -- and the language tiebreak is alphabetical, which is meaningless until the two
+ * above it have decided something. On the device this fallback was written for they
+ * do not: Chrome Android's default voice is the remote Google one, so no local
+ * voice carries `default`, and taking the first local entry returned whichever
+ * language sorted earliest. Review reproduced an Afrikaans engine, and an Arabic
+ * one, reading an English card. Before the fallback existed the reader at least got
+ * the browser's own default, which is remote but intelligible.
+ *
+ * So: a local voice whose tag matches, then one in the same language family, and
+ * otherwise nothing -- the browser's default is a better answer than a local voice
+ * the reader cannot understand.
+ */
+function preferredLocalVoice(): SpeechSynthesisVoice | null {
+  const local = listVoices().filter((v) => v.localService);
+  if (local.length === 0) return null;
+  const wanted = (globalThis.navigator?.language ?? 'en').toLowerCase();
+  const family = wanted.slice(0, 2);
+  return (
+    local.find((v) => v.lang.toLowerCase() === wanted) ??
+    local.find((v) => v.lang.slice(0, 2).toLowerCase() === family) ??
+    null
+  );
+}
+
 function finish(record: Live): void {
   if (record.done) return;
   record.done = true;
@@ -143,8 +178,7 @@ function begin(text: string, from: number, options: SpeakOptions, token: SpeechT
   // feed for a flight, tapped Listen and heard nothing was hitting a default
   // this file had already argued against. Falling back to the browser only when
   // the device has no local voice at all.
-  const voice =
-    (voiceURI ? findVoice(voiceURI) : null) ?? listVoices().find((v) => v.localService) ?? null;
+  const voice = (voiceURI ? findVoice(voiceURI) : null) ?? preferredLocalVoice();
   if (voice) utterance.voice = voice;
 
   const record: Live = {

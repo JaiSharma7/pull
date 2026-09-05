@@ -328,6 +328,41 @@ describe('speak', () => {
     expect(spoken[1]!.voice?.voiceURI).toBe('urn:local');
   });
 
+  it('picks a local voice in the reader’s own language, not the first one listed', () => {
+    // `listVoices` sorts local first, then the device default, then by language
+    // code — and on Chrome Android no LOCAL voice carries `default`, because the
+    // device default is the remote Google one. So the tiebreak fell to alphabetical
+    // language and an English card was read by an Afrikaans engine.
+    const { spoken } = fakeSynthesis([
+      voice({ voiceURI: 'urn:af', lang: 'af-ZA' }),
+      voice({ voiceURI: 'urn:ar', lang: 'ar-EG' }),
+      voice({ voiceURI: 'urn:en', lang: 'en-GB' }),
+      voice({ voiceURI: 'urn:remote', lang: 'en-US', localService: false, default: true }),
+    ]);
+    vi.stubGlobal('navigator', { language: 'en-GB' });
+    speak('The obstacle is the way.');
+    expect(spoken[0]!.voice?.voiceURI).toBe('urn:en');
+  });
+
+  it('accepts a local voice in the same language family when the tag differs', () => {
+    const { spoken } = fakeSynthesis([
+      voice({ voiceURI: 'urn:af', lang: 'af-ZA' }),
+      voice({ voiceURI: 'urn:en-us', lang: 'en-US' }),
+    ]);
+    vi.stubGlobal('navigator', { language: 'en-GB' });
+    speak('x');
+    expect(spoken[0]!.voice?.voiceURI).toBe('urn:en-us');
+  });
+
+  it('leaves it to the browser rather than reading English in Afrikaans', () => {
+    // The browser's own default is remote and intelligible; a local voice in a
+    // language the reader does not read is neither.
+    const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:af', lang: 'af-ZA' })]);
+    vi.stubGlobal('navigator', { language: 'en-GB' });
+    speak('x');
+    expect(spoken[0]!.voice).toBeNull();
+  });
+
   it('leaves it to the browser only when the device has no local voice', () => {
     const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:remote', localService: false })]);
     speak('x');
