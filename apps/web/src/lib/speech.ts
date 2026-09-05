@@ -5,6 +5,26 @@
  * server. Deepstash puts playback behind Pro; here it is affordable precisely because of
  * where it runs.
  *
+ * "On the device" has one qualification, and `listVoices` exists to make it. A browser
+ * ships local voices and may also offer remote ones — Chrome's "Google" voices synthesise
+ * on Google's servers, which means the text of the card goes there to be read. That is
+ * a smaller thing than dictation (the text is a published summary, not a reader's
+ * voice) but it is still a network round trip and it still does not work offline, so
+ * the local voices come first in the list and a reader who picks nothing gets the
+ * browser's default.
+ *
+ * PAUSE IS CANCEL PLUS A REMEMBERED OFFSET, not `speechSynthesis.pause()`. The native
+ * call is unreliable where it matters most: on Chrome for Android it either does
+ * nothing or ends the utterance outright, and `resume()` after it starts again from
+ * the top; on desktop Chrome an utterance paused for more than about fifteen seconds
+ * is quietly killed by the engine and never resumes at all. So pausing here cancels
+ * the utterance and remembers the `charIndex` of the last `onboundary` event — the
+ * start of the word being spoken — and resuming speaks the text again from that word.
+ * One path that behaves the same everywhere beats a native path that is only true on
+ * the machines we do not have. The cost is honest: an engine that fires no boundary
+ * events (Chrome Android's remote voices among them) resumes from the start of the
+ * utterance, and a card is a paragraph, so the price is a paragraph.
+ *
  * `SpeechRecognition` is **not** the same bargain, and this header used to vouch for both.
  * In most browsers it streams the captured audio to that browser's own speech
  * service — Chrome to Google, Safari to Apple, Edge to Microsoft; only a few
@@ -26,6 +46,14 @@ export function speechSupported(): boolean {
 export interface SpeakOptions {
   rate?: number;
   /**
+   * A `SpeechSynthesisVoice.voiceURI`, as returned by `listVoices()`.
+   *
+   * Unknown or null means the browser's default rather than the nearest match:
+   * a voice the reader chose on another device, or one an update removed, must
+   * not become a different voice they never picked.
+   */
+  voiceURI?: string | null;
+  /**
    * Called when this utterance stops for any reason — finished, cancelled by the
    * next `speak`, or ended by `stopSpeaking`.
    *
@@ -33,27 +61,159 @@ export interface SpeakOptions {
    * finished on its own, so the button sits there offering to stop silence.
    * `error` counts as an ending too: a voice that fails to load must not leave the
    * UI claiming it is still speaking.
+   *
+   * A pause is NOT an ending. The utterance is cancelled under the hood (see the
+   * header), but the caller is not told, because from where they stand nothing
+   * has finished — and a player that heard "ended" on every pause would advance
+   * to the next track while the reader was answering the door.
    */
   onEnd?: () => void;
 }
 
-export function speak(text: string, options: SpeakOptions = {}): void {
-  if (!speechSupported()) return;
-  const { rate = 1, onEnd } = options;
+/** What is being spoken right now, and where in the full text it began. */
+interface Live {
+  /** The whole text handed to `speak`, not the slice this utterance is reading. */
+  text: string;
+  /** Where in `text` this utterance started, so boundary offsets can be made absolute. */
+  base: number;
+  /** The start of the last word heard, absolute in `text`. Resume picks up here. */
+  offset: number;
+  options: SpeakOptions;
+  /** Set by `pauseSpeaking` before it cancels, so the ending it causes is not reported. */
+  silenced: boolean;
+  /** Both `onend` and `onerror` route through `finish`; this keeps `onEnd` to once. */
+  done: boolean;
+}
+
+interface Suspended {
+  text: string;
+  offset: number;
+  options: SpeakOptions;
+}
+
+let live: Live | null = null;
+let suspended: Suspended | null = null;
+
+function findVoice(voiceURI: string): SpeechSynthesisVoice | null {
+  return window.speechSynthesis.getVoices().find((v) => v.voiceURI === voiceURI) ?? null;
+}
+
+function finish(record: Live): void {
+  if (record.done) return;
+  record.done = true;
+  if (live === record) live = null;
+  if (record.silenced) return;
+  record.options.onEnd?.();
+}
+
+function begin(text: string, from: number, options: SpeakOptions): void {
+  const { rate = 1, voiceURI = null } = options;
   // Cancelling first means the previous utterance's own `onend` fires during this
   // call. Callers distinguish the two by the id they were speaking — see `Feed.tsx`.
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
+
+  const utterance = new SpeechSynthesisUtterance(from > 0 ? text.slice(from) : text);
   utterance.rate = rate;
-  if (onEnd) {
-    utterance.onend = () => onEnd();
-    utterance.onerror = () => onEnd();
-  }
+  const voice = voiceURI ? findVoice(voiceURI) : null;
+  if (voice) utterance.voice = voice;
+
+  const record: Live = { text, base: from, offset: from, options, silenced: false, done: false };
+  utterance.onboundary = (event) => {
+    // Word boundaries only. A sentence boundary lands on the same index as the
+    // first word of the sentence, so it is harmless, but resuming at a word is
+    // what a listener expects — the engine picks the last word up again.
+    record.offset = from + event.charIndex;
+  };
+  utterance.onend = () => finish(record);
+  utterance.onerror = () => finish(record);
+
+  live = record;
   window.speechSynthesis.speak(utterance);
 }
 
+export function speak(text: string, options: SpeakOptions = {}): void {
+  if (!speechSupported()) return;
+  // A paused utterance has no live object for `cancel` to end, so its ending is
+  // reported here, before the new one starts — the same order the live case gets.
+  const abandoned = suspended;
+  suspended = null;
+  abandoned?.options.onEnd?.();
+  begin(text, 0, options);
+}
+
+/**
+ * Pause. The utterance is cancelled and its place remembered; `onEnd` does not
+ * fire. A no-op when nothing is being spoken, including when already paused.
+ */
+export function pauseSpeaking(): void {
+  if (!speechSupported() || !live) return;
+  const record = live;
+  record.silenced = true;
+  suspended = { text: record.text, offset: record.offset, options: record.options };
+  live = null;
+  window.speechSynthesis.cancel();
+}
+
+/**
+ * Resume from the last word boundary heard before the pause, with the same rate,
+ * voice and `onEnd` as the original call. A no-op when nothing is paused.
+ */
+export function resumeSpeaking(): void {
+  if (!speechSupported() || !suspended) return;
+  const { text, offset, options } = suspended;
+  suspended = null;
+  begin(text, offset, options);
+}
+
 export function stopSpeaking(): void {
-  if (speechSupported()) window.speechSynthesis.cancel();
+  if (!speechSupported()) return;
+  // A paused utterance is already cancelled, so nothing will fire for it on its
+  // own. It has still stopped, and the contract says its caller is told.
+  const abandoned = suspended;
+  suspended = null;
+  window.speechSynthesis.cancel();
+  abandoned?.options.onEnd?.();
+}
+
+function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The voices this device can speak in, local ones first.
+ *
+ * Local first because a local voice works offline and sends nothing anywhere
+ * (see the header); the device's default next, since it is the one the reader
+ * has already been hearing; then by language and name so the list reads as a
+ * list. Ties keep the browser's order, so two calls over the same voices give
+ * the same sequence and a settings screen does not reshuffle under the pointer.
+ *
+ * `getVoices()` is empty in Chrome until `voiceschanged` fires, often after the
+ * first paint. `onVoicesChanged` is how a screen learns to ask again.
+ */
+export function listVoices(): SpeechSynthesisVoice[] {
+  if (!speechSupported()) return [];
+  return window.speechSynthesis
+    .getVoices()
+    .map((voice, order) => ({ voice, order }))
+    .sort(
+      (a, b) =>
+        Number(b.voice.localService) - Number(a.voice.localService) ||
+        Number(b.voice.default) - Number(a.voice.default) ||
+        compare(a.voice.lang, b.voice.lang) ||
+        compare(a.voice.name, b.voice.name) ||
+        a.order - b.order,
+    )
+    .map(({ voice }) => voice);
+}
+
+/** Be told when the voice list changes. Returns a teardown; a no-op when unsupported. */
+export function onVoicesChanged(listener: () => void): () => void {
+  if (!speechSupported()) return () => {};
+  const synth = window.speechSynthesis;
+  if (typeof synth.addEventListener !== 'function') return () => {};
+  synth.addEventListener('voiceschanged', listener);
+  return () => synth.removeEventListener('voiceschanged', listener);
 }
 
 interface SpeechRecognitionEventResult {
