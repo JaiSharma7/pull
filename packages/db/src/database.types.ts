@@ -2176,6 +2176,7 @@ export type Database = {
         Args: { p_weights: Json; p_work_id: string }
         Returns: number
       }
+      work_is_authorable: { Args: { p_work_id: string }; Returns: boolean }
     }
     Enums: {
       acquisition: "read" | "saved" | "explained" | "quizzed" | "probed"
