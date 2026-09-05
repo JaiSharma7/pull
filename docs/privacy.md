@@ -94,14 +94,37 @@ own history to yourself, not about retaining it against your wishes.
 
 This is the category most services describe vaguely, so here it is precisely:
 
-| Data                                                            | Table                               | What it is                                                                          |
-| --------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
-| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                  | Stops the feed repeating itself                                                     |
-| What you opened and for how long                                | `history_events` (incl. `dwell_ms`) | Your history, and the reading-time signal                                           |
-| Recall state per idea                                           | `knowledge_states`                  | Stability and last-seen, from which Half-Life is computed                           |
-| A numeric summary of what you know                              | `user_knowledge_vectors`            | The centroid the Delta compares candidates against                                  |
-| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds` | Bounds interleaved questions and backs off when you dismiss them                    |
-| Each recall attempt, as it happened                             | `recall_events`                     | The grade, your stated confidence and what you typed, so a retry never counts twice |
+| Data                                                            | Table                                                        | What it is                                                                          |
+| --------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                                           | Stops the feed repeating itself                                                     |
+| What you opened and for how long                                | `history_events` (incl. `dwell_ms`)                          | Your history, and the reading-time signal                                           |
+| Recall state per idea                                           | `knowledge_states`                                           | Stability and last-seen, from which Half-Life is computed                           |
+| A numeric summary of what you know                              | `user_knowledge_vectors`                                     | The centroid the Delta compares candidates against                                  |
+| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds`                          | Bounds interleaved questions and backs off when you dismiss them                    |
+| Each recall attempt, as it happened                             | `recall_events`                                              | The grade, your stated confidence and what you typed, so a retry never counts twice |
+| Highlights you chose to keep                                    | `imports`, `import_items`, and pulls under a private summary | Your own copy of your own reading, so the product can schedule and search it        |
+| Questions you wrote for yourself                                | `user_questions`                                             | Asked in Review before ours, because yours is the one you wanted                    |
+
+**Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
+export, the text of each highlight is stored verbatim — that is the point of keeping it —
+under a summary marked private that only you can read, on a source marked as your own
+material. Four consequences, and each is enforced by the database rather than by our
+intentions:
+
+- It never enters anybody's feed. The feed draws only from summaries that are both
+  published and public, and yours is neither.
+- It is never sent to a model to write a public summary. Imports do not enter canonical
+  generation at all, and nothing else reads them.
+- Nobody else can see it, or see that it exists. A source with nothing readable behind it
+  is invisible, so another reader listing our catalogue does not learn the titles of the
+  books you have been reading.
+- It is deleted with your account, along with the batch record and the questions you wrote
+  about it. You can also remove any single batch yourself, at any time, from Library — one
+  Undo takes back the highlights, the review schedule and the saves that came with them.
+
+We keep one thing after an Undo: a one-way fingerprint of each highlight's text, so that
+re-uploading the same file does not hand you back everything you just removed. It cannot
+be turned back into the highlight, and it goes with your account.
 
 `user_knowledge_vectors` deserves a sentence of its own. It is a vector — a list of numbers
 — averaged from the ideas you have engaged with. It is not readable prose and it is not

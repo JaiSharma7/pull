@@ -1,6 +1,6 @@
 # Data model
 
-43 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+46 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -21,6 +21,8 @@ User
  │    └── recall_events                          ← one row per attempt; append-only
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
+ ├── imports ─── import_items                     ← highlights you kept
+ ├── user_questions                               ← questions you wrote yourself
  └── feed_recipes · feed_impressions
 
 Work                                              ← the thing itself
@@ -59,6 +61,24 @@ the `client_mutation_id` the client minted for it. `grade_recall` inserts that r
 before it touches `knowledge_states`, so a retry of a lost response finds its own row
 and returns the state untouched. The log is append-only through the API and is the
 evidence a scheduler change is judged against.
+
+**An imported highlight is an ordinary pull.** `commit_import` writes the same
+works/summaries/pulls triple the pipeline does: a `works` row marked `user_owned`, a
+summary the reader authors at `visibility = 'private'`, and one pull per highlight. There
+is no second content path — Review schedules them, search finds them, the Delta can embed
+them — and there is no second privacy story either, because `get_feed` pools on
+`published AND public` and `works_read_readable` hides a work whose only summary is
+somebody else's. The `works` row is shared between two readers who import the same book;
+nothing else about it is. `import_items` carries the sha256 that makes a re-import a
+no-op, and it deliberately outlives the pull it created, so Undo does not hand back
+everything the reader just removed.
+
+**A reader's own question lives in its own table.** `user_questions` rather than a row in
+`quiz_questions`, because the pipeline upserts canonical questions with
+`on conflict (pull_id, kind)` and a partial unique index added to make room for reader
+rows would change what that upsert resolves against. `get_due_reviews` prefers the
+reader's own unretired question and says which one it gave, so `recall_events` can file
+the grade against `user_question_id` rather than the canonical foreign key.
 
 **Retrievability is computed, never stored.** `knowledge_states` holds
 `stability` and `last_seen_at`; `public.retrievability()` derives the current
