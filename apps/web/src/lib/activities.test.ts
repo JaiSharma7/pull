@@ -8,6 +8,7 @@ import {
   gradeOrdering,
   mcqOptions,
   normaliseAnswer,
+  semanticMarks,
   orderingSteps,
   type Question,
   seededShuffle,
@@ -259,6 +260,47 @@ describe('gradeCloze', () => {
   it('flags a confident miss', () => {
     expect(gradeCloze('chloroplast', answer, 'sure', 1_000).confidentlyWrong).toBe(true);
     expect(gradeCloze('chloroplast', answer, 'unsure', 1_000).confidentlyWrong).toBe(false);
+  });
+});
+
+describe('gradeCloze: the two ways a wrong answer used to pass', () => {
+  // A proportional threshold spread over a phrase let every edit pile into the
+  // one word carrying the meaning: 0.92 across the string, and `easy` for the
+  // opposite answer, so the confidently-wrong repair loop never saw it.
+  it('refuses a phrase whose meaning-bearing word is different', () => {
+    const result = gradeCloze(
+      'increase marginal utility',
+      'decrease marginal utility',
+      'sure',
+      1000,
+    );
+    expect(result.correct).toBe(false);
+    expect(result.confidentlyWrong).toBe(true);
+  });
+
+  it('still forgives a transposition inside a long word', () => {
+    expect(gradeCloze('mitochondira', 'mitochondria').correct).toBe(true);
+  });
+
+  it('refuses a missing or extra word', () => {
+    expect(gradeCloze('marginal utility', 'decreasing marginal utility').correct).toBe(false);
+    expect(gradeCloze('the marginal utility curve', 'marginal utility').correct).toBe(false);
+  });
+
+  // Stripping every symbol made `Na+` and `Na-` the same string, and accepted
+  // `C` for `C++`. Chemistry and computation answers must not do that.
+  it('keeps punctuation that is part of the answer', () => {
+    expect(gradeCloze('Na-', 'Na+').correct).toBe(false);
+    expect(gradeCloze('C', 'C++').correct).toBe(false);
+    expect(gradeCloze('C++', 'C++').correct).toBe(true);
+    expect(gradeCloze('na+', 'Na+').correct).toBe(true);
+  });
+
+  it('still treats a hyphen between words as spacing', () => {
+    expect(semanticMarks('well-known')).toBe('');
+    expect(semanticMarks('Na+')).toBe('+');
+    expect(semanticMarks('C++')).toBe('++');
+    expect(gradeCloze('well known', 'well-known').correct).toBe(true);
   });
 });
 

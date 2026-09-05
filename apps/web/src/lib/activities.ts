@@ -268,6 +268,44 @@ export function normaliseAnswer(text: string): string {
 }
 
 /**
+ * The punctuation in an answer that is part of the answer.
+ *
+ * `normaliseAnswer` drops every symbol, which is right for "mitochondria." and
+ * catastrophic for `Na+`: stripped, it is the same string as `Na-`, and the
+ * grader would mark the opposite ion correct. `C` would likewise pass for `C++`.
+ * A chemistry or computing answer records a wrong answer as recalled, which is
+ * the one outcome a grader must never produce.
+ *
+ * So the symbols are compared separately from the letters. `-` counts only when
+ * it is not between two alphanumerics, because there it is a hyphen and
+ * "well-known" and "well known" are the same answer; everything else in the set
+ * is kept wherever it appears, since a reader does not type `+` or `^` into a
+ * one-line answer by accident.
+ */
+export function semanticMarks(text: string): string {
+  const kept: string[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    // `noUncheckedIndexedAccess`: an index into a string is `string | undefined`,
+    // and only the `=== '-'` comparison narrows it. Guarded once, for both branches.
+    if (ch === undefined) continue;
+    if (ch === '-') {
+      const before = text[i - 1];
+      const after = text[i + 1];
+      const joins =
+        before !== undefined &&
+        after !== undefined &&
+        /[\p{L}\p{N}]/u.test(before) &&
+        /[\p{L}\p{N}]/u.test(after);
+      if (!joins) kept.push(ch);
+    } else if ('+#*/=^<>'.includes(ch)) {
+      kept.push(ch);
+    }
+  }
+  return kept.join('');
+}
+
+/**
  * Edit distance with adjacent transpositions counted once (optimal string
  * alignment), on strings short enough that the plain table is fine.
  *
@@ -322,6 +360,40 @@ export function answerSimilarity(typed: string, answer: string): number {
 export const CLOZE_ACCEPT = 0.85;
 
 /**
+ * And no more than this many edits in any one word, however long the answer.
+ *
+ * A proportional threshold alone is only safe on a single word. Spread over a
+ * phrase it lets every edit pile into the word that carries the meaning:
+ * "increase marginal utility" and "decrease marginal utility" are 0.92 similar
+ * across the whole string, so the grader called the opposite answer `easy` and
+ * the confidently-wrong repair loop never saw it. The comparison is per word
+ * now — same number of words, and each one close to its own counterpart — which
+ * puts "increase" against "decrease" at 0.75 and refuses it, while
+ * "mitochondira" for "mitochondria" is still one transposition and still passes.
+ */
+export const CLOZE_MAX_EDITS_PER_WORD = 2;
+
+/**
+ * Every word close to its own counterpart, and the same number of words.
+ *
+ * A missing or extra word is a different answer to a cloze, which is one to
+ * three words by construction — so word count is a real signal here rather than
+ * the blunt instrument it would be on a sentence.
+ */
+function wordsAreClose(typed: string, answer: string): boolean {
+  const a = normaliseAnswer(typed).split(' ').filter(Boolean);
+  const b = normaliseAnswer(answer).split(' ').filter(Boolean);
+  if (a.length === 0 || a.length !== b.length) return false;
+  return a.every((word, i) => {
+    const other = b[i] as string;
+    const distance = editDistance(word, other);
+    if (distance > CLOZE_MAX_EDITS_PER_WORD) return false;
+    const longest = Math.max(word.length, other.length);
+    return longest === 0 || 1 - distance / longest >= CLOZE_ACCEPT;
+  });
+}
+
+/**
  * Grade a typed cloze answer.
  *
  * `confidence` and `latencyMs` are optional so `gradeCloze(typed, answer)` reads
@@ -336,7 +408,7 @@ export function gradeCloze(
   latencyMs: number | null | undefined = null,
 ): GradeResult & { similarity: number } {
   const similarity = answerSimilarity(typed, answer);
-  const correct = similarity >= CLOZE_ACCEPT;
+  const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);
   return { ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.cloze), similarity };
 }
 
