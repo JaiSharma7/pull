@@ -571,7 +571,6 @@ begin
     from public.import_items
    where user_id = uid and undone_at is null;
 
-
   -- One batch per file, even when the file arrives in six calls. Outside the window a
   -- fresh batch is right: re-importing a clippings file that has grown since is a new
   -- act, and its already-held highlights fall out as duplicates rather than as rows.
