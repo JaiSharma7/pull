@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { parseCsvHighlights, parseKindleClippings, summarizeIngestion } from './ingestion.js';
+import {
+  chunkItems,
+  normaliseHighlight,
+  type ParsedHighlight,
+  parseCsvHighlights,
+  parseKindleClippings,
+  summarizeIngestion,
+  toImportItems,
+} from './ingestion.js';
 
 /*
  * Every fixture here quotes a public-domain work.
@@ -139,5 +147,115 @@ We got 6" of snow that winter and it mattered,Walden,Thoreau
     expect(h.length).toBe(1);
     expect(h[0]?.text).toBe('One, with a comma inside');
     expect(h[0]?.bookTitle).toBe('Walden');
+  });
+});
+
+describe('normaliseHighlight', () => {
+  it('collapses every run of whitespace to one space, then trims', () => {
+    // The RPC computes `btrim(regexp_replace(text, '\s+', ' ', 'g'))` and hashes the
+    // result, so this has to agree with it exactly or the client's idea of a duplicate
+    // and the server's differ.
+    expect(normaliseHighlight('  the   obstacle\n\nis the   way \t')).toBe(
+      'the obstacle is the way',
+    );
+  });
+
+  it('collapses before trimming, so whitespace-only is empty', () => {
+    // `btrim` with one argument removes spaces only. Trimming first would leave a tab
+    // or a newline standing and store a pull whose body is a single space.
+    expect(normaliseHighlight('\t\n  \r\n')).toBe('');
+  });
+});
+
+describe('toImportItems', () => {
+  const h = (over: Partial<ParsedHighlight> = {}): ParsedHighlight => ({
+    bookTitle: 'Meditations',
+    bookAuthor: 'Marcus Aurelius',
+    text: 'The obstacle is the way.',
+    location: 'loc 101',
+    ...over,
+  });
+
+  it('shapes a highlight into what commit_import accepts', () => {
+    expect(toImportItems([h()])).toEqual({
+      items: [
+        {
+          title: 'Meditations',
+          author: 'Marcus Aurelius',
+          text: 'The obstacle is the way.',
+          locator: 'loc 101',
+        },
+      ],
+      skipped: 0,
+    });
+  });
+
+  it('omits an absent author and locator rather than sending empty strings', () => {
+    // `commit_import` refuses a non-string for either, and `nullif(btrim(...), '')` means
+    // an empty string is a null to it anyway. Omitting keeps the payload honest.
+    const { items } = toImportItems([h({ bookAuthor: '   ', location: undefined })]);
+    expect(items[0]).not.toHaveProperty('author');
+    expect(items[0]).not.toHaveProperty('locator');
+  });
+
+  it('drops what the RPC would raise on, and counts it', () => {
+    // Dropping rather than sending is the whole point: `commit_import` validates per item
+    // and raises on the first bad one, which aborts the chunk — so one empty highlight
+    // would cost the reader the other 499.
+    const { items, skipped } = toImportItems([
+      h(),
+      h({ bookTitle: '  ' }),
+      h({ text: '   \n ' }),
+      h({ text: 'x'.repeat(20001) }),
+      h({ text: 'kept' }),
+    ]);
+    expect(items).toHaveLength(2);
+    expect(skipped).toBe(3);
+  });
+
+  it('keeps a highlight of exactly the maximum length', () => {
+    // The bound is `> 20000` in the RPC. An off-by-one here would silently drop a
+    // legitimate highlight and report it as unkeepable.
+    const { items, skipped } = toImportItems([h({ text: 'x'.repeat(20000) })]);
+    expect(items).toHaveLength(1);
+    expect(skipped).toBe(0);
+  });
+
+  it('truncates rather than drops an over-long title, author or locator', () => {
+    // The RPC applies `left(..., 200)` itself, so truncating here makes the content hash
+    // this client would predict match the one the server computes.
+    const { items, skipped } = toImportItems([
+      h({ bookTitle: 'T'.repeat(300), bookAuthor: 'A'.repeat(300), location: 'L'.repeat(300) }),
+    ]);
+    expect(skipped).toBe(0);
+    expect(items[0]?.title).toHaveLength(200);
+    expect(items[0]?.author).toHaveLength(200);
+    expect(items[0]?.locator).toHaveLength(200);
+  });
+
+  it('normalises the text it keeps', () => {
+    const { items } = toImportItems([h({ text: 'two\n\nlines' })]);
+    expect(items[0]?.text).toBe('two lines');
+  });
+});
+
+describe('chunkItems', () => {
+  it('splits at the RPC ceiling and keeps every item exactly once', () => {
+    const items = Array.from({ length: 1201 }, (_, i) => i);
+    const chunks = chunkItems(items);
+    expect(chunks.map((c) => c.length)).toEqual([500, 500, 201]);
+    expect(chunks.flat()).toEqual(items);
+  });
+
+  it('returns no chunks for no items, so no call is made', () => {
+    expect(chunkItems([])).toEqual([]);
+  });
+
+  it('does not split what already fits', () => {
+    expect(chunkItems([1, 2, 3])).toEqual([[1, 2, 3]]);
+  });
+
+  it('refuses a size that would loop forever', () => {
+    expect(() => chunkItems([1], 0)).toThrow(RangeError);
   });
 });

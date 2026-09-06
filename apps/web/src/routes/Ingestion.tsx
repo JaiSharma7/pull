@@ -1,10 +1,18 @@
 import { useState } from 'react';
 import {
+  commitImport,
+  hashFile,
+  type ImportResult,
+  type ImportSourceKind,
+  undoImport,
+} from '../lib/import-api.js';
+import {
   type IngestionSummary,
   type ParsedHighlight,
   parseCsvHighlights,
   parseKindleClippings,
   summarizeIngestion,
+  toImportItems,
 } from '../lib/ingestion.js';
 
 /*
@@ -15,9 +23,30 @@ import {
 export function Ingestion() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState<IngestionSummary | null>(null);
+  /*
+   * `paste` unless a file was chosen, and the file's own kind when one was.
+   * `commit_import` uses it in the reuse window: a hashless source is matched on
+   * `source_kind` alone, so calling every upload a paste would let two unrelated files
+   * merge into one batch and make an Undo of the second take the first one's highlights.
+   */
+  const [sourceKind, setSourceKind] = useState<ImportSourceKind>('paste');
+  const [keeping, setKeeping] = useState(false);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [skipped, setSkipped] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [undone, setUndone] = useState(false);
 
-  const handleParse = (text: string) => {
+  const handleParse = (text: string, kind: ImportSourceKind = 'paste') => {
     setRawText(text);
+    setSourceKind(kind);
+    // A new file is a new import: the previous result described a different upload, and
+    // leaving it on screen beside fresh counts is the kind of stale number this screen
+    // has had to have removed before.
+    setResult(null);
+    setError(null);
+    setUndone(false);
+    setSkipped(0);
+
     if (!text.trim()) {
       setSummary(null);
       return;
@@ -37,22 +66,58 @@ export function Ingestion() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      handleParse(content);
+      handleParse(content, file.name.toLowerCase().endsWith('.csv') ? 'csv' : 'kindle');
     };
     reader.readAsText(file);
+  };
+
+  const handleKeep = async () => {
+    if (!summary || keeping) return;
+    setKeeping(true);
+    setError(null);
+    try {
+      const { items, skipped: dropped } = toImportItems(summary.highlights);
+      setSkipped(dropped);
+      if (items.length === 0) {
+        setError('None of these highlights could be kept — each one needs a title and some text.');
+        return;
+      }
+      // Hashed from the raw text rather than the parsed items, because the hash is what
+      // joins chunks of ONE FILE into one batch, and two different parses of the same
+      // file must produce the same hash.
+      setResult(await commitImport(sourceKind, await hashFile(rawText), items));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The import did not go through.');
+    } finally {
+      setKeeping(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!result?.importId || keeping) return;
+    setKeeping(true);
+    setError(null);
+    try {
+      await undoImport(result.importId);
+      setUndone(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The undo did not go through.');
+    } finally {
+      setKeeping(false);
+    }
   };
 
   /*
    * There was a "Sync With My Delta →" button here that wrote three counters to
    * `localStorage`, set a flag, and reported "✓ Synced to your Delta". Nothing read those
-   * keys. The feed, the source Delta and the knowledge graph were unchanged, and the
-   * Delta itself derives known ideas from `knowledge_states` rows that this never wrote —
-   * so the one thing the screen claimed to do was the one thing it did not do.
+   * keys, and the Delta derives known ideas from `knowledge_states` rows it never wrote.
    *
-   * It is not replaced with a working import because that is a design decision rather
-   * than a missing function call: see the header of `lib/ingestion.ts` for what law 2 and
-   * law 4 each require of one first. What is left is the half that is real — a parser,
-   * and a count of what it found.
+   * "Keep these highlights" is not that button working at last -- it is a different and
+   * smaller promise, and the difference is the point. It stores the highlights as the
+   * reader's own private Pulls, scheduled and saved, so they reach Review and the Library.
+   * It does NOT put them in the Delta: that needs an embedding of the reader's verbatim
+   * text, which is a model call over their own words and a privacy promise to revisit
+   * first. The screen says what it does and no more.
    */
 
   return (
@@ -160,17 +225,71 @@ export function Ingestion() {
           </div>
 
           <p className="meta" style={{ marginBottom: 'var(--space-3)' }}>
-            Read here and nowhere else. Bringing these into your Delta means matching each highlight
-            to an idea, which is a cost per reader that has to be bounded before it is spent, and
-            storing them means storing text from books under copyright. Both are open questions, so
-            neither has been answered by pretending.
+            Keeping these stores them as your own private ideas: nobody else can see them or see
+            that they exist, they are never used to write anything for anyone else, and they go when
+            your account does. They will not appear in your Delta — that needs each highlight
+            matched to an idea, which is a cost worth answering separately.
           </p>
 
+          {result && !undone && (
+            <div role="status" style={{ marginBottom: 'var(--space-3)' }}>
+              <p style={{ fontWeight: 600 }}>
+                Kept {result.added} {result.added === 1 ? 'highlight' : 'highlights'} across{' '}
+                {result.works.length} {result.works.length === 1 ? 'book' : 'books'}.
+              </p>
+              {result.duplicates > 0 && (
+                <p className="meta">{result.duplicates} you already had, left alone.</p>
+              )}
+              {result.ceilingReached && (
+                <p className="meta">
+                  That is as many as this account can hold. Undo an import you no longer need to
+                  make room.
+                </p>
+              )}
+              {skipped > 0 && (
+                <p className="meta">
+                  {skipped} could not be kept — a highlight needs a title and some text.
+                </p>
+              )}
+              <p className="meta">They are in your Library, and due for review tomorrow.</p>
+            </div>
+          )}
+
+          {undone && (
+            <p className="meta" role="status" style={{ marginBottom: 'var(--space-3)' }}>
+              Removed. Uploading the same file again brings them back.
+            </p>
+          )}
+
+          {error && (
+            <p className="meta" role="status" style={{ marginBottom: 'var(--space-3)' }}>
+              {error}
+            </p>
+          )}
+
           <div className="pull-card__footer">
-            {/* No button. Removing the misleading /metacognition destination left this
-                one resolving to nothing — a control that changed nothing on screen. The
-                result panel is the whole outcome, so the line below is the whole footer. */}
-            <span className="meta">Parsed in your browser · nothing uploaded</span>
+            {!result && (
+              <button type="button" className="btn" onClick={handleKeep} disabled={keeping}>
+                {keeping
+                  ? 'Keeping…'
+                  : `Keep ${summary.totalHighlights} ${
+                      summary.totalHighlights === 1 ? 'highlight' : 'highlights'
+                    }`}
+              </button>
+            )}
+            {result?.importId && !undone && (
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={handleUndo}
+                disabled={keeping}
+              >
+                {keeping ? 'Undoing…' : 'Undo'}
+              </button>
+            )}
+            <span className="meta">
+              {result ? 'Kept in your account' : 'Parsed in your browser · nothing uploaded yet'}
+            </span>
           </div>
         </section>
       )}

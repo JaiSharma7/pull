@@ -1,18 +1,30 @@
 /**
- * Pure parsing utilities for external reading history.
+ * Pure parsing utilities for external reading history, and the shaping that turns what
+ * they parse into what `commit_import` accepts.
  *
- * These read a Kindle `My Clippings.txt` or a Readwise CSV into structured highlights,
- * in the browser, and that is all they do. Nothing here reaches a network or a database.
+ * Still pure: these read a Kindle `My Clippings.txt` or a Readwise CSV into structured
+ * highlights, and shape those into import items. Nothing here reaches a network or a
+ * database — `lib/import-api.ts` does that, and it is the only thing that does.
  *
- * That boundary is deliberate and worth stating where the code is, because the screen
- * above it originally claimed otherwise. Turning a highlight into a *known idea* means
- * matching it to a Pull, which is an embedding or a model call: under law 2 that belongs
- * at import time and metered through `cost_ledger`, and it is a per-reader cost with no
- * amortisation, so it needs a bound before it is built. Storing the highlights instead
- * runs at law 4 — a Kindle highlight is a verbatim excerpt of an in-copyright book — and
- * would have to be the reader's own data under `user_owned`, never surfaced to anyone
- * else and never fed into a canonical summary. Neither decision has been made, so
- * neither is implemented, and the parser stays local until they are.
+ * ONE OF THE TWO DECISIONS HAS NOW BEEN MADE, and this header used to say neither had.
+ *
+ * **Storing them: decided, and built.** `20260905110000_your_highlights_are_yours_to_keep`
+ * is the answer to law 4. A highlight is stored verbatim, which is defensible only
+ * because it is the reader's own copy of something they own: the work is
+ * `rights_status = 'user_owned'`, the summary is `visibility = 'private'`, `get_feed`
+ * pools on published AND public so an imported pull can never enter anybody's feed, and
+ * `og/index.ts` unfurls with the anon key so it can never be unfurled. It is never fed to
+ * canonical generation, and it goes with the account.
+ *
+ * **Matching them to canonical ideas: still open.** Bringing an imported highlight into
+ * the Delta means embedding it, which is a model call over the reader's own verbatim
+ * text — a per-reader cost with no amortisation, and a privacy promise that has to be
+ * revisited before it is spent rather than after. That is package 9, and it is not this.
+ *
+ * So an import lands as the reader's own private Pulls, scheduled and saved, and the
+ * Delta does not know about them. Two mechanics still do not reach them, and the
+ * migration's own header says so: search filters `visibility = 'public'` in all three
+ * branches, and nothing writes `pulls.embedding` outside the pipeline.
  */
 
 export interface ParsedHighlight {
@@ -219,4 +231,101 @@ export function summarizeIngestion(highlights: ParsedHighlight[]): IngestionSumm
     distinctAuthors: authors,
     highlights,
   };
+}
+
+// --------------------------------------------------------------- for commit_import
+
+/** One highlight in the shape `commit_import` accepts. */
+export interface ImportItem {
+  title: string;
+  author?: string;
+  text: string;
+  locator?: string;
+}
+
+/**
+ * What `commit_import` refuses, mirrored here so a reader is not told about it by a 500.
+ *
+ * Every number is the migration's own. 500 items a call is `max_items_per_call`; 200 is
+ * the `left(..., 200)` the RPC applies to a title, an author and a locator; 20,000 is
+ * `commit_import: a highlight of % characters exceeds 20000`. Mirroring rather than
+ * trusting, because the RPC raises `22023` for the whole chunk when one item is wrong,
+ * and a reader whose 400th highlight is empty should lose that highlight rather than the
+ * other 399.
+ */
+export const MAX_ITEMS_PER_CALL = 500;
+const MAX_FIELD = 200;
+const MAX_TEXT = 20000;
+
+/**
+ * Collapse whitespace the way `commit_import` does, so the client and the server agree
+ * about what is empty and about what is a duplicate.
+ *
+ * The RPC computes `btrim(regexp_replace(text, '\s+', ' ', 'g'))` and hashes the result,
+ * so a highlight that survives a copy through three apps arrives with different line
+ * breaks and is the same highlight. Collapse first, then trim: `btrim` with one argument
+ * removes spaces only, so tabs and newlines alone would otherwise survive as " ".
+ */
+export function normaliseHighlight(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Shape parsed highlights into import items, dropping the ones the RPC would refuse.
+ *
+ * DROPPED RATHER THAN SENT, and that asymmetry is the point. `commit_import` validates
+ * per item and raises on the first bad one, which aborts the whole chunk — so one
+ * highlight with no text would cost the reader the other 499. Anything this function
+ * cannot make acceptable is left out, and the caller can say how many.
+ *
+ * Truncation is not a drop: a 300-character title is a real book with a long title, and
+ * the RPC would truncate it to 200 anyway. Doing it here means the `content_hash` the
+ * server computes matches what this client would predict.
+ */
+export function toImportItems(highlights: readonly ParsedHighlight[]): {
+  items: ImportItem[];
+  skipped: number;
+} {
+  const items: ImportItem[] = [];
+  let skipped = 0;
+
+  for (const h of highlights) {
+    const title = h.bookTitle?.trim().slice(0, MAX_FIELD) ?? '';
+    const text = normaliseHighlight(h.text ?? '');
+
+    // The two the RPC raises on. A highlight with no title has nothing to file it
+    // under; one with no text is not a highlight.
+    if (!title || !text || text.length > MAX_TEXT) {
+      skipped += 1;
+      continue;
+    }
+
+    const author = h.bookAuthor?.trim().slice(0, MAX_FIELD);
+    const locator = h.location?.trim().slice(0, MAX_FIELD);
+
+    items.push({
+      title,
+      text,
+      ...(author ? { author } : {}),
+      ...(locator ? { locator } : {}),
+    });
+  }
+
+  return { items, skipped };
+}
+
+/**
+ * Split items into chunks the RPC will accept.
+ *
+ * 500 is `max_items_per_call`, and the reason the batch survives being split is
+ * `p_import_id`: `commit_import` returns an `importId` and a client chunking one upload
+ * passes it back for chunks two onward, so all of them land in one batch and one Undo
+ * takes the whole file. Without that they would be separate batches and an Undo would
+ * remove a fifth of a library.
+ */
+export function chunkItems<T>(items: readonly T[], size = MAX_ITEMS_PER_CALL): T[][] {
+  if (size < 1) throw new RangeError('chunkItems: size must be at least 1');
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
