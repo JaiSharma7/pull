@@ -329,6 +329,42 @@ describe('questionsToWrite', () => {
     expect(out[0]?.cloze).toBeNull();
   });
 
+  it('keeps a question the database bounds would refuse from killing the batch', () => {
+    // `insertQuizQuestions` writes the batch in one statement, so a row that violates a
+    // CHECK takes every good question on the summary with it -- at `cards`, after
+    // synthesis has been paid for, and again on every `resume` from the persisted step
+    // output. Each rule below is one `20260905120000` enforces.
+    const wide = questionsToWrite(
+      [
+        qs({
+          ...mcq,
+          distractors: Array.from({ length: 12 }, (_, i) => `wrong ${i}`),
+          rationale: Array.from({ length: 12 }, (_, i) => ({
+            distractor: `wrong ${i}`,
+            why: 'because',
+          })),
+          explanation: 'x'.repeat(2001),
+        }),
+      ],
+      written,
+    );
+    expect(wide[0]?.distractors).toHaveLength(8);
+    expect(wide[0]?.rationale).toHaveLength(8);
+    // Supplementary, so the question survives without it.
+    expect(wide[0]?.explanation).toBeNull();
+
+    // A prompt or an answer past the bound is the question, not a decoration, so the
+    // question goes rather than being asked in half.
+    expect(questionsToWrite([qs({ ...recall, prompt: 'x'.repeat(2001) })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...recall, answer: 'x'.repeat(2001) })], written)).toEqual([]);
+
+    // A cloze longer than the column takes cannot be cut safely -- the blank may be in
+    // the part removed.
+    expect(
+      questionsToWrite([qs({ ...cloze, cloze: `${'x'.repeat(1001)} ____` })], written),
+    ).toEqual([]);
+  });
+
   it('reads the singular field only when the array is absent', () => {
     // A step output PERSISTED BY AN EARLIER BUILD comes back with `question` and no
     // `questions`; `resume` replays exactly that. When both are present the array

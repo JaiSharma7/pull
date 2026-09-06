@@ -454,6 +454,26 @@ const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
 /** What `quiz_questions_mcq_has_distractors` requires of an `mcq`. */
 const MIN_MCQ_DISTRACTORS = 2;
 
+/**
+ * The rest of what `20260905120000_a_question_that_can_be_wrong.sql` requires, mirrored
+ * so a model that overshoots costs one question rather than a whole generation.
+ *
+ * `insertQuizQuestions` writes the batch in ONE statement, so a row that violates a
+ * CHECK takes every good question on the summary down with it -- at `cards`, the last
+ * step, after synthesis has been paid for. Worse, `resume` replays from the persisted
+ * step output, so the same malformed question fails again on every retry: the job is
+ * stuck rather than slow.
+ *
+ * Latent rather than live, and worth saying which: measured against the hosted project,
+ * the widest row across 222 `quiz_questions` is 3 distractors, a 158-character prompt
+ * and a 150-character answer. The headroom is real. It is mirrored anyway because the
+ * writer is a model and the failure mode is a wedged job rather than a bad row.
+ */
+const MAX_LIST = 8;
+const MAX_PROMPT = 2000;
+const MAX_EXPLANATION = 2000;
+const MAX_CLOZE = 1000;
+
 export interface QuizQuestionRow {
   pullId: string;
   kind: string;
@@ -539,6 +559,11 @@ export function questionsToWrite(
       const prompt = cleanString(q.prompt);
       const answer = cleanString(q.answer);
       if (!prompt || !answer) continue;
+      // DROPPED rather than truncated. A prompt cut at 2000 characters is a question
+      // asking half of something, and an answer cut there may no longer be the answer;
+      // one missing question is the smaller loss. The lists below are truncated instead,
+      // because a ninth distractor is surplus rather than a mutilation.
+      if (prompt.length > MAX_PROMPT || answer.length > MAX_PROMPT) continue;
 
       // An unrecognised kind is written as `recall` rather than dropped: the prompt
       // and answer are usable, and `quiz_questions_kind_known` would refuse the row
@@ -548,8 +573,14 @@ export function questionsToWrite(
       const kind = GENERATED_KINDS.has(rawKind) ? rawKind : 'recall';
       if (seen.has(kind)) continue;
 
-      const distractors = cleanStringArray(q.distractors).filter((d) => d !== answer);
+      const distractors = cleanStringArray(q.distractors)
+        .filter((d) => d !== answer)
+        .slice(0, MAX_LIST);
       const cloze = cleanString(q.cloze) || null;
+      // A cloze longer than the column takes is a cloze the row cannot carry, and the
+      // kind needs it -- so the question goes rather than the sentence being cut in a
+      // place that may remove the blank itself.
+      if (kind === 'cloze' && cloze && cloze.length > MAX_CLOZE) continue;
 
       // The two per-kind rules the database states, applied here so a question that
       // cannot be stored does not cost the ones that can.
@@ -568,6 +599,7 @@ export function questionsToWrite(
               return Boolean(d) && Boolean(why) && distractors.includes(d);
             })
             .map((r) => ({ distractor: cleanString(r.distractor), why: cleanString(r.why) }))
+            .slice(0, MAX_LIST)
         : [];
 
       seen.add(kind);
@@ -578,7 +610,11 @@ export function questionsToWrite(
         answer,
         distractors,
         cloze: kind === 'cloze' ? cloze : null,
-        explanation: cleanString(q.explanation) || null,
+        // Dropped, not the question: an over-long explanation is supplementary, and a
+        // question without one still asks and still grades.
+        explanation: ((e) => (e && e.length <= MAX_EXPLANATION ? e : null))(
+          cleanString(q.explanation),
+        ),
         rationale,
       });
     }
