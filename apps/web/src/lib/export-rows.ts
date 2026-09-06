@@ -189,9 +189,13 @@ export interface SavedPullRow {
  * Everything the reader could revise, as one deck.
  *
  * THE READER'S OWN QUESTIONS COME FIRST, mirroring the only place in the product
- * that already ranks the two: the `chosen` lateral in `get_due_reviews`
- * (20260905110000) coalesces `mine` over `canon`, so Review asks a reader their
- * own question when they have written one. Both are exported, though — a card
+ * that already ranks the two: `get_due_reviews` prefers a question the reader
+ * wrote over the canonical one, so Review asks them theirs when they have written
+ * one. Cited as behaviour rather than as an expression on purpose — that function
+ * has been re-stated more than once and is being re-stated again by 3a, which
+ * replaces the `coalesce(mine, canon)` this paragraph originally pointed at with
+ * an ordering over an array. What this deck mirrors is the decision, not its
+ * current spelling. Both are exported, though — a card
  * the reader will never be shown here is still a card, and an export that
  * dropped the canonical question for every idea they had annotated would be
  * quietly lossy in exactly the way an export must not be.
