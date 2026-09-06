@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Meter } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
-import { isOfflineFailure, queueMutation } from '../lib/offline.js';
+import { isOfflineFailure, pendingRecallPullIds, queueMutation } from '../lib/offline.js';
 import { elapsedSince, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
@@ -80,6 +80,14 @@ export function Review() {
    * when the whole point of that effect is to run once per page of twenty — or omit
    * and carry a lint warning for. A ref is read where it is needed and is always
    * current, which is what this actually wants.
+   *
+   * AND IT IS ONLY HALF THE ANSWER, because a ref dies with the mount and Review is
+   * a TAB. Switching to Library and back — or reloading — empties this set while the
+   * queued grade is still sitting in IndexedDB undrained, so the card comes back due
+   * and a second tap mints a second mutation id. Two ids are two grades, which is the
+   * P1 this whole file is about, arriving by a route the ref cannot see. The durable
+   * half is `pendingRecallPullIds`, read in the effect below; this set stays because
+   * it is current the instant a grade is given, before anything has been written.
    */
   const graded = useRef<Set<string>>(new Set());
   /** Bumped by the retry button, so the fetch re-runs without a second effect. */
@@ -87,13 +95,18 @@ export function Review() {
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .fetchDueReviews()
-      .then((rows) => {
+    const userId = getCurrentUserId();
+    Promise.all([
+      api.fetchDueReviews(),
+      userId === null ? Promise.resolve(new Set<string>()) : pendingRecallPullIds(userId),
+    ])
+      .then(([rows, queuedFor]) => {
         if (cancelled) return;
-        // Filtered rather than trusted. A queued grade has not reached the server,
-        // so it answers this request with the card the reader already judged.
-        setDue(rows.filter((row) => !graded.current.has(row.pullId)));
+        // Filtered rather than trusted, from both halves. A queued grade has not
+        // reached the server, so it answers this request with the card the reader
+        // already judged — whether they judged it a moment ago on this mount or
+        // before a tab switch that emptied the ref.
+        setDue(rows.filter((row) => !graded.current.has(row.pullId) && !queuedFor.has(row.pullId)));
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -201,6 +214,17 @@ export function Review() {
         // starts sending it in the same change that starts receiving it.
         ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
       });
+      /*
+       * A write that lands proves the reader is signed in, so the banner saying they
+       * are not stops being true and goes.
+       *
+       * `getCurrentUserId()` returning null is not always a session that ended — a
+       * token refresh in flight reads the same way — so this flag could be raised by
+       * a blip and then contradicted by the very next card, leaving a reader who is
+       * signed in reading that their session ended. `lostGrade` is left alone on
+       * purpose: a later success does not un-lose the earlier grade.
+       */
+      setSignedOut(false);
     } catch (e: unknown) {
       /*
        * Read from the live auth session rather than a prop: this screen takes none,
@@ -243,8 +267,20 @@ export function Review() {
         else setLostGrade(true);
         console.error('Recall grade was not recorded', e);
       }
+    } finally {
+      /*
+       * IN A `finally`, because everything after it is what lets the reader carry on.
+       *
+       * `setGrading(false)` sat after the catch block, so anything the RECOVERY path
+       * threw — `getCurrentUserId` on a torn-down client, `queueMutation` rejecting
+       * rather than returning false — left `grading` true forever. The guard at the
+       * top of this function then refused every subsequent tap, and the screen was
+       * wedged on one card with its answer showing: a reader who cannot grade and
+       * cannot move on. The failure that gets there is rare; being unable to review
+       * until a reload is not a rare consequence.
+       */
+      setGrading(false);
     }
-    setGrading(false);
     // Answered, whatever became of the write. See `graded`.
     graded.current.add(card.pullId);
     setRevealed(false);
@@ -281,7 +317,12 @@ export function Review() {
       </p>
 
       {/*
-        Said once, and it stays said for the rest of the session.
+        Said once, and it stays said for as long as this screen is open.
+
+        Not "for the rest of the session", which the earlier comment claimed and the
+        code has never done: Review is a tab, so both of these die on the next tab
+        switch along with everything else in this component. Saying what actually
+        happens is worth more than a promise the screen cannot keep.
 
         A grade that reaches neither the server nor the queue is gone, and the
         screen used to advance as though it had been recorded. This is the only

@@ -6,6 +6,7 @@ import {
   hasPending,
   isOfflineFailure,
   onPendingQueued,
+  pendingRecallPullIds,
   queueIfOffline,
   queueMutation,
   readCachedPulls,
@@ -915,5 +916,55 @@ describe('queueing a write the server has already refused', () => {
       ),
     ).toBe(true);
     await expect(hasPending(user)).resolves.toBe(true);
+  });
+});
+
+/**
+ * The card the reader already judged, asked durably.
+ *
+ * `Review.tsx` kept this in a `useRef`, and Review is a tab: switching to Library
+ * destroys the component and the set with it, so a card whose grade is still queued
+ * comes back due and a second tap mints a second mutation id. Two ids are two grades.
+ * The queue outlives the mount and the reload, and a pending grade is exactly the
+ * condition, so it is the queue that gets asked.
+ */
+describe('the pulls a queued grade already covers', () => {
+  const drain = (user: string) => drainPending(user, async () => undefined);
+
+  it('names a pull whose grade is still waiting', async () => {
+    await queueMutation(USER_A, {
+      kind: 'recall',
+      pullId: 'p-graded',
+      grade: 'good',
+      mutationId: 'm1',
+      submittedAt: Date.now(),
+    });
+    expect([...(await pendingRecallPullIds(USER_A))]).toEqual(['p-graded']);
+    await drain(USER_A);
+    // And stops naming it once the grade has actually applied, or the card would
+    // never come round again.
+    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
+  });
+
+  it("never names another account's", async () => {
+    await queueMutation(USER_B, {
+      kind: 'recall',
+      pullId: 'p-theirs',
+      grade: 'forgot',
+      mutationId: 'm2',
+      submittedAt: Date.now(),
+    });
+    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
+    expect((await pendingRecallPullIds(USER_B)).has('p-theirs')).toBe(true);
+    await drain(USER_B);
+  });
+
+  it('names only grades, not the saves and reads sharing the queue', async () => {
+    // A card the reader saved is still due, and hiding it would be this fix
+    // overreaching into the one place it has no business.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p-saved' });
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p-read' });
+    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
+    await drain(USER_A);
   });
 });

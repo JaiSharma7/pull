@@ -320,6 +320,37 @@ export async function queueMutation(
 }
 
 /**
+/**
+ * The pulls this account has a queued grade for, which is the durable answer to
+ * "did the reader already judge this card".
+ *
+ * `Review.tsx` filtered its refetch through a `useRef` set, which is right for as
+ * long as the component is mounted and Review is a TAB — switching to Library and
+ * back destroys it. The card whose grade is still sitting in this queue then comes
+ * back due, is shown again, and grading it mints a SECOND mutation id: two ids are
+ * two grades, and this file's own header says what a doubled grade does to an
+ * interval. A reload has the same shape and the queue survives that too, which the
+ * ref never could.
+ *
+ * A pending grade is exactly the condition — the write has not applied, so the
+ * server still calls the card due, and the reader has still answered it.
+ */
+export async function pendingRecallPullIds(userId: string): Promise<Set<string>> {
+  try {
+    const database = await db();
+    const all = await database.getAll('pending');
+    return new Set(
+      all
+        .filter((item) => item.userId === userId && item.kind === 'recall')
+        .map((item) => (item as { pullId: string }).pullId),
+    );
+  } catch {
+    // The store being unreadable is not a reason to hide the card; it is a reason to
+    // fall back on the in-mount set, which the caller still keeps.
+    return new Set();
+  }
+}
+
 /** Whether this account still has queued writes — the signal to keep retrying. */
 export async function hasPending(userId: string): Promise<boolean> {
   try {
