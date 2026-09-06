@@ -29,12 +29,30 @@ const WEB = join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src');
  * Absolute paths, so a file is read by where it is; messages carry the basename,
  * which is what a contributor recognises.
  */
-const STYLE_DIRS = [STYLES, join(WEB, 'styles')].filter(existsSync);
-const cssFiles = STYLE_DIRS.flatMap((dir) =>
-  readdirSync(dir)
-    .filter((f) => f.endsWith('.css'))
-    .map((f) => join(dir, f)),
-);
+const STYLE_DIRS = [WEB, join(import.meta.dirname)].filter(existsSync);
+
+/** Every file under `dir`, at any depth, whose name `keep` accepts. */
+const filesUnder = (dir: string, keep: (name: string) => boolean): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return filesUnder(full, keep);
+    return keep(entry.name) ? [full] : [];
+  });
+
+/*
+ * RECURSIVELY, and from the package roots rather than from `styles/`.
+ *
+ * The previous version was `readdirSync` over two flat directories, which is neither
+ * of the two things the assertions below need: a stylesheet one level down was never
+ * opened, and neither was one beside the component that imports it. Both are one line
+ * to write — `apps/web/src/routes/queue.css` next to a `import './queue.css'` in
+ * `DesignPreview.tsx`, or `packages/ui/src/styles/queue/queue.css` pulled in by
+ * `index.css`. Verified: a file with a pastel gradient, a 32px drop shadow, a 20px
+ * radius, a hot-pink hex, a `text-shadow` and a `100vh` passed all 119 tests from
+ * either location. `expect(STYLE_DIRS.length).toBe(2)` read as assurance and was
+ * assurance about the wrong thing.
+ */
+const cssFiles = STYLE_DIRS.flatMap((dir) => filesUnder(dir, (f) => f.endsWith('.css')));
 /**
  * The one stylesheet allowed to hold colour, by PATH rather than by name.
  *
@@ -76,18 +94,42 @@ describe('The Archive design laws', () => {
 
   it('uses no gradients anywhere — flat ground plus grain, never a gradient', () => {
     for (const f of cssFiles) {
+      // Case-insensitive, and the SVG spelling too: `linearGradient` has no hyphen, and
+      // `base.css` already embeds a data-URI SVG for the paper grain — which is exactly
+      // where a contributor would reach for a pastel one, and where the colour check
+      // below cannot follow because it strips data URIs before looking.
       expect(code(f), `${label(f)} contains a gradient`).not.toMatch(
-        /(linear|radial|conic)-gradient/,
+        /(linear|radial|conic)-gradient|linearGradient|radialGradient/i,
       );
     }
   });
+
+  /**
+   * The one shadow value the law permits, matched WHOLE.
+   *
+   * `.includes('--focus-ring')` was a substring test on the whole declaration, so any
+   * shadow could wear the ring: `box-shadow: var(--focus-ring), 0 12px 32px var(--ink)`
+   * is a real 32px drop shadow on a card, excused by what shares its declaration.
+   * `var(--focus-ring-lift)` did it with a token whose NAME contains the string.
+   * A composite is not a ring; the exemption is for the ring.
+   */
+  const ONLY_THE_RING = /^var\(--focus-ring\)$/;
 
   it('uses no shadow for elevation — separation is by hairline rule', () => {
     for (const f of cssFiles) {
       // The focus ring is the sole exception: there a shadow is an
       // accessibility affordance, not decoration.
-      const shadows = [...code(f).matchAll(/box-shadow:\s*([^;]+);/g)].map((m) => m[1]!.trim());
-      const decorative = shadows.filter((v) => !v.includes('--focus-ring'));
+      //
+      // `;` OR the end of the block, because the last declaration before `}` may have
+      // no semicolon: `box-shadow: 0 12px 32px var(--ink)` written last was invisible
+      // to a pattern that required one, and only `prettier --write` caught it. The
+      // formatter is not the law.
+      //
+      // Case-insensitive, because CSS function and property names are, and prettier
+      // lowercases property names but not function names: `Radial-Gradient(…)` and
+      // `Drop-Shadow(…)` survive `format:check` intact.
+      const shadows = [...code(f).matchAll(/box-shadow:\s*([^;}]+)/gi)].map((m) => m[1]!.trim());
+      const decorative = shadows.filter((v) => !ONLY_THE_RING.test(v));
       expect(decorative, `${label(f)} uses box-shadow for elevation`).toEqual([]);
 
       // The other two ways to write one. `box-shadow` was the whole of this law, so a
@@ -95,8 +137,8 @@ describe('The Archive design laws', () => {
       // anything at all were both legal in a stylesheet while the inline-style walk
       // rejected them in a component — the same look, judged by where it was typed.
       // Neither has a sanctioned form: the focus ring is a box-shadow.
-      expect(code(f), `${label(f)} uses text-shadow`).not.toMatch(/text-shadow:/);
-      expect(code(f), `${label(f)} uses a drop-shadow filter`).not.toMatch(/drop-shadow\s*\(/);
+      expect(code(f), `${label(f)} uses text-shadow`).not.toMatch(/text-shadow:/i);
+      expect(code(f), `${label(f)} uses a drop-shadow filter`).not.toMatch(/drop-shadow\s*\(/i);
     }
   });
 
@@ -109,8 +151,40 @@ describe('The Archive design laws', () => {
    * hypothetical elsewhere in the file, where a `border-radius: 50%` walked past a
    * check that matched only `px`.
    */
-  const COLOUR_LITERAL =
-    /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix)\(/g;
+  /*
+   * AND THE 148 NAMED ONES, which this said it covered and did not. `color: hotpink`
+   * is a colour the palette has never heard of, in a stylesheet and in a style object,
+   * and it passed both walks — as did `color(display-p3 …)`, because the alternation
+   * had `color-mix(` and not `color(`.
+   *
+   * `transparent` and `currentColor` are deliberately absent: neither names a hue, so
+   * neither can disagree with the theme.
+   */
+  const NAMED_COLOURS =
+    'aliceblue|antiquewhite|aqua|aquamarine|azure|beige|bisque|black|blanchedalmond|blue|' +
+    'blueviolet|brown|burlywood|cadetblue|chartreuse|chocolate|coral|cornflowerblue|' +
+    'cornsilk|crimson|cyan|darkblue|darkcyan|darkgoldenrod|darkgray|darkgreen|darkgrey|' +
+    'darkkhaki|darkmagenta|darkolivegreen|darkorange|darkorchid|darkred|darksalmon|' +
+    'darkseagreen|darkslateblue|darkslategray|darkslategrey|darkturquoise|darkviolet|' +
+    'deeppink|deepskyblue|dimgray|dimgrey|dodgerblue|firebrick|floralwhite|forestgreen|' +
+    'fuchsia|gainsboro|ghostwhite|gold|goldenrod|gray|green|greenyellow|grey|honeydew|' +
+    'hotpink|indianred|indigo|ivory|khaki|lavender|lavenderblush|lawngreen|lemonchiffon|' +
+    'lightblue|lightcoral|lightcyan|lightgoldenrodyellow|lightgray|lightgreen|lightgrey|' +
+    'lightpink|lightsalmon|lightseagreen|lightskyblue|lightslategray|lightslategrey|' +
+    'lightsteelblue|lightyellow|lime|limegreen|linen|magenta|maroon|mediumaquamarine|' +
+    'mediumblue|mediumorchid|mediumpurple|mediumseagreen|mediumslateblue|' +
+    'mediumspringgreen|mediumturquoise|mediumvioletred|midnightblue|mintcream|mistyrose|' +
+    'moccasin|navajowhite|navy|oldlace|olive|olivedrab|orange|orangered|orchid|' +
+    'palegoldenrod|palegreen|paleturquoise|palevioletred|papayawhip|peachpuff|peru|pink|' +
+    'plum|powderblue|purple|rebeccapurple|red|rosybrown|royalblue|saddlebrown|salmon|' +
+    'sandybrown|seagreen|seashell|sienna|silver|skyblue|slateblue|slategray|slategrey|' +
+    'snow|springgreen|steelblue|tan|teal|thistle|tomato|turquoise|violet|wheat|white|' +
+    'whitesmoke|yellow|yellowgreen';
+  const COLOUR_LITERAL = new RegExp(
+    `#[0-9a-fA-F]{3,8}\\b|\\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\\(` +
+      `|(?<=:\\s*|,\\s*|['"\`])(?:${NAMED_COLOURS})\\b`,
+    'gi',
+  );
 
   it('defines colour only in tokens.css', () => {
     for (const f of notTokens) {
@@ -224,15 +298,24 @@ describe('The Archive design laws', () => {
     // `box-?shadow` missed `textShadow` entirely — a different property, the same
     // law, and the one that does not need a box to blur. Both were verified past the
     // check before this line, on `PullCard`.
-    const declared = (name: string) => new RegExp(`${name}['"\`]?\\s*:`, 'giu');
+    //
+    // AND THREE WAYS OF WRITING IT, because a colon is only one of them. `declared`
+    // required `name:`, so `node.style.boxShadow = '0 10px 30px var(--ink)'` and
+    // `node.style.setProperty('border-radius', '20px')` were both invisible — the same
+    // pixels, set imperatively, which is how a component reaches for a value it cannot
+    // put in a style object. Verified: four such lines on `PullCard` passed the suite.
+    // `setProperty` is covered by the quoted-key branch already, since its first
+    // argument is a quoted name followed by a comma rather than a colon.
+    const declared = (name: string) =>
+      new RegExp(`${name}['"\`]?\\s*(?::|=(?!=)|['"\`]\\s*,)`, 'giu');
     const banned: [RegExp, string, RegExp | null][] = [
       // `--focus-ring` is sanctioned as a BOX shadow only. A text-shadow spelt with it
       // would be decoration wearing an accessibility affordance's clothes.
-      [declared('box-?shadow'), 'a shadow', /var\(--focus-ring\)/u],
+      [declared('box-?shadow'), 'a shadow', ONLY_THE_RING],
       [declared('text-?shadow'), 'a shadow', null],
-      [/\b(?:linear|radial|conic)-gradient\b/gu, 'a gradient', null],
-      [/\bdrop-shadow\s*\(/gu, 'a shadow', null],
-      [declared('border[a-z-]*radius'), 'a radius', /var\(--radius(?:-sm)?\)/u],
+      [/\b(?:linear|radial|conic)-gradient\b|linearGradient|radialGradient/giu, 'a gradient', null],
+      [/\bdrop-shadow\s*\(/giu, 'a shadow', null],
+      [declared('border[a-z-]*radius'), 'a radius', /^var\(--radius(?:-sm)?\)$/u],
     ];
 
     const offenders: string[] = [];
@@ -240,7 +323,9 @@ describe('The Archive design laws', () => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
-        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        // `.jsx` and `.js` too: the walk read `/\.tsx?$/`, so a single JavaScript file
+        // under either root could name any colour, shadow, gradient or radius it liked.
+        else if (/\.[jt]sx?$/.test(entry.name) && !/\.test\.[jt]sx?$/.test(entry.name)) {
           const src = readFileSync(full, 'utf8')
             .replace(/\/\*[\s\S]*?\*\//g, '')
             // Line comments too: a commented-out `borderRadius` inside a style
@@ -270,7 +355,13 @@ describe('The Archive design laws', () => {
             // value-scoping above, one property along.
             for (const declaration of src.matchAll(pattern)) {
               const value = valueAfter(src, (declaration.index ?? 0) + declaration[0].length);
-              if (sanctioned?.test(value)) continue;
+              // The WHOLE value, quotes stripped, not a search inside it. As a search,
+              // `borderRadius: 'var(--radius) 28px 28px var(--radius)'` was excused by
+              // the two corners that were tokens — and the identical value in a `.css`
+              // file is caught by `ROUND_BY_NATURE` below, which made the inline path
+              // the weaker of the two. design.md says an inline literal is the WORSE
+              // of the two.
+              if (sanctioned?.test(value.trim().replace(/^['"`]|['"`]$/g, ''))) continue;
               offenders.push(`${entry.name}: ${what} in a style`);
             }
           }
@@ -300,7 +391,7 @@ describe('The Archive design laws', () => {
         const full = join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
         // Tests carry palette literals on purpose — this file most of all.
-        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        else if (/\.[jt]sx?$/.test(entry.name) && !/\.test\.[jt]sx?$/.test(entry.name)) {
           const src = readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
           for (const hit of src.match(COLOUR_LITERAL) ?? []) {
             offenders.push(`${entry.name}: ${hit}`);
@@ -334,8 +425,20 @@ describe('The Archive design laws', () => {
   it('keeps corner radii small — candy rounding is the look being avoided', () => {
     const tokens = read('tokens.css');
     for (const [name, ceiling] of Object.entries(MAX_RADIUS)) {
-      const value = tokens.match(new RegExp(`${name}:\\s*([\\d.]+)px`))?.[1];
-      expect(Number(value), `${name} is too round`).toBeLessThanOrEqual(ceiling);
+      /*
+       * EVERY definition, not the first. `tokens.css` has a `:root`, a
+       * `prefers-color-scheme` block, a `[data-theme]` block and a contrast block, and
+       * `.match` stopped at the 3px in `:root` — so one line inside the existing dark
+       * block (`--radius: 22px`) candy-rounded every card and control in the product
+       * for a reader in dark mode, with 119 tests green.
+       */
+      const values = [...tokens.matchAll(new RegExp(`${name}:\\s*([\\d.]+)px`, 'g'))].map((m) =>
+        Number(m[1]),
+      );
+      expect(values.length, `no ${name} found in tokens.css`).toBeGreaterThan(0);
+      for (const value of values) {
+        expect(value, `${name} is too round`).toBeLessThanOrEqual(ceiling);
+      }
     }
     for (const f of notTokens) {
       // Every corner property, not just the shorthand: `border-top-left-radius: 18px`
@@ -377,23 +480,39 @@ describe('The Archive design laws', () => {
    * That is what the token is today and what makes the exemption defensible.
    */
   it('keeps the focus ring a ring, since every shadow check exempts it', () => {
-    const value = read('tokens.css')
-      .match(/--focus-ring:\s*([^;]+);/)?.[1]
-      ?.trim();
-    expect(value, 'no --focus-ring token found in tokens.css').toBeTruthy();
-    for (const layer of (value ?? '').split(/,(?![^(]*\))/)) {
-      const lengths = layer.trim().match(/(^|\s)-?[\d.]+(px|rem|em)?(?=\s|$)/gu) ?? [];
-      expect(
-        lengths.length,
-        `"${layer.trim()}" is not a ring layer — expected offset, offset, blur, spread`,
-      ).toBeGreaterThanOrEqual(3);
-      const [x, y, blur] = lengths.map((n) => Number.parseFloat(n));
-      expect(
-        [x, y, blur],
-        `--focus-ring layer "${layer.trim()}" has an offset or a blur, which makes it ` +
-          `a drop shadow. Every shadow check in this file exempts this token by name, so ` +
-          `a blur here is a blur on every focusable element in the product.`,
-      ).toEqual([0, 0, 0]);
+    /*
+     * EVERY `--focus-ring…` token and every block it is defined in.
+     *
+     * `.match` read the `:root` definition and stopped, so one line inside the existing
+     * dark block — `--focus-ring: 0 10px 30px rgb(0 0 0 / 55%)` — put a real drop
+     * shadow on every focusable element in the product with the suite green. That is
+     * verbatim the failure this test's own comment says it exists to prevent: "one
+     * line, and the law is gone everywhere it is enforced."
+     *
+     * And the name is a prefix rather than a constant, because `--focus-ring-lift`
+     * carries the exempted string as a substring and was neither checked here nor
+     * refused by the shadow laws that read `.includes('--focus-ring')`. `ONLY_THE_RING`
+     * closes the second half of that; this closes the first.
+     */
+    const definitions = [...read('tokens.css').matchAll(/(--focus-ring[\w-]*):\s*([^;]+);/g)].map(
+      (m) => [m[1]!, m[2]!.trim()] as const,
+    );
+    expect(definitions.length, 'no --focus-ring token found in tokens.css').toBeGreaterThan(0);
+    for (const [name, value] of definitions) {
+      for (const layer of value.split(/,(?![^(]*\))/)) {
+        const lengths = layer.trim().match(/(^|\s)-?[\d.]+(px|rem|em)?(?=\s|$)/gu) ?? [];
+        expect(
+          lengths.length,
+          `"${layer.trim()}" is not a ring layer — expected offset, offset, blur, spread`,
+        ).toBeGreaterThanOrEqual(3);
+        const [x, y, blur] = lengths.map((n) => Number.parseFloat(n));
+        expect(
+          [x, y, blur],
+          `${name} layer "${layer.trim()}" has an offset or a blur, which makes it ` +
+            `a drop shadow. Every shadow check in this file exempts this token by name, so ` +
+            `a blur here is a blur on every focusable element in the product.`,
+        ).toEqual([0, 0, 0]);
+      }
     }
   });
 
@@ -453,10 +572,18 @@ describe('The Archive design laws', () => {
 
   it('has exactly one accent colour', () => {
     const tokens = read('tokens.css');
-    const accents = [...tokens.matchAll(/^\s*--accent(?:-hover)?:\s*([^;]+);/gm)];
+    // Any token in the accent family, not the two names this happened to know.
+    // `--accent-cool: #1a73e8` in `tokens.css` — which the colour check exempts — plus
+    // one `var(--accent-cool)` in a stylesheet gave the product a second accent with
+    // every test green. Design law 3 is "one accent colour", not "two token names".
+    // Anchored on a line start OR a `{` OR a `;`, because a declaration does not need
+    // its own line. `:root { --accent-cool: #1a73e8; }` written on one line slipped a
+    // second accent past `^\s*` — prettier would split it, and "the formatter caught
+    // it" is not the same as "the law caught it".
+    const accents = [...tokens.matchAll(/(?:^|[;{])\s*(--accent[\w-]*):\s*([^;]+);/gm)];
     // One --accent and one --accent-hover per theme block; every value must
     // resolve to the oxblood family, never a second hue.
-    const values = new Set(accents.map((m) => m[1]!.trim()));
+    const values = new Set(accents.map((m) => `${m[1]!} ${m[2]!.trim()}`));
     for (const v of values) {
       expect(v, 'a second accent colour was introduced').toMatch(
         /var\(--oxblood(-soft)?\)|#(8c2f26|a8433a|c96a5f|dc8074)/i,
@@ -676,13 +803,84 @@ describe('The Archive design laws', () => {
  * the asymmetry that let two fixed breakpoints sit in the layout for a whole round
  * without anyone noticing they made a 70rem window render as a 60rem one.
  */
+/**
+ * A column width is a token, or it is drift.
+ *
+ * `--measure` is 34rem and is RE-DERIVED from `--step-0` under focus mode and large
+ * text, so it follows the reader's type setting; `.measure` in `components.css` is how
+ * a screen asks for it. A `maxWidth: '42rem'` written into a component is neither: it
+ * is ~82 characters a line instead of ~66, and it stays 42rem when a reader turns on
+ * large text — the one setting a reading column exists to respect. `docs/design.md`:
+ * "The reading column stays at `--measure` at every screen size", and "a new fixed
+ * `rem` dimension inside a layout rule is a smell".
+ *
+ * The law checked only that no stylesheet REDEFINES `--measure`, so an inline width in
+ * a route was outside every assertion in this file.
+ *
+ * `KNOWN_WIDE` is the debt, named rather than exempted by pattern, and the list is the
+ * point exactly as it is for `ROUND_BY_NATURE`. All three are grid or specimen
+ * containers rather than prose columns, which is why they are wide and why narrowing
+ * them belongs to the PR that owns each screen rather than to the law. A fourth entry
+ * has to be argued for here.
+ */
+const KNOWN_WIDE = new Map([
+  ['MetacognitiveDashboard.tsx', '42rem'],
+  ['OnboardingDemo.tsx', '42rem'],
+  ['Specimen.tsx', '48rem'],
+]);
+
+describe('The Archive measure law', () => {
+  it('sets a column width from the token, or says why not', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.[jt]sx?$/.test(entry.name) && !/\.test\.[jt]sx?$/.test(entry.name)) {
+          const src = readFileSync(full, 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+          for (const m of src.matchAll(/max-?[Ww]idth['"`]?\s*:\s*['"`]([^'"`]+)['"`]/g)) {
+            const value = m[1]!.trim();
+            if (value.startsWith('var(') || /^\d+%$/.test(value) || value === 'none') continue;
+            if (KNOWN_WIDE.get(entry.name) === value) continue;
+            offenders.push(`${entry.name}: max-width ${value}`);
+          }
+        }
+      }
+    };
+    for (const r of COMPONENT_ROOTS) walk(r);
+
+    expect(
+      offenders,
+      `a column width written into a component does not follow the reader's type ` +
+        `setting:\n  ${offenders.join('\n  ')}\n` +
+        `Use className="measure" or var(--measure), or add the file to KNOWN_WIDE with ` +
+        `a reason it is not a reading column.`,
+    ).toEqual([]);
+  });
+
+  it('keeps KNOWN_WIDE honest', () => {
+    // An entry whose file or value has moved on is an exemption nobody is checking.
+    for (const [file, value] of KNOWN_WIDE) {
+      const found = COMPONENT_ROOTS.flatMap((r) => filesUnder(r, (n) => n === file));
+      expect(found.length, `KNOWN_WIDE names ${file}, which no longer exists`).toBeGreaterThan(0);
+      const src = found.map((f) => readFileSync(f, 'utf8')).join('\n');
+      expect(src, `KNOWN_WIDE says ${file} is ${value}, and it is not`).toContain(value);
+    }
+  });
+});
+
 describe('The Archive viewport laws', () => {
   it('never uses vh — mobile chrome makes it taller than the visible area', () => {
     // `100vh` puts primary actions underneath the address bar on exactly the devices
     // where a mis-placed button is hardest to recover from. `dvh`/`svh` are the
     // measurements that describe what the reader can actually see.
     for (const f of cssFiles) {
-      const vh = [...code(f).matchAll(/\b\d*\.?\d+vh\b/g)].map((m) => m[0]);
+      // `lvh` is the LARGE viewport height, which is the one `100vh` already means and
+      // the one that hides a button under mobile chrome. Matching `vh` alone let it
+      // straight through, spelled differently.
+      const vh = [...code(f).matchAll(/\b\d*\.?\d+l?vh\b/g)].map((m) => m[0]);
       expect(vh, `${label(f)} uses ${vh.join(', ')} — use dvh or svh`).toEqual([]);
     }
   });
