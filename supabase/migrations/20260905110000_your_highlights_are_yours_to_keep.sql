@@ -314,13 +314,17 @@ comment on policy contributors_read_readable on public.contributors is
 
 -- --------------------------------------------------------- imported_work_slug
 --
--- The slug an imported book gets, as one function two callers share.
+-- The slug an imported book gets.
 --
--- It exists because `commit_import` now needs the slug TWICE: once in the ordered
--- pre-pass that creates the works, and once in the item loop that attaches pulls to
--- them. Two copies of this expression that drifted apart would attach a reader's
--- highlights to a work nobody else lands on, which is the quiet version of the bug
--- the pre-pass exists to fix.
+-- A function rather than an inline expression, and the reason changed under it. It was
+-- written when `commit_import` needed the slug TWICE -- once in an ordered pre-pass that
+-- created the works, once in the item loop that attached pulls to them -- and two copies
+-- that drifted would have attached a reader's highlights to a work nothing else lands on.
+-- Round 7 deleted the pre-pass, so there is one call site now (`commit_import`, in the
+-- item loop). It stays a function because the derivation is a rule about the schema
+-- rather than a line of one procedure: `imports.sql` has to name the same slug to assert
+-- what a second reader can and cannot see, and it cannot re-implement it without
+-- becoming a test of its own arithmetic.
 --
 -- `imported-` can never collide with a catalogue slug, which matters: adopting the
 -- seeded `meditations` would attach a reader's private pulls to a public work. The
@@ -432,9 +436,12 @@ revoke all on function public.imported_contributor_slug(text, uuid)
 -- as_slug`, which wraps a `citext` column with a unique btree in a function the index
 -- cannot answer -- so it ran a SEQUENTIAL SCAN, once per distinct author in the chunk.
 --
--- That was affordable while `contributors` held the seeded few. `commit_import` is what
--- makes it grow, and it now calls this once per author per import, so the feature feeds
--- its own scan. Measured on one 500-item chunk of fresh authors: 3.2 s at 7,856
+-- That was affordable while `contributors` held the seeded few, and imports are what make
+-- it grow. `commit_import` no longer calls this at all -- round 7 gave imported bylines
+-- their own per-reader rows and inlined the insert -- so the scan this fixes is now the
+-- PIPELINE's, on a table imports have already made large. The fix is still right and the
+-- measurements still hold; what has changed is who pays without it. Measured on one
+-- 500-item chunk of fresh authors: 3.2 s at 7,856
 -- contributors, 7.1 s at 23,356, 14.7 s at 53,856, 29.8 s at 114,356. `authenticated`
 -- carries an 8 s `statement_timeout`, so somewhere past 20,000 contributors a full chunk
 -- begins failing outright -- `canceling statement due to statement timeout`, raised
@@ -501,10 +508,13 @@ $$;
 -- itself -- no work id, no summary id and no visibility crosses the boundary from the
 -- client, so the worst a hostile caller can do with it is fill their own quota.
 --
--- Bounded in three directions. 500 items a call keeps one statement's work bounded and is
--- what the client chunks to; 20,000 items a reader is the ceiling on the whole feature;
--- and the advisory lock serialises a reader against themselves, so two chunks in flight
--- cannot both read the same ordinal or both create the same work.
+-- Bounded in five directions, which is two more than this line used to claim. 500 items a
+-- call keeps one statement's work bounded and is what the client chunks to; 20,000 items
+-- a reader is the ceiling on the whole feature; 2,000 books a reader bounds the catalogue
+-- rows an import can make; 2,000 batches a reader bounds `imports` itself, which an Undo
+-- tombstones rather than deletes; and the advisory lock serialises a reader against
+-- themselves, so two chunks in flight cannot both read the same ordinal or both create
+-- the same work.
 --
 -- The shared rows are bounded because they are no longer shared. Every `works` and
 -- `contributors` row this function makes is namespaced to the caller and created only
