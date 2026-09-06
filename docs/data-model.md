@@ -1,6 +1,6 @@
 # Data model
 
-40 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+43 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -18,6 +18,7 @@ User
  ├── stashes ─── saved_items · notes · highlights
  ├── history_events · progress
  ├── knowledge_states · user_knowledge_vectors    ← the Delta & Half-Life
+ │    └── recall_events                          ← one row per attempt; append-only
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  └── feed_recipes · feed_impressions
@@ -51,6 +52,13 @@ Dial free — the 30-second, 3-minute and 15-minute views are different subsets 
 the same record, not separate generations. `sections` is JSONB because the shape
 belongs to the medium: a paper has Method/Findings/Limitations where a film has
 Themes/Craft/Context.
+
+**Every grade is an event before it is a number.** `recall_events` keeps one row per
+attempt — grade, stated confidence, what was typed, stability before and after, and
+the `client_mutation_id` the client minted for it. `grade_recall` inserts that row
+before it touches `knowledge_states`, so a retry of a lost response finds its own row
+and returns the state untouched. The log is append-only through the API and is the
+evidence a scheduler change is judged against.
 
 **Retrievability is computed, never stored.** `knowledge_states` holds
 `stability` and `last_seen_at`; `public.retrievability()` derives the current
@@ -112,7 +120,9 @@ not that it grants anything.
   Wrapping `auth.uid()` in a scalar subquery lets Postgres evaluate it once per
   query instead of once per row.
 - **Canonical content** — world-readable once `status = 'published'`; written
-  only by the service role, which bypasses RLS.
+  only by the service role, which bypasses RLS. A `works` row is visible only when
+  one of its summaries is readable by the caller (published and public, or their
+  own), so a source with nothing readable behind it is not enumerable.
 - **Write policies are split** into INSERT/UPDATE/DELETE rather than `for all`
   wherever a separate read policy exists, so no read pays for two overlapping
   permissive policies. Enforced by invariant 5 in `supabase/tests/lint.sql`.
