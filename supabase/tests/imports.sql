@@ -123,6 +123,7 @@ declare
   slug_oq_a text;
   slug_oq_b text;
   slug_pd_b text;
+  bulk_pull uuid;
   closer_two uuid := extensions.gen_random_uuid();
   closer_two_sess uuid := extensions.gen_random_uuid();
   work_wal  uuid;
@@ -1001,13 +1002,28 @@ begin
   ));
   import_2 := (res ->> 'importId')::uuid;
 
+  -- WITH A PULL EACH, because "held" now means `undone_at is null AND pull_id is not
+  -- null` and a row with no pull is a highlight the reader does not have. The filler
+  -- used to leave `pull_id` null, which built 19,999 rows in a state `commit_import`
+  -- cannot produce and which the ceiling correctly no longer counts. They all point at
+  -- the one real pull this fixture made: `import_items.pull_id` carries no unique
+  -- constraint, and what is under test is the COUNT.
   perform pg_temp.as_owner();
-  insert into public.import_items (import_id, user_id, content_hash)
-  select import_2, bulk_user, md5(g::text) || md5((g + 1)::text)
+  select ii.pull_id into bulk_pull
+    from public.import_items ii
+   where ii.user_id = bulk_user and ii.pull_id is not null
+   limit 1;
+  if bulk_pull is null then
+    raise exception 'the bulk fixture has no pull to point its filler at';
+  end if;
+  insert into public.import_items (import_id, user_id, pull_id, content_hash)
+  select import_2, bulk_user, bulk_pull, md5(g::text) || md5((g + 1)::text)
     from generate_series(1, 19999) g;
   perform pg_temp.become(bulk_user);
 
-  select count(*) into n from public.import_items where user_id = bulk_user;
+  select count(*) into n
+    from public.import_items
+   where user_id = bulk_user and undone_at is null and pull_id is not null;
   if n <> 20000 then
     raise exception 'the bulk fixture holds % items, expected 20000', n;
   end if;

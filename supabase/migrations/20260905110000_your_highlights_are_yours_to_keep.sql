@@ -107,6 +107,22 @@ create table public.import_items (
   -- the fingerprint so an ACCIDENTAL re-upload of something still held is a no-op,
   -- and stops counting and stops blocking once the reader has explicitly said they
   -- do not want it. Uploading the file again is then how you undo an Undo.
+  --
+  -- `undone_at` IS NOT THE ONLY WAY A HIGHLIGHT GOES, which is the second half of the
+  -- same lesson and cost a second reproduction to find. `pull_id` is `on delete set
+  -- null` and `pulls.summary_id` cascades, so one permitted call --
+  -- `DELETE /rest/v1/summaries?id=eq.<s>`, which `summaries_author_delete` has allowed
+  -- since 20260829125021 -- deletes a reader's imported pulls while leaving these rows
+  -- with `undone_at` still null. Measured: the text gone, two items still counted as
+  -- held, and the re-upload the comment above calls the way back returning
+  -- `duplicates: 2, added: 0`. There is no delete policy on this table, so the reader
+  -- could not clear it either: the one-way door, re-opened by a different key.
+  --
+  -- So "held" is asked as `undone_at is null AND pull_id is not null` everywhere it is
+  -- asked. A row whose pull is gone stops counting and stops blocking, exactly as a
+  -- tombstone does, and the re-upload restores the highlight. The book ceiling is
+  -- deliberately NOT refunded by this -- `v_books` still counts every row -- so
+  -- deleting summaries cannot be used to buy back shared-row quota.
   undone_at    timestamptz,
   constraint import_items_locator_length
     check (locator is null or length(locator) <= 200),
@@ -155,7 +171,27 @@ create table public.user_questions (
   constraint user_questions_answer_length
     check (answer is null or length(answer) <= 2000),
   constraint user_questions_options_is_array
-    check (jsonb_typeof(options) = 'array')
+    check (jsonb_typeof(options) = 'array'),
+  /*
+   * AND BOUNDED, which it was not. `prompt` is capped at 2000, `answer` at 2000, and
+   * every comparable column in the schema at 20,000 -- `notes.body`, `highlights.text`,
+   * `explanations.text`, `convictions.rationale`, `recall_events.answer`. This one had
+   * a shape check and no size, which made it the only reader-writable column in the
+   * database a caller could put anything in.
+   *
+   * Measured through the local stack as an ordinary signed-up reader, not as SQL: a
+   * 10,000,934-byte POST to `/rest/v1/user_questions` returned 201 and stored 3.77 MB
+   * in one row. `user_questions_insert_own` asks only for `auth.uid()` and a readable
+   * pull, and nothing rate-limits the table. 20260901130000 argues at length that on
+   * this tier a storage bill is an outage.
+   *
+   * 20,000 matches its neighbours; eight options is twice what any MCQ here renders.
+   */
+  constraint user_questions_options_size
+    check (
+      length(options::text) <= 20000
+      and jsonb_array_length(options) <= 8
+    )
 );
 
 comment on table public.user_questions is
@@ -672,7 +708,7 @@ begin
   -- 20,000 and undid every one could never import again.
   select count(*) into v_held
     from public.import_items
-   where user_id = uid and undone_at is null;
+   where user_id = uid and undone_at is null and pull_id is not null;
 
   -- EVERY book ever, tombstones included: the counter an Undo does not refund. See
   -- `max_works_per_user`.
@@ -822,7 +858,13 @@ begin
     -- lookup and touches nothing.
     if exists (
       select 1 from public.import_items ii
-       where ii.user_id = uid and ii.content_hash = v_hash and ii.undone_at is null
+       where ii.user_id = uid
+         and ii.content_hash = v_hash
+         and ii.undone_at is null
+         -- A row whose pull was destroyed under it is not a highlight this reader
+         -- holds, so it must not refuse the upload that would restore it. See
+         -- `import_items.undone_at`.
+         and ii.pull_id is not null
     ) then
       v_duplicates := v_duplicates + 1;
       continue;
