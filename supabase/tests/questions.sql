@@ -472,6 +472,30 @@ begin
     raise exception 'expected 2 canonical questions after the cap, got %', n;
   end if;
 
+  -- AND THE CAP ACTUALLY CUTS. `pull_1` was drawn because it ALREADY carried a
+  -- canonical question -- `seeded_q` -- so with A's own and the two written above there
+  -- are four questions on this pull, and the three that come back are a real cut.
+  -- Nothing said so: both assertions above hold just as well on a pull carrying exactly
+  -- three, where `limit 3` is a no-op. `seeded_q` was assigned in the fixture and then
+  -- never read, in a file whose header names using every fixture it sets up as one of
+  -- three defences.
+  --
+  -- Which one goes is the part worth pinning. `seeded_q` is the oldest of the three and
+  -- the canonical branch orders `created_at desc`, so it is the one dropped -- a reader
+  -- is asked the questions written most recently for the idea, not the first ones ever
+  -- written for it.
+  select count(*) into n from public.quiz_questions q where q.pull_id = pull_1;
+  if n <> 3 then
+    raise exception
+      'pull_1 carries % canonical questions rather than 3, so the cap at three is not '
+      'exercised here and the two checks above show only that nothing was lost', n;
+  end if;
+  if exists (select 1 from jsonb_array_elements(qs) e where e ->> 'id' = seeded_q::text) then
+    raise exception
+      'the seeded canonical question survived the cap, so one of the two newer ones did '
+      'not: the canonical branch is taking the oldest three rather than the newest';
+  end if;
+
   -- THE KEYS THEMSELVES CARRY WHAT WAS WRITTEN, on both branches. `kind` is the
   -- subject of this migration and the field 3d will dispatch the grader on; `answer`
   -- is what `gradeMcq` compares against and what `mcqOptions` puts on screen; `cloze`
@@ -856,10 +880,19 @@ begin
   -- serves both tables. Returning `'[]'` for the reader's side instead -- which an
   -- earlier draft of the function did -- drops every choice they wrote and turns
   -- their own MCQ into a question with one option.
+  --
+  -- `cloze` and `explanation` are the other two columns this migration adds to
+  -- `user_questions`, and they are on the reader's branch of the union for the same
+  -- reason: one renderer, two tables. Nothing in this file set either, so both could be
+  -- wired to null -- or to the canonical row's -- and the suite would stay green. The
+  -- canonical side of both keys is asserted in section 3; this is the other half.
   ---------------------------------------------------------------------------
   perform pg_temp.as_owner();
   update public.user_questions
-     set kind = 'mcq', options = '["a wrong one","another wrong one"]'::jsonb
+     set kind = 'mcq',
+         options = '["a wrong one","another wrong one"]'::jsonb,
+         cloze = 'A wrote the ____ themselves.',
+         explanation = 'And A wrote why, in their own words.'
    where id = own_1;
   perform pg_temp.become(reader_a);
 
@@ -873,9 +906,81 @@ begin
       'the reader''s own options did not reach the array as distractors (got %). '
       'Their MCQ would render with one option.', qs -> 0 -> 'distractors';
   end if;
+  -- Compared against the literals rather than against the canonical row's, which are
+  -- the two values a wrong join would most plausibly return here.
+  if qs -> 0 ->> 'cloze' is distinct from 'A wrote the ____ themselves.' then
+    raise exception 'the reader''s own cloze did not reach the array (got %)',
+      qs -> 0 ->> 'cloze';
+  end if;
+  if qs -> 0 ->> 'explanation' is distinct from 'And A wrote why, in their own words.' then
+    raise exception 'the reader''s own explanation did not reach the array (got %)',
+      qs -> 0 ->> 'explanation';
+  end if;
+
+  -- Restored in full, all four columns, so sections 7 and 8 read the fixture section 2
+  -- set up rather than this one's. Leaving `cloze` and `explanation` behind was how the
+  -- `pull_faded` row taught this file the same lesson two rounds ago.
+  perform pg_temp.as_owner();
+  update public.user_questions
+     set kind = 'recall', options = '[]'::jsonb, cloze = null, explanation = null
+   where id = own_1;
+  perform pg_temp.become(reader_a);
+
+  ---------------------------------------------------------------------------
+  -- 6b-2. AND THE CARD EVERY READER IN THE CORPUS ACTUALLY GETS.
+  --
+  -- Every card asserted above belongs to a reader who has written their own question,
+  -- because `own_1` exists from section 2 onwards and always sorts first. Nobody in the
+  -- corpus has done that: `user_questions` is empty in production and the reader is
+  -- asked canonical questions or none. So the canonical-only shape -- the one the
+  -- deployed Review screen renders for everyone -- was the shape this file never built,
+  -- and `pull_2`, the only pull here without a question of the reader's, is a
+  -- constraint fixture that never reaches `get_due_reviews` at all.
+  --
+  -- It is the canonical branch's OWN `limit 3` that goes untested without this. With
+  -- A's question taking the first slot, that branch narrowing to two is invisible --
+  -- the outer cap keeps the total at three either way -- and a reader with no question
+  -- of their own would silently be asked two questions where the card says three.
+  ---------------------------------------------------------------------------
+  perform pg_temp.as_owner();
+  update public.user_questions set retired_at = now() where id = own_1;
+  perform pg_temp.become(reader_a);
+
+  qs := pg_temp.questions_for(pull_1, 'section 6b-2 (a reader with no question of their own)');
+
+  if jsonb_array_length(qs) <> 3 then
+    raise exception
+      'a reader with no question of their own got % questions, not 3, on a pull that '
+      'carries three canonical ones', jsonb_array_length(qs);
+  end if;
+  select count(*) into n
+    from jsonb_array_elements(qs) e where e ->> 'source' = 'canonical';
+  if n <> 3 then
+    raise exception 'expected 3 canonical questions and got % of them', n;
+  end if;
+  -- `seeded_q` is asked here and dropped in section 3, which is the pair that says the
+  -- cap is a cap: the oldest question is not gone, it is third in a queue of three.
+  if not exists (select 1 from jsonb_array_elements(qs) e where e ->> 'id' = seeded_q::text) then
+    raise exception 'the seeded canonical question is missing from a card with room for it';
+  end if;
+  if qs -> 0 ->> 'source' is distinct from 'canonical' then
+    raise exception 'the first question is not canonical (got %)', qs -> 0 ->> 'source';
+  end if;
+  -- The singular fields follow the array here too. They are built from
+  -- `questions[0]`, so on a card with no question of the reader's they must say
+  -- `canonical` -- and `questionSource` is the field 2d's "Your question" chip reads.
+  select e into card
+    from jsonb_array_elements(public.get_due_reviews(100)) e
+   where e ->> 'pullId' = pull_1::text;
+  if card ->> 'questionSource' is distinct from 'canonical'
+     or card ->> 'questionId' is distinct from (qs -> 0 ->> 'id') then
+    raise exception
+      'the singular fields still name a question of the reader''s on a card that has '
+      'none: % / %', card ->> 'questionSource', card ->> 'questionId';
+  end if;
 
   perform pg_temp.as_owner();
-  update public.user_questions set kind = 'recall', options = '[]'::jsonb where id = own_1;
+  update public.user_questions set retired_at = null where id = own_1;
   perform pg_temp.become(reader_a);
 
   ---------------------------------------------------------------------------
