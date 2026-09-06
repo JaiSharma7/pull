@@ -20,6 +20,48 @@
  */
 let last = 0;
 
+/**
+ * An identity for one submission, which must not be the thing that loses it.
+ *
+ * `crypto.randomUUID` is undefined in a non-secure context — `lib/offline.ts` names
+ * that as live, and this whole mechanism exists because a grade applied twice is
+ * invisible and wrong. Called bare, it throws where it is called, and the three sites
+ * in `Feed.tsx` call it AFTER the slot is marked handled: the reader's stance and
+ * explanation would go with no banner, no queue entry and no retry.
+ *
+ * So it falls back rather than throws. `getRandomValues` gives the same 122 bits of
+ * entropy where the constructor is missing; the last resort is a timestamp and two
+ * random suffixes, which is weaker and still unique enough for what the id is FOR — a
+ * `(user_id, client_mutation_id)` unique index recognising one reader's retry of one
+ * submission. It never needs to be unguessable.
+ */
+export function mutationId(): string {
+  const c: Crypto | undefined = globalThis.crypto;
+  if (typeof c?.randomUUID === 'function') return c.randomUUID();
+  if (typeof c?.getRandomValues === 'function') {
+    const b = c.getRandomValues(new Uint8Array(16));
+    b[6] = ((b[6] as number) & 0x0f) | 0x40;
+    b[8] = ((b[8] as number) & 0x3f) | 0x80;
+    const hex = [...b].map((n) => n.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  /*
+   * 32 hex characters, then sliced. The first version built the groups by hand and got
+   * a 12-character first group — a string shaped roughly like a uuid, which
+   * `recall_events.client_mutation_id` is typed `uuid` and would have refused outright.
+   * The test below is what caught it; a fallback that produces an invalid id is worse
+   * than the throw it replaced, because it fails at the server instead of the call.
+   */
+  const hex = (n: number) =>
+    Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+  const time = Date.now().toString(16).padStart(12, '0').slice(-12);
+  const body = `${time}${hex(20)}`;
+  return (
+    `${body.slice(0, 8)}-${body.slice(8, 12)}-4${body.slice(13, 16)}-` +
+    `8${body.slice(17, 20)}-${body.slice(20, 32)}`
+  );
+}
+
 export function nextSubmissionStamp(): number {
   const now = Date.now();
   last = now > last ? now : last + 1;

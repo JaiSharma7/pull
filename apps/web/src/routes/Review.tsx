@@ -3,7 +3,11 @@ import { Meter } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
 import { isOfflineFailure, pendingRecallPullIds, queueMutation } from '../lib/offline.js';
-import { elapsedSince, nextSubmissionStamp } from '../lib/submission.js';
+import {
+  elapsedSince,
+  mutationId as newMutationId,
+  nextSubmissionStamp,
+} from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
 
@@ -109,13 +113,23 @@ export function Review() {
          * a tab switch that emptied the ref.
          *
          * `queuedFor` is null when the queue could not be READ, and the card is shown.
-         * That is a decision rather than a default: a store that will not open is also
-         * a store `queueMutation` could not write to, so the grade was reported lost
-         * rather than silently held, and the card genuinely is still due. The case it
-         * does not cover is a store that was writable then and is blocked now — an
-         * older tab holding the database at the previous version — where the ref is
-         * the only guard left. Refusing to show any card would close that and break
-         * offline review, which is one of the five things law 3 promises free.
+         *
+         * That is a decision with a cost, stated plainly because the first version of
+         * this comment justified it with something false: "a store that will not open
+         * is also a store `queueMutation` could not write to". The entry may have been
+         * written by an earlier mount, or by another tab, while the store was fine —
+         * an older tab holding the database at the previous version makes it unreadable
+         * HERE and leaves the queued grade on disk. So the reader can be shown a card
+         * they have already answered, and a second grade mints a second mutation id.
+         *
+         * It is still the right way round. Refusing to show any card closes that and
+         * breaks review outright for anyone with a stale tab open, and offline practice
+         * is one of the five things law 3 promises free forever. The residual is
+         * narrow — it needs a version change between two tabs, a remount, and the
+         * reader grading the same card twice — and it is the residual rather than the
+         * default. Closing it properly needs a mutation id that is deterministic for a
+         * card's due instance, so a second grade of the same instance replays instead
+         * of applying; that belongs with the schema change that would carry it.
          */
         setDue(
           rows.filter(
@@ -214,8 +228,9 @@ export function Review() {
     /*
      * Inside the `try`, because `crypto.randomUUID` is not always there.
      *
-     * It is undefined in a non-secure context — `lib/offline.ts` names that condition
-     * as live and aborts an upgrade over it — and these two statements sat between
+     * It is undefined in a non-secure context — #82 records that as live in
+     * `lib/offline.ts`, which is a claim about a file this branch does not carry, so it
+     * is attributed rather than asserted here — and these two statements sat between
      * `setGrading(true)` and the `try`. A throw there set the guard and never cleared
      * it, so every later tap returned early and the screen was wedged on one card with
      * its answer showing: exactly the outcome the `finally` below says it prevents,
@@ -229,7 +244,7 @@ export function Review() {
     // offline is one of the five things promised free, so this page has to keep
     // working without a connection rather than wedging on the first card.
     try {
-      mutationId = crypto.randomUUID();
+      mutationId = newMutationId();
       submittedAt = nextSubmissionStamp();
       await api.gradeRecall(card.pullId, g, {
         mutationId,
@@ -350,7 +365,19 @@ export function Review() {
        * updater has to be pure; this is the reason why.
        */
       const rest = (due ?? []).slice(1);
-      setDue(rest);
+      /*
+       * `null`, NOT `[]`, when the page empties — `null` is loading and `[]` is "nothing
+       * is due", and the difference is the one this file exists for.
+       *
+       * `setDue([])` and the `setReloads` bump commit together, so the render between
+       * them showed "Nothing is fading. Everything you have saved is still solid." to a
+       * reader who may have fifty more cards, while the refetch that block had just
+       * asked for was still in flight. That is the same sentence the header comment
+       * says this screen must never show on incomplete information, arriving from a
+       * third direction: first on a failed request, then on a partial page, now on a
+       * pending one.
+       */
+      setDue(rest.length === 0 ? null : rest);
       if (rest.length === 0) setReloads((n) => n + 1);
     }
   }
@@ -383,10 +410,22 @@ export function Review() {
         </p>
       ) : null}
 
+      {/*
+        NO DIAGNOSIS, because three different failures reach this flag and the sentence
+        named one of them. `queueMutation` returns false for a PERMANENT SERVER REFUSAL
+        before it touches IndexedDB at all — a foreign key, a check constraint, a bad
+        uuid — which is the documented path its own comment describes; it returns false
+        when the store cannot be written; and this screen now also treats a missing
+        mutation id that way, which is `crypto.randomUUID` throwing in a non-secure
+        context. Telling a reader their browser may be blocking site data when Postgres
+        refused the row is a wrong answer to a question they did not ask.
+
+        What is true of all three is the second sentence, which is the one that matters:
+        the grade did not land, so the idea has not moved, so it comes round again.
+      */}
       {lostGrade ? (
         <p className="meta" role="alert">
-          Something went wrong saving a grade, and this device could not hold on to it either — your
-          browser may be blocking site data. Those ideas will come round again.
+          That grade could not be saved, here or on this device. Those ideas will come round again.
         </p>
       ) : null}
 
