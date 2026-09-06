@@ -391,19 +391,14 @@ function foldVariants(text: string): string {
 }
 
 /**
- * `foldSpelling` is false for the second chance `wordsAreClose` takes.
- *
- * The fold is right for deciding whether two answers are the same word, and wrong for
- * deciding whether one is a mistyping of the other: it rewrites one side and not the
- * other, so a typo INSIDE a folded word changes shape. `colur` for `colour` was an
- * accepted one-letter deletion until the fold made it `colur` against `color`, which is
- * a substitution and never a slip — so the change whose subject is that a spelling must
- * not be an accusation newly refused, and accused, a reader who dropped a letter.
+/**
+ * `foldSpelling` exists for `answerSimilarity`, which reports how close two answers came
+ * and should not be told they are the same word.
  */
 export function normaliseAnswer(text: string, foldSpelling = true): string {
-  const folded = foldSpelling ? foldVariants(text) : text;
-  return (
-    folded
+  return foldIf(
+    foldSpelling,
+    text
       .normalize('NFKD')
       .replace(/\p{M}/gu, '')
       .toLowerCase()
@@ -453,8 +448,27 @@ export function normaliseAnswer(text: string, foldSpelling = true): string {
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
-      .replace(/^(?:a|an|the) /, '')
+      .replace(/^(?:a|an|the) /, ''),
   );
+}
+
+/**
+ * The variant list, applied AFTER the lowercase and not before it.
+ *
+ * The first version folded the raw text. `SPELLING_VARIANTS` is all lower case and
+ * `split`/`join` is case-sensitive, so one capital letter defeated the whole fold —
+ * and a capital is the ordinary shape of an authored answer, where no keyboard is
+ * involved at all. Measured against round 4, which applied its regexes after the
+ * lowercase and did not have this: `Centre` for `center` went from correct at
+ * similarity 1 to `forgot` at 0.83 AND `confidentlyWrong`, and so did `Fibre`,
+ * `Litre` and `Manoeuvre`. Typed `centre` against an authored `Centre` — the identical
+ * word — was accepted only as a typing slip and could never be `easy`.
+ *
+ * That is verbatim the outcome the paragraphs above call unacceptable, produced by the
+ * change that exists to remove it, and reachable by capitalising one letter.
+ */
+function foldIf(fold: boolean, lowered: string): string {
+  return fold ? foldVariants(lowered) : lowered;
 }
 
 /**
@@ -690,19 +704,34 @@ function slipShape(a: string, b: string): boolean {
  * three words by construction — so word count is a real signal here rather than
  * the blunt instrument it would be on a sentence.
  */
+/*
+ * ON THE FOLDED FORMS ONLY, and the second chance on the raw ones is gone.
+ *
+ * It was added so `colur` for `colour` stayed a slip: the fold rewrites one side and
+ * not the other, so a dropped letter inside a folded word turns from a deletion into a
+ * substitution, which is never a slip. That is a real cost of folding at all.
+ *
+ * The raw retry cost more. An exhaustive sweep of a 370k-word list found 52 pairs it
+ * newly accepts — `fires` for `fibres`, `amour` for `armour`, `tires` for `titres`,
+ * `mires` for `mitres` — where the folded comparison correctly refuses and the raw one
+ * sees an ordinary indel. `fires`/`fibres` is two common words and `fibre` is an
+ * ordinary cloze answer, so that is a wrong answer recorded as recalled, which this
+ * module calls the one outcome a grader must never produce. Refusing a mistyped
+ * `colour` is the smaller harm, and it is the same class the cost paragraph in
+ * `gradeCloze` already discloses.
+ *
+ * No shape separates the two cases — `colur` and `fires` are both one indel from the
+ * unfolded answer, and only a dictionary knows that one of them is a word.
+ *
+ * And the cost is narrower than "a typo inside a variant": it bites only where the fold
+ * is itself an INDEL, because that is what turns a dropped letter into a substitution.
+ * `colour` -> `color` drops one, so `colur` is refused; `theatre` -> `theater` is a
+ * transposition and keeps the length, so `theatr` is still a slip. Most of the `-re`
+ * family is the second shape.
+ */
 function wordsAreClose(typed: string, answer: string): boolean {
-  // Folded FIRST, because that is what makes a spelling variant simply right; then, if
-  // that fails, on the raw forms, because a typo inside a folded word is still a typo.
-  // `colur` for `colour` is a one-letter deletion until the fold rewrites one side of
-  // it into `color` and turns it into a substitution.
-  return (
-    closeUnderNormalisation(typed, answer, true) || closeUnderNormalisation(typed, answer, false)
-  );
-}
-
-function closeUnderNormalisation(typed: string, answer: string, fold: boolean): boolean {
-  const a = normaliseAnswer(typed, fold).split(' ').filter(Boolean);
-  const b = normaliseAnswer(answer, fold).split(' ').filter(Boolean);
+  const a = normaliseAnswer(typed).split(' ').filter(Boolean);
+  const b = normaliseAnswer(answer).split(' ').filter(Boolean);
   // Both empty is the answer that IS a mark -- `+` for `+`, `=` for `=` -- and
   // `normaliseAnswer` strips it to nothing. The old bail on an empty typed
   // answer graded those wrong when they were exactly right, which is the one

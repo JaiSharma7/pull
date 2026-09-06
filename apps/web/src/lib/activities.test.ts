@@ -766,6 +766,8 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     ['shore', 'shoer'],
     ['eagre', 'eager'],
     ['livre', 'liver'],
+    ['spare', 'spaer'],
+    ['outre', 'outer'],
   ])('keeps %s and %s two words', (a, b) => {
     for (const [typed, answer] of [
       [a, b],
@@ -787,6 +789,19 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     expect(gradeCloze('measuer', 'measure', 'sure', 100).similarity).toBeLessThan(1);
   });
 
+  it('names the tenth pair, which the slip rule accepts on its own', () => {
+    /*
+     * The regex merged ten real pairs and this list keeps nine of them apart.
+     * `compère`/`compeer` is the tenth and is still accepted — not by any fold, but by
+     * the seven-letter transposition floor: the accent strip makes it `compere`, and
+     * `compere`/`compeer` is one swap at exactly seven letters. So it is a residual of
+     * the slip rule rather than of the variant list, which is a different claim from
+     * "a list cannot merge a pair nobody put in it" and is worth not conflating.
+     */
+    expect(gradeCloze('compère', 'compeer').correct).toBe(true);
+    expect(gradeCloze('compère', 'compeer').similarity).toBeLessThan(1);
+  });
+
   it('keeps the pairs a wider fold would merge', () => {
     // A list cannot merge a pair nobody put in it, which is the whole argument for
     // one. These are the pairs the plausible generalisations of it would take.
@@ -798,18 +813,70 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     expect(gradeCloze('anaemia', 'anemia').correct).toBe(true);
   });
 
-  it('still calls a typo inside a folded word a typo', () => {
+  it('folds a variant however it is capitalised', () => {
     /*
-     * The fold rewrites one side of a pair and not the other, so a dropped letter
-     * inside a folded word changes shape: `colur` for `colour` is a one-letter
-     * deletion until `colour` becomes `color`, and then it is a substitution, which is
-     * never a slip. Round 4 shipped that — the change whose subject is that a spelling
-     * must not be an accusation newly refused, and accused, a reader who dropped a
-     * letter. `wordsAreClose` therefore takes a second look at the raw forms.
+     * The fold is a rule about lower-case words, so it has to run AFTER the lowercase.
+     * The first version folded the raw text, and `SPELLING_VARIANTS` is all lower case
+     * against a case-sensitive `split`/`join` — so one capital defeated it entirely.
+     *
+     * The AUTHORED side matters more than the typed one here: an authored answer is
+     * routinely capitalised and no keyboard is involved, so `centre` typed against an
+     * authored `Centre` — the identical word — was accepted only as a typing slip and
+     * could never be `easy`, while `Centre` typed against `center` was `forgot` AND
+     * `confidentlyWrong`. Round 4's regexes ran after the lowercase and did not have
+     * this, so it was a regression produced by the fix for one.
      */
-    const r = gradeCloze('colur', 'colour', 'sure', 1000);
-    expect(r.correct).toBe(true);
-    expect(r.confidentlyWrong).toBe(false);
+    for (const [typed, answer] of [
+      ['Centre', 'center'],
+      ['centre', 'Centre'],
+      ['center', 'Centre'],
+      ['Colour', 'color'],
+      ['Fibre', 'fiber'],
+      ['Manoeuvre', 'maneuver'],
+      ['Skeptic', 'Sceptic'],
+      ['THEATRE', 'theater'],
+    ] as const) {
+      const r = gradeCloze(typed, answer, 'sure', 100);
+      expect(r.correct, `${typed} for ${answer}`).toBe(true);
+      expect(r.similarity, `${typed} for ${answer}`).toBe(1);
+      expect(r.confidentlyWrong).toBe(false);
+    }
+  });
+
+  it('does not read a different word as a mistyped variant', () => {
+    /*
+     * `wordsAreClose` took a second look at the RAW forms so that `colur` for `colour`
+     * stayed a slip — the fold rewrites one side and turns a dropped letter into a
+     * substitution. An exhaustive sweep of a 370k-word list found 52 pairs that retry
+     * newly accepted, where the folded comparison correctly refuses and the raw one
+     * sees an ordinary indel. These are two common words each, and `fibre` is an
+     * ordinary cloze answer.
+     *
+     * The retry is gone. What it cost is asserted below rather than left implied.
+     */
+    for (const [typed, answer] of [
+      ['fires', 'fibres'],
+      ['amour', 'armour'],
+      ['tires', 'titres'],
+      ['mires', 'mitres'],
+    ] as const) {
+      expect(gradeCloze(typed, answer).correct, `${typed} for ${answer}`).toBe(false);
+    }
+  });
+
+  it('refuses a typo inside a variant word only where the fold changes its length', () => {
+    /*
+     * The named price of removing the raw retry, stated precisely rather than
+     * generally. It costs a typo only where the fold is an INDEL: `colour` -> `color`
+     * drops a letter, so a reader who also dropped one has written a substitution
+     * against the folded answer, and a substitution is never a slip. No shape separates
+     * that from `fires`/`fibres` — only a dictionary would.
+     *
+     * Where the fold is a transposition the length is unchanged, so a dropped letter is
+     * still a dropped letter: `theatr` for `theatre` survives. Most of the `-re` family
+     * is that shape, which is why the cost is smaller than "a typo inside a variant".
+     */
+    expect(gradeCloze('colur', 'colour').correct).toBe(false);
     expect(gradeCloze('theatr', 'theatre').correct).toBe(true);
   });
 
