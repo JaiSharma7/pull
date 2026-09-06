@@ -160,15 +160,63 @@ export function Review() {
     setReloads((n) => n + 1);
   }, []);
 
+  /*
+   * A VARIABLE RATHER THAN JSX IN ONE BRANCH, because these two used to be reachable
+   * only from the branch that renders a card — and the case that most needs them is the
+   * one where no card comes back.
+   *
+   * Grade the LAST due card, have the write fail and the queue decline it, and the
+   * refetch returns that card still due; the effect filters it out on `graded`, `due`
+   * is empty, and the reader was shown "Nothing is fading. Everything you have saved is
+   * still solid." That is the sentence this file's header calls the worst available lie,
+   * on the PR named for never losing a grade, and the screen was filtering out the very
+   * card whose grade it had just dropped in order to say it. The error branch was worse:
+   * it asserted "Nothing has been lost" in the one state where something demonstrably
+   * had been.
+   */
+  /*
+   * Said once, and it stays said for as long as this screen is open — except that
+   * `signedOut` retracts when a later write lands, because that falsifies it.
+   *
+   * Not "for the rest of the session", which an earlier comment claimed and the code has
+   * never done: Review is a tab, so both of these die on the next tab switch along with
+   * everything else in this component. Saying what actually happens is worth more than a
+   * promise the screen cannot keep.
+   *
+   * A grade that reaches neither the server nor the queue is gone, and the screen used
+   * to advance as though it had been recorded. This is the only outcome in this file the
+   * reader cannot recover from by carrying on, so it is the only one worth interrupting
+   * them about — and it is deliberately not a blocking dialogue, because the session is
+   * still worth finishing.
+   */
+  const notices = (
+    <>
+      {signedOut ? (
+        <p className="meta" role="alert">
+          Your session ended before that grade could be saved. Sign in again and those ideas will
+          come round as they were.
+        </p>
+      ) : null}
+      {lostGrade ? (
+        <p className="meta" role="alert">
+          That grade could not be saved, here or on this device. Those ideas will come round again.
+        </p>
+      ) : null}
+    </>
+  );
+
   if (error) {
     return (
       <section className="stack measure" role="alert">
         <p className="meta">Review</p>
         <h1>Could not check what is fading.</h1>
+        {notices}
         <p>
           {offline
             ? 'You appear to be offline, so this could not be checked. It does not mean nothing is due.'
-            : 'Something went wrong reaching your review schedule. Nothing has been lost.'}
+            : lostGrade || signedOut
+              ? 'Something went wrong reaching your review schedule.'
+              : 'Something went wrong reaching your review schedule. Nothing has been lost.'}
         </p>
         <p className="meta">{error}</p>
         <button type="button" className="btn btn--primary" onClick={retry}>
@@ -180,9 +228,12 @@ export function Review() {
 
   if (!due)
     return (
-      <p className="meta" role="status">
-        Loading…
-      </p>
+      <section className="stack measure">
+        {notices}
+        <p className="meta" role="status">
+          Loading…
+        </p>
+      </section>
     );
 
   if (due.length === 0) {
@@ -190,7 +241,12 @@ export function Review() {
       <section className="stack measure">
         <p className="meta">Review</p>
         <h1>Nothing is fading.</h1>
-        <p>Everything you have saved is still solid. Come back when something slips.</p>
+        {notices}
+        <p>
+          {lostGrade || signedOut
+            ? 'Nothing else is due. The idea above will come round again.'
+            : 'Everything you have saved is still solid. Come back when something slips.'}
+        </p>
       </section>
     );
   }
@@ -388,46 +444,26 @@ export function Review() {
         Review · {due.length} {due.length === 1 ? 'idea' : 'ideas'} fading
       </p>
 
-      {/*
-        Said once, and it stays said for as long as this screen is open — except that
-        `signedOut` retracts when a later write lands, because that falsifies it.
-
-        Not "for the rest of the session", which an earlier comment claimed and the
-        code has never done: Review is a tab, so both of these die on the next tab
-        switch along with everything else in this component. Saying what actually
-        happens is worth more than a promise the screen cannot keep.
-
-        A grade that reaches neither the server nor the queue is gone, and the
-        screen used to advance as though it had been recorded. This is the only
-        outcome in this file the reader cannot recover from by carrying on, so it
-        is the only one worth interrupting them about — and it is deliberately not
-        a blocking dialogue, because the session is still worth finishing.
-      */}
-      {signedOut ? (
-        <p className="meta" role="alert">
-          Your session ended before that grade could be saved. Sign in again and those ideas will
-          come round as they were.
-        </p>
-      ) : null}
+      {notices}
 
       {/*
-        NO DIAGNOSIS, because three different failures reach this flag and the sentence
+        NO DIAGNOSIS, because two different failures reach this flag and the sentence
         named one of them. `queueMutation` returns false for a PERMANENT SERVER REFUSAL
         before it touches IndexedDB at all — a foreign key, a check constraint, a bad
-        uuid — which is the documented path its own comment describes; it returns false
-        when the store cannot be written; and this screen now also treats a missing
-        mutation id that way, which is `crypto.randomUUID` throwing in a non-secure
-        context. Telling a reader their browser may be blocking site data when Postgres
-        refused the row is a wrong answer to a question they did not ask.
+        uuid — which is the documented path its own comment describes; and it returns
+        false when the store cannot be written. Telling a reader their browser may be
+        blocking site data when Postgres refused the row is a wrong answer to a question
+        they did not ask.
 
-        What is true of all three is the second sentence, which is the one that matters:
+        TWO, NOT THREE. This used to name a third — a missing mutation id, from
+        `crypto.randomUUID` throwing in a non-secure context — and that path does not
+        exist in this PR: `mutationId()` is this change's own function, written and
+        tested never to throw, and the id is minted as the first statement of the try.
+        The guard stays because the type allows null, not because anything reaches it.
+
+        What is true of both is the second sentence, which is the one that matters:
         the grade did not land, so the idea has not moved, so it comes round again.
       */}
-      {lostGrade ? (
-        <p className="meta" role="alert">
-          That grade could not be saved, here or on this device. Those ideas will come round again.
-        </p>
-      ) : null}
 
       <div className="pull-card">
         <p className="pull-card__chip">{card.workTitle}</p>

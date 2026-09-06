@@ -3,7 +3,7 @@ import * as api from '../lib/api.js';
 import { unappliedGrades, type KnowledgeLevel } from '../lib/calibration.js';
 import { queueMutation } from '../lib/offline.js';
 import { getCurrentUserId } from '../lib/supabase.js';
-import { nextSubmissionStamp } from '../lib/submission.js';
+import { mutationId as newMutationId, nextSubmissionStamp } from '../lib/submission.js';
 import type { FeedRow } from '../lib/types.js';
 
 export type { KnowledgeLevel };
@@ -148,8 +148,25 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
        * because this is a declared level rather than a recall — the census asks
        * "how well do you know this" and nothing is retrieved — and `recall_events`
        * keeps the distinction so a later scheduler can weigh the two differently.
+       *
+       * `mutationId()` RATHER THAN `crypto.randomUUID()`, because this line wedged the
+       * screen. `randomUUID` is secure-context-gated, so it is absent over plain http —
+       * and sitting here, after `setSaving(true)` and outside the try, the throw escaped
+       * through `onClick={() => void handleFinish()}` with nothing to catch it.
+       * `setSaving(false)` is after the loop, so it never ran: Continue and every level
+       * button stayed disabled for the life of the mount, with no error shown, and the
+       * reader's only way out was "Skip calibration" — which discards the whole census.
+       * This screen is offered exactly once and is the only thing that seeds a knowledge
+       * model.
+       *
+       * IT STAYS OUTSIDE THE TRY, which is the half of the fix worth explaining. The
+       * catch needs both values to queue the write, so moving them in put them out of
+       * scope exactly where they are needed — typecheck caught it. What made the old
+       * line dangerous was not its position but that it could throw; `mutationId()`
+       * cannot, by construction, falling back to `getRandomValues` and then to
+       * `Math.random`. That is what it was written for.
        */
-      const mutationId = crypto.randomUUID();
+      const mutationId = newMutationId();
       const submittedAt = nextSubmissionStamp();
       try {
         await api.gradeRecall(pullId, grade, { mutationId, submittedAt, kind: 'calibration' });
