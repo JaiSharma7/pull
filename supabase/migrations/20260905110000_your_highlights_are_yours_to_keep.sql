@@ -476,6 +476,28 @@ declare
    * be the same cancellation this round had to fix one bound over.
    */
   max_imports_per_user constant int    := 2000;
+  /*
+   * A LIFETIME CEILING ON BOOKS, which is the resource that does not come back.
+   *
+   * `max_items_per_user` counts LIVE items, and an Undo frees it deliberately -- a
+   * highlight taken back is not one the reader is holding. The `works` and
+   * `contributors` an import created DO NOT go back, because deleting them races every
+   * other reader's import (round 5 tried; see `undo_import`). So bounding creation by
+   * the room left under a ceiling an Undo refunds is a bound that refunds itself:
+   * import 500 fresh titles, undo, repeat, forever.
+   *
+   * The counter has to be the thing being protected. Counting ITEMS was the first
+   * attempt and is wrong in the reader's direction: a reader who has stored 20,000
+   * highlights, undone most of them, and wants to import a corrected export would be
+   * refused, while the abuse -- fresh TITLES every cycle -- is what actually makes
+   * rows. Counting distinct `import_items.work_id` counts BOOKS this reader has ever
+   * imported into. Tombstones keep their `work_id`, so no Undo lowers it; re-importing
+   * the same book costs nothing, because it is the same work.
+   *
+   * 2,000 books is a library nobody has and 2,000 shared rows is a bound. 20,000
+   * highlights across 2,000 books is ten highlights a book, which is already thin.
+   */
+  max_works_per_user constant int      := 2000;
 
   uid          uuid := (select auth.uid());
   v_import_id  uuid;
@@ -499,6 +521,7 @@ declare
   v_duplicates int := 0;
   v_ceiling_reached boolean := false;
   v_held       int;
+  v_books      int;
   v_batches    int;
   v_touched    uuid[] := '{}';
   /** Contributors this call created or attributed, which the guard below may reuse. */
@@ -570,6 +593,12 @@ begin
   select count(*) into v_held
     from public.import_items
    where user_id = uid and undone_at is null;
+
+  -- EVERY book ever, tombstones included: the counter an Undo does not refund. See
+  -- `max_works_per_user`.
+  select count(distinct ii.work_id) into v_books
+    from public.import_items ii
+   where ii.user_id = uid and ii.work_id is not null;
 
   -- One batch per file, even when the file arrives in six calls. Outside the window a
   -- fresh batch is right: re-importing a clippings file that has grown since is a new
@@ -724,16 +753,25 @@ begin
                 ) item
                -- `undone_at is null` matches the loop's own dedupe: a highlight the
                -- reader has taken back is one a re-import may store again.
+               -- ANY row, tombstone included, and not just a live one. A tombstoned
+               -- hash is a revival: the loop stores it, but its work is already there
+               -- (nothing deletes works now), so it needs no creation room and must not
+               -- consume a rank slot that a genuinely new item needs.
                where not exists (
                  select 1 from public.import_items ii
-                  where ii.user_id = uid
-                    and ii.undone_at is null
-                    and ii.content_hash = item.hash
+                  where ii.user_id = uid and ii.content_hash = item.hash
                )
                order by item.slug, item.ord
             ) first_seen
         ) ranked
-       where ranked.rank <= greatest(max_items_per_user - v_held, 0)
+       -- BOTH CEILINGS, and `rank` is already a count of DISTINCT SLUGS -- the rows it
+       -- numbers are one per slug -- so a book ceiling and an item ceiling are both
+       -- upper bounds on it. The holding one stops a reader at the ceiling creating
+       -- anything; the book one stops import-undo-repeat refunding the room that bounds
+       -- creation. The window is still a superset of what the loop needs: the k-th item
+       -- the loop stores has slug rank <= k <= the item room.
+       where ranked.rank <= greatest(
+               least(max_items_per_user - v_held, max_works_per_user - v_books), 0)
     ) needed;
 
   -- The works first, and in slug order: every caller takes the same locks in the same
@@ -775,16 +813,30 @@ begin
   -- A Kindle export is grouped by book and chunked at 500, so several books by one
   -- author in one chunk is the ordinary case, not the edge: measured, three books by
   -- one new author in one call produced one link. The de-duplication bought nothing --
-  -- the lock order is the `order by author`, and re-locking a contributor this
-  -- transaction already holds is free.
+  -- the lock order is the `order by`, and re-locking a contributor this transaction
+  -- already holds is free.
+  --
+  -- ORDERED BY THE SLUG, WHICH IS WHAT IS LOCKED. Ordering by the raw author string
+  -- looked equivalent and is not: `attribute_work` locks
+  -- `btrim(regexp_replace(lower(author),'[^a-z0-9]+','-','g'),'-')`, and that map is
+  -- many-to-one -- every non-ASCII letter is stripped, so `Emile Zola`, `Émile Zola`
+  -- and `Ámile Zola` are one contributor sorting in three places, with any ordinary
+  -- name in between crossing them. Measured 12 deadlocks in 12 attempts with two
+  -- readers whose files spell one author two ways, both losing their whole chunk:
+  -- `40P01 ... while inserting index tuple in relation "contributors"`. Sorting by the
+  -- key the lock is taken on is the only thing that makes the order total.
   for v_pre in
     select a.author, a.slug
       from (
-        select distinct x.value ->> 'author' as author, x.value ->> 'slug' as slug
+        select distinct
+               x.value ->> 'author' as author,
+               x.value ->> 'slug' as slug,
+               btrim(regexp_replace(lower(x.value ->> 'author'), '[^a-z0-9]+', '-', 'g'),
+                     '-') as author_slug
           from jsonb_array_elements(v_needed) x
       ) a
      where a.author is not null
-     order by a.author, a.slug
+     order by a.author_slug, a.slug
   loop
     select w.id into v_work_id
       from public.works w
@@ -837,6 +889,25 @@ begin
      */
     if v_contributor_id is null
        or v_contributor_id = any(v_mine)
+       /*
+        * OR THIS READER HAS IMPORTED THAT AUTHOR BEFORE, tombstones included.
+        *
+        * The readability leg asks for a summary the caller can read behind the
+        * contributor, and an Undo deletes exactly that summary -- so a reader who
+        * imported an author, took it back, and imported them again got no byline the
+        * second time. The guard could not tell their own abandoned row from a
+        * stranger's. Round 5 answered that by DELETING the abandoned row, which turned
+        * out to race every other reader's import; this asks the question directly.
+        *
+        * It discloses nothing: the leg is true only when the caller has themselves
+        * imported a book this contributor is on, which is a fact they already hold.
+        */
+       or exists (
+         select 1
+           from public.import_items ii
+           join public.work_contributors wc2 on wc2.work_id = ii.work_id
+          where ii.user_id = uid and wc2.contributor_id = v_contributor_id
+       )
        or exists (
          select 1
            from public.work_contributors wc
@@ -968,12 +1039,22 @@ begin
     select w.id into v_work_id
       from public.works w
      where w.slug operator(extensions.=) v_slug::extensions.citext;
-    -- The pre-pass above created it. Anything still missing here is a slug the
-    -- pre-pass could not have seen, which means this item is malformed in a way the
-    -- validation above should already have caught -- so say so rather than creating a
-    -- work in item order and reopening the deadlock.
+    /*
+     * MISSING MEANS THE BOOK CEILING STOPPED IT, and that is the only thing it can mean
+     * now -- so this stops the call rather than raising.
+     *
+     * It used to raise `no work for %`, on the reasoning that the pre-pass creates
+     * every work and anything absent is an item the validation should have refused.
+     * That reasoning had a second case even then, and round 6 measured it: a concurrent
+     * `undo_import` deleting the work between the pre-pass and here, 3 of 3, aborting a
+     * 500-highlight chunk with an internal error naming a slug. That delete is gone.
+     * What is left is the pre-pass declining a slug because this reader is at
+     * `max_works_per_user` -- a ceiling, and every other ceiling here stops and reports
+     * rather than rolling back what the reader had room for.
+     */
     if v_work_id is null then
-      raise exception 'commit_import: no work for %', v_slug using errcode = 'XX000';
+      v_ceiling_reached := true;
+      exit;
     end if;
 
     -- `summaries unique (work_id, version, author_id)` is what makes this one row per
@@ -1272,63 +1353,38 @@ begin
      and not exists (select 1 from public.pulls p where p.summary_id = s.id);
 
   /*
-   * AND THE SHARED ROWS THIS BATCH CREATED AND NOTHING ELSE USES.
+   * NOTHING SHARED IS DELETED HERE, and round 5's attempt to is recorded because it
+   * looked obviously right and was three separate ways of losing a reader's data.
    *
-   * Round 4 bounded shared-catalogue creation by the room left under the ceiling.
-   * Round 3 had already made an Undo free that room, by not counting tombstoned items
-   * -- and together those two correct fixes cancel: import 500 fresh titles, undo,
-   * repeat. Measured: five cycles as one ordinary reader added 500 `works` and 500
-   * `contributors` with `held` back at 0 every time, repeatable forever, which put the
-   * growth this feature causes back outside every bound the function claims.
+   * It deleted the `works` this batch created that nothing else appeared to use, to
+   * stop the item ceiling (which bounds shared-row creation by the room left) and the
+   * Undo (which frees that room) cancelling into unbounded growth. All three of its
+   * guards are evaluated against the deleting statement's snapshot, and
+   * `summaries.work_id` is `on delete cascade`:
    *
-   * The honest counterpart to "an Undo takes back what the import added" is that it
-   * takes back the shared rows too -- but only the ones NOTHING else is now using. A
-   * work another reader also imported still has their summary behind it; a work in the
-   * catalogue is not `user_owned`; a work whose items are only tombstoned still has
-   * `import_items` pointing at it, so a re-import finds the same row. What is left is
-   * exactly the orphan: `user_owned`, no summary at all, no item -- invisible to
-   * everyone under 20260905101000 and collected by nothing.
+   *   * ANOTHER READER'S IMPORT, IN FLIGHT, IS DESTROYED. B's `commit_import` holds a
+   *     `for key share` lock on the shared work but its rows are invisible to A, so
+   *     A's delete passes the guards, waits on the lock, and does not re-check. The
+   *     cascade takes B's summary, B's pull, `knowledge_states` and `saved_items`.
+   *     Measured 12 silent losses in 14 ordinary runs -- B's call returns `added: 500`
+   *     with no error, B has 499 pulls, and the dedupe tombstone then refuses the
+   *     re-upload that is supposed to be the way back.
+   *   * OR THE IMPORT ABORTS. The other crossing order lands A's delete between B's
+   *     pre-pass and B's item loop, and the loop raises `no work for %` on a slug.
+   *     3 of 3.
+   *   * OR A BYLINE GOES. `work_contributors.contributor_id` cascades too, so A's
+   *     delete strips the author off B's just-committed book. 3 of 4.
    *
-   * The contributors go with them, and that closes a second thing: a byline lost.
-   * `attribute_work` reuses a contributor only when the caller can already see a work
-   * behind it, so a reader who imported an author, undid it, and imported them again
-   * got no byline the second time -- the guard could not tell their own abandoned row
-   * from a stranger's. There is no abandoned row now.
+   * And it bounded nothing. The guard read `import_items ii2 where ii2.import_id <>
+   * p_import_id` -- no user filter, no `undone_at` filter -- so any second batch that
+   * ever touched the work pinned it forever, including a fully undone one. Importing
+   * each title into two batches and undoing both left 500 works and 500 contributors
+   * per five cycles with the item quota fully refunded: the exact cancellation it was
+   * written to close.
+   *
+   * The bound belongs where the row is CREATED, which is a decision one transaction
+   * can make about itself. See `max_created_per_user` in `commit_import`.
    */
-  -- Read BEFORE the works go, because `work_contributors` cascades with them.
-  select coalesce(array_agg(distinct wc.contributor_id), '{}')
-    into v_orphan_contributors
-    from public.work_contributors wc
-   where wc.work_id in (
-     select ii.work_id from public.import_items ii
-      where ii.import_id = p_import_id and ii.user_id = uid and ii.work_id is not null
-   );
-
-  with orphaned as (
-    delete from public.works w
-     where w.rights_status = 'user_owned'
-       and w.id in (
-         select ii.work_id from public.import_items ii
-          where ii.import_id = p_import_id and ii.user_id = uid and ii.work_id is not null
-       )
-       and not exists (select 1 from public.summaries s2 where s2.work_id = w.id)
-       and not exists (
-         select 1 from public.import_items ii2
-          where ii2.work_id = w.id and ii2.import_id <> p_import_id
-       )
-    returning w.id
-  )
-  select coalesce(array_agg(id), '{}') into v_orphan_works from orphaned;
-
-  -- `work_contributors` cascaded with the works above, so a contributor with no link
-  -- left is one nothing can reach: `contributors_read_readable` needs a readable work
-  -- behind them, and the seed always attaches its own.
-  delete from public.contributors c
-   where c.id = any(v_orphan_contributors)
-     and not exists (
-       select 1 from public.work_contributors wc where wc.contributor_id = c.id
-     );
-
   update public.imports set undone_at = now() where id = p_import_id;
 
   -- `alsoRemoved` is the count of everything that went with the highlights, AFTER it

@@ -131,12 +131,21 @@ was. Two reasons, both of which cut in your favour. It is what lets an Undo be u
 upload the same file again and the highlights come back. And it is what stops an ordinary
 re-upload of a file you have already imported from duplicating everything in it.
 
-The book itself does not stay. If nobody else has imported it and you have nothing else
-kept from it, the record of the book goes with the highlights, and so does the author we
-attached to it — an earlier version kept both, and because an Undo also gives you back
-room under your import limit, that meant a library entry nothing pointed at for every
-import you undid, growing without a ceiling. Re-uploading the file puts the book back;
-the fingerprint above is what recognises it.
+The record of the book does stay, and we would rather say so. Your highlights go, your
+notes and grades go, the private page that held them goes — what is left is a catalogue
+entry saying a book with that title and author exists, with nothing of yours attached to
+it and nothing readable behind it, which means no other reader can see it at all. It stays
+because two readers who import the same book share that one entry, and deleting it the
+moment one of them changes their mind would take the other reader's copy with it. We tried;
+it did, in twelve of fourteen attempts. Losing somebody else's highlights is not a price
+worth paying for tidiness.
+
+It also stays when you close your account, which is the one place this is weaker than we
+would like: the highlights and everything you wrote about them are deleted, and the
+catalogue entry is not. There is a ceiling on how many of these one account can ever
+create, so this cannot grow without bound — but it is a title and an author name that
+outlive the account that typed them, and that belongs in this list rather than in a
+footnote.
 
 **The text comes back; the work you built on it does not.** This paragraph used to say the
 highlights came back "exactly as they were", and that was not true. A re-import creates the
@@ -290,13 +299,19 @@ the pipeline fetched into `job_steps.output` — sitting in the database with yo
 taken off it. That is not deletion. `delete_my_account` now removes those rows outright
 before the account goes.
 
-Three things survive, none of them attached to you:
+Four things survive, none of them attached to you:
 
 - **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
   so deleting an account cannot erase a moderation trail.
 - **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
   token count and a cost. It never held a user id, and it is how this project can state
   what generation costs. Nothing in it identifies you.
+- **The catalogue entry for a book you imported** — its title and its author, and nothing
+  else. Not your highlights, which go; not the page that held them, which goes; not any
+  link between it and you, which goes with your account. It stays because two readers who
+  import the same book share one entry, and deleting it when one of them leaves would take
+  the other reader's copy with it. There is a ceiling on how many of these one account can
+  ever create. This is the fourth, and it was three until we looked properly.
 - **Backups**, for up to 30 days, after which they roll off.
 
 **A guest session is deleted for you.** Unused for a day, it is removed outright from the
