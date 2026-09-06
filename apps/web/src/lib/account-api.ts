@@ -204,6 +204,23 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'session_seeds', column: 'user_id', key: 'id' },
   { table: 'user_knowledge_vectors', column: 'user_id', key: 'user_id' },
   { table: 'reports', column: 'reporter_id', key: 'id' },
+  /*
+   * AND THE THREE AN IMPORT CREATES. `docs/privacy.md` promises "every row stored
+   * against your account, as one JSON file" and names these as the reader's own, and
+   * the moment `20260905110000` lands they exist and this list did not carry them —
+   * a promise that goes false on somebody else's merge is still this file's to keep.
+   *
+   * The note below used to say they "arrive with the PR that lets a reader create
+   * one, so that this list and the tables it names land together". They did not: that
+   * PR shipped `imports`, `import_items` and `user_questions` and never came back
+   * here. Naming them from this side is what makes the two land together, and it
+   * costs nothing before the migration is applied — `buildAccountExport` catches a
+   * read per table and records it in `incomplete`, so a table that does not exist yet
+   * is reported rather than thrown.
+   */
+  { table: 'imports', column: 'user_id', key: 'id' },
+  { table: 'import_items', column: 'user_id', key: 'id' },
+  { table: 'user_questions', column: 'user_id', key: 'id' },
 ];
 
 /*
@@ -217,9 +234,10 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
  *   rate_limits         Operational counters keyed to the account rather than
  *                       anything the reader did. Nothing in them is theirs.
  *
- * `imports`, `import_items` and `user_questions` are the reader's and belong
- * here; they arrive with the PR that lets a reader create one, so that this list
- * and the tables it names land together.
+ * `imports`, `import_items` and `user_questions` ARE here, above. They were left out
+ * on the reasoning that they would arrive with the PR that creates them; that PR
+ * shipped without them, which is how "every row stored against your account" came to
+ * be false of a file whose whole job is making it true.
  */
 
 export interface AccountExport {
