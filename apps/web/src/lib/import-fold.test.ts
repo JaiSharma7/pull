@@ -28,19 +28,23 @@ const many = (n: number): ImportItem[] => Array.from({ length: n }, (_, i) => it
 
 /** A fake `commit_import` that records what it was called with. */
 function recorder(replies: Partial<ImportResult>[]) {
-  const calls: { size: number; importId: string | null }[] = [];
+  const calls: { size: number; importId: string | null; items: readonly ImportItem[] }[] = [];
   const call: CommitChunk = async (chunk, importId) => {
-    calls.push({ size: chunk.length, importId });
+    calls.push({ size: chunk.length, importId, items: [...chunk] });
     return replies[calls.length - 1] ?? {};
   };
   return { call, calls };
 }
 
 describe('foldChunks', () => {
-  it('splits at the RPC ceiling and sends every item once', async () => {
+  it('splits at the RPC ceiling, and sends every item exactly once', async () => {
     const { call, calls } = recorder([{ importId: 'i1' }, {}, {}]);
-    await foldChunks(many(1201), call);
+    const items = many(1201);
+    await foldChunks(items, call);
     expect(calls.map((c) => c.size)).toEqual([500, 500, 201]);
+    // The name used to promise this half and assert only the sizes above, which three
+    // chunks of the wrong items would also satisfy.
+    expect(calls.flatMap((c) => c.items)).toEqual(items);
   });
 
   it('threads the first importId into every later call', async () => {
@@ -304,12 +308,15 @@ describe('mergeAttempts', () => {
     expect(total.duplicates).toBe(20);
   });
 
-  it('clamps rather than going negative when the counts do not line up', () => {
-    // The two numbers come from different calls; an Undo in between can lower the
-    // retry's duplicate count. Nothing guarantees the subtraction stays positive.
-    const total = mergeAttempts(base({ added: 500 }), base({ added: 0, duplicates: 1 }));
-    expect(total.duplicates).toBe(0);
-  });
+  /*
+   * A test named `clamps rather than going negative when the counts do not line up` was
+   * here, over a third `0` argument to the `Math.max`. Neither could do anything:
+   * `prev.duplicates` is a count, so it is `>= 0` and is already the floor of the max,
+   * and this test's fixture left it at the default `0` -- so the assertion held whether
+   * the third argument was there or not. Mutation review killed the argument through the
+   * test that was supposed to be pinning it. Both are gone; the property that is real --
+   * that a partial retry keeps the earlier count -- is the test above.
+   */
 
   it('keeps a book the first attempt created and the retry did not touch', () => {
     const a = { workId: 'w1', title: 'Meditations', slug: 'meditations' };

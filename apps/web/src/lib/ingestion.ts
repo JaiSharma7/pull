@@ -281,14 +281,51 @@ const MAX_TEXT = 20000;
  * function, and the mutation that swaps them passes.
  */
 export function normaliseHighlight(text: string): string {
-  return (
-    text
-      // `replaceAll` with a string rather than a regex: `no-control-regex` rejects a
-      // control character in a pattern, and this needs no pattern.
-      .replaceAll('\u0000', '')
-      .replace(/\s+/g, ' ')
-      .trim()
-  );
+  return stripNul(text).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Remove the one character Postgres cannot carry through the jsonb cast.
+ *
+ * `replaceAll` with a string rather than a regex: `no-control-regex` rejects a control
+ * character in a pattern, and this needs no pattern.
+ *
+ * SHARED BY ALL FOUR FIELDS rather than living inside `normaliseHighlight`, which is
+ * where it was -- and which is why it only ever protected the text. `title`, `author`
+ * and `locator` do not want the `\s+` collapse, since they are neither hashed nor
+ * compared for duplicates, but they want this: the cast that raises `22P05` does not
+ * care which key the NUL was under, and a UTF-16 clippings file read without a BOM
+ * interleaves them through every field rather than only the text.
+ */
+function stripNul(value: string): string {
+  return value.replaceAll('\u0000', '');
+}
+
+/**
+ * Trim, drop what the cast would refuse, and truncate WITHOUT SPLITTING A CHARACTER.
+ *
+ * The three short fields, which the RPC truncates with `left(..., 200)` (`:819`,
+ * `:820`, `:822`). Doing it here keeps the reader's screen and the stored row saying
+ * the same thing; doing it with a bare `slice` introduced a second way to lose a chunk.
+ *
+ * `left` counts CHARACTERS and `String.prototype.slice` counts UTF-16 CODE UNITS, so a
+ * title whose 200th unit fell between the halves of an astral character -- an emoji, a
+ * rarer CJK ideograph -- was cut into a LONE HIGH SURROGATE. `JSON.stringify` emits that
+ * as a bare `\ud83d`, which is not encodable as UTF-8 and which Postgres's JSON parser
+ * refuses, so the whole 500-item chunk dies before validation -- the same failure and the
+ * same cost as the NUL above, reached by this module's own truncation rather than by
+ * anything that was in the file.
+ *
+ * Only a lone HIGH surrogate is reachable: the input is well-formed, so cutting it can
+ * orphan the leading half of a pair and never the trailing half. `charCodeAt` of an
+ * empty string is `NaN`, which fails the comparison, so the empty case needs no guard.
+ */
+function shapeField(value: string | undefined): string {
+  const clipped = stripNul(value ?? '')
+    .trim()
+    .slice(0, MAX_FIELD);
+  const last = clipped.charCodeAt(clipped.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? clipped.slice(0, -1) : clipped;
 }
 
 /**
@@ -305,6 +342,12 @@ export function normaliseHighlight(text: string): string {
  * this said, so a hash matches "what this client would predict". Nothing here predicts a
  * hash: `content_hash` is computed by the server from the values it receives, after its
  * own `left(..., 200)`, so client-side truncation cannot change it either way.
+ *
+ * All four fields go through a sanitiser, and that is the correction rather than the
+ * design. Only the text did, because the NUL strip was written inside
+ * `normaliseHighlight`, so a NUL in a title still cost the whole chunk -- the exact
+ * failure the strip was added to prevent, left reachable on three of the four keys it
+ * had to cover. See `shapeField`.
  */
 export function toImportItems(highlights: readonly ParsedHighlight[]): {
   items: ImportItem[];
@@ -314,7 +357,7 @@ export function toImportItems(highlights: readonly ParsedHighlight[]): {
   let skipped = 0;
 
   for (const h of highlights) {
-    const title = h.bookTitle?.trim().slice(0, MAX_FIELD) ?? '';
+    const title = shapeField(h.bookTitle);
     const text = normaliseHighlight(h.text ?? '');
 
     // The two the RPC raises on. A highlight with no title has nothing to file it
@@ -324,8 +367,8 @@ export function toImportItems(highlights: readonly ParsedHighlight[]): {
       continue;
     }
 
-    const author = h.bookAuthor?.trim().slice(0, MAX_FIELD);
-    const locator = h.location?.trim().slice(0, MAX_FIELD);
+    const author = shapeField(h.bookAuthor);
+    const locator = shapeField(h.location);
 
     items.push({
       title,

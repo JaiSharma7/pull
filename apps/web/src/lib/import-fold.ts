@@ -155,6 +155,12 @@ export class PartialImportError extends Error {
  *                the reader was already shown. So it is the LARGER of the two readings,
  *                which is the earlier count exactly when the retry did not get far
  *                enough to restate it.
+ *
+ *                TWO ARGUMENTS, NOT THREE. A third `0` was here, and a test was named
+ *                for it -- "clamps rather than going negative". It could not fail:
+ *                `prev.duplicates` is a count, so it is already `>= 0` and is already
+ *                the floor of the max. Mutation review caught the dead argument through
+ *                the test that was supposed to be pinning it.
  *   `works`      is a union by id -- a book the first attempt created is in the batch
  *                whether or not the retry touched it again.
  *   the ceiling  LATCHES. It was the newer answer first, on the reasoning that an Undo
@@ -174,7 +180,7 @@ export function mergeAttempts(prev: ImportResult | null, next: ImportResult): Im
   return {
     importId: next.importId ?? prev.importId,
     added: prev.added + next.added,
-    duplicates: Math.max(prev.duplicates, next.duplicates - prev.added, 0),
+    duplicates: Math.max(prev.duplicates, next.duplicates - prev.added),
     ceilingReached: prev.ceilingReached || next.ceilingReached,
     works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
   };

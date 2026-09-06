@@ -240,8 +240,11 @@ describe('toImportItems', () => {
   });
 
   it('truncates rather than drops an over-long title, author or locator', () => {
-    // The RPC applies `left(..., 200)` itself, so truncating here makes the content hash
-    // this client would predict match the one the server computes.
+    // The RPC applies `left(..., 200)` itself, so a long title is a real book rather than
+    // a bad item. Truncating here is so the reader's screen and the stored row agree
+    // about what was kept -- NOT, as this comment used to claim, so a hash matches "what
+    // this client would predict". Nothing here predicts a hash: the server computes
+    // `content_hash` from what it receives, after its own `left(..., 200)`.
     const { items, skipped } = toImportItems([
       h({ bookTitle: 'T'.repeat(300), bookAuthor: 'A'.repeat(300), location: 'L'.repeat(300) }),
     ]);
@@ -249,6 +252,49 @@ describe('toImportItems', () => {
     expect(items[0]?.title).toHaveLength(200);
     expect(items[0]?.author).toHaveLength(200);
     expect(items[0]?.locator).toHaveLength(200);
+  });
+
+  it('strips NUL from the title, author and locator, not only from the text', () => {
+    /*
+     * Postgres cannot hold `U+0000` in `text`, so `p_items` fails at the jsonb CAST with
+     * `22P05` before `commit_import` validates anything -- costing the whole 500-item
+     * chunk. The strip lived inside `normaliseHighlight`, which only the text goes
+     * through, so three of the four keys still carried it. `String.prototype.trim` does
+     * not remove NUL, so the old `.trim().slice()` path left it on the wire.
+     *
+     * A UTF-16 clippings file read without a BOM interleaves NULs through every field,
+     * which is why the title is at least as likely a carrier as the text.
+     */
+    const nul = String.fromCharCode(0);
+    const { items } = toImportItems([
+      h({
+        bookTitle: `Medi${nul}tations`,
+        bookAuthor: `Mar${nul}cus`,
+        location: `loc${nul} 1`,
+        text: `a hi${nul}ghlight`,
+      }),
+    ]);
+    expect(JSON.stringify(items)).not.toContain('\\u0000');
+    expect(items[0]?.title).toBe('Meditations');
+    expect(items[0]?.author).toBe('Marcus');
+  });
+
+  it('does not cut a surrogate pair in half when it truncates', () => {
+    /*
+     * `left` counts CHARACTERS; `slice` counts UTF-16 CODE UNITS. A title whose 200th
+     * unit fell between the halves of an astral character was cut into a lone high
+     * surrogate, which `JSON.stringify` emits as a bare `\ud83d` -- not encodable as
+     * UTF-8, refused by Postgres's JSON parser, and so the same whole-chunk loss as a
+     * NUL, introduced by this module's own truncation.
+     *
+     * `toHaveLength(200)` alone cannot see this: a split pair is still 200 units.
+     */
+    const title = 'x'.repeat(199) + String.fromCodePoint(0x1f600) + 'tail';
+    const { items } = toImportItems([h({ bookTitle: title })]);
+    const kept = items[0]?.title ?? '';
+    expect(kept).toHaveLength(199);
+    expect(/[\uD800-\uDBFF]/.test(kept)).toBe(false);
+    expect(JSON.stringify(items)).not.toContain('\\ud83d');
   });
 
   it('normalises the text it keeps', () => {

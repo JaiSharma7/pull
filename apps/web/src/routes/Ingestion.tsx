@@ -9,8 +9,18 @@ import {
   type UndoResult,
   undoImport,
 } from '../lib/import-api.js';
-import { isOfflineFailure } from '../lib/offline.js';
-import { sqlState } from '../lib/rpc-error.js';
+import {
+  batchIsGone,
+  canKeep,
+  failureLine,
+  footerLine,
+  forgetsOnParse,
+  type ImportAction,
+  type ImportFailure,
+  keepLabel,
+  showsKeep,
+  showsUndo,
+} from '../lib/import-screen.js';
 import { collateral } from '../lib/undo-summary.js';
 import {
   type IngestionSummary,
@@ -26,24 +36,6 @@ import {
  * by navigation the Delta sync this screen does not perform; removing the destination
  * left the callback and its button doing nothing at all, so both are gone.
  */
-/**
- * What to tell the reader about a failure.
- *
- * A request that never left the device is not a refusal, and `rpc-error.ts` exists to
- * tell them apart -- postgrest-js catches a `fetch` rejection and RESOLVES with an error
- * object carrying `code: ''`, so "TypeError: Failed to fetch" arrives as data and there
- * is no `TypeError` left downstream to recognise. Every other screen in the app branches
- * on `isOfflineFailure`; this one rendered `e.message` raw, which put a JavaScript stack
- * trace on screen in mono uppercase -- the exact defect `rpc-error.ts`'s own header
- * describes the feed having had.
- */
-function failureLine(e: unknown, fallback: string): string {
-  if (isOfflineFailure(e)) {
-    return 'You appear to be offline. Nothing was sent — try again when you are back.';
-  }
-  return e instanceof Error ? e.message : fallback;
-}
-
 export function Ingestion() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState<IngestionSummary | null>(null);
@@ -57,15 +49,21 @@ export function Ingestion() {
   /*
    * WHICH action is running, not merely that one is. A shared boolean made the Undo
    * button relabel itself "Undoing…" while a retry was resending 1,200 highlights --
-   * and on that path it is the only button on screen, because setting `error` to null
-   * unmounts the Keep button the moment the retry starts.
+   * and on that path it is the only button on screen, because clearing `failure` at the
+   * start of the retry unmounts the Keep button for as long as the retry runs.
    */
-  const [busy, setBusy] = useState<'keep' | 'undo' | null>(null);
+  const [busy, setBusy] = useState<ImportAction | null>(null);
   const keeping = busy !== null;
   const [result, setResult] = useState<ImportResult | null>(null);
   const [skipped, setSkipped] = useState(0);
   const [shaped, setShaped] = useState<ReturnType<typeof toImportItems> | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /*
+   * WHICH ACTION FAILED, not merely that one did. A single `error` string gated the Keep
+   * button's visibility and its label, so a failed UNDO re-armed Keep as "Keep the rest"
+   * -- on an import that had fully succeeded and that the reader was trying to delete.
+   * Pressing it resent the whole file into the batch under deletion. See `import-screen`.
+   */
+  const [failure, setFailure] = useState<ImportFailure | null>(null);
   const [undone, setUndone] = useState<UndoResult | null>(null);
   /*
    * WHICH INPUT A PENDING REQUEST BELONGS TO.
@@ -89,7 +87,6 @@ export function Ingestion() {
     generation.current += 1;
     setRawText(text);
     setSourceKind(kind);
-    setError(null);
 
     /*
      * THE SAME TEXT IS THE SAME FILE, and clearing the result for it was two defects.
@@ -103,11 +100,20 @@ export function Ingestion() {
      *
      * Unchanged text keeps the result and its Undo; changed text is a different import
      * and clears them, which is what stops a stale batch id being joined to a new file.
+     *
+     * THE FAILURE IS CLEARED WITH THEM RATHER THAN ALWAYS, which it was. Clearing it on
+     * every parse removed "Keep the rest" from a partial import the moment the reader
+     * re-picked the same file -- `result` survived, so the button's `!result` disjunct
+     * was false and its `failure` disjunct had just been emptied. That left the batch
+     * strandable: the only way to get a Keep button back was to change the text, which
+     * clears `result` and therefore the id, and a changed file is a changed hash, so the
+     * rest of the highlights opened a SECOND batch the panel's Undo did not cover.
      */
-    if (text !== rawText) {
+    if (forgetsOnParse(text, rawText)) {
       setResult(null);
       setUndone(null);
       setSkipped(0);
+      setFailure(null);
     }
 
     if (!text.trim()) {
@@ -125,7 +131,14 @@ export function Ingestion() {
     // will actually deliver. It said `summary.totalHighlights` and then reported fewer,
     // because `toImportItems` drops what the RPC would refuse -- so a file with one
     // 20,001-character highlight offered "Keep 1204 highlights" and kept 1,203.
-    setShaped(parsed.length > 0 ? toImportItems(parsed) : null);
+    const next = parsed.length > 0 ? toImportItems(parsed) : null;
+    setShaped(next);
+    // AND COUNTED HERE TOO, for the same reason the shaping moved. `skipped` was set
+    // inside `handleKeep`, so the sentence explaining what would be dropped only appeared
+    // after the reader had already committed to keeping -- and when EVERYTHING was
+    // dropped the button read "Keep 0 highlights", was enabled, and answered a press with
+    // an error. Now the count is known before the button is, so the panel can say so.
+    setSkipped(next?.skipped ?? 0);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -151,18 +164,34 @@ export function Ingestion() {
       ? `Kept ${result.added} ${result.added === 1 ? 'highlight' : 'highlights'}.`
       : '';
 
+  /*
+   * The three values every affordance below is decided from. Gathered once so the
+   * decisions are made in `import-screen.ts`, where they can be tested -- this route
+   * cannot be imported under vitest, and six mutants on the conditions that used to be
+   * written inline here all survived.
+   */
+  const panel = { result, undone: undone !== null, failure };
+
   const handleKeep = async () => {
     if (!summary || !shaped || keeping) return;
     const mine = generation.current;
     setBusy('keep');
-    setError(null);
+    setFailure(null);
+    // A new attempt supersedes the last Undo's message. Without this a successful keep
+    // rendered "Kept 500 highlights" and "Removed 500 highlights" in the same panel.
+    setUndone(null);
     try {
-      const { items, skipped: dropped } = shaped;
-      setSkipped(dropped);
+      const { items } = shaped;
+      // A backstop now rather than the first line of defence: `canKeep` disables the
+      // button when there is nothing to send, so this is unreachable from the screen. It
+      // stays because the alternative is sending an empty chunk, which opens no batch and
+      // would leave "Kept 0 highlights across 0 books" on screen with no button beside it.
       if (items.length === 0) {
-        setError(
-          'None of these could be kept — each needs a title, some text, and fewer than 20,000 characters.',
-        );
+        setFailure({
+          action: 'keep',
+          message:
+            'None of these could be kept — each needs a title, some text, and fewer than 20,000 characters.',
+        });
         return;
       }
       // Hashed from the raw text rather than the parsed items, because the hash is what
@@ -196,14 +225,17 @@ export function Ingestion() {
         setResult((prev) => mergeAttempts(prev, partial));
       }
       /*
-       * A BATCH THAT IS GONE IS NOT ONE TO KEEP RESENDING. If the Undo committed but its
-       * answer was lost, `result.importId` names a tombstoned batch, and
-       * `commit_import`'s named branch refuses it with 22023 -- "no open batch of yours
-       * with that id" -- on this press and on every press after it. Forgetting the id
-       * lets the next one open a fresh batch, which is what the reader is asking for.
+       * A BATCH THAT IS GONE IS NOT ONE TO KEEP RESENDING. If the batch was undone --
+       * in another tab, or here by an Undo whose answer was lost -- `result.importId`
+       * names a tombstone, `commit_import`'s named branch refuses it with 22023, and it
+       * refuses it identically on every press after this one. Forgetting the id lets the
+       * next press open a fresh batch, which is what the reader is asking for.
+       *
+       * `batchIsGone` rather than `sqlState(e)` directly, because the error here is
+       * wrapped: see its own comment for why the direct check could never match.
        */
-      if (sqlState(e) === '22023') setResult(null);
-      setError(failureLine(e, 'The import did not go through.'));
+      if (batchIsGone(e)) setResult(null);
+      setFailure({ action: 'keep', message: failureLine(e, 'The import did not go through.') });
     } finally {
       /*
        * UNCONDITIONALLY, and it was conditioned on the generation first.
@@ -226,18 +258,26 @@ export function Ingestion() {
     if (!result?.importId || keeping) return;
     // The same capture `handleKeep` makes, and for the same reason: an Undo in flight
     // when the reader picks another file would otherwise write the old batch's counts
-    // under the new one -- and because `undone` being set hides the Keep button, the
-    // new file could not be imported at all until they touched an input again.
+    // under the new one.
     const mine = generation.current;
     setBusy('undo');
-    setError(null);
+    setFailure(null);
     try {
       const answer = await undoImport(result.importId);
       if (generation.current !== mine) return;
       setUndone(answer);
+      /*
+       * AND THE RESULT GOES WITH IT. The batch is a tombstone now: its id cannot be added
+       * to and cannot be undone again to any effect, so holding it only misreports the
+       * screen. Keeping it is what made `undone` have to gate both buttons -- and that
+       * gate, once a re-parse of identical text stopped clearing `undone`, left the panel
+       * with no control at all, under copy telling the reader to upload the file again.
+       * Clearing it here means Keep comes back on its own and Undo goes on its own.
+       */
+      setResult(null);
     } catch (e) {
       if (generation.current !== mine) return;
-      setError(failureLine(e, 'The undo did not go through.'));
+      setFailure({ action: 'undo', message: failureLine(e, 'The undo did not go through.') });
     } finally {
       setBusy(null);
     }
@@ -374,7 +414,7 @@ export function Ingestion() {
               conditionally is the version that stays silent." All three panels here were
               created at the same moment as their text, so a reader using a screen reader
               was told nothing when an import finished, failed, or was undone. */}
-          {result && !undone && (
+          {result && (
             <div style={{ marginBottom: 'var(--space-3)' }}>
               <p style={{ fontWeight: 600 }}>
                 Kept {result.added} {result.added === 1 ? 'highlight' : 'highlights'} across{' '}
@@ -389,14 +429,19 @@ export function Ingestion() {
                   make room.
                 </p>
               )}
-              {skipped > 0 && (
-                <p className="meta">
-                  {skipped} could not be kept — each needs a title, some text, and fewer than 20,000
-                  characters.
-                </p>
-              )}
               <p className="meta">They are in your Library, and due for review tomorrow.</p>
             </div>
+          )}
+
+          {/* BEFORE THE BUTTON RATHER THAN AFTER THE IMPORT. This sat inside the panel
+              above, so the reader learned what would be dropped only once it had been --
+              and when everything was dropped there was no panel to say it in, just a
+              button reading "Keep 0 highlights" that answered a press with an error. */}
+          {skipped > 0 && (
+            <p className="meta" style={{ marginBottom: 'var(--space-3)' }}>
+              {skipped} of these cannot be kept — each needs a title, some text, and fewer than
+              20,000 characters.
+            </p>
           )}
 
           {undone && (
@@ -434,29 +479,33 @@ export function Ingestion() {
           <p
             role="alert"
             className="meta"
-            style={{ marginBottom: 'var(--space-3)', color: error ? 'var(--accent)' : undefined }}
+            style={{ marginBottom: 'var(--space-3)', color: failure ? 'var(--accent)' : undefined }}
           >
-            {error}
+            {failure?.message ?? ''}
           </p>
 
           <div className="pull-card__footer">
-            {/* Shown again after a failure, including a PARTIAL one -- otherwise a reader
-                whose fourth chunk timed out is left with 1,500 highlights kept, an error,
-                and no way to finish. Pressing it again is cheap and safe: `commit_import`
-                dedupes on `content_hash`, so what already landed is counted as a
-                duplicate rather than stored twice. */}
-            {(!result || error) && !undone && (
-              <button type="button" className="btn" onClick={handleKeep} disabled={keeping}>
-                {busy === 'keep'
-                  ? 'Keeping…'
-                  : error && result
-                    ? 'Keep the rest'
-                    : `Keep ${shaped?.items.length ?? 0} ${
-                        (shaped?.items.length ?? 0) === 1 ? 'highlight' : 'highlights'
-                      }`}
+            {/* Shown again after a KEEP fails, including a PARTIAL one -- otherwise a
+                reader whose fourth chunk timed out is left with 1,500 highlights kept, an
+                error, and no way to finish. Pressing it again is cheap and safe:
+                `commit_import` dedupes on `content_hash`, so what already landed is
+                counted as a duplicate rather than stored twice.
+
+                After a failed UNDO it stays hidden, which it did not: one `error` flag
+                served both verbs, so a failed Undo put "Keep the rest" back on screen for
+                an import that had succeeded, and pressing it resent the whole file into
+                the batch the reader was trying to delete. */}
+            {showsKeep(panel) && (
+              <button
+                type="button"
+                className="btn"
+                onClick={handleKeep}
+                disabled={!canKeep(busy, shaped?.items.length ?? 0)}
+              >
+                {keepLabel(panel, busy, shaped?.items.length ?? 0)}
               </button>
             )}
-            {result?.importId && !undone && (
+            {showsUndo(panel) && (
               <button
                 type="button"
                 className="btn btn--plain"
@@ -466,9 +515,7 @@ export function Ingestion() {
                 {busy === 'undo' ? 'Undoing…' : 'Undo'}
               </button>
             )}
-            <span className="meta">
-              {result ? 'Kept in your account' : 'Parsed in your browser · nothing uploaded yet'}
-            </span>
+            <span className="meta">{footerLine(panel)}</span>
           </div>
         </section>
       )}
