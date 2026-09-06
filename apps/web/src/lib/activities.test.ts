@@ -23,11 +23,19 @@ import {
  * different idea.
  */
 
+/*
+ * `Question.answer` is `string | null` -- a reader's own `recall` or `short_answer`
+ * question is self-graded and stores none -- but this fixture's answer is a known
+ * string, and several tests pass it as the reader's PICK, which is always a string.
+ * Named once here rather than laundered with `?? ''` at ten call sites.
+ */
+const RIGHT = 'The material of the work';
+
 const mcq = (over: Partial<Question> = {}): Question => ({
   id: 'q1',
   kind: 'mcq',
   prompt: 'What does an obstacle become, on the Stoic account?',
-  answer: 'The material of the work',
+  answer: RIGHT,
   distractors: ['A reason to stop', 'A sign of bad luck', 'Someone else’s fault'],
   cloze: null,
   explanation: 'The impediment to action advances action; what stands in the way becomes the way.',
@@ -91,9 +99,59 @@ describe('mcqOptions', () => {
     expect(options).toHaveLength(2);
   });
 
-  it('survives a distractors field that is not an array at all', () => {
+  it('refuses to render when a non-array leaves the answer alone', () => {
+    // Not a shape either table can store -- `quiz_questions_distractors_shape` and
+    // `user_questions_options_is_array` both require an array -- so this is the cast
+    // boundary being defended, not the database. What matters is the OUTCOME: one
+    // option is not a multiple choice, and returning it was the bug.
     const options = mcqOptions(mcq({ distractors: { nope: true } as unknown as string[] }), 'seed');
-    expect(options).toEqual(['The material of the work']);
+    expect(options).toEqual([]);
+  });
+
+  it('refuses to render an mcq whose distractors are all non-strings', () => {
+    // The storable one, and the reason this guard exists.
+    // `quiz_questions_mcq_has_distractors` counts array ELEMENTS, so `[1, 2]` satisfies
+    // it -- measured against the local stack, the insert is accepted. The filter above
+    // then drops both, leaving the answer by itself.
+    //
+    // What that would put on screen: a card headed multiple choice with one button on
+    // it, the right one. Tapping the only thing there returns
+    // `{ grade: 'easy', correct: true, confidentlyWrong: false }` -- a perfect recall
+    // recorded for a question that could not be got wrong, which is the exact failure
+    // the `confidently wrong` signal exists to catch.
+    const options = mcqOptions(mcq({ distractors: [1, 2] as unknown as string[] }), 'seed');
+    expect(options).toEqual([]);
+  });
+
+  it('refuses to render an mcq a reader stored with no options at all', () => {
+    // `user_questions.options` defaults to `'[]'` and the migration declines the
+    // matching `mcq needs two options` rule on that table on purpose, because
+    // `remember_pull` cannot write the column. So the client is the only place this can
+    // be caught, and until now it was not caught anywhere.
+    expect(mcqOptions(mcq({ distractors: [] }), 'seed')).toEqual([]);
+  });
+
+  it('still renders when exactly two options survive, which is the floor', () => {
+    // The boundary, so the guard cannot quietly become `< 3` and empty every two-option
+    // question on the corpus.
+    const options = mcqOptions(
+      mcq({ distractors: ['A reason to stop', 7 as unknown as string] }),
+      'seed',
+    );
+    expect(options).toHaveLength(2);
+    expect(options).toContain('The material of the work');
+    expect(options).toContain('A reason to stop');
+  });
+
+  it('grades a null answer as wrong rather than throwing', () => {
+    // `get_due_reviews` returns `answer: null` for a reader's own `recall` or
+    // `short_answer` question -- `user_questions_graded_kinds_need_an_answer` exempts
+    // both, because they are self-graded and have nothing to store. Measured against
+    // the local stack. `Question.answer` said `string`, so every entry point took
+    // `.trim()` on null.
+    expect(mcqOptions({ answer: null, distractors: ['a', 'b'] }, 'seed')).toEqual([]);
+    expect(gradeMcq('anything', { answer: null }, 'sure', 100).correct).toBe(false);
+    expect(orderingSteps({ answer: null })).toEqual([]);
   });
 
   it('always includes the answer', () => {
@@ -122,7 +180,7 @@ describe('mcqOptions', () => {
 
 describe('gradeMcq', () => {
   const q = mcq();
-  const right = q.answer;
+  const right = RIGHT;
   const wrong = 'A reason to stop';
 
   it('right, sure and fast is easy', () => {
@@ -180,7 +238,7 @@ describe('gradeMcq', () => {
 
 describe('selfReportedHard', () => {
   it('lets the reader lower a right answer to hard', () => {
-    const result = gradeMcq(mcq().answer, mcq(), 'sure', 1_000);
+    const result = gradeMcq(RIGHT, mcq(), 'sure', 1_000);
     expect(selfReportedHard(result)).toEqual({ ...result, grade: 'hard' });
   });
 
@@ -628,8 +686,8 @@ describe('whyWrong', () => {
   });
 
   it('has nothing to say about the right answer', () => {
-    expect(whyWrong(q, q.answer)).toBeNull();
-    expect(whyWrong(q, ` ${q.answer} `)).toBeNull();
+    expect(whyWrong(q, RIGHT)).toBeNull();
+    expect(whyWrong(q, ` ${RIGHT} `)).toBeNull();
   });
 
   it('is null when there is neither a rationale nor an explanation', () => {

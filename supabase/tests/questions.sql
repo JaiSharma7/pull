@@ -47,19 +47,46 @@
 --     not a prompt either
 --   * `remember_pull` can still write every kind `user_questions_kind_known` permits --
 --     a constraint the only writer cannot satisfy is an unusable RPC, not a guard
---   * no lookup of a card under test can pass by comparing against NULL -- an
---     assertion against NULL takes no branch and asserts nothing. Every questions
---     array is fetched through `pg_temp.questions_for`, which raises when the card is
---     not in the page; section 3's one whole-card lookup raises on NULL itself
+--   * no assertion can pass by comparing against NULL -- `NULL <> x` is NULL, the
+--     branch is not taken, and the section passes having asserted nothing. Three
+--     things hold that line, because the hazard has three shapes: an ARRAY that is
+--     missing is fetched through `pg_temp.questions_for`, which raises; every
+--     `select ... into card` is followed by its own `is null` raise; and a FIELD that
+--     is null is compared with
+--     `is distinct from` rather than `<>`, so a payload key wired to null fails here
+--     instead of passing quietly. The last of those was absent for three rounds: six
+--     separate mutations that nulled a key in `jsonb_build_object` all passed
 --
--- WHAT THIS FILE CANNOT PROVE, said plainly because a mutation run measured it. The
--- `id` at the end of the questions ordering makes it TOTAL, and removing it does not
--- fail this file: within one session Postgres picks one plan and returns tied rows in
--- a consistent order, so an unspecified order and a specified one look identical from
--- here. Section 4 is therefore evidence, not proof -- the same kind of caveat
--- `imports.sql` makes about lock ordering. What can be asserted is that the tie is
--- genuine rather than hypothetical, which is why the two canonical questions are
--- written by ONE statement, and section 4 checks that first.
+-- WHAT THIS FILE CANNOT PROVE, said plainly because a mutation run measured each one.
+-- FIVE properties, not one: an earlier revision of this block named only the first and
+-- left the rest recorded six hundred lines further down, next to the sections that
+-- cannot fail on them -- which is the wrong place, because this block is what someone
+-- reads before deciding how much to trust the file.
+--
+--   1. THE TOTAL ORDER. The `id` at the end of the questions ordering makes it total,
+--      and removing it does not fail this file: within one session Postgres picks one
+--      plan and returns tied rows consistently, so an unspecified order and a specified
+--      one look identical from here. Section 4 is therefore evidence, not proof -- the
+--      same caveat `imports.sql` makes about lock ordering. What CAN be asserted is
+--      that the tie is genuine rather than hypothetical, which is why the two canonical
+--      questions are written by ONE statement and section 4 checks that first.
+--   2. THE READER'S PER-BRANCH `limit 3`. Deleting it leaves the answer right and the
+--      work unbounded, because the union-level limit still trims to three. Section 6d,
+--      which says so and gives the timings that are the only honest evidence.
+--   3. THE CANONICAL BRANCH'S `limit 3`, for the same reason and with the same
+--      union-level limit covering it. Nothing measures that one at all.
+--   4. `uq.user_id = uid` IN THE LATERAL. Deleting it changes nothing a reader sees,
+--      because `get_due_reviews` is `security invoker` and `user_questions_read_own`
+--      has already refused B every one of A's rows. Section 7. It matters because a
+--      future `security definer` rewrite would make the dead predicate the only thing
+--      standing between two readers.
+--   5. `user_questions_due_idx`. Dropping it changes no answer -- only how much work
+--      the query does -- so prose in the migration is its only guard. Asserting a
+--      duration here would be a flake waiting for a slow runner.
+--
+-- 2, 3 and 5 are all the same shape: a performance property, invisible to an assertion
+-- about the answer. That is why the migration carries the measurements and this file
+-- carries the answer.
 --
 -- Everything that can run as a real reader under RLS does. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -215,6 +242,13 @@ begin
      'The obstacle is the ____.', 'That is the phrase the passage turns on.',
      '[]'::jsonb);
 
+  -- The seeded pull carries neither, and the card asserts both below. Without this the
+  -- `example` assertion would compare null against null and take no branch.
+  update public.pulls
+     set example = 'For instance: the fixture set this.',
+         explanation = 'Because the fixture set that too.'
+   where id = pull_1;
+
   select q.id into mcq_id   from public.quiz_questions q where q.pull_id = pull_1 and q.kind = 'mcq';
   select q.id into cloze_id from public.quiz_questions q where q.pull_id = pull_1 and q.kind = 'cloze';
 
@@ -346,6 +380,23 @@ begin
   exception when check_violation then null;
   end;
 
+  -- AND THE LOWER HALF OF BOTH, which is the half a model actually reaches.
+  -- `check (length(...) between 1 and 2000)` is two bounds and only the ceiling was
+  -- exercised, so `>= 1` could be deleted with this file still passing.
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind)
+    values (pull_2, '', 'a', 'recall');
+    raise exception 'an empty prompt was accepted';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind)
+    values (pull_2, 'p', '', 'recall');
+    raise exception 'an empty answer was accepted';
+  exception when check_violation then null;
+  end;
+
   begin
     insert into public.quiz_questions (pull_id, prompt, answer, kind, explanation)
     values (pull_2, 'p', 'a', 'recall', repeat('x', 2001));
@@ -368,8 +419,14 @@ begin
   ---------------------------------------------------------------------------
   perform pg_temp.become(reader_a);
 
-  insert into public.knowledge_states (user_id, pull_id, acquired_via, next_due_at)
-  values (reader_a, pull_1, 'saved', now() - interval '1 hour');
+  -- EVERY ONE OF THESE IS A DIFFERENT NUMBER, deliberately. `difficulty` sits two lines
+  -- from `stability` in the function and `lapses` two from `reps`, and both pairs are
+  -- the same type -- so on a fixture where they share the defaults, an edit that reads
+  -- the neighbour is invisible. Measured: with `lapses` and `reps` both 0, swapping them
+  -- passed the whole file.
+  insert into public.knowledge_states
+    (user_id, pull_id, acquired_via, next_due_at, difficulty, stability, lapses, reps)
+  values (reader_a, pull_1, 'saved', now() - interval '1 hour', 0.77, 3.5, 4, 9);
 
   own_1 := (public.remember_pull(pull_1, 'What did A ask?', 'A''s answer', 'recall',
                                  extensions.gen_random_uuid()) ->> 'questionId')::uuid;
@@ -400,10 +457,10 @@ begin
     raise exception 'expected 3 questions after the cap, got %', jsonb_array_length(qs);
   end if;
 
-  if qs -> 0 ->> 'source' <> 'user' then
+  if qs -> 0 ->> 'source' is distinct from 'user' then
     raise exception 'the reader''s own question is not first (got %)', qs -> 0 ->> 'source';
   end if;
-  if qs -> 0 ->> 'id' <> own_1::text then
+  if qs -> 0 ->> 'id' is distinct from own_1::text then
     raise exception 'the first question is not the one A wrote';
   end if;
 
@@ -413,12 +470,32 @@ begin
     raise exception 'expected 2 canonical questions after the cap, got %', n;
   end if;
 
+  -- THE KEYS THEMSELVES CARRY WHAT WAS WRITTEN, on both branches. `kind` is the
+  -- subject of this migration and the field 3d will dispatch the grader on; `answer`
+  -- is what `gradeMcq` compares against and what `mcqOptions` puts on screen; `cloze`
+  -- is the whole payload of a cloze. All three were in the payload and none was ever
+  -- read, so `'kind', uq.kind` could be wired to null and this file would not notice.
+  -- `prompt` needs its own positive assertion and cannot borrow the singular-fields
+  -- check below: that compares `card ->> 'question'` against `qs -> 0 ->> 'prompt'`, and
+  -- both are read off the same expression -- so nulling the key leaves them equal and
+  -- the comparison proves only that the function agrees with itself. This is the field
+  -- the Review card renders.
+  if qs -> 0 ->> 'prompt' is distinct from 'What did A ask?' then
+    raise exception 'the reader''s own question lost its prompt (got %)', qs -> 0 ->> 'prompt';
+  end if;
+  if qs -> 0 ->> 'kind' is distinct from 'recall' then
+    raise exception 'the reader''s own question lost its kind (got %)', qs -> 0 ->> 'kind';
+  end if;
+  if qs -> 0 ->> 'answer' is distinct from 'A''s answer' then
+    raise exception 'the reader''s own question lost its answer (got %)', qs -> 0 ->> 'answer';
+  end if;
+
   -- The three singular fields are READ OFF questions[0]; they cannot disagree with
   -- it. 20260905110000 had them computed separately and a review mutant made them
   -- name a different question than the one returned.
-  if card ->> 'question' <> (qs -> 0 ->> 'prompt')
-     or card ->> 'questionId' <> (qs -> 0 ->> 'id')
-     or card ->> 'questionSource' <> (qs -> 0 ->> 'source') then
+  if card ->> 'question' is distinct from (qs -> 0 ->> 'prompt')
+     or card ->> 'questionId' is distinct from (qs -> 0 ->> 'id')
+     or card ->> 'questionSource' is distinct from (qs -> 0 ->> 'source') then
     raise exception
       'the singular question fields disagree with questions[0]: % / % / % vs % / % / %',
       card ->> 'question', card ->> 'questionId', card ->> 'questionSource',
@@ -432,12 +509,43 @@ begin
       (select string_agg(k, ',') from jsonb_object_keys(card) k);
   end if;
 
+  -- AND CARRY WHAT THEY SHOULD, which `?` cannot tell you: `jsonb_build_object` always
+  -- emits the key, so the check above passes with every one of them wired to null or
+  -- to the wrong join. `contentVersion` is the summary's `version` and could plausibly
+  -- be read off the wrong row; `lapses` and `difficulty` are the scheduler's. All four
+  -- are deterministic in this fixture. `example` needed one to be set -- the seeded
+  -- pull has none, so the field the comment above calls prose Review could not reach
+  -- had no positive case anywhere in the file.
+  if card ->> 'contentVersion' is distinct from '1' then
+    raise exception 'contentVersion is not the summary version (got %)', card ->> 'contentVersion';
+  end if;
+  if card ->> 'lapses' is distinct from '4' then
+    raise exception 'lapses is not the scheduler''s lapses (got %, and reps is 9)',
+      card ->> 'lapses';
+  end if;
+  if (card ->> 'difficulty')::numeric is distinct from 0.77 then
+    raise exception 'difficulty is not the scheduler''s difficulty (got %, and stability is 3.50)',
+      card ->> 'difficulty';
+  end if;
+  if card ->> 'example' is distinct from 'For instance: the fixture set this.' then
+    raise exception 'the card lost the pull''s example (got %)', card ->> 'example';
+  end if;
+  if card ->> 'explanation' is null then
+    raise exception 'the card lost the pull''s explanation';
+  end if;
+
   -- Every canonical question carries the new columns, and the MCQ carries its
   -- rationale rather than losing it on the way out.
   select e into card
     from jsonb_array_elements(qs) e where e ->> 'id' = mcq_id::text;
   if card is null then
     raise exception 'the mcq did not survive the cap';
+  end if;
+  if card ->> 'kind' is distinct from 'mcq' then
+    raise exception 'the canonical mcq lost its kind (got %)', card ->> 'kind';
+  end if;
+  if card ->> 'answer' is distinct from 'The one that follows' then
+    raise exception 'the canonical mcq lost its answer (got %)', card ->> 'answer';
   end if;
   if jsonb_array_length(card -> 'distractors') <> 3 then
     raise exception 'the mcq lost its distractors';
@@ -447,6 +555,20 @@ begin
   end if;
   if card ->> 'explanation' is null then
     raise exception 'the mcq lost its explanation';
+  end if;
+
+  -- And the cloze, which is the other column this migration adds to both tables and
+  -- was written in section 1 and then never looked at again.
+  select e into card
+    from jsonb_array_elements(qs) e where e ->> 'id' = cloze_id::text;
+  if card is null then
+    raise exception 'the cloze did not survive the cap';
+  end if;
+  if card ->> 'kind' is distinct from 'cloze' then
+    raise exception 'the canonical cloze lost its kind (got %)', card ->> 'kind';
+  end if;
+  if card ->> 'cloze' is distinct from 'The obstacle is the ____.' then
+    raise exception 'the canonical cloze lost its blank (got %)', card ->> 'cloze';
   end if;
 
   ---------------------------------------------------------------------------
@@ -506,7 +628,7 @@ begin
 
   qs := pg_temp.questions_for(pull_1, 'section 5 (a retired question falls out)');
 
-  if qs -> 0 ->> 'id' <> own_2::text then
+  if qs -> 0 ->> 'id' is distinct from own_2::text then
     raise exception 'the newer of A''s own questions is not asked first';
   end if;
 
@@ -514,7 +636,7 @@ begin
 
   qs := pg_temp.questions_for(pull_1, 'section 5 (the newer question is asked first)');
 
-  if qs -> 0 ->> 'id' <> own_1::text then
+  if qs -> 0 ->> 'id' is distinct from own_1::text then
     raise exception 'a retired question did not fall out (got %)', qs -> 0 ->> 'id';
   end if;
 
@@ -574,6 +696,25 @@ begin
     raise exception 'a null p_limit did not fall back to the default of 20';
   end if;
 
+  -- A CARD'S QUESTIONS ARE ITS OWN, which nothing asserted until now.
+  --
+  -- Neither `uq.pull_id = due.pull_id` nor `qq.pull_id = due.pull_id` had any coverage:
+  -- the fixture opens only `pull_1`'s card, and every one of A's own questions is on
+  -- `pull_1`, so replacing either predicate with `true` left this file passing while
+  -- every due card carried the same three questions -- a reader asked about an idea
+  -- they are not being shown. The 120 bulk pulls have no canonical and no reader
+  -- questions, so an empty array on each of them is the property, and it is checked
+  -- across the whole page rather than on one sampled card.
+  select count(*) into n
+    from jsonb_array_elements(public.get_due_reviews(100)) e
+   where e ->> 'pullId' is distinct from pull_1::text
+     and jsonb_array_length(e -> 'questions') > 0;
+  if n <> 0 then
+    raise exception
+      '% cards other than the one under test came back carrying questions, and none of '
+      'those pulls has any. The questions lateral is not filtering by pull.', n;
+  end if;
+
   ---------------------------------------------------------------------------
   -- 6b. A READER'S OWN CHOICES REACH THE ARRAY.
   --
@@ -591,7 +732,7 @@ begin
 
   qs := pg_temp.questions_for(pull_1, 'section 6b (a reader''s own options reach the array)');
 
-  if qs -> 0 ->> 'source' <> 'user' then
+  if qs -> 0 ->> 'source' is distinct from 'user' then
     raise exception 'the reader''s own question is no longer first';
   end if;
   if jsonb_array_length(qs -> 0 -> 'distractors') <> 2 then
@@ -775,10 +916,25 @@ begin
 
   -- And the four kinds a reader may write are still four: `ordering` and `scenario`
   -- are generated forms the "Remember this" box cannot express.
+  --
+  -- WITH AN ANSWER, and that word is the whole assertion. Without one the row is
+  -- refused by `user_questions_graded_kinds_need_an_answer` first -- `ordering` is not
+  -- in its `('recall', 'short_answer')` exemption -- so the handler caught a violation
+  -- of a DIFFERENT constraint and `user_questions_kind_known` could be dropped
+  -- outright with this file still passing. Measured: refused by
+  -- `user_questions_graded_kinds_need_an_answer` without, by `user_questions_kind_known`
+  -- with. That is the round-1 defect exactly, at a site round 1 did not reach.
   begin
-    insert into public.user_questions (user_id, pull_id, kind, prompt)
-    values (reader_b, pull_1, 'ordering', 'p');
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
+    values (reader_b, pull_1, 'ordering', 'p', 'an answer');
     raise exception 'a reader wrote an ordering question';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
+    values (reader_b, pull_1, 'scenario', 'p', 'an answer');
+    raise exception 'a reader wrote a scenario question';
   exception when check_violation then null;
   end;
 

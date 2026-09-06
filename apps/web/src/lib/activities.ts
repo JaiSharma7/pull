@@ -63,6 +63,28 @@ export const QUESTION_KINDS = [
 ] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
+/**
+ * The kinds a READER may write, which is four of the six.
+ *
+ * `user_questions_kind_known` (`20260905110000_your_highlights_are_yours_to_keep.sql:167`)
+ * permits `recall`, `cloze`, `mcq` and `short_answer`. `ordering` and `scenario` are
+ * generated forms that a prompt and an answer cannot express, so the reader's table has
+ * never accepted them.
+ *
+ * It exists because the difference was documented and not expressible: with only
+ * `QuestionKind` to hand, the 2d/2e "Remember this" writer would typecheck
+ * `remember_pull({ kind: 'ordering' })` and find out at runtime, as a 23514 that
+ * PostgREST returns as a 400. `satisfies` keeps it a subset, so a seventh kind added to
+ * `QUESTION_KINDS` cannot silently widen this one.
+ */
+export const USER_QUESTION_KINDS = [
+  'recall',
+  'cloze',
+  'mcq',
+  'short_answer',
+] as const satisfies readonly QuestionKind[];
+export type UserQuestionKind = (typeof USER_QUESTION_KINDS)[number];
+
 /** Why a particular wrong answer is wrong — shown after the reader picks it. */
 export interface DistractorRationale {
   distractor: string;
@@ -92,10 +114,25 @@ export interface Question {
    * The right answer. For `mcq` it is one option among `distractors`; for `cloze`
    * it is what fills the blank; for `ordering` it is the steps in their correct
    * order, one per line (see `orderingSteps`).
+   *
+   * NULLABLE, because the payload really carries nulls. `quiz_questions.answer` is
+   * `not null`, but a reader's own question is not: `user_questions_graded_kinds_need_an_answer`
+   * deliberately exempts `recall` and `short_answer`, which are self-graded and have
+   * nothing to store, and `get_due_reviews` passes `uq.answer` straight through. This
+   * said `string` while the RPC returned `{"kind":"recall","answer":null}` -- measured
+   * against the local stack -- so every entry point below took `.trim()` on null and
+   * threw. They are narrowed rather than the type being widened alone: each already had
+   * an "an empty answer is malformed" guard one line down, and `?? ''` feeds it.
    */
-  answer: string;
+  answer: string | null;
   /** Wrong options, for `mcq`. Empty for every other kind. */
   distractors: string[];
+  /**
+   * Which table it came from. `get_due_reviews` sets it, and the card's `questionSource`
+   * is this field of `questions[0]`. Optional because the graders never read it and the
+   * fixtures in this file's tests do not carry one.
+   */
+  source?: 'user' | 'canonical';
   /** The sentence with a blank in it, for `cloze`. */
   cloze?: string | null;
   /** Why the answer is the answer — shown after grading, whatever was picked. */
@@ -189,7 +226,7 @@ export function seededShuffle<T>(items: readonly T[], seed: string | number): T[
  * two right answers or two identical wrong ones.
  */
 export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: string | number) {
-  const answer = q.answer.trim();
+  const answer = (q.answer ?? '').trim();
   // A blank answer is a malformed row, and it used to be pushed anyway — so the
   // reader was shown an empty option, and picking it graded `forgot` with
   // `confidentlyWrong: true` while `whyWrong` returned null for the same reason.
@@ -199,14 +236,17 @@ export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: st
   if (!answer) return [];
   const seen = new Set<string>([answer]);
   const options = [answer];
-  // NARROWED LIKE `whyWrong` NARROWS ITS OWN, and for the same reason one paragraph
-  // further down: `distractors` is `string[]` in TypeScript and jsonb in Postgres, and
+  // NARROWED LIKE `whyWrong` NARROWS ITS OWN `rationale`, at the bottom of this file,
+  // and for the reason the next paragraph gives: `distractors` is `string[]` in
+  // TypeScript and jsonb in Postgres, and
   // it arrives through `supabase.rpc('get_due_reviews')` under an unchecked cast. The
   // constraints on both sides check the CONTAINER -- an array, at most eight, under a
   // size cap -- and say nothing about the members. `user_questions.options` is the one
   // a reader writes directly through PostgREST, so `[1, null]` is a storable 201, and
   // `get_due_reviews` surfaces it here as `distractors`. Calling `.trim()` on that
-  // threw inside the render, on a screen a reader cannot get past.
+  // throws, and will do it inside the render once 3d is the thing calling this --
+  // stated as what it would do rather than what it did, because nothing imports this
+  // module yet except its own test, so no reader has seen it.
   //
   // Filtered rather than coerced: a number where an option should be is a malformed
   // question, and `String(1)` would render "1" as a choice.
@@ -217,6 +257,28 @@ export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: st
     seen.add(d);
     options.push(d);
   }
+  /*
+   * FEWER THAN TWO OPTIONS IS NOT A MULTIPLE CHOICE, and returning one is worse than
+   * returning none.
+   *
+   * `quiz_questions_mcq_has_distractors` counts array ELEMENTS -- so `distractors:
+   * [1, 2]` satisfies it, the filter above drops both as non-strings, and one option
+   * is left. `user_questions.options` has no such rule at all, deliberately: the
+   * migration declines it because `remember_pull` cannot write the column, so a reader
+   * can store `kind = 'mcq'` with `options = '[]'`. Both are storable; both were
+   * measured.
+   *
+   * What the reader would then get is a card headed as multiple choice with a single
+   * button on it -- the right answer -- and tapping the only thing on screen grades
+   * `easy` with `confidentlyWrong: false`. The memory model records a perfect recall
+   * for a question that could not be got wrong, which is the exact failure this whole
+   * schema exists to make representable.
+   *
+   * Empty is the honest answer, and the caller already has to handle it: `if (!answer)
+   * return []` twenty lines up returns the same thing for the same reason, and 3d
+   * degrades a question with no options to free recall.
+   */
+  if (options.length < 2) return [];
   return seededShuffle(options, seed);
 }
 
@@ -284,8 +346,8 @@ function gradeFrom(
  */
 export function selfReportedHard<T extends GradeResult>(result: T): T {
   if (!result.correct) return result;
-  // Generic, so the caller keeps whatever the grader added — `similarity` and
-  // `similarity` from a cloze, `positionsWrong` and `inSequence` from an ordering.
+  // Generic, so the caller keeps whatever the grader added — `similarity` from a
+  // cloze, `positionsWrong` and `inSequence` from an ordering.
   // Typed as `GradeResult` it erased fields the runtime was still carrying, and
   // a screen asking for them after this call would not compile.
   return { ...result, grade: 'hard' };
@@ -307,8 +369,9 @@ export function gradeMcq(
 ): GradeResult {
   // An empty answer matched by an empty pick is not a right answer, it is two
   // absences agreeing. A question with no answer is malformed and nothing the
-  // reader did should be graded `easy` on the strength of it.
-  const answer = q.answer.trim();
+  // reader did should be graded `easy` on the strength of it. Null included: a
+  // self-graded kind stores none, and `get_due_reviews` returns it as it is.
+  const answer = (q.answer ?? '').trim();
   const correct = answer.length > 0 && picked.trim() === answer;
   return gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.mcq);
 }
@@ -867,7 +930,7 @@ export function gradeCloze(
  * phantom step.
  */
 export function orderingSteps(q: Pick<Question, 'answer'>): string[] {
-  return q.answer
+  return (q.answer ?? '')
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
@@ -950,16 +1013,17 @@ export function whyWrong(
   picked: string,
 ): WhyWrong | null {
   const chosen = picked.trim();
-  // Both empty is not agreement. See `mcqOptions`.
-  const expected = q.answer.trim();
+  // Both empty is not agreement, and a null answer is the same absence. See `mcqOptions`.
+  const expected = (q.answer ?? '').trim();
   if (!expected || chosen === expected) return null;
 
   // `rationale` is jsonb, and `quiz_questions_rationale_shape` checks that it is an
   // array of at most eight entries and nothing about what is IN it -- so the
   // elements are as unvalidated as the array was. Guarding only the array left
-  // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing inside the
-  // feedback path after a reader answered, taking the render with them. Both
-  // halves are narrowed here so nothing below can.
+  // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing in the feedback
+  // path after a reader answered -- which will be inside the render once 3d calls
+  // this, and is today a throw with no caller, since nothing imports this module but
+  // its own test. Both halves are narrowed here so nothing below can.
   const rationale = (Array.isArray(q.rationale) ? q.rationale : []).filter(
     (r): r is DistractorRationale =>
       typeof (r as DistractorRationale | null)?.distractor === 'string' &&

@@ -39,78 +39,28 @@
 -- Law 2 is untouched: nothing here calls a model. Law 5: no new table, and the two tables
 -- altered keep the policies they have.
 
--- --------------------------------------------------------------- quiz_questions
---
--- Canonical questions. Written only by the pipeline (`insertQuizQuestions`), and readable
--- by anyone who can read the pull -- `quiz_questions_read` from 20260829124730 asks
--- exactly that. There is no insert, update or delete policy, so none of the bounds below
--- are defending against a reader; they are defending against a MODEL, which is the other
--- source of unbounded text in this schema and the one that costs money by the token.
-alter table public.quiz_questions
-  add column explanation text,
-  add column cloze       text,
-  add column rationale   jsonb not null default '[]'::jsonb;
-
-comment on column public.quiz_questions.explanation is
-  'Why the answer is the answer. Shown after grading, whatever the reader picked.';
-comment on column public.quiz_questions.cloze is
-  'The sentence with a blank in it. Null for every kind but cloze.';
-comment on column public.quiz_questions.rationale is
-  'Array of {distractor, why}: why each wrong option is wrong. Gemini has no map type, so it is an array rather than an object.';
-
--- ------------------------------------------------------------------------ bounds
---
--- Every one of these is a number this schema already uses somewhere: 2,000 for a prompt or
--- an answer (`user_questions_prompt_length`), 20,000 for a body of prose (`notes.body`,
--- `highlights.text`, `recall_events.answer`), and a small integer for how many of a thing
--- a screen will render.
---
--- `distractors` HAS NEVER HAD ONE, and it is the older half of this. It has been `jsonb
--- not null default '[]'` with no shape check and no size check since 20260829124507 --
--- so a `cards` step that came back with a malformed or enormous array stored it, and the
--- failure surfaced later, in a renderer, on a row somebody had already paid to generate.
--- Checking it here is not defensive tidiness: `gradeMcq` in `activities.ts` indexes into
--- this array, and `mcqOptions` shuffles it, so a non-array is a client crash on a screen
--- the reader cannot get past.
---
--- The MCQ rule is the one with real content. An MCQ with fewer than two wrong options is
--- not a multiple-choice question -- with one distractor it is a coin flip, and with none
--- the answer is the only thing on screen. Two is the floor at which picking wrong is
--- possible, which is the whole point of the kind. It is expressed as a table check rather
--- than left to the generator because the generator is a model.
-alter table public.quiz_questions
-  add constraint quiz_questions_kind_known
-    check (kind in ('recall', 'mcq', 'cloze', 'short_answer', 'ordering', 'scenario')),
-  add constraint quiz_questions_prompt_length
-    check (length(prompt) between 1 and 2000),
-  add constraint quiz_questions_answer_length
-    check (length(answer) between 1 and 2000),
-  add constraint quiz_questions_explanation_length
-    check (explanation is null or length(explanation) <= 2000),
-  add constraint quiz_questions_cloze_length
-    check (cloze is null or length(cloze) <= 1000),
-  add constraint quiz_questions_distractors_shape
-    check (
-      jsonb_typeof(distractors) = 'array'
-      and jsonb_array_length(distractors) <= 8
-      and length(distractors::text) <= 20000
-    ),
-  add constraint quiz_questions_rationale_shape
-    check (
-      jsonb_typeof(rationale) = 'array'
-      and jsonb_array_length(rationale) <= 8
-      and length(rationale::text) <= 20000
-    ),
-  -- Two distractors is the floor at which an MCQ can be got wrong. Below it the kind is a
-  -- lie about what the screen is asking.
-  add constraint quiz_questions_mcq_has_distractors
-    check (kind <> 'mcq' or jsonb_array_length(distractors) >= 2),
-  -- And a cloze needs its blank. Without one `gradeCloze` has nothing to render and the
-  -- reader is shown a prompt with no gap to fill.
-  -- `!~ '^\s*$'` for the reason given on the reader's answer bound below: one-argument
-  -- `btrim` strips spaces only, so a cloze of a single newline passed as "has its blank".
-  add constraint quiz_questions_cloze_has_text
-    check (kind <> 'cloze' or (cloze is not null and cloze !~ '^\s*$'));
+/*
+ * `user_questions` FIRST, AND THAT ORDER IS THE POINT RATHER THAN A PREFERENCE.
+ *
+ * This is the first migration to take write locks on both question tables, and it took
+ * them in the opposite order to every reader. Readers go `user_questions` first:
+ * `grade_recall` reads it before its `recall_events` insert takes referential locks on
+ * `quiz_questions`, and `get_due_reviews`'s questions lateral runs the reader's own
+ * branch ahead of the canonical one. Two orders meeting is a deadlock, and review
+ * demonstrated one -- with the READER as the victim, which is a Review that answers 500
+ * mid-session because a deploy was running.
+ *
+ * How much that can bite depends on the runner, and this project's does not wrap a
+ * migration file in a transaction: each statement commits on its own, so the two locks
+ * are never held at once and the deadlock is unreachable here. That is a property of the
+ * runner rather than of this file, though. A `lock table ... in access exclusive mode`
+ * taking both up front in reader order would have said so explicitly and been immune to
+ * either -- it is rejected with 25P01 for exactly the same reason, since `LOCK TABLE`
+ * needs a transaction block.
+ *
+ * So the ordering is the fix that survives both: free, and correct under a runner that
+ * does wrap.
+ */
 
 -- ------------------------------------------------------------- user_questions
 --
@@ -269,6 +219,91 @@ comment on index public.user_questions_due_idx is
  * `remember_pull`, which cannot. There is now a test for the call that was broken.
  */
 
+-- --------------------------------------------------------------- quiz_questions
+--
+-- Canonical questions. Written only by the pipeline (`insertQuizQuestions`), and readable
+-- by anyone who can read the pull -- `quiz_questions_read` from 20260829124730 asks
+-- exactly that. There is no insert, update or delete policy, so none of the bounds below
+-- are defending against a reader; they are defending against a MODEL, which is the other
+-- source of unbounded text in this schema and the one that costs money by the token.
+alter table public.quiz_questions
+  add column explanation text,
+  add column cloze       text,
+  add column rationale   jsonb not null default '[]'::jsonb;
+
+comment on column public.quiz_questions.explanation is
+  'Why the answer is the answer. Shown after grading, whatever the reader picked.';
+comment on column public.quiz_questions.cloze is
+  'The sentence with a blank in it. Null for every kind but cloze.';
+comment on column public.quiz_questions.rationale is
+  'Array of {distractor, why}: why each wrong option is wrong. Gemini has no map type, so it is an array rather than an object.';
+
+-- ------------------------------------------------------------------------ bounds
+--
+-- Every one of these is a number this schema already uses somewhere: 2,000 for a prompt or
+-- an answer (`user_questions_prompt_length`), 20,000 for a body of prose (`notes.body`,
+-- `highlights.text`, `recall_events.answer`), and a small integer for how many of a thing
+-- a screen will render.
+--
+-- `distractors` HAS NEVER HAD ONE, and it is the older half of this. It has been `jsonb
+-- not null default '[]'` with no shape check and no size check since 20260829124507 --
+-- so a `cards` step that came back with a malformed or enormous array stored it, and the
+-- failure surfaced later, in a renderer, on a row somebody had already paid to generate.
+-- Checking it here is not defensive tidiness: `mcqOptions` in `activities.ts` iterates
+-- this array and shuffles what it finds, so a non-array is a client crash on the screen
+-- 3d will render it on. (`gradeMcq` does not touch it -- it takes `answer` alone. An
+-- earlier draft of this paragraph said it indexed into the array, which it never did.)
+--
+-- The MCQ rule is the one with real content. An MCQ with fewer than two wrong options is
+-- not a multiple-choice question -- with one distractor it is a coin flip, and with none
+-- the answer is the only thing on screen. Two is the floor at which picking wrong is
+-- possible, which is the whole point of the kind. It is expressed as a table check rather
+-- than left to the generator because the generator is a model.
+alter table public.quiz_questions
+  add constraint quiz_questions_kind_known
+    check (kind in ('recall', 'mcq', 'cloze', 'short_answer', 'ordering', 'scenario')),
+  add constraint quiz_questions_prompt_length
+    check (length(prompt) between 1 and 2000),
+  add constraint quiz_questions_answer_length
+    check (length(answer) between 1 and 2000),
+  add constraint quiz_questions_explanation_length
+    check (explanation is null or length(explanation) <= 2000),
+  add constraint quiz_questions_cloze_length
+    check (cloze is null or length(cloze) <= 1000),
+  add constraint quiz_questions_distractors_shape
+    check (
+      jsonb_typeof(distractors) = 'array'
+      and jsonb_array_length(distractors) <= 8
+      and length(distractors::text) <= 20000
+    ),
+  add constraint quiz_questions_rationale_shape
+    check (
+      jsonb_typeof(rationale) = 'array'
+      and jsonb_array_length(rationale) <= 8
+      and length(rationale::text) <= 20000
+    ),
+  -- Two distractors is the floor at which an MCQ can be got wrong. Below it the kind is a
+  -- lie about what the screen is asking.
+  --
+  -- IT COUNTS ELEMENTS, NOT OPTIONS, and the difference is not academic. Like the shape
+  -- check above it says nothing about what is IN the array, so `[1, 2]` satisfies it --
+  -- and `mcqOptions` drops both as non-strings, leaving the answer alone on screen.
+  -- Tapping the only thing there grades `easy` with `confidentlyWrong: false`: a perfect
+  -- recall recorded for a question that could not be got wrong, which is the failure
+  -- this whole migration exists to make representable. Expressing the real floor here
+  -- would take a jsonpath filter over the members inside a CHECK; the cheaper and more
+  -- reliable place is the renderer, so `mcqOptions` returns `[]` when fewer than two
+  -- options survive its filter, and `activities.test.ts` covers it. This check remains
+  -- the cheap guard against a model returning one distractor or none.
+  add constraint quiz_questions_mcq_has_distractors
+    check (kind <> 'mcq' or jsonb_array_length(distractors) >= 2),
+  -- And a cloze needs its blank. Without one `gradeCloze` has nothing to render and the
+  -- reader is shown a prompt with no gap to fill.
+  -- `!~ '^\s*$'` for the reason given on the reader's answer bound below: one-argument
+  -- `btrim` strips spaces only, so a cloze of a single newline passed as "has its blank".
+  add constraint quiz_questions_cloze_has_text
+    check (kind <> 'cloze' or (cloze is not null and cloze !~ '^\s*$'));
+
 -- --------------------------------------------------------------- get_due_reviews
 --
 -- Restated, same signature, so `create or replace` is enough and every caller keeps
@@ -408,8 +443,12 @@ begin
     -- built", and the second clause is false: a `LIMIT` bounds the AGGREGATE, and does
     -- nothing to stop a projection being evaluated for every row the sort consumes.
     -- Measured on the plan the old indexes gave: `Result (rows=5000)` feeding a top-N
-    -- heapsort, 15.7 ms of a 16.4 ms branch spent building documents thrown away one
-    -- node later.
+    -- heapsort, with all but 0.7 ms of a 16.394 ms branch happening at or below the
+    -- node that builds one document per row. Phrased the way the index comment above
+    -- phrases it, and for the reason it gives: an `actual time` is inclusive of its
+    -- input, so the number does not say "15.7 ms of jsonb construction" -- and this
+    -- paragraph said exactly that while the one two hundred lines up explained why it
+    -- could not.
     --
     -- `user_questions_due_idx` is what makes the sentence true -- it returns the rows
     -- already in this order, so the limit terminates the SCAN and three payloads are
