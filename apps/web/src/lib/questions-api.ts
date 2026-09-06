@@ -88,7 +88,13 @@ export async function fetchUserQuestions(pullIds: readonly string[]): Promise<Us
     .select('id, pull_id, kind, prompt, answer, created_at')
     .in('pull_id', pullIds as string[])
     .is('retired_at', null)
-    .order('created_at', { ascending: false });
+    // `id` after `created_at`, because `created_at` alone is not a total order. Two
+    // questions written inside one transaction share it to the microsecond, and Postgres
+    // may then return them either way round -- so a reader's own list would reorder
+    // itself between two loads of the same page. `get_due_reviews` carries the same
+    // tiebreak on the same column for the same reason.
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true });
 
   if (error) throw rpcError(error);
   return (data ?? []).map((r) => ({
