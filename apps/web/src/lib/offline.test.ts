@@ -6,6 +6,7 @@ import {
   hasPending,
   isOfflineFailure,
   onPendingQueued,
+  pendingRecallPullIds,
   queueIfOffline,
   queueMutation,
   readCachedPulls,
@@ -757,6 +758,20 @@ describe('queueMutation reports whether it persisted', () => {
     });
   });
 
+  it('says it does not know, rather than that nothing is queued', async () => {
+    /*
+     * `pendingRecallPullIds` is the durable half of "has the reader already judged this
+     * card", and an empty set is a CLAIM about the queue. A store that will not open
+     * supports no claim at all, so it answers null and `Review.tsx` decides. Returning
+     * an empty set here would tell a caller whose whole job is preventing a doubled
+     * grade that a blocked database is a clean bill of health — which is the trade
+     * `queueMutation` and `hasPending` both refuse one function along.
+     */
+    await withBrokenStore(async (offline) => {
+      await expect(offline.pendingRecallPullIds('broken-store-user')).resolves.toBeNull();
+    });
+  });
+
   /*
    * The half the previous revision left untested, and the one whose absence would let the
    * regression back in silently: re-propagating `queueMutation`'s answer through
@@ -804,5 +819,166 @@ describe('queueIfOffline answers whether it took responsibility', () => {
     );
     expect(queued).toBe(false);
     await expect(hasPending(user)).resolves.toBe(false);
+  });
+});
+
+/*
+ * The queue used to accept a write it was going to throw away.
+ *
+ * `queueMutation` answered "persisted", which was true of IndexedDB and useless to
+ * the reader: `runDrain` deletes a write the server refused for a reason no replay
+ * can change, so the entry lived exactly until the next drain. Every caller that
+ * reports success on a successful queue — the census counting a calibration as
+ * recorded, Review leaving `lostGrade` unset — was therefore reporting a write with
+ * no future, and the census is the expensive one because it is offered once.
+ *
+ * The refusal is now passed in and the write is declined, which turns each of those
+ * callers' existing "could not record" branch into the one that fires. These pin
+ * both halves: what is declined, and what must still be kept.
+ */
+describe('queueing a write the server has already refused', () => {
+  const refusal = (code: string) => {
+    const e = new Error('the server refused this write');
+    e.name = `PostgrestError ${code}`;
+    return e;
+  };
+
+  it.each(['23503', '23514', '22P02'])(
+    'declines a recall the server refused with %s, rather than losing it on the next drain',
+    async (code) => {
+      const user = `u-decline-${code}`;
+      const queued = await queueMutation(
+        user,
+        {
+          kind: 'recall',
+          pullId: 'gone',
+          grade: 'good',
+          mutationId: 'm1',
+          submittedAt: 1_700_000_000_000,
+          recallKind: 'calibration',
+        },
+        refusal(code),
+      );
+      expect(queued).toBe(false);
+      // And nothing was written, so `hasPending` does not hold a retry timer open
+      // for a write that has already been decided against.
+      await expect(hasPending(user)).resolves.toBe(false);
+    },
+  );
+
+  it('still queues a refusal a retry could survive', async () => {
+    const user = 'u-transient';
+    // 57014 is the server being unwell, and 42501 may be about the session rather
+    // than the account — `rpc-error.ts` keeps both off the permanent list on purpose.
+    for (const code of ['57014', '42501']) {
+      expect(
+        await queueMutation(
+          user,
+          {
+            kind: 'recall',
+            pullId: 'p1',
+            grade: 'good',
+            mutationId: `m-${code}`,
+            submittedAt: 1_700_000_000_000,
+            recallKind: 'review',
+          },
+          refusal(code),
+        ),
+      ).toBe(true);
+    }
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('still queues when no refusal is offered at all', async () => {
+    // The offline case: the request never left, so there is no server verdict to
+    // judge and the write is exactly the kind the queue exists for.
+    const user = 'u-no-refusal';
+    expect(
+      await queueMutation(user, {
+        kind: 'recall',
+        pullId: 'p1',
+        grade: 'good',
+        mutationId: 'm2',
+        submittedAt: 1_700_000_000_000,
+        recallKind: 'review',
+      }),
+    ).toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+
+  it('still queues a collection write, whose target may be one entry behind it', async () => {
+    /*
+     * The one case `queueMutation` must not judge. A `stash-create` naming a parent,
+     * or an `organise` naming a destination, can fail 23503 against a collection that
+     * is itself still queued — and at queue time there is no queue to check yet. Only
+     * a drain can tell, so both are kept and `runDrain` decides with the set in hand.
+     * Declining them here would delete a collection the reader had just made.
+     */
+    const user = 'u-collection';
+    expect(
+      await queueMutation(
+        user,
+        { kind: 'stash-create', stashId: 's1', name: 'Later', parentId: 'p-queued' },
+        refusal('23503'),
+      ),
+    ).toBe(true);
+    expect(
+      await queueMutation(
+        user,
+        { kind: 'organise', saveId: 'sv', patch: { stashId: 's1' } },
+        refusal('23503'),
+      ),
+    ).toBe(true);
+    await expect(hasPending(user)).resolves.toBe(true);
+  });
+});
+
+/**
+ * The card the reader already judged, asked durably.
+ *
+ * `Review.tsx` kept this in a `useRef`, and Review is a tab: switching to Library
+ * destroys the component and the set with it, so a card whose grade is still queued
+ * comes back due and a second tap mints a second mutation id. Two ids are two grades.
+ * The queue outlives the mount and the reload, and a pending grade is exactly the
+ * condition, so it is the queue that gets asked.
+ */
+describe('the pulls a queued grade already covers', () => {
+  const drain = (user: string) => drainPending(user, async () => undefined);
+
+  it('names a pull whose grade is still waiting', async () => {
+    await queueMutation(USER_A, {
+      kind: 'recall',
+      pullId: 'p-graded',
+      grade: 'good',
+      mutationId: 'm1',
+      submittedAt: Date.now(),
+    });
+    expect([...(await pendingRecallPullIds(USER_A))!]).toEqual(['p-graded']);
+    await drain(USER_A);
+    // And stops naming it once the grade has actually applied, or the card would
+    // never come round again.
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
+  });
+
+  it("never names another account's", async () => {
+    await queueMutation(USER_B, {
+      kind: 'recall',
+      pullId: 'p-theirs',
+      grade: 'forgot',
+      mutationId: 'm2',
+      submittedAt: Date.now(),
+    });
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
+    expect((await pendingRecallPullIds(USER_B))?.has('p-theirs')).toBe(true);
+    await drain(USER_B);
+  });
+
+  it('names only grades, not the saves and reads sharing the queue', async () => {
+    // A card the reader saved is still due, and hiding it would be this fix
+    // overreaching into the one place it has no business.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p-saved' });
+    await queueMutation(USER_A, { kind: 'read', pullId: 'p-read' });
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
+    await drain(USER_A);
   });
 });
