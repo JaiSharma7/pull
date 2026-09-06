@@ -146,6 +146,27 @@ comment on column public.user_questions.cloze is
   'The sentence with a blank in it, when the reader wrote a cloze.';
 
 alter table public.user_questions
+  /*
+   * A DETERMINISTICALLY GRADED KIND NEEDS AN ANSWER, and `answer` is nullable.
+   *
+   * Review finding. `remember_pull(p_pull_id, p_prompt, p_answer default null, p_kind
+   * default 'recall', ...)` takes the answer as optional, and nothing refused
+   * `remember_pull(pull, 'An mcq?', null, 'mcq', id)` -- measured, accepted. That row
+   * is then returned in the same shape as a canonical question, and `mcqOptions` in
+   * `activities.ts` calls `answer.trim()` on it: a valid row the reader wrote, which
+   * throws in the renderer rather than displaying.
+   *
+   * `recall` and `short_answer` are self-graded -- the reader reveals and marks
+   * themselves, so a question with no stored answer is a perfectly good prompt. `mcq`
+   * and `cloze` are graded by comparison against the answer, so for those it is not
+   * optional at all. `quiz_questions.answer` has been `not null` since
+   * 20260829124507 for the same reason.
+   */
+  add constraint user_questions_graded_kinds_need_an_answer
+    check (
+      kind in ('recall', 'short_answer')
+      or (answer is not null and length(btrim(answer)) > 0)
+    ),
   add constraint user_questions_explanation_length
     check (explanation is null or length(explanation) <= 2000),
   add constraint user_questions_cloze_length
@@ -197,140 +218,155 @@ begin
   select coalesce(jsonb_agg(t order by t ->> 'retrievability'), '[]'::jsonb) into res
   from (
     select jsonb_build_object(
-      'pullId', p.id,
-      'headline', p.headline,
-      'body', p.body,
+      'pullId', due.pull_id,
+      'headline', due.headline,
+      'body', due.body,
       -- The three the card already had, plus the two it did not. `example` and
       -- `explanation` are the pull's own -- a worked instance and the reasoning behind
       -- the idea -- and Review has been re-deriving neither and showing the body alone.
-      'whyItMatters', p.why_it_matters,
-      'example', p.example,
-      'explanation', p.explanation,
-      'workTitle', w.title,
-      'workSlug', w.slug,
+      'whyItMatters', due.why_it_matters,
+      'example', due.example,
+      'explanation', due.explanation,
+      'workTitle', due.work_title,
+      'workSlug', due.work_slug,
       -- Which revision of the summary the reader was asked about. A pull's body can be
       -- rewritten by a later generation, and a grade against the old wording is evidence
       -- about the old wording; without this nothing downstream can tell.
-      'contentVersion', s.version,
-      'retrievability', round(public.retrievability(ks.stability, ks.last_seen_at)::numeric, 3),
-      'stability', round(ks.stability::numeric, 2),
+      'contentVersion', due.content_version,
+      'retrievability', round(public.retrievability(due.stability, due.last_seen_at)::numeric, 3),
+      'stability', round(due.stability::numeric, 2),
       -- Both off `knowledge_states`, both already stored, neither previously returned.
       -- `lapses` is how many times this idea has been forgotten, which is what makes a
       -- "you keep losing this one" line possible without a second query per card.
-      'difficulty', round(ks.difficulty::numeric, 2),
-      'lapses', ks.lapses,
-      'reps', ks.reps,
-      'dueAt', ks.next_due_at,
+      'difficulty', round(due.difficulty::numeric, 2),
+      'lapses', due.lapses,
+      'reps', due.reps,
+      'dueAt', due.next_due_at,
       'questions', asked.questions,
       -- Derived from the array, never computed beside it. See the header.
       'question', asked.questions -> 0 ->> 'prompt',
       'questionId', (asked.questions -> 0 ->> 'id')::uuid,
       'questionSource', asked.questions -> 0 ->> 'source'
     ) as t
-    -- THE DUE SET IS CHOSEN AND TRIMMED FIRST, on its own, and everything below runs
-    -- against at most `lim` rows.
+    -- THE DUE SET IS CHOSEN AND TRIMMED FIRST, and the joins that decide whether a
+    -- card is VISIBLE are part of choosing it.
     --
-    -- With the `limit` in the OUTER query -- which is where it was when this function
-    -- was first written this way -- the lateral below is an inner-row expression, so
-    -- it is evaluated for every due idea the reader has and only then sorted and cut to
-    -- a hundred. Each evaluation is two index lookups and two aggregations building a
-    -- document that is then thrown away.
+    -- Both halves matter and the first version had only one. Selecting from
+    -- `knowledge_states` alone and joining `pulls`/`summaries`/`works` outside the
+    -- limit puts three RLS-filtered inner joins after the row has already taken a
+    -- slot -- so a due row whose pull the reader can no longer see (a summary
+    -- retired, an import undone, a work withdrawn) consumes one of the `lim` and is
+    -- then dropped. Measured: a reader with 30 readable cards due and 30 unreadable
+    -- ones sorting ahead of them got 0 back from `get_due_reviews(20)`. Review would
+    -- have told them nothing was due while thirty ideas waited.
     --
-    -- Measured, one canonical question per pull, `get_due_reviews(100)`: 588.9 ms
-    -- against 47.6 ms at 5,000 due ideas, and 1,898.8 ms against 127.3 ms at 20,000 --
-    -- which is exactly the import ceiling `commit_import` allows, so it is a backlog a
-    -- reader can actually have. The cost of the outer form grows with the reader's
-    -- backlog and the cost of this one does not; `authenticated` carries an 8 s
-    -- `statement_timeout`, and more than one question per pull closes that gap fast.
-    --
+    -- The questions lateral stays OUTSIDE the limit, which is the half the first
+    -- version got right. As an outer-query expression it is evaluated for every due
+    -- idea the reader has and only then sorted and cut to a hundred. Measured, one
+    -- canonical question per pull, `get_due_reviews(100)`: 588.9 ms against 47.6 ms
+    -- at 5,000 due ideas, and 1,898.8 ms against 127.3 ms at 20,000 -- exactly the
+    -- import ceiling `commit_import` allows, so it is a backlog a reader can have.
     -- The same shape as the sequential scan 20260905110000 had to fix in
     -- `commit_import`: correct, and linear in the one direction the product grows.
     from (
-      select ks.pull_id, ks.stability, ks.difficulty, ks.reps, ks.lapses,
-             ks.last_seen_at, ks.next_due_at
+      select ks.stability, ks.difficulty, ks.reps, ks.lapses, ks.last_seen_at,
+             ks.next_due_at,
+             p.id as pull_id, p.headline, p.body, p.why_it_matters, p.example,
+             p.explanation,
+             w.title as work_title, w.slug as work_slug,
+             s.version as content_version
         from public.knowledge_states ks
+        join public.pulls p on p.id = ks.pull_id
+        join public.summaries s on s.id = p.summary_id
+        join public.works w on w.id = s.work_id
        where ks.user_id = uid and ks.next_due_at <= now()
        order by public.retrievability(ks.stability, ks.last_seen_at) asc
        limit lim
-    ) ks
-    join public.pulls p on p.id = ks.pull_id
-    join public.summaries s on s.id = p.summary_id
-    join public.works w on w.id = s.work_id
+    ) due
     -- The reader's own first, then the canonical ones. `union all` rather than two
-    -- lateral joins and a coalesce: the screen asks one question at a time and takes the
-    -- first, so "whose question wins" is expressed once, as an ORDER BY, instead of as a
-    -- precedence rule three fields have to agree about.
+    -- lateral joins and a coalesce: the screen asks one question at a time and takes
+    -- the first, so "whose question wins" is expressed once, as an ORDER BY, instead
+    -- of as a precedence rule three fields have to agree about.
     --
-    -- Bounded at three. A pull can carry one canonical question of each of six kinds
-    -- (`quiz_questions_pull_kind_key`) and any number the reader has written, and this
-    -- document already carries the whole body of every due card. Three is what 3d renders
-    -- as "1 of N".
+    -- BOUNDED ON EACH BRANCH, not by trimming the finished array. Review finding, and
+    -- the branch that needed it is the reader's: `user_questions_insert_own` lets a
+    -- signed-in caller write as many questions about one pull as they like, and
+    -- aggregating them all into one JSON document before keeping three made `p_limit`
+    -- no bound on the work at all -- `get_due_reviews(1)` would build every one of
+    -- them. `jsonb_build_object` is in the target list, so it is evaluated before the
+    -- sort; only a limit on each branch stops the payloads being built. Measured with
+    -- 5,000 of a reader's own questions on one due pull: 129.72 ms trimming the
+    -- finished array, 24.26 ms bounding each branch, against 6.56 and 5.50 ms at five
+    -- questions. The first grows with what the reader chooses to write.
+    --
+    -- Three per branch and three overall is the same answer as three overall alone,
+    -- because a reader's own question always outranks a canonical one: whatever the
+    -- overall top three are, each is within its own branch's top three.
+    --
+    -- `id` is the last term, which makes the ordering TOTAL. A pull's canonical
+    -- questions are written by one statement and share `created_at` to the
+    -- microsecond, so without it the order among them is unspecified. Said as a
+    -- hazard rather than an observed one: removing it changes nothing this suite can
+    -- see, because within one session Postgres returns tied rows consistently. It is
+    -- here because unspecified is not the same as stable.
+    --
+    -- Positional ORDER BY because the branches of a UNION have no shared column names.
     left join lateral (
-      -- `id` is the last term, which makes the ordering TOTAL. The seed writes a pull's
-      -- canonical questions in one statement, so they share `created_at` to the
-      -- microsecond, and without it the order among them is unspecified -- SQL is free
-      -- to return them either way round, and the reader's "1 of 3" could rename itself
-      -- between two loads of the same card.
-      --
-      -- Said as "could" rather than "would", because removing it does not currently
-      -- change anything observable and `supabase/tests/questions.sql` says so: within
-      -- one session Postgres picks one plan and returns tied rows consistently, so the
-      -- mutation that deletes this term passes the whole suite. It is here because
-      -- unspecified is not the same as stable -- a plan change, a version upgrade or a
-      -- parallel scan is free to reorder them -- not because a test caught it.
-      select coalesce(jsonb_agg(q.j order by q.own desc, q.written_at desc, q.qid), '[]'::jsonb)
-             as questions
+      select coalesce(jsonb_agg(q.j order by q.own desc, q.written_at desc, q.qid),
+                      '[]'::jsonb) as questions
         from (
-          select 0 as own, uq.created_at as written_at, uq.id as qid,
-                 jsonb_build_object(
-                   'id', uq.id,
-                   'source', 'user',
-                   'kind', uq.kind,
-                   'prompt', uq.prompt,
-                   'answer', uq.answer,
-                   -- SURFACED AS `distractors`, WHICH IS THE POINT OF THE KEY.
-                   --
-                   -- `user_questions.options` and `quiz_questions.distractors` are the
-                   -- same list named for the side that writes it: the wrong choices,
-                   -- not including the answer. `mcqOptions` in `activities.ts` builds
-                   -- the rendered options from `answer` PLUS `distractors`, so a screen
-                   -- reading this array must not have to know which table a question
-                   -- came from -- and returning `'[]'` here, as the first draft of this
-                   -- function did, silently dropped every choice a reader had written
-                   -- and turned their own MCQ into a one-option question.
-                   'distractors', uq.options,
-                   'cloze', uq.cloze,
-                   'explanation', uq.explanation,
-                   'rationale', '[]'::jsonb
-                 ) as j
-            from public.user_questions uq
-           where uq.user_id = uid and uq.pull_id = p.id and uq.retired_at is null
+          (
+            select 0 as own, uq.created_at as written_at, uq.id as qid,
+                   jsonb_build_object(
+                     'id', uq.id,
+                     'source', 'user',
+                     'kind', uq.kind,
+                     'prompt', uq.prompt,
+                     'answer', uq.answer,
+                     -- SURFACED AS `distractors`, WHICH IS THE POINT OF THE KEY.
+                     --
+                     -- `user_questions.options` and `quiz_questions.distractors` are
+                     -- the same list named for the side that writes it: the wrong
+                     -- choices, not including the answer. `mcqOptions` in
+                     -- `activities.ts` builds the rendered options from `answer` PLUS
+                     -- `distractors`, so a screen reading this array must not have to
+                     -- know which table a question came from -- and returning `'[]'`
+                     -- here, as the first draft of this function did, silently dropped
+                     -- every choice a reader had written and turned their own MCQ into
+                     -- a one-option question.
+                     'distractors', uq.options,
+                     'cloze', uq.cloze,
+                     'explanation', uq.explanation,
+                     'rationale', '[]'::jsonb
+                   ) as j
+              from public.user_questions uq
+             where uq.user_id = uid and uq.pull_id = due.pull_id
+               and uq.retired_at is null
+             order by uq.created_at desc, uq.id
+             limit 3
+          )
           union all
-          select -1, qq.created_at, qq.id,
-                 jsonb_build_object(
-                   'id', qq.id,
-                   'source', 'canonical',
-                   'kind', qq.kind,
-                   'prompt', qq.prompt,
-                   'answer', qq.answer,
-                   'distractors', qq.distractors,
-                   'cloze', qq.cloze,
-                   'explanation', qq.explanation,
-                   'rationale', qq.rationale
-                 )
-            from public.quiz_questions qq
-           where qq.pull_id = p.id
+          (
+            select -1, qq.created_at, qq.id,
+                   jsonb_build_object(
+                     'id', qq.id,
+                     'source', 'canonical',
+                     'kind', qq.kind,
+                     'prompt', qq.prompt,
+                     'answer', qq.answer,
+                     'distractors', qq.distractors,
+                     'cloze', qq.cloze,
+                     'explanation', qq.explanation,
+                     'rationale', qq.rationale
+                   )
+              from public.quiz_questions qq
+             where qq.pull_id = due.pull_id
+             order by qq.created_at desc, qq.id
+             limit 3
+          )
+          order by 1 desc, 2 desc, 3
+          limit 3
         ) q
-    ) all_q on true
-    -- Trimmed to three AFTER the ordering, so the three kept are the three that would
-    -- have been asked first rather than three arbitrary rows.
-    left join lateral (
-      select coalesce(
-               jsonb_agg(e.value order by e.ordinality),
-               '[]'::jsonb
-             ) as questions
-        from jsonb_array_elements(all_q.questions) with ordinality as e(value, ordinality)
-       where e.ordinality <= 3
     ) asked on true
   ) x;
 

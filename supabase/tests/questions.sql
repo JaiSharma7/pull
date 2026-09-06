@@ -32,6 +32,12 @@
 --   * a reader's own question is theirs alone: B's `get_due_reviews` on the same
 --     pull never carries A's question -- and see the note below on WHERE that comes
 --     from, which is not where the function's own text suggests
+--   * a due card whose pull the reader cannot READ does not consume a slot in the
+--     page: the visibility joins run before the limit, not after it
+--   * a reader's own questions are bounded per BRANCH, so however many they write
+--     about one idea, `get_due_reviews` builds three
+--   * a question graded by comparison -- `mcq`, `cloze` -- cannot be stored with no
+--     answer to compare against
 --
 -- WHAT THIS FILE CANNOT PROVE, said plainly because a mutation run measured it. The
 -- `id` at the end of the questions ordering makes it TOTAL, and removing it does not
@@ -100,6 +106,8 @@ declare
 
   bulk_work    uuid := extensions.gen_random_uuid();
   bulk_summary uuid := extensions.gen_random_uuid();
+  hidden_work    uuid := extensions.gen_random_uuid();
+  hidden_summary uuid := extensions.gen_random_uuid();
 begin
   insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)
   values (reader_a, '00000000-0000-0000-0000-000000000000', 'authenticated',
@@ -484,6 +492,95 @@ begin
   perform pg_temp.become(reader_a);
 
   ---------------------------------------------------------------------------
+  -- 6c. AN UNREADABLE PULL DOES NOT EAT THE PAGE.
+  --
+  -- Review finding, and a regression this migration introduced: moving the `limit`
+  -- inside is right, but leaving the RLS-filtered joins on `pulls`/`summaries`/
+  -- `works` OUTSIDE it means a due row the reader can no longer see takes a slot and
+  -- is then dropped. Measured before the fix: a reader with 30 readable cards due and
+  -- 30 unreadable ones sorting ahead of them got 0 back from `get_due_reviews(20)` --
+  -- Review would have said nothing was due.
+  ---------------------------------------------------------------------------
+  perform pg_temp.as_owner();
+
+  insert into public.works (id, kind, title, slug, rights_status)
+  values (hidden_work, 'book', 'Withdrawn', 'questions-test-withdrawn', 'public_domain');
+
+  -- Draft and private with no author: `summary_is_readable` is false, so the pulls
+  -- behind it are refused by `pulls_read_via_summary`.
+  insert into public.summaries
+    (id, work_id, version, status, visibility, author_id, title)
+  values (hidden_summary, hidden_work, 1, 'draft', 'private', null, 'Withdrawn');
+
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  select hidden_summary, g, 'withdrawn ' || g, 'gone', 5 from generate_series(1, 40) g;
+
+  -- The lowest retrievability there is, so they sort ahead of everything readable.
+  insert into public.knowledge_states
+    (user_id, pull_id, acquired_via, next_due_at, stability, last_seen_at)
+  select reader_a, p.id, 'saved', now() - interval '1 hour', 0.5, now() - interval '400 days'
+    from public.pulls p where p.summary_id = hidden_summary
+  on conflict (user_id, pull_id) do nothing;
+
+  perform pg_temp.become(reader_a);
+
+  select count(*) into n from public.pulls p where p.summary_id = hidden_summary;
+  if n <> 0 then
+    raise exception
+      'the fixture is not testing anything: the reader can read % of the withdrawn '
+      'pulls, so they were never going to be filtered out', n;
+  end if;
+
+  if jsonb_array_length(public.get_due_reviews(20)) <> 20 then
+    raise exception
+      'unreadable due rows ate the page: asked for 20 and got %. The visibility joins '
+      'must run before the limit, not after it.',
+      jsonb_array_length(public.get_due_reviews(20));
+  end if;
+
+  ---------------------------------------------------------------------------
+  -- 6d. A READER CANNOT MAKE THEIR OWN CARD ARBITRARILY EXPENSIVE.
+  --
+  -- Review finding. `user_questions_insert_own` lets a signed-in caller write as many
+  -- questions about one pull as they like, and aggregating them all before keeping
+  -- three made `p_limit` no bound on the work: `jsonb_build_object` is in the target
+  -- list, so every payload was built and then thrown away. Each branch is bounded
+  -- now. Measured at 5,000 questions on one pull: 129.72 ms before, 24.26 ms after.
+  --
+  -- WHAT THIS SECTION CAN AND CANNOT SHOW, measured by mutation rather than assumed.
+  -- Deleting the `limit 3` on the reader's own branch does NOT fail this file: the
+  -- union-level limit still trims the array to three, so the ANSWER is unchanged and
+  -- only the WORK grows. The per-branch limits are a performance property and the
+  -- only honest evidence for them is the timing above; asserting a duration here
+  -- would be a flake waiting for a slow runner. So this section pins the answer, and
+  -- the two limits are load-bearing for different reasons: remove the union-level one
+  -- and the array is wrong (the next mutation proves it), remove a per-branch one and
+  -- the array is right and the query is unbounded in the reader's own writes.
+  ---------------------------------------------------------------------------
+  perform pg_temp.as_owner();
+  insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
+  select reader_a, pull_1, 'recall', 'bulk question ' || g, 'an answer'
+    from generate_series(1, 200) g;
+  perform pg_temp.become(reader_a);
+
+  select e -> 'questions' into qs
+    from jsonb_array_elements(public.get_due_reviews(50)) e
+   where e ->> 'pullId' = pull_1::text;
+
+  if jsonb_array_length(qs) <> 3 then
+    raise exception
+      'a pull with 200 of the reader''s own questions returned % of them', 
+      jsonb_array_length(qs);
+  end if;
+
+  select count(*) into n
+    from jsonb_array_elements(qs) e where e ->> 'source' = 'user';
+  if n <> 3 then
+    raise exception
+      'the reader''s own questions did not fill the array when they had 200 (got %)', n;
+  end if;
+
+  ---------------------------------------------------------------------------
   -- 7. A QUESTION IS THE READER'S OWN.
   --
   -- AND RLS IS WHAT MAKES IT SO, not the `uq.user_id = uid` in the function. Deleting
@@ -556,6 +653,34 @@ begin
     raise exception 'a reader wrote an ordering question';
   exception when check_violation then null;
   end;
+
+  -- A KIND GRADED BY COMPARISON NEEDS SOMETHING TO COMPARE AGAINST.
+  --
+  -- Review finding, reached through the ordinary API: `remember_pull` takes the answer
+  -- as optional, so `remember_pull(pull, 'An mcq?', null, 'mcq', id)` stored an `mcq`
+  -- with a null answer -- a valid row, returned in the same shape as a canonical
+  -- question, on which `mcqOptions` calls `answer.trim()` and throws. `recall` and
+  -- `short_answer` are self-graded and keep the optional answer.
+  begin
+    perform public.remember_pull(pull_1, 'An mcq with no answer?', null, 'mcq',
+                                 extensions.gen_random_uuid());
+    raise exception 'remember_pull stored an mcq with no answer';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer, cloze)
+    values (reader_b, pull_1, 'cloze', 'p', '   ', 'a ____ sentence');
+    raise exception 'a cloze with a blank answer was accepted';
+  exception when check_violation then null;
+  end;
+
+  -- Self-graded kinds keep the optional answer: a reader who writes a prompt and
+  -- reveals from memory has nothing to store.
+  if (public.remember_pull(pull_1, 'A recall with no answer?', null, 'recall',
+                           extensions.gen_random_uuid()) ->> 'questionId') is null then
+    raise exception 'a recall question with no answer was refused';
+  end if;
 
   perform pg_temp.as_owner();
   raise notice 'questions.sql: all assertions passed';
