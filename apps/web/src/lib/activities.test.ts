@@ -23,11 +23,19 @@ import {
  * different idea.
  */
 
+/*
+ * `Question.answer` is `string | null` -- a reader's own `recall` or `short_answer`
+ * question is self-graded and stores none -- but this fixture's answer is a known
+ * string, and several tests pass it as the reader's PICK, which is always a string.
+ * Named once here rather than laundered with `?? ''` at ten call sites.
+ */
+const RIGHT = 'The material of the work';
+
 const mcq = (over: Partial<Question> = {}): Question => ({
   id: 'q1',
   kind: 'mcq',
   prompt: 'What does an obstacle become, on the Stoic account?',
-  answer: 'The material of the work',
+  answer: RIGHT,
   distractors: ['A reason to stop', 'A sign of bad luck', 'Someone else’s fault'],
   cloze: null,
   explanation: 'The impediment to action advances action; what stands in the way becomes the way.',
@@ -75,6 +83,128 @@ describe('seededShuffle', () => {
 });
 
 describe('mcqOptions', () => {
+  it('drops a distractor that is not a string, rather than throwing on it', () => {
+    // `distractors` is `string[]` here and jsonb in Postgres, and it arrives through
+    // `supabase.rpc('get_due_reviews')` under an unchecked cast. Neither table
+    // constrains the MEMBERS -- `quiz_questions_distractors_shape` and
+    // `user_questions_options_size` both check the container only -- and
+    // `user_questions.options` is written by the reader directly through PostgREST, so
+    // `[1, null]` is a storable 201 that `get_due_reviews` then surfaces here as
+    // `distractors`. Calling `.trim()` on that threw inside the render.
+    //
+    // Filtered rather than coerced: `String(1)` would offer "1" as a choice.
+    const junk = [1, null, { text: 'wrong' }, 'a real one'] as unknown as string[];
+    const options = mcqOptions(mcq({ distractors: junk }), 'seed');
+    expect(options).toEqual(expect.arrayContaining(['The material of the work', 'a real one']));
+    expect(options).toHaveLength(2);
+  });
+
+  it('refuses to render when a non-array leaves the answer alone', () => {
+    // Not a shape either table can store -- `quiz_questions_distractors_shape` and
+    // `user_questions_options_is_array` both require an array -- so this is the cast
+    // boundary being defended, not the database. What matters is the OUTCOME: one
+    // option is not a multiple choice, and returning it was the bug.
+    const options = mcqOptions(mcq({ distractors: { nope: true } as unknown as string[] }), 'seed');
+    expect(options).toEqual([]);
+  });
+
+  it('refuses to render an mcq whose distractors are all non-strings', () => {
+    // The storable one, and the reason this guard exists.
+    // `quiz_questions_mcq_has_distractors` counts array ELEMENTS, so `[1, 2]` satisfies
+    // it -- measured against the local stack, the insert is accepted. The filter above
+    // then drops both, leaving the answer by itself.
+    //
+    // What that would put on screen: a card headed multiple choice with one button on
+    // it, the right one. Tapping the only thing there returns
+    // `{ grade: 'easy', correct: true, confidentlyWrong: false }` -- a perfect recall
+    // recorded for a question that could not be got wrong, which is the exact failure
+    // the `confidently wrong` signal exists to catch.
+    const options = mcqOptions(mcq({ distractors: [1, 2] as unknown as string[] }), 'seed');
+    expect(options).toEqual([]);
+  });
+
+  it('refuses to render an mcq a reader stored with no options at all', () => {
+    // `user_questions.options` defaults to `'[]'` and the migration declines the
+    // matching `mcq needs two options` rule on that table on purpose, because
+    // `remember_pull` cannot write the column. So the client is the only place this can
+    // be caught, and until now it was not caught anywhere.
+    expect(mcqOptions(mcq({ distractors: [] }), 'seed')).toEqual([]);
+  });
+
+  it('still renders when exactly two options survive, which is the floor', () => {
+    // The boundary, so the guard cannot quietly become `< 3` and empty every two-option
+    // question on the corpus.
+    const options = mcqOptions(
+      mcq({ distractors: ['A reason to stop', 7 as unknown as string] }),
+      'seed',
+    );
+    expect(options).toHaveLength(2);
+    expect(options).toContain('The material of the work');
+    expect(options).toContain('A reason to stop');
+  });
+
+  it('grades a null answer as wrong rather than throwing', () => {
+    // `get_due_reviews` returns `answer: null` for a reader's own `recall` or
+    // `short_answer` question -- `user_questions_graded_kinds_need_an_answer` exempts
+    // both, because they are self-graded and have nothing to store. Measured against
+    // the local stack. `Question.answer` said `string`, so every entry point took
+    // `.trim()` on null.
+    expect(mcqOptions({ answer: null, distractors: ['a', 'b'] }, 'seed')).toEqual([]);
+    expect(orderingSteps({ answer: null })).toEqual([]);
+
+    // WRONG, BUT NOT CONFIDENTLY WRONG. `confidentlyWrong` is the signal this whole
+    // schema exists to record and it feeds the repair list; reporting it for a question
+    // that had nothing to be wrong ABOUT would put a false belief in front of a reader
+    // who never held one -- with no reason beside it, since `whyWrong` correctly returns
+    // null for the same input. A reader's own self-graded question is a VALID row that
+    // stores no answer, not a malformed one.
+    expect(gradeMcq('anything', { answer: null }, 'sure', 100)).toEqual({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    expect(gradeCloze('anything', '', 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // AND THE THIRD GRADER, which this block asserted for two of three and left out --
+    // the miss two round-five reviewers found independently. `orderingSteps` above got
+    // its `?? ''` in the same commit and `gradeOrdering` got no guard at all, so a
+    // question with nothing to be wrong about scored `confidentlyWrong` for any reader
+    // who said they were sure.
+    expect(gradeOrdering(['anything'], { answer: null }, 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // The sharpest form: NOTHING was placed wrong, and the reader was still accused.
+    expect(gradeOrdering([], { answer: null }, 'sure', 100)).toMatchObject({
+      positionsWrong: 0,
+      confidentlyWrong: false,
+    });
+  });
+
+  it('disagrees with gradeCloze on a spelling variant, which is why a screen must ask the grader', () => {
+    /*
+     * Round six wanted this pinned rather than described. `gradeCloze` folds a typing slip
+     * and a spelling variant into `correct`; `whyWrong` compares trimmed strings, so it
+     * still has something to say about the same input. That is right for the MCQ case it
+     * was written for -- picking an option either is or is not the answer -- and it means
+     * a screen must decide whether to show a reason from the GRADER's verdict, never from
+     * whether this returned null. `gradeCloze`'s folding has been edited in three rounds
+     * now; without this the gap could move with nothing failing.
+     */
+    expect(gradeCloze('colour', 'color', 'sure', 100).correct).toBe(true);
+    expect(
+      whyWrong(
+        { answer: 'color', explanation: 'The American spelling is the one stored.', rationale: [] },
+        'colour',
+      ),
+    ).not.toBeNull();
+    // And null when the question carries nothing to say -- the half the comment used to
+    // overstate.
+    expect(whyWrong({ answer: 'color', explanation: null, rationale: [] }, 'colour')).toBeNull();
+  });
+
   it('always includes the answer', () => {
     const options = mcqOptions(mcq(), 'seed');
     expect(options).toContain('The material of the work');
@@ -101,7 +231,7 @@ describe('mcqOptions', () => {
 
 describe('gradeMcq', () => {
   const q = mcq();
-  const right = q.answer;
+  const right = RIGHT;
   const wrong = 'A reason to stop';
 
   it('right, sure and fast is easy', () => {
@@ -159,7 +289,7 @@ describe('gradeMcq', () => {
 
 describe('selfReportedHard', () => {
   it('lets the reader lower a right answer to hard', () => {
-    const result = gradeMcq(mcq().answer, mcq(), 'sure', 1_000);
+    const result = gradeMcq(RIGHT, mcq(), 'sure', 1_000);
     expect(selfReportedHard(result)).toEqual({ ...result, grade: 'hard' });
   });
 
@@ -508,7 +638,13 @@ describe('gradeOrdering', () => {
   });
 
   it('is never right against a question with no steps', () => {
-    expect(gradeOrdering([], { answer: '' }).correct).toBe(false);
+    // `'sure'` explicitly. The default is `'unsure'`, which is the one confidence that
+    // hides `confidentlyWrong` -- so this line asserted the empty case for two rounds
+    // while the flag it should have been watching was free to be wrong.
+    expect(gradeOrdering([], { answer: '' }, 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
   });
 
   it('trims what the reader arranged', () => {
@@ -520,6 +656,50 @@ describe('gradeOrdering', () => {
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering).grade).toBe('easy');
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering + 1).grade).toBe('good');
     expect(gradeOrdering(order, q, 'unsure', 1_000).grade).toBe('good');
+  });
+
+  it('treats two identical steps as one, because there is still one arrangement', () => {
+    // Round six. The floor counted steps and not DISTINCT steps, so
+    // `"Boil the water\nBoil the water"` had two of them, one possible arrangement, and
+    // graded `easy` -- verbatim what the guard's own comment condemns. `mcqOptions`
+    // dedupes through its `seen` set BEFORE applying the same floor; this had copied the
+    // floor without the dedupe.
+    const dup = { answer: 'Boil the water\nBoil the water' };
+    expect(orderingSteps(dup)).toEqual([]);
+    expect(gradeOrdering(['Boil the water', 'Boil the water'], dup, 'sure', 100)).toMatchObject({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // Three steps with a repeat still has three arrangements, so it stays gradeable.
+    expect(orderingSteps({ answer: 'a\na\nb' })).toEqual(['a', 'a', 'b']);
+  });
+
+  it('refuses to render a one-step ordering at all, as mcqOptions does', () => {
+    // The floor round five put only in the grader. A one-step ordering still reached the
+    // screen, the reader made the only arrangement there is, and the guard then booked
+    // them a lapse for it -- a false `easy` turned into a false `forgot`. `mcqOptions`
+    // has refused at this boundary since round three.
+    expect(orderingSteps({ answer: 'Boil the water' })).toEqual([]);
+    expect(orderingSteps({ answer: '   ' })).toEqual([]);
+  });
+
+  it('refuses to grade a one-step ordering as anything', () => {
+    // The round-three MCQ finding at the kind round three did not reach. One step is one
+    // arrangement: the reader makes it, and a sure and quick answer used to return
+    // `{ grade: 'easy', correct: true }` -- stability multiplied by more than three for a
+    // question that could not be got wrong. `mcqOptions` has carried the same floor since
+    // round three; this is its ordering twin.
+    const one = { answer: 'Boil the water' };
+    expect(gradeOrdering(['Boil the water'], one, 'sure', 100)).toMatchObject({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // Two is the floor and it still works, so the guard bounds the broken case only.
+    expect(
+      gradeOrdering(['a', 'b'], { answer: 'a\nb' }, 'sure', FAST_ANSWER_MS.ordering).grade,
+    ).toBe('easy');
   });
 });
 
@@ -607,8 +787,8 @@ describe('whyWrong', () => {
   });
 
   it('has nothing to say about the right answer', () => {
-    expect(whyWrong(q, q.answer)).toBeNull();
-    expect(whyWrong(q, ` ${q.answer} `)).toBeNull();
+    expect(whyWrong(q, RIGHT)).toBeNull();
+    expect(whyWrong(q, ` ${RIGHT} `)).toBeNull();
   });
 
   it('is null when there is neither a rationale nor an explanation', () => {

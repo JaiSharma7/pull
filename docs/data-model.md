@@ -88,9 +88,44 @@ reader's verbatim highlight is a model call over their own text.
 **A reader's own question lives in its own table.** `user_questions` rather than a row in
 `quiz_questions`, because the pipeline upserts canonical questions with
 `on conflict (pull_id, kind)` and a partial unique index added to make room for reader
-rows would change what that upsert resolves against. `get_due_reviews` prefers the
-reader's own unretired question and says which one it gave, so `recall_events` can file
+rows would change what that upsert resolves against. `get_due_reviews` puts the reader's
+own unretired questions first and says of each which it is, so `recall_events` can file
 the grade against `user_question_id` rather than the canonical foreign key.
+
+**A question has a kind, and the kind is checked.** `quiz_questions.kind` is one of
+`recall`, `mcq`, `cloze`, `short_answer`, `ordering` or `scenario`; a question also
+carries an `explanation` (why the answer is the answer, shown whatever the reader
+picked), a `cloze` sentence, and a `rationale` — an array of `{distractor, why}`, which
+is an array rather than a map because Gemini has no map type. The three kinds
+`lib/activities.ts` grades deterministically are MCQ, cloze and ordering; the other three
+stay self-graded, because marking a paragraph a reader composed would be a model call per
+answer and law 2 says no.
+
+Two rules live in the table rather than in the generator, because the generator is a
+model. An `mcq` needs at least two distractors — with one it is a coin flip and with none
+the answer is the only thing on screen — and a `cloze` needs its blank, or there is
+nothing for the reader to fill. `user_questions` carries `explanation` and `cloze` too,
+but only the first four kinds: `ordering` and `scenario` are generated forms that a prompt
+and an answer cannot express.
+
+**Neither of those two rules is on `user_questions`, and that is deliberate.**
+`remember_pull` — the RPC the product writes these rows through — has no parameter for
+`options` or `cloze`, so a constraint requiring either would refuse every call it makes
+for that kind, permanently, as a 400 from PostgREST. A constraint the only writer that
+matters cannot satisfy forbids a kind rather than guarding one. Both wait for the screen
+that can supply the missing column.
+
+It is not that the columns are unwritable: `user_questions_insert_own` places no
+restriction on which columns a row carries, so a signed-in reader can POST either
+straight to `/rest/v1/user_questions` — and this migration's own blank-prompt rule exists
+because that path is real. The point is narrower and it is about the RPC. Recorded here
+because this file is what someone reads before adding the obvious missing constraint.
+
+`get_due_reviews` returns up to three questions per card, the reader's own first. The
+three singular fields beside them — `question`, `questionId`, `questionSource` — are read
+off `questions[0]` rather than computed next to it, so they cannot come to describe a
+different question than the one returned; they exist for one release, until the Review
+screen renders the array.
 
 **Retrievability is computed, never stored.** `knowledge_states` holds
 `stability` and `last_seen_at`; `public.retrievability()` derives the current
