@@ -452,7 +452,13 @@ export function createPipelineDb(supabase: Db): PipelineDb {
               prompt: r.prompt,
               answer: r.answer,
               distractors: r.distractors,
-              kind: 'recall',
+              // The kind the generation actually produced. Hardcoded `'recall'` until
+              // 3g, which is why every row written before it is one — and why the
+              // upsert target below has only ever had one row per pull to collide on.
+              kind: r.kind,
+              cloze: r.cloze,
+              explanation: r.explanation,
+              rationale: r.rationale,
             })),
             // `(pull_id, kind)`, which is what `quiz_questions_pull_kind_key`
             // actually is. `pull_id` alone raises 42P10 — there was no unique

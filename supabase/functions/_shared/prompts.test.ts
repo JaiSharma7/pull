@@ -73,16 +73,25 @@ describe('the exported schema', () => {
     expect(topics.minItems).toBe(1);
     expect(topics.maxItems).toBe(4);
     expect(summary.schema.properties.pulls.minItems).toBe(1);
-    // `question` is optional, so it may arrive as `T` or as `anyOf [T, null]`.
-    type Bounded = { properties: Record<string, { minItems?: number; maxItems?: number }> };
-    const question: unknown = summary.schema.properties.pulls.items.properties.question;
-    const inner = (
-      question && typeof question === 'object' && 'anyOf' in question
-        ? (question as { anyOf: readonly unknown[] }).anyOf[0]
-        : question
-    ) as Bounded;
-    expect(inner.properties.distractors?.minItems).toBe(3);
-    expect(inner.properties.distractors?.maxItems).toBe(3);
+    // A LIST since 3g, and bounded at both levels: at most three questions per idea
+    // (`quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and there are
+    // three kinds, so a fourth could only be a duplicate) and exactly three
+    // distractors on any one of them.
+    const questions = summary.schema.properties.pulls.items.properties.questions;
+    expect(questions.type).toBe('array');
+    expect(questions.maxItems).toBe(3);
+    expect(questions.items.properties.distractors?.minItems).toBe(3);
+    expect(questions.items.properties.distractors?.maxItems).toBe(3);
+  });
+
+  it('offers the model only the kinds the column will accept', () => {
+    // The enum is ALIASED to the database's own values in `canonical_summary.baml`.
+    // A model answering `Mcq` -- the generated TypeScript member name -- would be
+    // refused by `quiz_questions_kind_known` after the call had been paid for, which
+    // is the expensive way to find out. `questionsToWrite` maps anything unexpected
+    // back to `recall`; this is the half that stops it arising.
+    const kind = summary.schema.properties.pulls.items.properties.questions.items.properties.kind;
+    expect([...kind.enum]).toEqual(['recall', 'mcq', 'cloze']);
   });
 
   it('converts to the Gemini dialect the API enforces', () => {
@@ -93,9 +102,14 @@ describe('the exported schema', () => {
     expect(g.properties?.topics?.items?.type).toBe('STRING');
     expect(g.properties?.topics?.items?.enum).toEqual([...TOPIC_SLUGS]);
     expect(g.properties?.topics?.minItems).toBe(1);
-    // An optional question is nullable in Gemini's dialect, not a union.
-    const q = g.properties?.pulls?.items?.properties?.question;
-    expect(q?.type).toBe('OBJECT');
+    // Questions are a list now, and the dialect has to carry both the array and the
+    // object inside it -- `toGeminiSchema` walks `items` as well as `properties`, and
+    // a conversion that stopped at the array would send the model an untyped bag.
+    const q = g.properties?.pulls?.items?.properties?.questions;
+    expect(q?.type).toBe('ARRAY');
+    expect(q?.items?.type).toBe('OBJECT');
+    expect(q?.items?.properties?.kind?.enum).toEqual(['recall', 'mcq', 'cloze']);
+    expect(q?.items?.properties?.rationale?.type).toBe('ARRAY');
   });
 
   it('refuses a construct it cannot express', () => {

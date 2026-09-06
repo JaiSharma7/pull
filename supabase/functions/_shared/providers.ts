@@ -86,22 +86,38 @@ export interface CanonicalSummary {
     /** The deep-dive breakdown for readers choosing the full/long depth stop. */
     explanation?: string;
     /**
-     * A recall question about this idea, produced by the same call.
+     * The questions about this idea, produced by the same call.
      *
      * `quiz_questions` has been read by `get_due_reviews` since round 1 and
      * written by nothing: six rows, all seeded, against 156 pulls. `recall` is
      * 45% of the interrupt distribution, so Interleaved Recall — the mechanic
      * this product is built on — had nothing to ask about 96% of the library.
      *
-     * Optional for the same reason `topics` is: a provider that predates the
-     * field is still a valid provider, and an absent question means the
-     * interrupt falls back to the self-graded reveal rather than failing.
+     * A LIST, and one of each kind at most. It was a single optional question
+     * until 3g, and one free-recall question is the weakest thing to learn from
+     * because it cannot be wrong in a way anybody can name — an `mcq` can be
+     * wrong specifically and a `cloze` can be wrong in one word, which is what
+     * makes an explanation worth writing. `quiz_questions_pull_kind_key` is
+     * unique on `(pull_id, kind)`, so the ceiling is structural rather than a
+     * policy: `questionsToWrite` keeps the first of each kind.
      *
-     * It rides on the synthesis call rather than becoming a step of its own, so
-     * it costs no extra request and only a few output tokens — the same trade
-     * `topics` already made, and the reason both are affordable at all.
+     * Optional for the same reason `topics` is: a provider that predates the
+     * field is still a valid provider, and an absent list means the interrupt
+     * falls back to the self-graded reveal rather than failing.
+     *
+     * They ride on the synthesis call rather than becoming a step of their own,
+     * so they cost no extra request and only a few output tokens — the same
+     * trade `topics` already made, and the reason both are affordable at all.
      */
-    question?: { prompt: string; answer: string; distractors?: string[] };
+    questions?: {
+      kind?: string;
+      prompt: string;
+      answer: string;
+      distractors?: string[];
+      cloze?: string | null;
+      explanation?: string | null;
+      rationale?: { distractor: string; why: string }[];
+    }[];
   }[];
   /**
    * Topic slugs this work belongs under, from the fixed taxonomy in `pipeline.ts`.
@@ -205,13 +221,35 @@ export const stubSummaryProvider: SummaryProvider = {
                 : `Placeholder body for ${input.workTitle}, produced without a model.`,
             whyItMatters:
               'The stub provider produces one Pull so the pipeline can be exercised end to end without an API key.',
-            // A real question, so the no-key path exercises the write rather
-            // than the skip. Same reasoning as the real topic slug below.
-            question: {
-              prompt: `What does ${input.workTitle} claim?`,
-              answer: 'That the stub provider produced this idea.',
-              distractors: ['Nothing at all.', 'Something a model wrote.', 'A different work.'],
-            },
+            // Real questions, so the no-key path exercises the write rather than
+            // the skip. Same reasoning as the real topic slug below.
+            //
+            // TWO KINDS, deliberately. One would exercise the write and leave the
+            // part 3g actually added — several kinds against a unique
+            // `(pull_id, kind)` — untested by the only path that runs without an
+            // API key.
+            questions: [
+              {
+                kind: 'recall',
+                prompt: `What does ${input.workTitle} claim?`,
+                answer: 'That the stub provider produced this idea.',
+                distractors: [],
+                explanation: 'The stub writes a fixed answer so the write path is exercised.',
+              },
+              {
+                kind: 'mcq',
+                prompt: `Which of these did ${input.workTitle} produce?`,
+                answer: 'This idea.',
+                distractors: ['Nothing at all.', 'Something a model wrote.', 'A different work.'],
+                explanation: 'Only one option names what the stub actually did.',
+                rationale: [
+                  {
+                    distractor: 'Something a model wrote.',
+                    why: 'The stub runs precisely when no model was called.',
+                  },
+                ],
+              },
+            ],
           },
         ],
         // A real slug, not a placeholder: `upsertWork` looks these up against

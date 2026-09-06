@@ -181,7 +181,12 @@ const BOUNDS = {
   WriteCanonicalSummary: {
     pulls: { minItems: 1 },
     topics: { minItems: 1, maxItems: 4 },
-    'pulls[].question.distractors': { minItems: 3, maxItems: 3 },
+    // At most three per idea, and at most three distractors on any one of them.
+    // The ceiling is what keeps a widened question model from widening the call:
+    // 3g adds kinds to the SAME synthesis request, so law 2 is untouched only for
+    // as long as nothing here is unbounded.
+    'pulls[].questions': { maxItems: 3 },
+    'pulls[].questions[].distractors': { minItems: 3, maxItems: 3 },
   },
 };
 

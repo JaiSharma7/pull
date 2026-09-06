@@ -14,5 +14,6 @@
  * isolates cannot load one. See docs/baml.md.
  */
 export { TOPIC_SLUG_BY_MEMBER, topicSlugOf } from './topics.js';
+export { QUESTION_KIND_BY_MEMBER } from './question-kinds.js';
 export type { TopicSlug } from '../baml_sdk/index.js';
 export type { CanonicalSummary, Pull, RecallQuestion } from '../baml_sdk/index.js';

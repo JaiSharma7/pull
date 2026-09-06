@@ -63,10 +63,28 @@ function pullItems(schema: JsonSchema): JsonSchema {
   return node;
 }
 
+/**
+ * `pulls[].questions[]`, which was `pulls[].question` and a nullable one.
+ *
+ * A required array replaced the optional single, so there is no `anyOf` to follow
+ * any more — an idea with nothing worth asking now returns `[]` rather than null.
+ * The old unwrap is kept as a hard failure rather than deleted: if the field ever
+ * goes back to being nullable, this should say so rather than silently pick the
+ * union node and compare a `RecallQuestion` against `{ anyOf }`.
+ */
 function recallQuestion(schema: JsonSchema): JsonSchema {
-  const q = pullItems(schema).properties?.question;
-  const inner = q?.anyOf?.find((b) => b.type !== 'null');
-  if (!inner) throw new Error('pulls[].question is not a `T | null` in the exported schema');
+  const list = pullItems(schema).properties?.questions;
+  if (!list) throw new Error('pulls[].questions is not in the exported schema');
+  if (list.anyOf) throw new Error('pulls[].questions became nullable; update this picker');
+  const inner = list.items;
+  if (!inner) throw new Error('pulls[].questions is not an array in the exported schema');
+  return inner;
+}
+
+/** `pulls[].questions[].rationale[]`, the per-distractor explanation. */
+function distractorRationale(schema: JsonSchema): JsonSchema {
+  const inner = recallQuestion(schema).properties?.rationale?.items;
+  if (!inner) throw new Error('questions[].rationale is not an array in the exported schema');
   return inner;
 }
 
@@ -112,6 +130,7 @@ describe('exported schema shape', () => {
     ['CanonicalSummary', (s: JsonSchema) => s],
     ['Pull', pullItems],
     ['RecallQuestion', recallQuestion],
+    ['DistractorRationale', distractorRationale],
   ] as const)('carries every field %s declares', (className, pick) => {
     const node = pick(exportedSchema());
     const declared = classFields(className);
@@ -143,5 +162,29 @@ describe('exported schema shape', () => {
       minItems: 3,
       maxItems: 3,
     });
+    // The ceiling on the array itself, which is what keeps a widened question model
+    // from widening the call. Three kinds per idea at most; the request is the same
+    // one that already produced the idea, so law 2 is untouched only while this
+    // stays bounded.
+    expect(pullItems(schema).properties?.questions).toMatchObject({ maxItems: 3 });
+  });
+
+  it('offers the model only the kinds a model should write', () => {
+    /*
+     * `kind` reaches Postgres as a string and `quiz_questions_kind_known` decides
+     * what is storable, so the two lists have to agree in one direction: everything
+     * the model can return must be storable. The column also allows `short_answer`,
+     * `ordering` and `scenario`, which are authored rather than generated — offering
+     * those here would invite a generation the pipeline has no writer for.
+     *
+     * The values are the ALIASES, not the TypeScript members. `QuestionKind.Mcq` is
+     * `"Mcq"`; what a reader's row stores is `"mcq"`. `questionKindOf` is the only
+     * thing that should ever bridge them.
+     */
+    expect(recallQuestion(exportedSchema()).properties?.kind?.enum).toEqual([
+      'recall',
+      'mcq',
+      'cloze',
+    ]);
   });
 });

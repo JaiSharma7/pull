@@ -340,7 +340,7 @@ export interface PipelineDb {
    * is invisible and permanent.
    */
   insertQuizQuestions(
-    rows: { pullId: string; prompt: string; answer: string; distractors: string[] }[],
+    rows: { pullId: string; kind: string; prompt: string; answer: string; distractors: string[]; cloze: string | null; explanation: string | null; rationale: { distractor: string; why: string }[] }[],
   ): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
@@ -459,24 +459,116 @@ export function qualityFromDraft(summary: {
  * exactly this reason — a question attached to the wrong idea is invisible and
  * permanent.
  */
+/**
+ * Every kind `quiz_questions_kind_known` admits from a generation.
+ *
+ * The BAML enum aliases to exactly these three, so a Gemini or Anthropic response is
+ * already one of them — but a stub provider does not go through either, and this
+ * function's whole reason for existing is that Postgres refusing a value AFTER the
+ * call has been paid for is the expensive way to find out. Anything else falls back
+ * to `recall`, which every question can be.
+ */
+const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
+
+/** Matches `quiz_questions_explanation_length` and `quiz_questions_cloze_length`. */
+const MAX_EXPLANATION = 2000;
+const MAX_CLOZE = 1000;
+
+function cleanRationale(value: unknown): { distractor: string; why: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((r) => {
+    const distractor = typeof (r as { distractor?: unknown })?.distractor === 'string'
+      ? ((r as { distractor: string }).distractor).trim()
+      : '';
+    const why = typeof (r as { why?: unknown })?.why === 'string'
+      ? ((r as { why: string }).why).trim()
+      : '';
+    return distractor && why ? [{ distractor, why }] : [];
+  });
+}
+
 export function questionsToWrite(
-  pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
+  pulls: readonly { questions?: unknown }[],
   written: readonly { ordinal: number; id: string }[],
-): { pullId: string; prompt: string; answer: string; distractors: string[] }[] {
+): { pullId: string; kind: string; prompt: string; answer: string; distractors: string[]; cloze: string | null; explanation: string | null; rationale: { distractor: string; why: string }[] }[] {
   const byOrdinal = new Map(written.map((w) => [w.ordinal, w.id]));
-  const out: { pullId: string; prompt: string; answer: string; distractors: string[] }[] = [];
+  const out: { pullId: string; kind: string; prompt: string; answer: string; distractors: string[]; cloze: string | null; explanation: string | null; rationale: { distractor: string; why: string }[] }[] = [];
+  /*
+   * ONE QUESTION PER (PULL, KIND), enforced here rather than discovered at the
+   * database.
+   *
+   * `insertQuizQuestions` upserts on `pull_id,kind` — which is what
+   * `quiz_questions_pull_kind_key` is — and a single statement that names the same
+   * conflict target twice is refused outright by Postgres with "ON CONFLICT DO UPDATE
+   * command cannot affect row a second time". One idea now carries up to three
+   * questions instead of one, so a generation returning two `mcq`s for the same pull
+   * would fail the whole synthesis step after the model call was paid for. The first
+   * of a kind wins; the rest are dropped, which is the same posture as every other
+   * narrowing in this function.
+   */
+  const seen = new Set<string>();
 
   pulls.forEach((p, ordinal) => {
     const pullId = byOrdinal.get(ordinal);
-    const q = p.question;
-    if (!pullId || !q) return;
-    const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
-    const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
-    if (!prompt || !answer) return;
-    const distractors = Array.isArray(q.distractors)
-      ? q.distractors.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
-      : [];
-    out.push({ pullId, prompt, answer, distractors });
+    if (!pullId || !Array.isArray(p.questions)) return;
+
+    for (const raw of p.questions) {
+      const q = raw as {
+        kind?: unknown;
+        prompt?: unknown;
+        answer?: unknown;
+        distractors?: unknown;
+        cloze?: unknown;
+        explanation?: unknown;
+      };
+      const prompt = typeof q?.prompt === 'string' ? q.prompt.trim() : '';
+      const answer = typeof q?.answer === 'string' ? q.answer.trim() : '';
+      if (!prompt || !answer) continue;
+
+      const kind = typeof q?.kind === 'string' && GENERATED_KINDS.has(q.kind) ? q.kind : 'recall';
+      const key = `${pullId}:${kind}`;
+      if (seen.has(key)) continue;
+
+      const distractors = Array.isArray(q?.distractors)
+        ? q.distractors.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+        : [];
+      const clozeText = typeof q?.cloze === 'string' ? q.cloze.trim() : '';
+
+      // The two constraints that are about the question's own identity rather than
+      // its bounds. An MCQ with one option is not a choice and a cloze with no
+      // sentence has no blank; `quiz_questions_mcq_has_choices` and
+      // `quiz_questions_cloze_has_sentence` refuse both, so they are dropped here
+      // instead of failing the step.
+      if (kind === 'mcq' && distractors.length < 2) continue;
+      if (kind === 'cloze' && !clozeText) continue;
+
+      // Bounds, by contrast, are about one field rather than the question. An
+      // over-long explanation loses the explanation, not the question — the column
+      // is nullable precisely so a question can stand without one.
+      const explanationText = typeof q?.explanation === 'string' ? q.explanation.trim() : '';
+      const explanation =
+        explanationText && explanationText.length <= MAX_EXPLANATION ? explanationText : null;
+
+      seen.add(key);
+      out.push({
+        pullId,
+        kind,
+        prompt,
+        answer,
+        distractors,
+        cloze: kind === 'cloze' && clozeText.length <= MAX_CLOZE ? clozeText : null,
+        explanation,
+        // Only an MCQ has wrong options to explain, and only ones it actually offers:
+        // a rationale naming a distractor that is not on the card is feedback a reader
+        // can never be shown.
+        rationale:
+          kind === 'mcq'
+            ? cleanRationale((raw as { rationale?: unknown })?.rationale).filter((r) =>
+                distractors.includes(r.distractor),
+              )
+            : [],
+      });
+    }
   });
 
   return out;
@@ -944,7 +1036,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
               whyItMatters: string;
               example?: string;
               explanation?: string;
-              question?: { prompt?: unknown; answer?: unknown; distractors?: unknown };
+              questions?: unknown;
             }[];
           }
         | undefined;

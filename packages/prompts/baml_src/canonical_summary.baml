@@ -52,16 +52,53 @@ enum TopicSlug {
     Ecology @alias("ecology"),
 }
 
-/// One recall question, produced by the same call that produced the idea.
+/// What shape a question takes, and therefore how it can be wrong.
+///
+/// Aliased to the values `quiz_questions.kind` actually stores. The generated
+/// TypeScript member is `QuestionKind.Mcq`, whose value is `"Mcq"` and NOT
+/// `"mcq"` — go through `questionKindOf`, exactly as `TopicSlug` goes through
+/// `topicSlugOf`. The three here are the kinds a model can write well; the
+/// column also allows `short_answer`, `ordering` and `scenario`, which are
+/// authored rather than generated.
+enum QuestionKind {
+    Recall @alias("recall"),
+    Mcq @alias("mcq"),
+    Cloze @alias("cloze"),
+}
+
+/// Why one wrong option is wrong.
+///
+/// An array rather than a map from distractor to reason, because Gemini's
+/// structured output has no map type. `quiz_questions.rationale` stores it in
+/// this shape for the same reason.
+class DistractorRationale {
+    /// The exact distractor string this explains, so the client can match it.
+    distractor: string,
+    /// The misconception a reader who picked it holds — named, not "incorrect".
+    why: string,
+}
+
+/// One question, produced by the same call that produced the idea.
 ///
 /// `distractors` are what turn the recall interrupt from a self-graded reveal
 /// into something that can be wrong — and grading three wrong answers against
 /// one right one is a comparison the client does, so no model goes near the
 /// read path.
 class RecallQuestion {
+    kind: QuestionKind,
     prompt: string,
     answer: string,
+    /// Plausible wrong options, each wrong for a different reason. Empty for
+    /// every kind but `mcq`.
     distractors: string[],
+    /// The sentence with the answer removed, written as `___`. Null unless this
+    /// is a `cloze`.
+    cloze: string?,
+    /// Why the answer is the answer, shown only after the reader has answered.
+    /// This is the half that makes being wrong worth something.
+    explanation: string,
+    /// One entry per distractor. Empty for every kind but `mcq`.
+    rationale: DistractorRationale[],
 }
 
 /// One atomic idea that stands on its own out of context, structured for progressive depth.
@@ -76,9 +113,12 @@ class Pull {
     example: string?,
     /// Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
     explanation: string?,
-    /// Omitted rather than invented when the source is too thin to support a fair
-    /// question. `get_due_reviews` already copes with a pull that has none.
-    question: RecallQuestion?,
+    /// Up to three, of different kinds where the idea supports it — a `recall` to
+    /// state it, an `mcq` to make it separable from what it is not, a `cloze` where
+    /// one word carries the meaning. Empty rather than invented when the source is
+    /// too thin to support a fair question; `get_due_reviews` copes with a pull that
+    /// has none.
+    questions: RecallQuestion[],
 }
 
 class CanonicalSummary {

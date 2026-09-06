@@ -768,21 +768,54 @@ describe('reuse skips the paid work', () => {
               headline: 'h0',
               body: 'b0',
               whyItMatters: 'w0',
-              question: { prompt: 'q0?', answer: 'a0', distractors: ['x', 'y', 'z'] },
+              questions: [
+                { kind: 'recall', prompt: 'q0?', answer: 'a0' },
+                {
+                  kind: 'mcq',
+                  prompt: 'which?',
+                  answer: 'a0',
+                  distractors: ['x', 'y', 'z'],
+                  explanation: 'because a0',
+                  rationale: [{ distractor: 'x', why: 'x is the near miss' }],
+                },
+              ],
             },
-            // No question: a source too thin to support a fair one omits it
-            // rather than inventing it, and this must not become "undefined".
+            // No questions: a source too thin to support a fair one omits them
+            // rather than inventing them, and this must not become "undefined".
             { headline: 'h1', body: 'b1', whyItMatters: 'w1' },
           ],
         },
       },
     } as never);
 
+    // ONE CALL carrying both, not one call per question. `insertQuizQuestions`
+    // upserts on `(pull_id, kind)`, and a statement naming the same target twice is
+    // refused outright -- so the batching and the de-duplication have to agree.
     expect(calls.insertQuizQuestions).toBe(1);
     expect(received.insertQuizQuestions).toEqual([
-      { pullId: 'p0', prompt: 'q0?', answer: 'a0', distractors: ['x', 'y', 'z'] },
+      {
+        pullId: 'p0',
+        kind: 'recall',
+        prompt: 'q0?',
+        answer: 'a0',
+        distractors: [],
+        cloze: null,
+        explanation: null,
+        rationale: [],
+      },
+      {
+        pullId: 'p0',
+        kind: 'mcq',
+        prompt: 'which?',
+        answer: 'a0',
+        distractors: ['x', 'y', 'z'],
+        cloze: null,
+        explanation: 'because a0',
+        rationale: [{ distractor: 'x', why: 'x is the near miss' }],
+      },
     ]);
-    expect(cards.output).toMatchObject({ questions: 1 });
+    // Counted as rows written, which is what the ledger and the operator see.
+    expect(cards.output).toMatchObject({ questions: 2 });
   });
 
   it('writes no questions at all rather than calling with an empty list', async () => {

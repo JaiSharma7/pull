@@ -66,6 +66,28 @@ export class CanonicalSummary$stream {
 }
 
 /**
+ * Why one wrong option is wrong.
+ * 
+ * An array rather than a map from distractor to reason, because Gemini's
+ * structured output has no map type. `quiz_questions.rationale` stores it in
+ * this shape for the same reason.
+ *
+ * Attributes:
+ *   distractor: The exact distractor string this explains, so the client can match it.
+ *   why: The misconception a reader who picked it holds — named, not "incorrect".
+ */
+export class DistractorRationale$stream {
+  distractor!: string | null;
+  why!: string | null;
+  constructor(init: {
+    distractor: string | null;
+    why: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
  * One atomic idea that stands on its own out of context, structured for progressive depth.
  *
  * Attributes:
@@ -74,8 +96,11 @@ export class CanonicalSummary$stream {
  *   whyItMatters: Medium stop (impact): what changes if the reader believes it -- not a restatement of the body.
  *   example: Medium stop (concrete grounding): a real case study, historical instance, demonstration, or thought experiment.
  *   explanation: Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
- *   question: Omitted rather than invented when the source is too thin to support a fair
- *     question. `get_due_reviews` already copes with a pull that has none.
+ *   questions: Up to three, of different kinds where the idea supports it — a `recall` to
+ *     state it, an `mcq` to make it separable from what it is not, a `cloze` where
+ *     one word carries the meaning. Empty rather than invented when the source is
+ *     too thin to support a fair question; `get_due_reviews` copes with a pull that
+ *     has none.
  */
 export class Pull$stream {
   headline!: string | null;
@@ -83,35 +108,55 @@ export class Pull$stream {
   whyItMatters!: string | null;
   example!: string | null;
   explanation!: string | null;
-  question!: RecallQuestion$stream | null;
+  questions!: RecallQuestion$stream[];
   constructor(init: {
     headline: string | null;
     body: string | null;
     whyItMatters: string | null;
     example: string | null;
     explanation: string | null;
-    question: RecallQuestion$stream | null;
+    questions: RecallQuestion$stream[];
   }) {
     Object.assign(this, init);
   }
 }
 
 /**
- * One recall question, produced by the same call that produced the idea.
+ * One question, produced by the same call that produced the idea.
  * 
  * `distractors` are what turn the recall interrupt from a self-graded reveal
  * into something that can be wrong — and grading three wrong answers against
  * one right one is a comparison the client does, so no model goes near the
  * read path.
+ *
+ * Attributes:
+ *   kind
+ *   prompt
+ *   answer
+ *   distractors: Plausible wrong options, each wrong for a different reason. Empty for
+ *     every kind but `mcq`.
+ *   cloze: The sentence with the answer removed, written as `___`. Null unless this
+ *     is a `cloze`.
+ *   explanation: Why the answer is the answer, shown only after the reader has answered.
+ *     This is the half that makes being wrong worth something.
+ *   rationale: One entry per distractor. Empty for every kind but `mcq`.
  */
 export class RecallQuestion$stream {
+  kind!: QuestionKind | null;
   prompt!: string | null;
   answer!: string | null;
   distractors!: string[];
+  cloze!: string | null;
+  explanation!: string | null;
+  rationale!: DistractorRationale$stream[];
   constructor(init: {
+    kind: QuestionKind | null;
     prompt: string | null;
     answer: string | null;
     distractors: string[];
+    cloze: string | null;
+    explanation: string | null;
+    rationale: DistractorRationale$stream[];
   }) {
     Object.assign(this, init);
   }
@@ -167,21 +212,79 @@ export enum TopicSlug {
 }
 
 /**
- * One recall question, produced by the same call that produced the idea.
+ * What shape a question takes, and therefore how it can be wrong.
+ * 
+ * Aliased to the values `quiz_questions.kind` actually stores. The generated
+ * TypeScript member is `QuestionKind.Mcq`, whose value is `"Mcq"` and NOT
+ * `"mcq"` — go through `questionKindOf`, exactly as `TopicSlug` goes through
+ * `topicSlugOf`. The three here are the kinds a model can write well; the
+ * column also allows `short_answer`, `ordering` and `scenario`, which are
+ * authored rather than generated.
+ */
+export enum QuestionKind {
+  Recall = "Recall",
+  Mcq = "Mcq",
+  Cloze = "Cloze",
+}
+
+/**
+ * Why one wrong option is wrong.
+ * 
+ * An array rather than a map from distractor to reason, because Gemini's
+ * structured output has no map type. `quiz_questions.rationale` stores it in
+ * this shape for the same reason.
+ *
+ * Attributes:
+ *   distractor: The exact distractor string this explains, so the client can match it.
+ *   why: The misconception a reader who picked it holds — named, not "incorrect".
+ */
+export class DistractorRationale {
+  distractor!: string;
+  why!: string;
+  constructor(init: {
+    distractor: string;
+    why: string;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * One question, produced by the same call that produced the idea.
  * 
  * `distractors` are what turn the recall interrupt from a self-graded reveal
  * into something that can be wrong — and grading three wrong answers against
  * one right one is a comparison the client does, so no model goes near the
  * read path.
+ *
+ * Attributes:
+ *   kind
+ *   prompt
+ *   answer
+ *   distractors: Plausible wrong options, each wrong for a different reason. Empty for
+ *     every kind but `mcq`.
+ *   cloze: The sentence with the answer removed, written as `___`. Null unless this
+ *     is a `cloze`.
+ *   explanation: Why the answer is the answer, shown only after the reader has answered.
+ *     This is the half that makes being wrong worth something.
+ *   rationale: One entry per distractor. Empty for every kind but `mcq`.
  */
 export class RecallQuestion {
+  kind!: QuestionKind;
   prompt!: string;
   answer!: string;
   distractors!: string[];
+  cloze!: string | null;
+  explanation!: string;
+  rationale!: DistractorRationale[];
   constructor(init: {
+    kind: QuestionKind;
     prompt: string;
     answer: string;
     distractors: string[];
+    cloze: string | null;
+    explanation: string;
+    rationale: DistractorRationale[];
   }) {
     Object.assign(this, init);
   }
@@ -196,8 +299,11 @@ export class RecallQuestion {
  *   whyItMatters: Medium stop (impact): what changes if the reader believes it -- not a restatement of the body.
  *   example: Medium stop (concrete grounding): a real case study, historical instance, demonstration, or thought experiment.
  *   explanation: Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
- *   question: Omitted rather than invented when the source is too thin to support a fair
- *     question. `get_due_reviews` already copes with a pull that has none.
+ *   questions: Up to three, of different kinds where the idea supports it — a `recall` to
+ *     state it, an `mcq` to make it separable from what it is not, a `cloze` where
+ *     one word carries the meaning. Empty rather than invented when the source is
+ *     too thin to support a fair question; `get_due_reviews` copes with a pull that
+ *     has none.
  */
 export class Pull {
   headline!: string;
@@ -205,14 +311,14 @@ export class Pull {
   whyItMatters!: string;
   example!: string | null;
   explanation!: string | null;
-  question!: RecallQuestion | null;
+  questions!: RecallQuestion[];
   constructor(init: {
     headline: string;
     body: string;
     whyItMatters: string;
     example: string | null;
     explanation: string | null;
-    question: RecallQuestion | null;
+    questions: RecallQuestion[];
   }) {
     Object.assign(this, init);
   }

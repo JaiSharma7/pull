@@ -178,15 +178,26 @@ describe('questionsToWrite', () => {
     { ordinal: 1, id: 'p1' },
   ];
 
+  /** One pull carrying one question, with `over` layered on top of a valid recall. */
   const q = (over: Record<string, unknown> = {}) => ({
-    question: { prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'], ...over },
+    questions: [{ kind: 'recall', prompt: 'Why?', answer: 'Because.', ...over }],
+  });
+
+  /** What a plain recall question lowers to, so the cases below stay readable. */
+  const recall = (pullId: string, over: Record<string, unknown> = {}) => ({
+    pullId,
+    kind: 'recall',
+    prompt: 'Why?',
+    answer: 'Because.',
+    distractors: [],
+    cloze: null,
+    explanation: null,
+    rationale: [],
+    ...over,
   });
 
   it('pairs a question to the Pull that was actually written', () => {
-    expect(questionsToWrite([q(), q()], written)).toEqual([
-      { pullId: 'p0', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    expect(questionsToWrite([q(), q()], written)).toEqual([recall('p0'), recall('p1')]);
   });
 
   it('pairs by ordinal, not by array position', () => {
@@ -197,15 +208,14 @@ describe('questionsToWrite', () => {
       { ordinal: 0, id: 'first' },
     ];
     expect(questionsToWrite([q({ prompt: 'A' }), q({ prompt: 'B' })], shuffled)).toEqual([
-      { pullId: 'first', prompt: 'A', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'second', prompt: 'B', answer: 'Because.', distractors: ['a', 'b', 'c'] },
+      recall('first', { prompt: 'A' }),
+      recall('second', { prompt: 'B' }),
     ]);
   });
 
-  it('skips a Pull with no question rather than writing an empty one', () => {
-    expect(questionsToWrite([{}, q()], written)).toEqual([
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+  it('skips a Pull with no questions rather than writing an empty one', () => {
+    expect(questionsToWrite([{}, q()], written)).toEqual([recall('p1')]);
+    expect(questionsToWrite([{ questions: [] }, q()], written)).toEqual([recall('p1')]);
   });
 
   it('drops a question missing either half', () => {
@@ -221,16 +231,115 @@ describe('questionsToWrite', () => {
   });
 
   it('keeps only string distractors, and tolerates a missing list', () => {
-    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual({
-      pullId: 'p0',
-      prompt: 'Why?',
-      answer: 'Because.',
-      distractors: ['a', 'b'],
-    });
+    const row = questionsToWrite(
+      [{ questions: [{ kind: 'mcq', prompt: 'Why?', answer: 'Because.', distractors: ['a', 7, '', null, 'b'] }] }],
+      written,
+    )[0];
+    expect(row?.distractors).toEqual(['a', 'b']);
     expect(questionsToWrite([q({ distractors: undefined })], written)[0]?.distractors).toEqual([]);
   });
 
   it('drops a question whose Pull was never written', () => {
     expect(questionsToWrite([q(), q(), q()], [{ ordinal: 0, id: 'p0' }])).toHaveLength(1);
+  });
+
+  /*
+   * Everything below is 3g: one question per idea became up to three, and the
+   * database has opinions about all of them.
+   */
+
+  it('keeps one of each kind, and only the first of a repeated kind', () => {
+    /*
+     * `insertQuizQuestions` upserts on `pull_id,kind`, and a single statement naming
+     * the same conflict target twice is refused outright — "ON CONFLICT DO UPDATE
+     * command cannot affect row a second time". A generation returning two `mcq`s for
+     * one idea would fail the whole synthesis step AFTER the model call was paid for,
+     * which is the expensive way to discover it.
+     */
+    const rows = questionsToWrite(
+      [
+        {
+          questions: [
+            { kind: 'recall', prompt: 'first recall', answer: 'a' },
+            { kind: 'mcq', prompt: 'an mcq', answer: 'a', distractors: ['x', 'y'] },
+            { kind: 'recall', prompt: 'second recall', answer: 'a' },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(rows.map((r) => r.kind)).toEqual(['recall', 'mcq']);
+    expect(rows[0]?.prompt).toBe('first recall');
+  });
+
+  it('allows the same kind on different Pulls', () => {
+    // The uniqueness is per pull, not per batch. Deduplicating globally would drop
+    // every idea's question but the first.
+    const rows = questionsToWrite([q(), q()], written);
+    expect(rows.map((r) => r.pullId)).toEqual(['p0', 'p1']);
+  });
+
+  it('falls back to recall for a kind the column would refuse', () => {
+    // The BAML enum aliases to the three storable kinds, so a real provider cannot
+    // produce anything else — but a stub or a future provider does not go through
+    // either, and `quiz_questions_kind_known` refusing a value after the call has
+    // been paid for is exactly what this function exists to prevent.
+    expect(questionsToWrite([q({ kind: 'essay' })], written)[0]?.kind).toBe('recall');
+    expect(questionsToWrite([q({ kind: 'Mcq' })], written)[0]?.kind).toBe('recall');
+    expect(questionsToWrite([q({ kind: undefined })], written)[0]?.kind).toBe('recall');
+  });
+
+  it('drops an mcq that is not a choice', () => {
+    // `quiz_questions_mcq_has_choices` needs two. One option is not a choice, and
+    // `mcqOptions` deduplicates before anything downstream could notice.
+    const thin = { questions: [{ kind: 'mcq', prompt: 'p', answer: 'a', distractors: ['x'] }] };
+    expect(questionsToWrite([thin], written)).toEqual([]);
+  });
+
+  it('drops a cloze with no sentence to blank', () => {
+    const blank = { questions: [{ kind: 'cloze', prompt: 'p', answer: 'a', cloze: '   ' }] };
+    expect(questionsToWrite([blank], written)).toEqual([]);
+    const good = { questions: [{ kind: 'cloze', prompt: 'p', answer: 'a', cloze: 'The ___ is the way.' }] };
+    expect(questionsToWrite([good], written)[0]?.cloze).toBe('The ___ is the way.');
+  });
+
+  it('keeps rationale only for an mcq, and only for options it offers', () => {
+    // A rationale naming a distractor that is not on the card is feedback a reader
+    // can never be shown, and `whyWrong` matches on the exact string.
+    const rows = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'p',
+              answer: 'a',
+              distractors: ['x', 'y'],
+              rationale: [
+                { distractor: 'x', why: 'because x' },
+                { distractor: 'not offered', why: 'unreachable' },
+                { distractor: 'y' },
+              ],
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(rows[0]?.rationale).toEqual([{ distractor: 'x', why: 'because x' }]);
+    expect(questionsToWrite([q({ rationale: [{ distractor: 'a', why: 'b' }] })], written)[0]
+      ?.rationale).toEqual([]);
+  });
+
+  it('loses an over-long explanation rather than the question carrying it', () => {
+    // `quiz_questions_explanation_length` caps it at 2000. The column is nullable, so
+    // a question can stand without one — dropping the whole question over a field
+    // that is only ever shown after answering would be the wrong trade.
+    const long = questionsToWrite([q({ explanation: 'x'.repeat(2001) })], written)[0];
+    expect(long?.explanation).toBeNull();
+    expect(long?.prompt).toBe('Why?');
+    expect(questionsToWrite([q({ explanation: '  short  ' })], written)[0]?.explanation).toBe(
+      'short',
+    );
   });
 });
