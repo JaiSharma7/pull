@@ -39,7 +39,18 @@ export interface UndoResult {
   importId: string;
   removed: number;
   alreadyUndone: boolean;
-  alsoRemoved: {
+  /**
+   * What went with the highlights — ABSENT on a second Undo.
+   *
+   * `undo_import`'s idempotent branch returns `{importId, removed, alreadyUndone}` and
+   * stops (`20260905110000_your_highlights_are_yours_to_keep.sql:1227-1231`); there is
+   * nothing left to count, so it counts nothing. Declared non-optional first, and the
+   * screen then read `.questions` off it unconditionally — which threw, and because the
+   * error boundary wraps the whole tree, replaced the entire app with "This screen
+   * stopped working". Reachable without anything unusual: the first Undo commits, its
+   * response is lost, the button is still on screen, the reader presses it again.
+   */
+  alsoRemoved?: {
     questions: number;
     grades: number;
     notes: number;
@@ -103,9 +114,13 @@ export type CommitChunk = (
  * So the partial result rides on the error. `Ingestion.tsx` renders it beside the
  * failure: what landed, and the button that removes it.
  *
- * Only raised when something actually landed. A first chunk that fails has stored
- * nothing and has no batch id, so that error is rethrown unchanged rather than dressed
- * up as a partial success with an `importId` of null.
+ * Raised whenever a batch id is in hand, which is not quite the same as "something
+ * landed". On a FIRST attempt the two coincide: no chunk has succeeded, there is no id,
+ * and the error is rethrown unchanged rather than dressed up as a partial success with
+ * an `importId` of null. On a RETRY the id was supplied by the caller, so a first chunk
+ * that fails and stores nothing still raises this -- carrying `added: 0` and the id of
+ * the batch the earlier attempt opened, which is exactly what the screen needs to keep
+ * offering Undo. `mergeAttempts` is what stops those zeroes overwriting the counts.
  */
 export class PartialImportError extends Error {
   readonly partial: ImportResult;
@@ -116,6 +131,53 @@ export class PartialImportError extends Error {
     this.cause = cause;
     this.partial = partial;
   }
+}
+
+/**
+ * Fold a retry's result into the one already on screen.
+ *
+ * A resumed attempt resends the WHOLE file, so its counters describe that attempt and
+ * not the batch. Writing them over the earlier ones tells a reader who kept 600
+ * highlights that they kept 100: `commit_import` counts the 500 the first attempt
+ * stored as duplicates of themselves, and reports only the books the last 100 touched.
+ *
+ * So:
+ *   `added`      sums. Both attempts stored rows and the batch holds all of them.
+ *   `duplicates` means "highlights in your file you already had BEFORE this import".
+ *                A retry that re-walks the WHOLE file reports every pre-existing
+ *                duplicate PLUS the first attempt's own stored rows, so those have to
+ *                come out of it -- and the earlier count must not be added back on top,
+ *                or the pre-existing ones are counted twice. (Written the other way
+ *                first; the test below caught it.)
+ *
+ *                But a retry that fails partway has NOT re-walked everything, and then
+ *                the subtraction goes negative and a clamp to zero would erase a number
+ *                the reader was already shown. So it is the LARGER of the two readings,
+ *                which is the earlier count exactly when the retry did not get far
+ *                enough to restate it.
+ *   `works`      is a union by id -- a book the first attempt created is in the batch
+ *                whether or not the retry touched it again.
+ *   the ceiling  LATCHES. It was the newer answer first, on the reasoning that an Undo
+ *                between attempts can free room -- but an Undo hides this panel
+ *                entirely, and a new file resets it, so the only sequence that reaches
+ *                here is retries of one file. Across those, a partial retry starts the
+ *                flag at false and would clear a ceiling the reader had been told
+ *                about.
+ *
+ * Pure, and exported for its tests.
+ */
+export function mergeAttempts(prev: ImportResult | null, next: ImportResult): ImportResult {
+  if (!prev) return next;
+  const byWorkId = new Map<string, ImportedWork>();
+  for (const w of prev.works) byWorkId.set(w.workId, w);
+  for (const w of next.works) byWorkId.set(w.workId, w);
+  return {
+    importId: next.importId ?? prev.importId,
+    added: prev.added + next.added,
+    duplicates: Math.max(prev.duplicates, next.duplicates - prev.added, 0),
+    ceilingReached: prev.ceilingReached || next.ceilingReached,
+    works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
+  };
 }
 
 /**
@@ -132,9 +194,9 @@ export class PartialImportError extends Error {
  *
  * EVERY chunk is sent, including after a ceiling is reported. The loop says why.
  *
- * A chunk that fails after an earlier one landed raises `PartialImportError` carrying
- * what did land, so the batch id survives and Undo stays reachable. A first chunk that
- * fails raises whatever it raised.
+ * A chunk that fails while a batch id is in hand raises `PartialImportError` carrying
+ * what did land, so the id survives and Undo stays reachable. A first chunk that fails
+ * with no id -- which is a first attempt, never a retry -- raises whatever it raised.
  *
  * `startImportId` is how a retry rejoins the batch its first attempt opened. Without it
  * the rejoin is `commit_import`'s reuse window, which is a clock -- six hours for a file
@@ -145,46 +207,6 @@ export class PartialImportError extends Error {
  *
  * Exported for its tests. `commitImport` is this with the RPC wired in.
  */
-/**
- * Fold a retry's result into the one already on screen.
- *
- * A resumed attempt resends the WHOLE file, so its counters describe that attempt and
- * not the batch. Writing them over the earlier ones tells a reader who kept 600
- * highlights that they kept 100: `commit_import` counts the 500 the first attempt
- * stored as duplicates of themselves, and reports only the books the last 100 touched.
- *
- * So:
- *   `added`      sums. Both attempts stored rows and the batch holds all of them.
- *   `duplicates` means "highlights in your file you already had BEFORE this import".
- *                The retry re-walked the WHOLE file, so its count already includes every
- *                pre-existing duplicate the first attempt found -- it is the first
- *                attempt's own stored rows that have to come out of it, and the earlier
- *                count must NOT be added back on top or those pre-existing ones are
- *                counted twice. (Written the other way first; the test below caught it.)
- *                Clamped at zero rather than trusted: the two numbers come from
- *                different calls and nothing guarantees their relationship if a row was
- *                removed in between.
- *   `works`      is a union by id -- a book the first attempt created is in the batch
- *                whether or not the retry touched it again.
- *   the ceiling  is the latest answer, not a latch: room can be freed by an Undo
- *                between attempts.
- *
- * Pure, and exported for its tests.
- */
-export function mergeAttempts(prev: ImportResult | null, next: ImportResult): ImportResult {
-  if (!prev) return next;
-  const byWorkId = new Map<string, ImportedWork>();
-  for (const w of prev.works) byWorkId.set(w.workId, w);
-  for (const w of next.works) byWorkId.set(w.workId, w);
-  return {
-    importId: next.importId ?? prev.importId,
-    added: prev.added + next.added,
-    duplicates: Math.max(0, next.duplicates - prev.added),
-    ceilingReached: next.ceilingReached,
-    works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
-  };
-}
-
 export async function foldChunks(
   items: readonly ImportItem[],
   call: CommitChunk,
@@ -226,9 +248,10 @@ export async function foldChunks(
      * `commit_import` raises the flag at both of its ceilings and behaves oppositely at
      * each, which its own comments spell out. At the ITEM ceiling it `exit`s -- "past
      * the item ceiling nothing later in the chunk can be stored either"
-     * (20260905110000:889). At the BOOK ceiling it `continue`s -- "declining one book
-     * does not end the chunk: a later item may sit on a book this reader already owns,
-     * which costs no book quota and which they have item room for" (:948).
+     * (20260905110000:889-890). At the BOOK ceiling it `continue`s -- "declining one
+     * book does not end the chunk" (:946-947), "a later item may sit on a book this
+     * reader already owns, which costs no book quota and which they have item room for"
+     * (:949-950), and the statement itself is at :958.
      *
      * One boolean cannot tell those apart, so any stopping rule built on it throws away
      * highlights in the second case. An earlier revision of this loop broke here and

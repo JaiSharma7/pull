@@ -160,10 +160,28 @@ describe('normaliseHighlight', () => {
     );
   });
 
-  it('collapses before trimming, so whitespace-only is empty', () => {
-    // `btrim` with one argument removes spaces only. Trimming first would leave a tab
-    // or a newline standing and store a pull whose body is a single space.
+  it('makes a whitespace-only highlight empty, which is what the server checks', () => {
+    // NOT an assertion about the ORDER of the collapse and the trim, which an earlier
+    // name and comment here claimed: `String.prototype.trim` strips tabs and newlines,
+    // so both orders give the same answer for every input and the mutation that swaps
+    // them passes. The order matters in the MIGRATION, where one-argument `btrim` strips
+    // spaces only -- that is the SQL's reason, and it was borrowed here for JavaScript
+    // that does not need it.
+    //
+    // What this does assert is the property that has to agree with the server:
+    // `commit_import` refuses an item whose normalised text is empty (`:835`), so the
+    // client must call the same thing empty or it sends a chunk the RPC will reject
+    // whole.
     expect(normaliseHighlight('\t\n  \r\n')).toBe('');
+  });
+
+  it('strips NUL, which the server cannot even be asked about', () => {
+    // Everything else in this module mirrors a bound `commit_import` checks. `U+0000` is
+    // different in kind: Postgres cannot hold it in `text`, so `p_items` fails at the
+    // jsonb cast with `22P05` before validation runs at all -- and the cost is the whole
+    // chunk, 499 good highlights for one stray byte from a UTF-16 export.
+    expect(normaliseHighlight('a\u0000b')).toBe('ab');
+    expect(normaliseHighlight('\u0000')).toBe('');
   });
 });
 

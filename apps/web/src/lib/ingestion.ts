@@ -247,8 +247,10 @@ export interface ImportItem {
  * What `commit_import` refuses, mirrored here so a reader is not told about it by a 500.
  *
  * Every number is the migration's own. 500 items a call is `max_items_per_call`; 200 is
- * the `left(..., 200)` the RPC applies to a title, an author and a locator; 20,000 is
- * `commit_import: a highlight of % characters exceeds 20000`. Mirroring rather than
+ * the `left(..., 200)` the RPC applies to a title, an author and a locator (`:819`,
+ * `:820`, `:822` -- `:821` is the text itself and is not truncated); 20,000 is the bound
+ * at `:838`, whose message at `:839-840` reads `commit_import: a highlight of %
+ * characters exceeds 20000`. Mirroring rather than
  * trusting, because the RPC raises `22023` for the whole chunk when one item is wrong,
  * and a reader whose 400th highlight is empty should lose that highlight rather than the
  * other 399.
@@ -261,13 +263,32 @@ const MAX_TEXT = 20000;
  * Collapse whitespace the way `commit_import` does, so the client and the server agree
  * about what is empty and about what is a duplicate.
  *
- * The RPC computes `btrim(regexp_replace(text, '\s+', ' ', 'g'))` and hashes the result,
- * so a highlight that survives a copy through three apps arrives with different line
- * breaks and is the same highlight. Collapse first, then trim: `btrim` with one argument
- * removes spaces only, so tabs and newlines alone would otherwise survive as " ".
+ * The RPC computes `btrim(regexp_replace(v_raw, '\s+', ' ', 'g'))` (`:830`) and hashes
+ * the result, so a highlight that survives a copy through three apps arrives with
+ * different line breaks and is the same highlight.
+ *
+ * NUL IS REMOVED FIRST, and it is the one character that does not merely fail
+ * validation. Postgres cannot represent `U+0000` in `text` at all, so `p_items` fails at
+ * the jsonb CAST -- `22P05 unsupported Unicode escape sequence` -- before
+ * `commit_import` looks at anything. That is earlier than every bound this module
+ * mirrors, and the cost is the same: the whole chunk, so 499 good highlights for one
+ * stray byte. Reachable from a UTF-16 clippings file read as text without a BOM.
+ *
+ * The `\s+` collapse and the trim are written in that order, and the order does not
+ * matter in JavaScript: `String.prototype.trim` strips tabs and newlines, unlike the
+ * one-argument `btrim` the SQL comment is about. An earlier version of this doc claimed
+ * the ordering was load-bearing here; it is load-bearing in the migration, not in this
+ * function, and the mutation that swaps them passes.
  */
 export function normaliseHighlight(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  return (
+    text
+      // `replaceAll` with a string rather than a regex: `no-control-regex` rejects a
+      // control character in a pattern, and this needs no pattern.
+      .replaceAll('\u0000', '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /**
@@ -279,8 +300,11 @@ export function normaliseHighlight(text: string): string {
  * cannot make acceptable is left out, and the caller can say how many.
  *
  * Truncation is not a drop: a 300-character title is a real book with a long title, and
- * the RPC would truncate it to 200 anyway. Doing it here means the `content_hash` the
- * server computes matches what this client would predict.
+ * the RPC truncates it to 200 anyway (`:819-822`). Doing it here is so the reader's
+ * screen and the stored row agree about what was kept -- not, as an earlier version of
+ * this said, so a hash matches "what this client would predict". Nothing here predicts a
+ * hash: `content_hash` is computed by the server from the values it receives, after its
+ * own `left(..., 200)`, so client-side truncation cannot change it either way.
  */
 export function toImportItems(highlights: readonly ParsedHighlight[]): {
   items: ImportItem[];

@@ -9,6 +9,9 @@ import {
   type UndoResult,
   undoImport,
 } from '../lib/import-api.js';
+import { isOfflineFailure } from '../lib/offline.js';
+import { sqlState } from '../lib/rpc-error.js';
+import { collateral } from '../lib/undo-summary.js';
 import {
   type IngestionSummary,
   type ParsedHighlight,
@@ -24,27 +27,21 @@ import {
  * left the callback and its button doing nothing at all, so both are gone.
  */
 /**
- * What an Undo took beyond the highlights, in a sentence, or null if it took nothing.
+ * What to tell the reader about a failure.
  *
- * `undo_import` deletes the batch's Pulls and everything that cascades off them. The
- * counts come back in `alsoRemoved` precisely so a reader can be told; naming them is
- * the difference between an Undo and a surprise.
+ * A request that never left the device is not a refusal, and `rpc-error.ts` exists to
+ * tell them apart -- postgrest-js catches a `fetch` rejection and RESOLVES with an error
+ * object carrying `code: ''`, so "TypeError: Failed to fetch" arrives as data and there
+ * is no `TypeError` left downstream to recognise. Every other screen in the app branches
+ * on `isOfflineFailure`; this one rendered `e.message` raw, which put a JavaScript stack
+ * trace on screen in mono uppercase -- the exact defect `rpc-error.ts`'s own header
+ * describes the feed having had.
  */
-function collateral(u: UndoResult): string | null {
-  const parts = [
-    [u.alsoRemoved.questions, 'question', 'questions'],
-    [u.alsoRemoved.grades, 'recorded review', 'recorded reviews'],
-    [u.alsoRemoved.notes, 'note', 'notes'],
-    [u.alsoRemoved.highlights, 'highlight of your own', 'highlights of your own'],
-    [u.alsoRemoved.explanations, 'explanation', 'explanations'],
-    [u.alsoRemoved.convictions, 'recorded stance', 'recorded stances'],
-  ] as const;
-  const said = parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
-  // `at(-1)` rather than an index, because `noUncheckedIndexedAccess` widens every
-  // index to `| undefined` and the emptiness is already decided one line up.
-  const last = said.at(-1);
-  if (last === undefined) return null;
-  return said.length === 1 ? last : `${said.slice(0, -1).join(', ')} and ${last}`;
+function failureLine(e: unknown, fallback: string): string {
+  if (isOfflineFailure(e)) {
+    return 'You appear to be offline. Nothing was sent — try again when you are back.';
+  }
+  return e instanceof Error ? e.message : fallback;
 }
 
 export function Ingestion() {
@@ -57,9 +54,17 @@ export function Ingestion() {
    * merge into one batch and make an Undo of the second take the first one's highlights.
    */
   const [sourceKind, setSourceKind] = useState<ImportSourceKind>('paste');
-  const [keeping, setKeeping] = useState(false);
+  /*
+   * WHICH action is running, not merely that one is. A shared boolean made the Undo
+   * button relabel itself "Undoing…" while a retry was resending 1,200 highlights --
+   * and on that path it is the only button on screen, because setting `error` to null
+   * unmounts the Keep button the moment the retry starts.
+   */
+  const [busy, setBusy] = useState<'keep' | 'undo' | null>(null);
+  const keeping = busy !== null;
   const [result, setResult] = useState<ImportResult | null>(null);
   const [skipped, setSkipped] = useState(0);
+  const [shaped, setShaped] = useState<ReturnType<typeof toImportItems> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [undone, setUndone] = useState<UndoResult | null>(null);
   /*
@@ -84,16 +89,30 @@ export function Ingestion() {
     generation.current += 1;
     setRawText(text);
     setSourceKind(kind);
-    // A new file is a new import: the previous result described a different upload, and
-    // leaving it on screen beside fresh counts is the kind of stale number this screen
-    // has had to have removed before.
-    setResult(null);
     setError(null);
-    setUndone(null);
-    setSkipped(0);
+
+    /*
+     * THE SAME TEXT IS THE SAME FILE, and clearing the result for it was two defects.
+     *
+     * Re-parsing an identical file dropped `result`, so `resume` went null and
+     * `commit_import` fell back to its six-hour reuse window -- which returns the FIRST
+     * batch's id. The panel then said "Kept 0 highlights across 0 books" beside an Undo
+     * that would take back everything the first attempt stored. And any re-parse at all
+     * destroyed the only handle on that batch, since this PR ships no other surface that
+     * can undo one.
+     *
+     * Unchanged text keeps the result and its Undo; changed text is a different import
+     * and clears them, which is what stops a stale batch id being joined to a new file.
+     */
+    if (text !== rawText) {
+      setResult(null);
+      setUndone(null);
+      setSkipped(0);
+    }
 
     if (!text.trim()) {
       setSummary(null);
+      setShaped(null);
       return;
     }
 
@@ -102,6 +121,11 @@ export function Ingestion() {
       : parseCsvHighlights(text);
 
     setSummary(parsed.length > 0 ? summarizeIngestion(parsed) : null);
+    // SHAPED HERE, not at the moment of keeping, so the button can promise the number it
+    // will actually deliver. It said `summary.totalHighlights` and then reported fewer,
+    // because `toImportItems` drops what the RPC would refuse -- so a file with one
+    // 20,001-character highlight offered "Keep 1204 highlights" and kept 1,203.
+    setShaped(parsed.length > 0 ? toImportItems(parsed) : null);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,16 +140,29 @@ export function Ingestion() {
     reader.readAsText(file);
   };
 
+  /*
+   * One sentence for the permanent live region, so the outcome is spoken rather than
+   * only drawn. Deliberately short: the panels carry the detail visually, and a screen
+   * reader repeating six lines on every state change is worse than a summary.
+   */
+  const announcement = undone
+    ? 'Import undone.'
+    : result
+      ? `Kept ${result.added} ${result.added === 1 ? 'highlight' : 'highlights'}.`
+      : '';
+
   const handleKeep = async () => {
-    if (!summary || keeping) return;
+    if (!summary || !shaped || keeping) return;
     const mine = generation.current;
-    setKeeping(true);
+    setBusy('keep');
     setError(null);
     try {
-      const { items, skipped: dropped } = toImportItems(summary.highlights);
+      const { items, skipped: dropped } = shaped;
       setSkipped(dropped);
       if (items.length === 0) {
-        setError('None of these highlights could be kept — each one needs a title and some text.');
+        setError(
+          'None of these could be kept — each needs a title, some text, and fewer than 20,000 characters.',
+        );
         return;
       }
       // Hashed from the raw text rather than the parsed items, because the hash is what
@@ -148,32 +185,61 @@ export function Ingestion() {
        * needs the batch id and the batch id is on the error.
        *
        * So both are shown: the counts and the Undo button from `partial`, and the
-       * failure above them.
+       * failure below them, in the alert region at the foot of the panel.
        */
       if (generation.current !== mine) return;
-      // Merged for the same reason a success is, which also covers the case that used to
-      // need its own guard: a retry failing on its first chunk carries the batch id and
-      // zeroes, and `mergeAttempts` adds zero rather than overwriting the earlier counts.
+      // Merged for the same reason a success is: a retry that fails early carries the
+      // batch id and small numbers, and `mergeAttempts` keeps the larger reading rather
+      // than overwriting what the reader was already shown.
       if (e instanceof PartialImportError) {
         const { partial } = e;
         setResult((prev) => mergeAttempts(prev, partial));
       }
-      setError(e instanceof Error ? e.message : 'The import did not go through.');
+      /*
+       * A BATCH THAT IS GONE IS NOT ONE TO KEEP RESENDING. If the Undo committed but its
+       * answer was lost, `result.importId` names a tombstoned batch, and
+       * `commit_import`'s named branch refuses it with 22023 -- "no open batch of yours
+       * with that id" -- on this press and on every press after it. Forgetting the id
+       * lets the next one open a fresh batch, which is what the reader is asking for.
+       */
+      if (sqlState(e) === '22023') setResult(null);
+      setError(failureLine(e, 'The import did not go through.'));
     } finally {
-      if (generation.current === mine) setKeeping(false);
+      /*
+       * UNCONDITIONALLY, and it was conditioned on the generation first.
+       *
+       * `keeping` is one flag for one screen, not a fact about a request: a superseded
+       * attempt that skipped the reset left it `true` for the life of the tab, so the
+       * button read "Keeping…" and stayed disabled, `handleKeep` refused on its own
+       * guard, and `handleUndo` refused on the same flag. The screen was dead until a
+       * reload -- reachable by doing exactly what the inputs are deliberately left
+       * editable for: picking a second file while the first is still uploading.
+       *
+       * Clearing it always is safe because only one attempt can be in flight: both
+       * handlers refuse while it is set.
+       */
+      setBusy(null);
     }
   };
 
   const handleUndo = async () => {
     if (!result?.importId || keeping) return;
-    setKeeping(true);
+    // The same capture `handleKeep` makes, and for the same reason: an Undo in flight
+    // when the reader picks another file would otherwise write the old batch's counts
+    // under the new one -- and because `undone` being set hides the Keep button, the
+    // new file could not be imported at all until they touched an input again.
+    const mine = generation.current;
+    setBusy('undo');
     setError(null);
     try {
-      setUndone(await undoImport(result.importId));
+      const answer = await undoImport(result.importId);
+      if (generation.current !== mine) return;
+      setUndone(answer);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The undo did not go through.');
+      if (generation.current !== mine) return;
+      setError(failureLine(e, 'The undo did not go through.'));
     } finally {
-      setKeeping(false);
+      setBusy(null);
     }
   };
 
@@ -201,7 +267,8 @@ export function Ingestion() {
         </h1>
         <p className="meta">
           Read your Kindle clippings or a Readwise export and see what is in them. This runs in your
-          browser: nothing is uploaded, and nothing is added to your Delta yet.
+          browser, and nothing leaves it until you choose to keep these. Nothing is added to your
+          Delta either way.
         </p>
       </header>
 
@@ -301,8 +368,14 @@ export function Ingestion() {
             matched to an idea, which is a cost worth answering separately.
           </p>
 
+          {/* THE ANNOUNCEMENT IS THE PERMANENT REGION BELOW, not these panels.
+              `App.tsx:1146` states the rule: "A live region that is always present and
+              changes its text is what gets announced; rendering the region itself
+              conditionally is the version that stays silent." All three panels here were
+              created at the same moment as their text, so a reader using a screen reader
+              was told nothing when an import finished, failed, or was undone. */}
           {result && !undone && (
-            <div role="status" style={{ marginBottom: 'var(--space-3)' }}>
+            <div style={{ marginBottom: 'var(--space-3)' }}>
               <p style={{ fontWeight: 600 }}>
                 Kept {result.added} {result.added === 1 ? 'highlight' : 'highlights'} across{' '}
                 {result.works.length} {result.works.length === 1 ? 'book' : 'books'}.
@@ -318,7 +391,8 @@ export function Ingestion() {
               )}
               {skipped > 0 && (
                 <p className="meta">
-                  {skipped} could not be kept — a highlight needs a title and some text.
+                  {skipped} could not be kept — each needs a title, some text, and fewer than 20,000
+                  characters.
                 </p>
               )}
               <p className="meta">They are in your Library, and due for review tomorrow.</p>
@@ -326,7 +400,7 @@ export function Ingestion() {
           )}
 
           {undone && (
-            <div role="status" style={{ marginBottom: 'var(--space-3)' }}>
+            <div style={{ marginBottom: 'var(--space-3)' }}>
               <p className="meta">
                 {undone.alreadyUndone
                   ? 'Already removed.'
@@ -347,11 +421,23 @@ export function Ingestion() {
             </div>
           )}
 
-          {error && (
-            <p className="meta" role="status" style={{ marginBottom: 'var(--space-3)' }}>
-              {error}
-            </p>
-          )}
+          {/* THE TWO PERMANENT REGIONS. Always mounted, empty until there is something
+              to say, so a screen reader is actually told. `role="alert"` on the failure
+              rather than `status`, and the accent colour with it: every other error in
+              the app does both (`Auth.tsx`, `Review.tsx`, `Interrupt.tsx`), and this one
+              was `className="meta"` -- the same muted mono as the supporting copy, so a
+              statement timeout sat typographically indistinguishable from "They are in
+              your Library" one line above it. */}
+          <p role="status" className="meta" style={{ marginBottom: 'var(--space-3)' }}>
+            {announcement}
+          </p>
+          <p
+            role="alert"
+            className="meta"
+            style={{ marginBottom: 'var(--space-3)', color: error ? 'var(--accent)' : undefined }}
+          >
+            {error}
+          </p>
 
           <div className="pull-card__footer">
             {/* Shown again after a failure, including a PARTIAL one -- otherwise a reader
@@ -361,12 +447,12 @@ export function Ingestion() {
                 duplicate rather than stored twice. */}
             {(!result || error) && !undone && (
               <button type="button" className="btn" onClick={handleKeep} disabled={keeping}>
-                {keeping
+                {busy === 'keep'
                   ? 'Keeping…'
                   : error && result
                     ? 'Keep the rest'
-                    : `Keep ${summary.totalHighlights} ${
-                        summary.totalHighlights === 1 ? 'highlight' : 'highlights'
+                    : `Keep ${shaped?.items.length ?? 0} ${
+                        (shaped?.items.length ?? 0) === 1 ? 'highlight' : 'highlights'
                       }`}
               </button>
             )}
@@ -377,7 +463,7 @@ export function Ingestion() {
                 onClick={handleUndo}
                 disabled={keeping}
               >
-                {keeping ? 'Undoing…' : 'Undo'}
+                {busy === 'undo' ? 'Undoing…' : 'Undo'}
               </button>
             )}
             <span className="meta">

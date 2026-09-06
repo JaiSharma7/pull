@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type CommitChunk,
   foldChunks,
+  hashFile,
   type ImportResult,
   mergeAttempts,
   PartialImportError,
@@ -185,6 +186,42 @@ describe('foldChunks', () => {
   });
 });
 
+describe('hashFile', () => {
+  it('is the sha256 of the text, as 64 lowercase hex characters', () => {
+    // `imports.file_hash` has a `^[0-9a-f]{64}$` check (`20260905110000:65`) and the
+    // reuse window matches on it, so this value is what joins six chunks of one
+    // clippings file into one batch -- and therefore what makes one Undo take the whole
+    // file back rather than a sixth of it. It had no test at all, in the module that
+    // exists so the parts with a bug in them are reachable without a network.
+    return expect(hashFile('abc')).resolves.toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
+  });
+
+  it('answers null rather than throwing where there is no digest to compute', async () => {
+    // `crypto.subtle` is secure-context-gated, so over plain http it is absent. The RPC
+    // takes a null hash and gives a hashless source its own five-minute window, so
+    // losing the hash costs a weaker window; throwing would cost the reader their
+    // import.
+    // AWAITED INSIDE THE TRY. Returning the assertion instead let `finally` restore
+    // `crypto` before `hashFile` ever ran, so the test passed against the real digest
+    // path and never entered the fallback it is named for.
+    //
+    // What this CANNOT distinguish, recorded rather than left for someone to hunt:
+    // deleting the `|| !crypto.subtle` guard does not fail this test, because the
+    // `try/catch` below it returns null on the resulting TypeError anyway. The two
+    // paths are behaviourally identical from outside, so the assertion is about the
+    // answer -- null, never a throw -- and not about which branch produced it.
+    const real = globalThis.crypto;
+    try {
+      Object.defineProperty(globalThis, 'crypto', { value: {}, configurable: true });
+      await expect(hashFile('abc')).resolves.toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true });
+    }
+  });
+});
+
 describe('mergeAttempts', () => {
   const base = (over: Partial<ImportResult> = {}): ImportResult => ({
     importId: 'i',
@@ -206,6 +243,55 @@ describe('mergeAttempts', () => {
     // who kept 600 highlights that they kept 100.
     const total = mergeAttempts(base({ added: 500 }), base({ added: 100, duplicates: 500 }));
     expect(total.added).toBe(600);
+  });
+
+  it('distinguishes the formula from simply keeping the earlier count', () => {
+    // Both of the fixtures below happen to pick numbers where
+    // `next.duplicates - prev.added` equals `prev.duplicates`, so the suite could not
+    // tell the implemented formula from `duplicates: prev.duplicates` -- a mutation
+    // review ran and watched pass. This is the case that separates them: a retry that
+    // finds twenty duplicates the first attempt never saw.
+    const total = mergeAttempts(
+      base({ added: 500, duplicates: 20 }),
+      base({ added: 80, duplicates: 540 }),
+    );
+    expect(total.duplicates).toBe(40);
+  });
+
+  it('keeps the earlier count when a retry did not get far enough to restate it', () => {
+    // A retry that fails partway has NOT re-walked everything, so its duplicate count is
+    // smaller than the truth and the subtraction goes negative. Clamping to zero there
+    // erases a number the reader was already shown: 100 highlights they already had
+    // would silently stop being mentioned.
+    const total = mergeAttempts(
+      base({ added: 900, duplicates: 100 }),
+      base({ added: 0, duplicates: 0 }),
+    );
+    expect(total.duplicates).toBe(100);
+  });
+
+  it('does not let a partial retry clear a ceiling the reader was told about', () => {
+    // Same shape: a retry that drops early initialises the flag false. An Undo between
+    // attempts could genuinely free room, but an Undo hides this panel and a new file
+    // resets it, so the only sequence that reaches here is retries of one file.
+    const total = mergeAttempts(base({ ceilingReached: true }), base({ added: 0 }));
+    expect(total.ceilingReached).toBe(true);
+  });
+
+  it('prefers the batch id the retry reports, and falls back to the earlier one', () => {
+    // Both directions, because neither was covered and the mutation that swaps the
+    // coalesce passes.
+    expect(mergeAttempts(base({ importId: 'a' }), base({ importId: 'b' })).importId).toBe('b');
+    expect(mergeAttempts(base({ importId: 'a' }), base({ importId: null })).importId).toBe('a');
+  });
+
+  it('lets the retry win a book both attempts touched', () => {
+    // The retry is the newer reading of the same row, so it is the one to keep. Nothing
+    // covered a collision, so the mutation that swaps the two loops passes.
+    const older = { workId: 'w1', title: 'Meditations', slug: 'meditations' };
+    const newer = { workId: 'w1', title: 'Meditations, Book II', slug: 'meditations' };
+    const total = mergeAttempts(base({ works: [older] }), base({ works: [newer] }));
+    expect(total.works).toEqual([newer]);
   });
 
   it("does not count the first attempt's own rows as duplicates", () => {
@@ -232,10 +318,17 @@ describe('mergeAttempts', () => {
     expect(total.works.map((w) => w.title)).toEqual(['Meditations', 'Walden']);
   });
 
-  it('takes the latest ceiling answer rather than latching it', () => {
-    // Room can be freed by an Undo between attempts, and the retry is the newer fact.
+  it('latches the ceiling once any attempt has reported it', () => {
+    // This asserted the opposite until review pointed out what it costs. "The retry is
+    // the newer fact" is true only of a retry that got far enough to have a fact: one
+    // that fails early initialises the flag `false` and would clear a ceiling the reader
+    // had already been told about.
+    //
+    // The case latching was written for -- an Undo freeing room between attempts --
+    // cannot reach here: an Undo hides this panel entirely and a new file resets the
+    // result, so the only sequence `mergeAttempts` ever sees is retries of one file.
     const total = mergeAttempts(base({ ceilingReached: true }), base({ ceilingReached: false }));
-    expect(total.ceilingReached).toBe(false);
+    expect(total.ceilingReached).toBe(true);
   });
 
   it('keeps the earlier batch id when a retry answers without one', () => {

@@ -81,9 +81,18 @@ export async function commitImport(
   );
 }
 
-/** Take a whole batch back. Idempotent: a second call reports `alreadyUndone`. */
+/**
+ * Take a whole batch back. Idempotent: a second call reports `alreadyUndone` and, having
+ * nothing left to count, omits `alsoRemoved` -- which is why that field is optional.
+ *
+ * A null body is refused rather than cast. PostgREST hands back `null` data for a
+ * function that returned SQL NULL, and `as unknown as UndoResult` would turn that into an
+ * object whose every field is `undefined` -- a silent no-op Undo that reports success.
+ * `commitImport` has guarded this since it was written; this did not.
+ */
 export async function undoImport(importId: string): Promise<UndoResult> {
   const { data, error } = await supabase.rpc('undo_import', { p_import_id: importId });
   if (error) throw rpcError(error);
+  if (!data) throw new Error('The undo returned nothing, so nothing can be said about it.');
   return data as unknown as UndoResult;
 }
