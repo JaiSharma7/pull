@@ -66,11 +66,23 @@ export function MetacognitiveDashboard({
           It said the container is 42rem. `App.tsx` renders this screen inside
           `<div className="shell__column">`, which `components.css` pins at
           `max-width: var(--measure)` — so the rendered width is
-          `min(--measure, 42rem)` and the paragraph was already at the measure. Adding
-          `.measure` set the same value a second time: no viewport and no appearance
-          setting changed by a pixel. The `42rem` on the container below is likewise
-          dead for the same reason, and removing it belongs to a change that owns the
-          layout rather than the copy.
+          `min(--measure, 42rem)`, and adding `.measure` sets `max-width: var(--measure)`
+          a second time, which cannot narrow a box already bounded by it. No viewport and
+          no appearance setting changes by a pixel. That conclusion is measured and holds.
+
+          WHAT IS NOT TRUE IS THAT THE 42rem IS DEAD. An earlier draft of this paragraph
+          said so, reasoning that `--measure` is always the smaller of the two. It is 34rem
+          with focus off, so it is smaller then — but `tokens.css` defines it again under
+          `:root[data-focus='on']` as `calc(var(--step-0) * 32)`, and `--step-0` is
+          `clamp(1.0625rem, 0.95rem + 0.6vw, 1.625rem)`, so the measure reaches 52rem and
+          crosses 42rem at a viewport of about 967px. Focus mode is a reader toggle
+          persisted on `documentElement`, so at the three desktop widths `docs/design.md`
+          says to test — 1128, 1504 and 1920 — the column is 832px and this container is
+          the operative 672px, left-aligned inside it because `.stack` has no
+          `margin-inline: auto`. The 42rem binds, on a screen a reader can reach in two
+          clicks. It is left alone here because removing it changes the layout, which
+          belongs to a change that owns the layout rather than the copy — but it is left
+          alone as a live value, not as a dead one.
 
           It also said `--measure` follows large text. `tokens.css` defines it twice —
           `:root` at 34rem and `:root[data-focus='on']` from `--step-0`.
