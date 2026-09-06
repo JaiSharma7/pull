@@ -85,6 +85,8 @@ const due = (pullId: string, retrievability = 0.5): DueReview => ({
   reps: 1,
   dueAt: '2026-09-05T00:00:00Z',
   question: null,
+  questionId: null,
+  questionSource: null,
 });
 
 /*

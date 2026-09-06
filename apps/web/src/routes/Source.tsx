@@ -7,7 +7,15 @@ import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
+import { draftQuestion } from '../lib/questions.js';
+import {
+  fetchUserQuestions,
+  rememberPull,
+  retireQuestion,
+  type UserQuestion,
+} from '../lib/questions-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
+import { mutationId } from '../lib/submission.js';
 import type { SourceDelta } from '../lib/types.js';
 
 /**
@@ -160,6 +168,21 @@ export function Source({
   const [related, setRelated] = useState<RelatedPull[]>([]);
   const [relatedTo, setRelatedTo] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  /*
+   * The reader's own questions on the ideas of this source, and the one they are
+   * writing.
+   *
+   * `asking` is a pull id rather than a boolean, so the form belongs to one idea: a
+   * shared open flag would put the box under whichever idea rendered last, and a reader
+   * who scrolled would find their half-typed question attached to the wrong one.
+   */
+  const [myQuestions, setMyQuestions] = useState<UserQuestion[]>([]);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [askPrompt, setAskPrompt] = useState('');
+  const [askAnswer, setAskAnswer] = useState('');
+  const [askError, setAskError] = useState<string | null>(null);
+  const [asked, setAsked] = useState<string | null>(null);
+  const [askBusy, setAskBusy] = useState(false);
   const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
@@ -325,6 +348,63 @@ export function Source({
   }, [userId, detail, claimHighlightLoad]);
 
   useEffect(reloadHighlights, [reloadHighlights]);
+
+  const reloadQuestions = useCallback(() => {
+    if (!userId || !detail || detail.pulls.length === 0) return;
+    fetchUserQuestions(detail.pulls.map((p) => p.id))
+      .then(setMyQuestions)
+      // Supplementary in the same sense the highlights are: the source reads perfectly
+      // well without the reader's own questions, and failing to load them must not take
+      // the page down.
+      .catch((e: unknown) => console.error('Could not load your questions', e));
+  }, [userId, detail]);
+
+  useEffect(reloadQuestions, [reloadQuestions]);
+
+  /**
+   * Write the question in the box, and put the idea into review.
+   *
+   * NOT OPTIMISTIC, unlike the highlight above it, and the difference is what failure
+   * costs. A highlight that fails to save is a mark that disappears from text still on
+   * screen; the reader sees it go and can select again. A question is a sentence they
+   * composed, and showing it as saved before it is would let them navigate away from
+   * words that were never stored. So the box holds what they typed until the row exists.
+   *
+   * The mutation id is minted BEFORE the send, which is what makes a retry after a
+   * timeout safe: `remember_pull` matches on `(user_id, client_mutation_id)` and returns
+   * the first call's question rather than writing a second one.
+   */
+  const saveQuestion = useCallback(
+    async (pullId: string) => {
+      if (askBusy) return;
+      const draft = draftQuestion({ prompt: askPrompt, answer: askAnswer });
+      if (!draft.ok) {
+        setAskError(draft.error);
+        return;
+      }
+
+      setAskBusy(true);
+      setAskError(null);
+      try {
+        await rememberPull(pullId, {
+          prompt: draft.prompt,
+          answer: draft.answer,
+          kind: draft.kind,
+          mutationId: mutationId(),
+        });
+        setAskPrompt('');
+        setAskAnswer('');
+        setAsking(null);
+        setAsked(pullId);
+        reloadQuestions();
+      } catch (e: unknown) {
+        setAskError(e instanceof Error ? e.message : 'That question did not reach your account.');
+      } finally {
+        setAskBusy(false);
+      }
+    },
+    [askAnswer, askBusy, askPrompt, reloadQuestions],
+  );
 
   /*
    * Ideas close to the one the reader actually came for.
@@ -616,6 +696,27 @@ export function Source({
                       }}
                     >
                       Highlight the selection
+                    </button>{' '}
+                    {/* REMEMBER THIS. The other half of what a reader can do with an
+                        idea they are looking at: mark the words, or write the question
+                        they want to be asked about them later.
+
+                        `remember_pull` does three things at once, and the copy below
+                        says all three, because a button that silently schedules
+                        something is a button that surprises people: it stores the
+                        question, saves the idea, and puts it into review. */}
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      onClick={() => {
+                        setAsking((prev) => (prev === p.id ? null : p.id));
+                        setAskPrompt('');
+                        setAskAnswer('');
+                        setAskError(null);
+                        setAsked(null);
+                      }}
+                    >
+                      {asking === p.id ? 'Never mind' : 'Remember this'}
                     </button>
                     {highlights.some((h) => h.pullId === p.id) && (
                       <button
@@ -640,6 +741,94 @@ export function Source({
                     )}
                   </p>
                 )}
+
+                {userId && asking === p.id && (
+                  <div className="source__ask">
+                    <label className="meta" htmlFor={`ask-prompt-${p.id}`}>
+                      What should this idea ask you?
+                    </label>
+                    <textarea
+                      id={`ask-prompt-${p.id}`}
+                      rows={2}
+                      value={askPrompt}
+                      onChange={(e) => setAskPrompt(e.target.value)}
+                      placeholder="What does an obstacle become?"
+                    />
+                    <label className="meta" htmlFor={`ask-answer-${p.id}`}>
+                      The answer, if you want one to check against. Leave it empty to recall it from
+                      memory and mark yourself.
+                    </label>
+                    <textarea
+                      id={`ask-answer-${p.id}`}
+                      rows={2}
+                      value={askAnswer}
+                      onChange={(e) => setAskAnswer(e.target.value)}
+                    />
+                    {askError && (
+                      <p className="meta" role="alert">
+                        {askError}
+                      </p>
+                    )}
+                    <p>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={askBusy}
+                        onClick={() => void saveQuestion(p.id)}
+                      >
+                        {askBusy ? 'Keeping…' : 'Keep this question'}
+                      </button>{' '}
+                      <span className="meta">
+                        Keeping it also saves this idea and puts it in your review.
+                      </span>
+                    </p>
+                  </div>
+                )}
+
+                {userId && asked === p.id && asking !== p.id && (
+                  <p className="meta" role="status">
+                    Kept. You will be asked it here from tomorrow.
+                  </p>
+                )}
+
+                {userId &&
+                  myQuestions.some((q) => q.pullId === p.id) &&
+                  (() => {
+                    const mine = myQuestions.filter((q) => q.pullId === p.id);
+                    return (
+                      <div className="source__ask-list">
+                        <p className="meta">
+                          {mine.length === 1
+                            ? 'Your question about this idea'
+                            : `Your ${mine.length} questions about this idea`}
+                        </p>
+                        <ul>
+                          {mine.map((q) => (
+                            <li key={q.id}>
+                              {q.prompt}{' '}
+                              <button
+                                type="button"
+                                className="btn btn--plain"
+                                onClick={() => {
+                                  // Optimistic here, unlike the write: removing a row
+                                  // from a list the reader is looking at is reversible
+                                  // by the reload in the catch, and a Retire that takes
+                                  // a round trip to disappear reads as a dead button.
+                                  setMyQuestions((prev) => prev.filter((x) => x.id !== q.id));
+                                  retireQuestion(q.id).catch((e: unknown) => {
+                                    console.error('Could not retire the question', e);
+                                    reloadQuestions();
+                                  });
+                                }}
+                              >
+                                Retire
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()}
               </li>
             );
           })}
