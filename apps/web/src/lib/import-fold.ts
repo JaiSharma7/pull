@@ -86,6 +86,33 @@ export type CommitChunk = (
 ) => Promise<Partial<ImportResult>>;
 
 /**
+ * A chunk failed after earlier chunks had already landed.
+ *
+ * `commit_import` is one transaction per CALL, not one per file, so a rejection partway
+ * through a 3,000-highlight upload leaves everything before it stored. Rethrowing the
+ * bare error loses the `importId` those chunks share -- and that id is the only handle
+ * Undo has. The reader would be told the import failed while 1,500 highlights sat in
+ * their library with no way to take them back.
+ *
+ * So the partial result rides on the error. `Ingestion.tsx` renders it beside the
+ * failure: what landed, and the button that removes it.
+ *
+ * Only raised when something actually landed. A first chunk that fails has stored
+ * nothing and has no batch id, so that error is rethrown unchanged rather than dressed
+ * up as a partial success with an `importId` of null.
+ */
+export class PartialImportError extends Error {
+  readonly partial: ImportResult;
+
+  constructor(cause: unknown, partial: ImportResult) {
+    super(cause instanceof Error ? cause.message : 'A chunk of the import did not go through.');
+    this.name = 'PartialImportError';
+    this.cause = cause;
+    this.partial = partial;
+  }
+}
+
+/**
  * Fold the chunks into one result.
  *
  * ACCUMULATED, not read off the last call. Each `commit_import` reports only what that
@@ -97,14 +124,26 @@ export type CommitChunk = (
  * time window, and six chunks could land in six batches -- so one Undo would take back
  * a sixth of a library.
  *
+ * A chunk that fails after an earlier one landed raises `PartialImportError` carrying
+ * what did land, so the batch id survives and Undo stays reachable. A first chunk that
+ * fails raises whatever it raised.
+ *
+ * `startImportId` is how a retry rejoins the batch its first attempt opened. Without it
+ * the rejoin is `commit_import`'s reuse window, which is a clock -- six hours for a file
+ * and five minutes for a paste -- so a reader who came back the next day would open a
+ * second batch and one Undo would take back only half their file. Naming the id is the
+ * path the RPC documents as the exact one; the window is its fallback for a caller that
+ * does not say.
+ *
  * Exported for its tests. `commitImport` is this with the RPC wired in.
  */
 export async function foldChunks(
   items: readonly ImportItem[],
   call: CommitChunk,
+  startImportId: string | null = null,
 ): Promise<ImportResult> {
   const total: ImportResult = {
-    importId: null,
+    importId: startImportId,
     added: 0,
     duplicates: 0,
     ceilingReached: false,
@@ -116,7 +155,15 @@ export async function foldChunks(
   const byWorkId = new Map<string, ImportedWork>();
 
   for (const chunk of chunkItems(items, MAX_ITEMS_PER_CALL)) {
-    const result = await call(chunk, total.importId);
+    let result: Partial<ImportResult>;
+    try {
+      result = await call(chunk, total.importId);
+    } catch (e) {
+      // Nothing landed yet, so there is no batch to hand back and no Undo to offer.
+      if (total.importId === null) throw e;
+      total.works = [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title));
+      throw new PartialImportError(e, total);
+    }
 
     total.importId = result.importId ?? total.importId;
     total.added += result.added ?? 0;

@@ -27,7 +27,7 @@ export type {
   ImportSourceKind,
   UndoResult,
 } from './import-fold.js';
-export { foldChunks, hashFile } from './import-fold.js';
+export { foldChunks, hashFile, PartialImportError } from './import-fold.js';
 
 /**
  * Keep a batch of highlights.
@@ -44,42 +44,41 @@ export { foldChunks, hashFile } from './import-fold.js';
  *
  * A chunk that fails aborts the rest, and what landed stays landed — `commit_import` is
  * one transaction per call, not one per file. The reader gets the error and an `importId`
- * for what did land, which is what makes Undo reachable after a partial import.
- */
-
-/**
- * Keep a batch of highlights.
- *
- * Chunked at 500 because that is `max_items_per_call`. A chunk that fails aborts the
- * rest, and what landed stays landed -- `commit_import` is one transaction per call, not
- * one per file. The reader gets the error, and the `importId` of what did land is what
- * makes Undo reachable after a partial import.
+ * for what did land, carried on `PartialImportError`, which is what makes Undo reachable
+ * after a partial import. Pass that id back as `resumeImportId` to retry: the rest of the
+ * file then joins the batch the first attempt opened, rather than opening a second one
+ * that a single Undo could not take back.
  */
 export async function commitImport(
   sourceKind: ImportSourceKind,
   fileHash: string | null,
   items: readonly ImportItem[],
+  resumeImportId: string | null = null,
 ): Promise<ImportResult> {
-  return foldChunks(items, async (chunk, importId) => {
-    const { data, error } = await supabase.rpc('commit_import', {
-      p_source_kind: sourceKind,
-      // `as never` on both, for two different reasons the generator creates.
-      //
-      // `p_file_hash` is `text` with no default, so `db:types` renders it `string` --
-      // but the column it feeds is nullable and `commit_import` branches on
-      // `p_file_hash is null` to give a hashless source its own reuse window. Omitting
-      // the argument is not the same thing: the parameter has no default, so PostgREST
-      // would fail to resolve the function at all. Null is the value to send.
-      p_file_hash: fileHash as never,
-      // `p_items` is `jsonb`, rendered as the recursive `Json` union, which an interface
-      // with optional properties is not assignable to however well-formed it is.
-      p_items: chunk as never,
-      ...(importId ? { p_import_id: importId } : {}),
-    });
+  return foldChunks(
+    items,
+    async (chunk, importId) => {
+      const { data, error } = await supabase.rpc('commit_import', {
+        p_source_kind: sourceKind,
+        // `as never` on both, for two different reasons the generator creates.
+        //
+        // `p_file_hash` is `text` with no default, so `db:types` renders it `string` --
+        // but the column it feeds is nullable and `commit_import` branches on
+        // `p_file_hash is null` to give a hashless source its own reuse window. Omitting
+        // the argument is not the same thing: the parameter has no default, so PostgREST
+        // would fail to resolve the function at all. Null is the value to send.
+        p_file_hash: fileHash as never,
+        // `p_items` is `jsonb`, rendered as the recursive `Json` union, which an interface
+        // with optional properties is not assignable to however well-formed it is.
+        p_items: chunk as never,
+        ...(importId ? { p_import_id: importId } : {}),
+      });
 
-    if (error) throw rpcError(error);
-    return (data ?? {}) as Partial<ImportResult>;
-  });
+      if (error) throw rpcError(error);
+      return (data ?? {}) as Partial<ImportResult>;
+    },
+    resumeImportId,
+  );
 }
 
 /** Take a whole batch back. Idempotent: a second call reports `alreadyUndone`. */

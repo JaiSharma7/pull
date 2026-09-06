@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type CommitChunk, foldChunks, type ImportResult } from './import-fold.js';
+import {
+  type CommitChunk,
+  foldChunks,
+  type ImportResult,
+  PartialImportError,
+} from './import-fold.js';
 import type { ImportItem } from './ingestion.js';
 
 /*
@@ -117,14 +122,58 @@ describe('foldChunks', () => {
     expect(total.importId).toBeNull();
   });
 
-  it('lets a failed chunk through, so what landed keeps its batch id', async () => {
+  it('carries what landed on the error, so Undo keeps its batch id', async () => {
     // `commit_import` is one transaction per CALL, not one per file: a chunk that fails
-    // leaves the earlier chunks stored. The error has to reach the screen rather than
-    // being swallowed into a partial success the reader cannot undo.
+    // leaves the earlier chunks stored. The error has to reach the screen -- but a bare
+    // rethrow loses the `importId` those chunks share, and that id is the only handle
+    // Undo has. A reader would be told the import failed while 500 highlights sat in
+    // their library with no way to take them back.
+    //
+    // This test was previously named for that property and asserted only that it threw,
+    // which it did while discarding the id.
     const boom: CommitChunk = async (_chunk, importId) => {
       if (importId) throw new Error('the second chunk failed');
-      return { importId: 'i', added: 500 };
+      return { importId: 'i', added: 500, works: [{ workId: 'w', title: 'W', slug: 'w' }] };
     };
-    await expect(foldChunks(many(600), boom)).rejects.toThrow('the second chunk failed');
+
+    const err = await foldChunks(many(600), boom).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PartialImportError);
+    const partial = (err as PartialImportError).partial;
+    expect(partial.importId).toBe('i');
+    expect(partial.added).toBe(500);
+    // Collected, not left empty: the screen names the books it kept beside the failure.
+    expect(partial.works).toEqual([{ workId: 'w', title: 'W', slug: 'w' }]);
+    expect((err as PartialImportError).message).toBe('the second chunk failed');
+  });
+
+  it('rethrows plainly when the first chunk fails, because nothing landed', async () => {
+    // No batch was opened, so there is nothing to undo and no id to hand back. Dressing
+    // this up as a partial success with `importId: null` would put an Undo button on
+    // screen that cannot do anything.
+    const boom: CommitChunk = async () => {
+      throw new Error('the first chunk failed');
+    };
+    const err = await foldChunks(many(600), boom).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(PartialImportError);
+    expect((err as Error).message).toBe('the first chunk failed');
+  });
+
+  it('resumes an existing batch, so a retry does not open a second one', async () => {
+    // What makes a retry after a partial failure recoverable. Without it the rejoin is
+    // `commit_import`'s reuse window -- a clock -- and a reader who came back the next
+    // day would get a second batch that one Undo could not take back.
+    const { call, calls } = recorder([{}, {}]);
+    await foldChunks(many(600), call, 'batch-1');
+    expect(calls.map((c) => c.importId)).toEqual(['batch-1', 'batch-1']);
+  });
+
+  it('still reports the resumed batch id when no call returns one', async () => {
+    // `commit_import` returns the id it used, so this is belt and braces -- but a reply
+    // that omitted it must not blank out the id the caller supplied, or the Undo button
+    // disappears on the retry that was meant to restore it.
+    const { call } = recorder([{ added: 3 }]);
+    const total = await foldChunks(many(2), call, 'batch-1');
+    expect(total.importId).toBe('batch-1');
   });
 });

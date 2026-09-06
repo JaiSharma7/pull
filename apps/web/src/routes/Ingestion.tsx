@@ -4,6 +4,7 @@ import {
   hashFile,
   type ImportResult,
   type ImportSourceKind,
+  PartialImportError,
   undoImport,
 } from '../lib/import-api.js';
 import {
@@ -85,8 +86,29 @@ export function Ingestion() {
       // Hashed from the raw text rather than the parsed items, because the hash is what
       // joins chunks of ONE FILE into one batch, and two different parses of the same
       // file must produce the same hash.
-      setResult(await commitImport(sourceKind, await hashFile(rawText), items));
+      // The batch an earlier attempt opened, so a retry joins it rather than starting a
+      // second one. Null on a first attempt, which is when `commit_import` opens one.
+      const resume = result?.importId ?? null;
+      setResult(await commitImport(sourceKind, await hashFile(rawText), items, resume));
     } catch (e) {
+      /*
+       * A chunk that fails after an earlier one landed is not a failed import -- it is a
+       * partial one, and `commit_import` is one transaction per call rather than one per
+       * file, so what landed stays landed. Showing only the error would leave those
+       * highlights in the reader's library with no way to take them back, because Undo
+       * needs the batch id and the batch id is on the error.
+       *
+       * So both are shown: the counts and the Undo button from `partial`, and the
+       * failure above them.
+       */
+      if (e instanceof PartialImportError) {
+        // Only when THIS attempt landed something. A retry that fails on its first chunk
+        // carries the batch id and zeroes, and writing those over the earlier counts
+        // would tell a reader whose library holds 1,500 highlights that it holds none.
+        // The id is the same either way, so Undo stays reachable regardless.
+        const { partial } = e;
+        setResult((prev) => (prev && partial.added === 0 ? prev : partial));
+      }
       setError(e instanceof Error ? e.message : 'The import did not go through.');
     } finally {
       setKeeping(false);
@@ -268,13 +290,20 @@ export function Ingestion() {
           )}
 
           <div className="pull-card__footer">
-            {!result && (
+            {/* Shown again after a failure, including a PARTIAL one -- otherwise a reader
+                whose fourth chunk timed out is left with 1,500 highlights kept, an error,
+                and no way to finish. Pressing it again is cheap and safe: `commit_import`
+                dedupes on `content_hash`, so what already landed is counted as a
+                duplicate rather than stored twice. */}
+            {(!result || error) && !undone && (
               <button type="button" className="btn" onClick={handleKeep} disabled={keeping}>
                 {keeping
                   ? 'Keeping…'
-                  : `Keep ${summary.totalHighlights} ${
-                      summary.totalHighlights === 1 ? 'highlight' : 'highlights'
-                    }`}
+                  : error && result
+                    ? 'Keep the rest'
+                    : `Keep ${summary.totalHighlights} ${
+                        summary.totalHighlights === 1 ? 'highlight' : 'highlights'
+                      }`}
               </button>
             )}
             {result?.importId && !undone && (
