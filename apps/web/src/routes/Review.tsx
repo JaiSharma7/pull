@@ -191,13 +191,18 @@ export function Review() {
    */
   const notices = (
     <>
+      {/*
+        ONE BANNER, the more specific while it holds. Both flags are now raised together
+        for a session failure, so rendering them independently would say the same loss
+        twice. When `signedOut` retracts — the session came back — the general sentence
+        is left standing, which is the true one: the grade is still gone.
+      */}
       {signedOut ? (
         <p className="meta" role="alert">
           Your session ended before that grade could be saved. Sign in again and those ideas will
           come round as they were.
         </p>
-      ) : null}
-      {lostGrade ? (
+      ) : lostGrade ? (
         <p className="meta" role="alert">
           That grade could not be saved, here or on this device. Those ideas will come round again.
         </p>
@@ -373,8 +378,27 @@ export function Review() {
        * but it is the difference between a lost measurement and a silent one.
        */
       if (!queued) {
+        /*
+         * THE LOSS IS RECORDED WHATEVER CAUSED IT, and the diagnosis is recorded on top.
+         *
+         * This was `if (userId === null) setSignedOut(true); else setLostGrade(true)`,
+         * and the `else` was the defect: when the session was the cause, the ONLY flag
+         * raised was the one that retracts. `setSignedOut(false)` fires on the next
+         * grade that lands, and `graded.current` keeps the lost card filtered out of
+         * every refetch — so a token refresh mid-session erased the sole record of a
+         * dropped grade and the screen fell through to "Everything you have saved is
+         * still solid", which this file's header calls the worst available lie.
+         * Measured against the real component: two cards, the first dropped with no
+         * session, the second landing after a refresh — zero `role="alert"` nodes left.
+         *
+         * `lostGrade` never retracts, which is exactly what the block above says the
+         * asymmetry is for: a write landing falsifies "your session ended" and says
+         * nothing about whether an earlier grade survived. Setting both makes that
+         * comment true of the code — before, retracting the diagnosis retracted the
+         * loss, because the loss had never been written down anywhere else.
+         */
+        setLostGrade(true);
         if (userId === null) setSignedOut(true);
-        else setLostGrade(true);
         console.error('Recall grade was not recorded', e);
       }
     } finally {
