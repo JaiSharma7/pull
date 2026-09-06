@@ -181,6 +181,43 @@ alter table public.user_questions
     check (cloze is null or length(cloze) <= 1000);
 
 /*
+ * THE INDEX THAT MAKES THE PER-BRANCH LIMIT MEAN WHAT IT SAYS.
+ *
+ * `get_due_reviews` asks each pull for `where user_id = ? and pull_id = ? and
+ * retired_at is null order by created_at desc, id limit 3`. Neither existing index
+ * serves both halves: `user_questions_live_idx (user_id, pull_id) where retired_at is
+ * null` filters without ordering, and `user_questions_user_idx (user_id, created_at
+ * desc)` orders without filtering by pull. So the planner filtered, built a jsonb
+ * payload for EVERY matching row, and only then sorted and took three.
+ *
+ * Measured, 5,000 of one reader's own questions on one due pull: `Result (rows=5000)`
+ * ahead of the `top-N heapsort`, 15.7 ms of a 16.4 ms branch spent building documents
+ * that are immediately discarded. The same query with the payload replaced by bare
+ * columns runs in 2.2 ms.
+ *
+ * That is not what the per-branch limit was claimed to do, and this migration said so
+ * in as many words -- "only a limit on each branch stops the payloads being built". A
+ * `LIMIT` bounds the aggregate; it does not stop a projection in the target list being
+ * evaluated for every row the sort consumes. Only an index that returns the rows
+ * already in order lets the limit terminate the scan, and then only three payloads are
+ * ever built.
+ *
+ * It replaces `user_questions_live_idx` rather than joining it: same leading columns,
+ * same partial predicate, two more ordering columns. Keeping both would cost every
+ * write an index for no read. The two non-partial indexes lint invariant 3 wants for
+ * the foreign keys -- `user_questions_user_idx` and `user_questions_pull_idx` -- are
+ * untouched.
+ */
+drop index public.user_questions_live_idx;
+
+create index user_questions_due_idx
+  on public.user_questions (user_id, pull_id, created_at desc, id)
+  where retired_at is null;
+
+comment on index public.user_questions_due_idx is
+  'Serves get_due_reviews'' per-pull lookup in its own order, so the limit stops the scan rather than the sort.';
+
+/*
  * AND NO "a reader's cloze needs its blank" RULE, for exactly the reason this file gives
  * for declining the matching MCQ rule -- which it gave, and then contradicted two
  * constraints later.
@@ -330,11 +367,23 @@ begin
     -- signed-in caller write as many questions about one pull as they like, and
     -- aggregating them all into one JSON document before keeping three made `p_limit`
     -- no bound on the work at all -- `get_due_reviews(1)` would build every one of
-    -- them. `jsonb_build_object` is in the target list, so it is evaluated before the
-    -- sort; only a limit on each branch stops the payloads being built. Measured with
-    -- 5,000 of a reader's own questions on one due pull: 129.72 ms trimming the
-    -- finished array, 24.26 ms bounding each branch, against 6.56 and 5.50 ms at five
-    -- questions. The first grows with what the reader chooses to write.
+    -- them. Measured with 5,000 of a reader's own questions on one due pull: 129.72 ms
+    -- trimming the finished array, 24.26 ms bounding each branch, against 6.56 and
+    -- 5.50 ms at five questions. The first grows with what the reader chooses to write.
+    --
+    -- THE LIMIT IS ONLY HALF OF IT, AND THE OTHER HALF IS AN INDEX. An earlier revision
+    -- of this comment said "`jsonb_build_object` is in the target list, so it is
+    -- evaluated before the sort; only a limit on each branch stops the payloads being
+    -- built", and the second clause is false: a `LIMIT` bounds the AGGREGATE, and does
+    -- nothing to stop a projection being evaluated for every row the sort consumes.
+    -- Measured on the plan the old indexes gave: `Result (rows=5000)` feeding a top-N
+    -- heapsort, 15.7 ms of a 16.4 ms branch spent building documents thrown away one
+    -- node later.
+    --
+    -- `user_questions_due_idx` is what makes the sentence true -- it returns the rows
+    -- already in this order, so the limit terminates the SCAN and three payloads are
+    -- built rather than five thousand. Same measurement after: three rows out of the
+    -- index, 0.121 ms. See the index's own comment above.
     --
     -- Three per branch and three overall is the same answer as three overall alone,
     -- because a reader's own question always outranks a canonical one: whatever the
