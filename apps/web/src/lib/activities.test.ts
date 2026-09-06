@@ -679,7 +679,12 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     ['litre', 'liter'],
     ['fibre', 'fiber'],
     ['theatre', 'theater'],
-    ['centres', 'centers'],
+    ['odour', 'odor'],
+    ['sceptical', 'skeptical'],
+    ['catalogue', 'catalog'],
+    ['grey', 'gray'],
+    ['kilometre', 'kilometer'],
+    ['colourful', 'colorful'],
     ['colour', 'color'],
     ['favourite', 'favorite'],
     ['neighbours', 'neighbors'],
@@ -715,6 +720,7 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     ['hat', 'heat'],
     ['at', 'art'],
     ['rat', 'rate'],
+    ['timbre', 'timber'],
   ])('refuses %s answered as %s AND says the reader was confidently wrong', (answer, typed) => {
     const r = gradeCloze(typed, answer, 'sure', 1000);
     expect(r.correct, `${typed} for ${answer}`).toBe(false);
@@ -742,20 +748,69 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     expect(gradeCloze('mitochondia', 'mitochondria', 'sure', 100).grade).toBe('good');
   });
 
-  it('keeps the two pairs a wider fold would merge', () => {
-    // `four` -> `for` is why `-our` needs three stem letters, and `shoe` -> `she` is
-    // why `ae`/`oe` is not folded at all. Both are two common words that a wider rule
-    // would make one, which is the failure the whole-alphabet `z` fold was reverted
-    // for. The `-our` guard costs `odour`/`odor`, a five-letter pair that stays
-    // refused; that is the named residual.
+  /*
+   * THE TEN PAIRS A SUFFIX RULE MERGED, which is why this is a list.
+   *
+   * Round 4 wrote the axis as `(?<=[a-z]{3})re(s?)(?![a-z])` -> `er$1`, which is not a
+   * suffix rule: it rewrote the trailing `re` of every word with three stem letters.
+   * A 370k-word sweep found 453 collisions, these ten between real English words. Each
+   * became an EXACT match, so the "an accepted slip is never easy" cap was skipped and
+   * a wrong answer graded `easy` at similarity 1 — the one outcome the module says a
+   * grader must never produce, and the same failure the `/z/g` fold was reverted for.
+   */
+  it.each([
+    ['timbre', 'timber'],
+    ['shire', 'shier'],
+    ['stere', 'steer'],
+    ['spire', 'spier'],
+    ['shore', 'shoer'],
+    ['eagre', 'eager'],
+    ['livre', 'liver'],
+  ])('keeps %s and %s two words', (a, b) => {
+    for (const [typed, answer] of [
+      [a, b],
+      [b, a],
+    ] as const) {
+      const r = gradeCloze(typed, answer, 'sure', 100);
+      expect(r.correct, `${typed} for ${answer}`).toBe(false);
+      expect(r.similarity).toBeLessThan(1);
+    }
+  });
+
+  it('does not turn every final transposition into a free exact match', () => {
+    // A side effect of the same rule: `nature` folded to `natuer`, so `natuer` typed
+    // for `nature` was exact and graded `easy` — straight past the seven-letter
+    // transposition floor, for every word ending in a consonant plus `e`.
+    const r = gradeCloze('natuer', 'nature', 'sure', 100);
+    expect(r.grade).not.toBe('easy');
+    expect(r.similarity).toBeLessThan(1);
+    expect(gradeCloze('measuer', 'measure', 'sure', 100).similarity).toBeLessThan(1);
+  });
+
+  it('keeps the pairs a wider fold would merge', () => {
+    // A list cannot merge a pair nobody put in it, which is the whole argument for
+    // one. These are the pairs the plausible generalisations of it would take.
     expect(gradeCloze('four', 'for').correct).toBe(false);
     expect(gradeCloze('shoe', 'she').correct).toBe(false);
-    expect(gradeCloze('odor', 'odour').correct).toBe(false);
 
-    // And the `ae`/`oe` family mostly does not need the fold: it clears the slip
-    // rule's own floor.
+    // And the `ae`/`oe` family needs no entry: it clears the slip rule's own floor.
     expect(gradeCloze('foetus', 'fetus').correct).toBe(true);
     expect(gradeCloze('anaemia', 'anemia').correct).toBe(true);
+  });
+
+  it('still calls a typo inside a folded word a typo', () => {
+    /*
+     * The fold rewrites one side of a pair and not the other, so a dropped letter
+     * inside a folded word changes shape: `colur` for `colour` is a one-letter
+     * deletion until `colour` becomes `color`, and then it is a substitution, which is
+     * never a slip. Round 4 shipped that — the change whose subject is that a spelling
+     * must not be an accusation newly refused, and accused, a reader who dropped a
+     * letter. `wordsAreClose` therefore takes a second look at the raw forms.
+     */
+    const r = gradeCloze('colur', 'colour', 'sure', 1000);
+    expect(r.correct).toBe(true);
+    expect(r.confidentlyWrong).toBe(false);
+    expect(gradeCloze('theatr', 'theatre').correct).toBe(true);
   });
 
   it('still flags a confident answer that is simply a different idea', () => {

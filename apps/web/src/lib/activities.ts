@@ -296,9 +296,114 @@ export function gradeMcq(
  * and "the mitochondria." are the same answer, and a grader that says otherwise
  * teaches the reader to game the box rather than remember the idea.
  */
-export function normaliseAnswer(text: string): string {
+
+/**
+ * The spellings that are one word written two ways, as a LIST rather than a rule.
+ *
+ * Round 4 wrote these as two suffix regexes and the `-re` one was not a suffix rule at
+ * all: `(?<=[a-z]{3})re(s?)(?![a-z])` rewrites the trailing `re` of every word with
+ * three stem letters. `timbre` became `timber` — two different words, one string, which
+ * graded a wrong answer `easy` at similarity 1 because the fold made it EXACT and the
+ * inexact cap was skipped. That is verbatim what the reverted `/z/g` fold is recorded
+ * above as doing, one axis along, and it defeats `answerSimilarity`'s stated invariant
+ * that a similarity of 1 cannot accompany a wrong answer.
+ *
+ * A sweep of a 370k-word list found 453 collisions, ten of them between real English
+ * words: `timbre`/`timber`, `shire`/`shier`, `stere`/`steer`, `spire`/`spier`,
+ * `shore`/`shoer`, `spare`/`spaer`, `eagre`/`eager`, `livre`/`liver`, `outré`/`outer`,
+ * `compère`/`compeer`. It also made every final-pair transposition a free exact match:
+ * `natuer` for `nature` graded `easy`, bypassing the seven-letter transposition floor
+ * entirely.
+ *
+ * No stem guard fixes that, because the axis is not a suffix — it is a vocabulary. So
+ * this is the variant list the module has been saying it needed since the `-ize` fold
+ * went in ("closing it needs a variant list, which is a different change"). A list
+ * cannot merge a pair nobody put in it.
+ *
+ * Substrings on purpose: `colour` folds inside `colourful` and `discolour`, `metre`
+ * inside `kilometre`, `centre` inside `epicentre`. Longest first so a longer entry is
+ * never pre-empted by a shorter one it contains.
+ *
+ * The costs, named the way the `-ize` fold names `prize`/`prise`: `metre` and `meter`
+ * become one word, so a cloze turning on the length against the instrument cannot tell
+ * them apart, and the same for `mitre`/`miter` and `titre`/`titer`. Rarer than a reader
+ * spelling the way they were taught. `louvre` is deliberately absent — the museum is
+ * not a slat.
+ */
+const SPELLING_VARIANTS: readonly (readonly [string, string])[] = [
+  ['misdemeanour', 'misdemeanor'],
+  ['manoeuvre', 'maneuver'],
+  ['sepulchre', 'sepulcher'],
+  ['neighbour', 'neighbor'],
+  ['behaviour', 'behavior'],
+  ['endeavour', 'endeavor'],
+  ['splendour', 'splendor'],
+  ['catalogue', 'catalog'],
+  ['demeanour', 'demeanor'],
+  ['flavour', 'flavor'],
+  ['harbour', 'harbor'],
+  ['parlour', 'parlor'],
+  ['clamour', 'clamor'],
+  ['glamour', 'glamor'],
+  ['candour', 'candor'],
+  ['fervour', 'fervor'],
+  ['saviour', 'savior'],
+  ['calibre', 'caliber'],
+  ['spectre', 'specter'],
+  ['sceptre', 'scepter'],
+  ['sceptic', 'skeptic'],
+  ['theatre', 'theater'],
+  ['colour', 'color'],
+  ['honour', 'honor'],
+  ['favour', 'favor'],
+  ['labour', 'labor'],
+  ['humour', 'humor'],
+  ['rumour', 'rumor'],
+  ['vapour', 'vapor'],
+  ['armour', 'armor'],
+  ['savour', 'savor'],
+  ['ardour', 'ardor'],
+  ['valour', 'valor'],
+  ['rigour', 'rigor'],
+  ['vigour', 'vigor'],
+  ['tumour', 'tumor'],
+  ['sombre', 'somber'],
+  ['lustre', 'luster'],
+  ['meagre', 'meager'],
+  ['goitre', 'goiter'],
+  ['centre', 'center'],
+  ['odour', 'odor'],
+  ['metre', 'meter'],
+  ['litre', 'liter'],
+  ['fibre', 'fiber'],
+  ['mitre', 'miter'],
+  ['sabre', 'saber'],
+  ['titre', 'titer'],
+  ['ochre', 'ocher'],
+  ['grey', 'gray'],
+];
+
+/** Apply the list, longest entry first. */
+function foldVariants(text: string): string {
+  let out = text;
+  for (const [british, american] of SPELLING_VARIANTS) out = out.split(british).join(american);
+  return out;
+}
+
+/**
+ * `foldSpelling` is false for the second chance `wordsAreClose` takes.
+ *
+ * The fold is right for deciding whether two answers are the same word, and wrong for
+ * deciding whether one is a mistyping of the other: it rewrites one side and not the
+ * other, so a typo INSIDE a folded word changes shape. `colur` for `colour` was an
+ * accepted one-letter deletion until the fold made it `colur` against `color`, which is
+ * a substitution and never a slip — so the change whose subject is that a spelling must
+ * not be an accusation newly refused, and accused, a reader who dropped a letter.
+ */
+export function normaliseAnswer(text: string, foldSpelling = true): string {
+  const folded = foldSpelling ? foldVariants(text) : text;
   return (
-    text
+    folded
       .normalize('NFKD')
       .replace(/\p{M}/gu, '')
       .toLowerCase()
@@ -345,45 +450,6 @@ export function normaliseAnswer(text: string): string {
       // `organise`, `realise`, `criticise` and `analyse` all have stems and still fold.
       .replace(/(?<=[a-z]{3})iz(?=e|ing|ed|er|ation|abl)/gu, 'is')
       .replace(/(?<=[a-z]{3})yz(?=e|ing|ed|er)/gu, 'ys')
-      // AND THE OTHER TWO AXES, for the reason the paragraph above gives and the
-      // paragraph above did not act on: `-re`/`-er` and `-our`/`-or` are the same
-      // word spelled two ways, and a reader spelling the way they were taught was
-      // graded `forgot` for it.
-      //
-      // `-re` is the one that matters. It is a TRANSPOSITION, so the slip rule wants
-      // seven letters, and the family sits either side of that: `theatre`/`theater`
-      // was accepted and `centre`/`center`, `metre`/`meter`, `litre`/`liter` and
-      // `fibre`/`fiber` were refused, on nothing but a letter of length.
-      //
-      // `-our` changes no verdict at all: it is a deletion, and every word the stem
-      // guard below admits is long enough that the slip rule already accepts it. What
-      // it changes is the GRADE. An accepted slip is capped at `good` because the rule
-      // cannot promise it was the reader's word rather than a different one; a fold
-      // can promise exactly that, so `colour` for `color` is exact and a fast, sure
-      // reader gets the `easy` the other speller gets for the same knowledge. That is
-      // what folding an axis buys over merely not accusing anybody, and it is why the
-      // axis belongs here rather than in a suppression.
-      //
-      // The cost, named as the `-ize` fold names `prize`/`prise`: `metre` and `meter`
-      // become one word, so a cloze that turns on the length against the instrument
-      // cannot tell them apart. Rarer than a British reader.
-      //
-      // THREE STEM LETTERS BEFORE `-our`, and that guard is load-bearing rather than
-      // cautious: at two, `four` folds to `for`. Two common words becoming one is the
-      // failure the `/z/g` version of the fold above was reverted for. It costs
-      // `odour`/`odor`, which has a two-letter stem and stays refused at five letters
-      // -- a named residual, not an oversight.
-      //
-      // `ae`/`oe` -> `e` is the third axis and is NOT folded, for the same reason one
-      // step further: `shoe` normalises to `she`. The family barely needs it, because
-      // it is mostly long enough for the slip rule already -- `foetus`/`fetus` and
-      // `anaemia`/`anemia` are both accepted -- and `shoe`/`she` is exactly the pair
-      // the length floor is there to keep apart.
-      //
-      // Plurals and the common inflections fold with the stem, or `centres` and
-      // `favourite` would be the same defect one suffix along.
-      .replace(/(?<=[a-z]{3})re(s?)(?![a-z])/gu, 'er$1')
-      .replace(/(?<=[a-z]{3})our(?=s?(?![a-z])|it|ab|ing|ed)/gu, 'or')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -625,8 +691,18 @@ function slipShape(a: string, b: string): boolean {
  * the blunt instrument it would be on a sentence.
  */
 function wordsAreClose(typed: string, answer: string): boolean {
-  const a = normaliseAnswer(typed).split(' ').filter(Boolean);
-  const b = normaliseAnswer(answer).split(' ').filter(Boolean);
+  // Folded FIRST, because that is what makes a spelling variant simply right; then, if
+  // that fails, on the raw forms, because a typo inside a folded word is still a typo.
+  // `colur` for `colour` is a one-letter deletion until the fold rewrites one side of
+  // it into `color` and turns it into a substitution.
+  return (
+    closeUnderNormalisation(typed, answer, true) || closeUnderNormalisation(typed, answer, false)
+  );
+}
+
+function closeUnderNormalisation(typed: string, answer: string, fold: boolean): boolean {
+  const a = normaliseAnswer(typed, fold).split(' ').filter(Boolean);
+  const b = normaliseAnswer(answer, fold).split(' ').filter(Boolean);
   // Both empty is the answer that IS a mark -- `+` for `+`, `=` for `=` -- and
   // `normaliseAnswer` strips it to nothing. The old bail on an empty typed
   // answer graded those wrong when they were exactly right, which is the one
@@ -681,10 +757,13 @@ export function gradeCloze(
    * makes them exact and CORRECT rather than merely unaccused. A reader who spells
    * `centre` is now marked right, which is the outcome that was wanted.
    *
-   * What that costs, stated: a short typo that lands on a non-word — `hte` for `the`
-   * — answered `sure` is now flagged. It is the same shape as `trail`/`trial` and no
-   * rule here can tell them apart without a dictionary. Showing a reader an idea
-   * again is a smaller harm than silencing eleven real confusions.
+   * What that costs, stated as the class rather than one example: EVERY transposition
+   * under seven letters and every indel under its floor, answered `sure`, is now
+   * flagged — `hte`/`the` and `adn`/`and`, but also `freind`/`friend`, which is six
+   * letters and one of the commonest misspellings in the language. Each has the same
+   * shape as `trail`/`trial`, and no rule here separates them without a dictionary.
+   * Showing a reader an idea again is a smaller harm than silencing eleven real
+   * confusions, but it is not nothing and the sentence should say what it is.
    */
   // AN ACCEPTED SLIP IS NEVER `easy`. That grade multiplies stability by more
   // than three and takes the idea out of review for a fortnight, and this rule
