@@ -722,6 +722,100 @@ export type Database = {
           },
         ]
       }
+      import_items: {
+        Row: {
+          content_hash: string
+          created_at: string
+          id: string
+          import_id: string
+          locator: string | null
+          pull_id: string | null
+          undone_at: string | null
+          user_id: string
+          work_id: string | null
+        }
+        Insert: {
+          content_hash: string
+          created_at?: string
+          id?: string
+          import_id: string
+          locator?: string | null
+          pull_id?: string | null
+          undone_at?: string | null
+          user_id: string
+          work_id?: string | null
+        }
+        Update: {
+          content_hash?: string
+          created_at?: string
+          id?: string
+          import_id?: string
+          locator?: string | null
+          pull_id?: string | null
+          undone_at?: string | null
+          user_id?: string
+          work_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_items_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "imports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_items_pull_id_fkey"
+            columns: ["pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_items_work_id_fkey"
+            columns: ["work_id"]
+            isOneToOne: false
+            referencedRelation: "works"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      imports: {
+        Row: {
+          created_at: string
+          duplicate_count: number
+          file_hash: string | null
+          id: string
+          item_count: number
+          source_kind: string
+          undone_at: string | null
+          user_id: string
+          work_count: number
+        }
+        Insert: {
+          created_at?: string
+          duplicate_count?: number
+          file_hash?: string | null
+          id?: string
+          item_count?: number
+          source_kind: string
+          undone_at?: string | null
+          user_id: string
+          work_count?: number
+        }
+        Update: {
+          created_at?: string
+          duplicate_count?: number
+          file_hash?: string | null
+          id?: string
+          item_count?: number
+          source_kind?: string
+          undone_at?: string | null
+          user_id?: string
+          work_count?: number
+        }
+        Relationships: []
+      }
       interleave_config: {
         Row: {
           base_probability: number
@@ -1340,6 +1434,7 @@ export type Database = {
           stability_before: number | null
           submitted_at: string | null
           user_id: string
+          user_question_id: string | null
         }
         Insert: {
           answer?: string | null
@@ -1357,6 +1452,7 @@ export type Database = {
           stability_before?: number | null
           submitted_at?: string | null
           user_id: string
+          user_question_id?: string | null
         }
         Update: {
           answer?: string | null
@@ -1374,6 +1470,7 @@ export type Database = {
           stability_before?: number | null
           submitted_at?: string | null
           user_id?: string
+          user_question_id?: string | null
         }
         Relationships: [
           {
@@ -1389,6 +1486,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "quiz_questions"
             referencedColumns: ["id", "pull_id"]
+          },
+          {
+            foreignKeyName: "recall_events_user_question_is_theirs"
+            columns: ["user_question_id", "user_id", "pull_id"]
+            isOneToOne: false
+            referencedRelation: "user_questions"
+            referencedColumns: ["id", "user_id", "pull_id"]
           },
         ]
       }
@@ -1758,6 +1862,56 @@ export type Database = {
         }
         Relationships: []
       }
+      user_questions: {
+        Row: {
+          answer: string | null
+          client_mutation_id: string | null
+          created_at: string
+          id: string
+          kind: string
+          options: Json
+          prompt: string
+          pull_id: string
+          retired_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          answer?: string | null
+          client_mutation_id?: string | null
+          created_at?: string
+          id?: string
+          kind?: string
+          options?: Json
+          prompt: string
+          pull_id: string
+          retired_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          answer?: string | null
+          client_mutation_id?: string | null
+          created_at?: string
+          id?: string
+          kind?: string
+          options?: Json
+          prompt?: string
+          pull_id?: string
+          retired_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_questions_pull_id_fkey"
+            columns: ["pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       work_contributors: {
         Row: {
           contributor_id: string
@@ -1913,6 +2067,15 @@ export type Database = {
         Args: { p_hash: string; p_job_id: string; p_lease?: string }
         Returns: string
       }
+      commit_import: {
+        Args: {
+          p_file_hash: string
+          p_import_id?: string
+          p_items: Json
+          p_source_kind: string
+        }
+        Returns: Json
+      }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
@@ -1990,6 +2153,14 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      imported_contributor_slug: {
+        Args: { p_author: string; p_owner: string }
+        Returns: string
+      }
+      imported_work_slug: {
+        Args: { p_author: string; p_owner: string; p_title: string }
+        Returns: string
       }
       is_guest: { Args: never; Returns: boolean }
       job_step_outputs:
@@ -2100,6 +2271,16 @@ export type Database = {
         Returns: Json
       }
       release_source_hash: { Args: { p_job_id: string }; Returns: number }
+      remember_pull: {
+        Args: {
+          p_answer?: string
+          p_kind?: string
+          p_mutation_id?: string
+          p_prompt: string
+          p_pull_id: string
+        }
+        Returns: Json
+      }
       requeue_generation_message: {
         Args: {
           p_delay_seconds: number
@@ -2176,6 +2357,7 @@ export type Database = {
         Args: { p_weights: Json; p_work_id: string }
         Returns: number
       }
+      undo_import: { Args: { p_import_id: string }; Returns: Json }
       work_is_authorable: { Args: { p_work_id: string }; Returns: boolean }
     }
     Enums: {
