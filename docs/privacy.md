@@ -126,11 +126,17 @@ intentions:
 
 **What an Undo leaves behind, exactly.** Not nothing, and it is worth being precise
 because the point of an Undo is that you decide. We keep a one-way fingerprint of each
-highlight's text, which cannot be turned back into the highlight; the book it came from;
-and where in the book it was. Two reasons, both of which cut in your favour. It is what
-lets an Undo be undone — upload the same file again and the highlights come back. And it
-is what stops an ordinary re-upload of a file you have already imported from duplicating
-everything in it.
+highlight's text, which cannot be turned back into the highlight, and where in the book it
+was. Two reasons, both of which cut in your favour. It is what lets an Undo be undone —
+upload the same file again and the highlights come back. And it is what stops an ordinary
+re-upload of a file you have already imported from duplicating everything in it.
+
+The book itself does not stay. If nobody else has imported it and you have nothing else
+kept from it, the record of the book goes with the highlights, and so does the author we
+attached to it — an earlier version kept both, and because an Undo also gives you back
+room under your import limit, that meant a library entry nothing pointed at for every
+import you undid, growing without a ceiling. Re-uploading the file puts the book back;
+the fingerprint above is what recognises it.
 
 **The text comes back; the work you built on it does not.** This paragraph used to say the
 highlights came back "exactly as they were", and that was not true. A re-import creates the

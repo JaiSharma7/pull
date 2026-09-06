@@ -356,6 +356,74 @@ $$;
 
 revoke all on function public.imported_work_slug(text, text) from public, anon, authenticated;
 
+-- --------------------------------------------------------------- attribute_work
+--
+-- Re-stated for ONE LINE, and it is the same line this migration already fixed one
+-- table over. `attribute_work` looked its contributor up with `lower(c.slug::text) =
+-- as_slug`, which wraps a `citext` column with a unique btree in a function the index
+-- cannot answer -- so it ran a SEQUENTIAL SCAN, once per distinct author in the chunk.
+--
+-- That was affordable while `contributors` held the seeded few. `commit_import` is what
+-- makes it grow, and it now calls this once per author per import, so the feature feeds
+-- its own scan. Measured on one 500-item chunk of fresh authors: 3.2 s at 7,856
+-- contributors, 7.1 s at 23,356, 14.7 s at 53,856, 29.8 s at 114,356. `authenticated`
+-- carries an 8 s `statement_timeout`, so somewhere past 20,000 contributors a full chunk
+-- begins failing outright -- `canceling statement due to statement timeout`, raised
+-- inside `attribute_work`, rolling back all 500 highlights with a message the reader
+-- cannot act on.
+--
+-- Schema-qualifying the operator keeps the index: 36.5 ms and 817 buffers become 0.105
+-- ms and 4 at 67,855 rows. Migrations are append-only, so the fix is a `create or
+-- replace` here rather than an edit to 20260901160000.
+create or replace function public.attribute_work(p_work_id uuid, p_author text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  cleaned        text;
+  as_slug        text;
+  contributor_id uuid;
+begin
+  cleaned := nullif(btrim(coalesce(p_author, '')), '');
+  if cleaned is null or p_work_id is null then
+    return;
+  end if;
+  cleaned := left(cleaned, 200);
+
+  as_slug := btrim(regexp_replace(lower(cleaned), '[^a-z0-9]+', '-', 'g'), '-');
+  if as_slug = '' then
+    return;
+  end if;
+
+  select c.id into contributor_id
+    from public.contributors c
+   where c.slug operator(extensions.=) as_slug::extensions.citext;
+
+  if contributor_id is null then
+    insert into public.contributors (name, slug)
+    values (cleaned, as_slug)
+    on conflict (slug) do nothing
+    returning id into contributor_id;
+
+    if contributor_id is null then
+      select c.id into contributor_id
+        from public.contributors c
+       where c.slug operator(extensions.=) as_slug::extensions.citext;
+    end if;
+  end if;
+
+  if contributor_id is null then
+    return;
+  end if;
+
+  insert into public.work_contributors (work_id, contributor_id, role)
+  values (p_work_id, contributor_id, 'author')
+  on conflict do nothing;
+end;
+$$;
+
 -- ------------------------------------------------------------------ commit_import
 --
 -- The only non-pipeline writer of the works/summaries/pulls triple, and `security
@@ -376,7 +444,11 @@ revoke all on function public.imported_work_slug(text, text) from public, anon, 
 create function public.commit_import(
   p_source_kind text,
   p_file_hash   text,
-  p_items       jsonb
+  p_items       jsonb,
+  -- The batch this chunk continues, from the `importId` the previous chunk returned.
+  -- See the reuse window below: with it, "chunk 2 of this paste" is a fact rather than
+  -- a guess. Optional, because the first chunk of anything has nothing to name.
+  p_import_id   uuid default null
 )
 returns jsonb
 language plpgsql
@@ -387,6 +459,23 @@ declare
   max_items_per_call constant int      := 500;
   max_items_per_user constant int      := 20000;
   reuse_window       constant interval := interval '6 hours';
+  /*
+   * A ceiling on BATCHES, because the item ceiling has never counted them.
+   *
+   * The zero-length guard below exists because `commit_import('paste', null, '[]')`
+   * inserted an `imports` row and returned, so any signed-in reader could write batch
+   * rows in a loop. Narrowing the hashless reuse window to five minutes -- correct for
+   * the Undo defect it fixes -- loosened the residual bound on that from four rows a
+   * day to 288, and a caller sending a fresh random `file_hash` each time was never
+   * bounded at all. Measured: 21 duplicate-only calls six minutes apart produced 21
+   * `imports` rows and one `import_items` row.
+   *
+   * 20,000 items at 500 a chunk is 40 batches for a whole library, so 2,000 is fifty
+   * times more than the feature needs and still a number. Tombstoned batches count:
+   * an Undo frees item quota deliberately, and letting it free batch quota too would
+   * be the same cancellation this round had to fix one bound over.
+   */
+  max_imports_per_user constant int    := 2000;
 
   uid          uuid := (select auth.uid());
   v_import_id  uuid;
@@ -410,7 +499,10 @@ declare
   v_duplicates int := 0;
   v_ceiling_reached boolean := false;
   v_held       int;
+  v_batches    int;
   v_touched    uuid[] := '{}';
+  /** Contributors this call created or attributed, which the guard below may reuse. */
+  v_mine       uuid[] := '{}';
   v_works_out  jsonb;
   v_needed     jsonb;
 begin
@@ -495,6 +587,26 @@ begin
   --
   -- It also bounds `imports` growth for the one source that can be called without a
   -- file: repeated pastes join the open batch instead of each opening their own.
+  /*
+   * NAMED, IF THE CALLER NAMED IT. The window below is a heuristic and this is not:
+   * `commit_import` returns an `importId`, and a client chunking one upload passes it
+   * back for chunks two onward. Then "these items belong with those" is something the
+   * client knows and says, rather than something the server infers from a clock.
+   *
+   * Ownership is checked rather than trusted, and a tombstoned batch is refused: a
+   * chunk cannot join something the reader has already taken back.
+   */
+  if p_import_id is not null then
+    select i.id into v_import_id
+      from public.imports i
+     where i.id = p_import_id and i.user_id = uid and i.undone_at is null;
+    if v_import_id is null then
+      raise exception 'commit_import: no open batch of yours with that id'
+        using errcode = '22023';
+    end if;
+  end if;
+
+  if v_import_id is null then
   select i.id into v_import_id
     from public.imports i
    where i.user_id = uid
@@ -516,8 +628,17 @@ begin
      )
    order by i.created_at desc
    limit 1;
+  end if;
 
   if v_import_id is null then
+    select count(*) into v_batches from public.imports where user_id = uid;
+    if v_batches >= max_imports_per_user then
+      raise exception
+        'You have reached the limit of % import batches. Undo one you no longer need.',
+        max_imports_per_user
+        using errcode = '54023';
+    end if;
+
     insert into public.imports (user_id, source_kind, file_hash)
     values (uid, p_source_kind, p_file_hash)
     returning id into v_import_id;
@@ -648,14 +769,23 @@ begin
    *
    * So: every works lock in slug order, then every contributor lock in author order.
    */
+  --
+  -- EVERY (author, work) PAIR, not one per author. The first version was `distinct on
+  -- (author)`, which passed `attribute_work` the lexicographically smallest slug and
+  -- silently dropped the byline on every other book by that author in the same call.
+  -- A Kindle export is grouped by book and chunked at 500, so several books by one
+  -- author in one chunk is the ordinary case, not the edge: measured, three books by
+  -- one new author in one call produced one link. The de-duplication bought nothing --
+  -- the lock order is the `order by author`, and re-locking a contributor this
+  -- transaction already holds is free.
   for v_pre in
-    select distinct on (author) author, slug
+    select a.author, a.slug
       from (
-        select x.value ->> 'author' as author, x.value ->> 'slug' as slug
+        select distinct x.value ->> 'author' as author, x.value ->> 'slug' as slug
           from jsonb_array_elements(v_needed) x
       ) a
      where a.author is not null
-     order by author, slug
+     order by a.author, a.slug
   loop
     select w.id into v_work_id
       from public.works w
@@ -692,7 +822,22 @@ begin
            btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
                ::extensions.citext;
 
+    /*
+     * `v_mine` is the third admitting condition and it is not an optimisation.
+     *
+     * The readability leg asks for a summary the caller can read behind the
+     * contributor -- and inside THIS call there is none yet: the pre-pass runs ahead of
+     * the item loop, which is what creates the summaries. So for three books by one new
+     * author in one chunk, the first created the contributor and the next two found it
+     * and were refused by their own reader's row. Measured: one byline of three, on the
+     * ordinary case for a Kindle export, which is grouped by book.
+     *
+     * A contributor this call created or has already legitimately attributed is one the
+     * caller demonstrably reaches, so admitting it discloses nothing a stranger could
+     * not already have inferred from their own import succeeding.
+     */
     if v_contributor_id is null
+       or v_contributor_id = any(v_mine)
        or exists (
          select 1
            from public.work_contributors wc
@@ -702,6 +847,16 @@ begin
        )
     then
       perform public.attribute_work(v_work_id, v_pre.author);
+      -- Re-read rather than reused: on the first book of an author `v_contributor_id`
+      -- was null, and it is `attribute_work` that decided the id.
+      select c.id into v_contributor_id
+        from public.contributors c
+       where c.slug operator(extensions.=)
+             btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
+                 ::extensions.citext;
+      if v_contributor_id is not null and not (v_contributor_id = any(v_mine)) then
+        v_mine := v_mine || v_contributor_id;
+      end if;
     end if;
     v_contributor_id := null;
   end loop;
@@ -930,8 +1085,8 @@ $$;
 comment on function public.commit_import is
   'Keep a batch of highlights as private pulls the reader authored. Definer: a reader may not write the triple.';
 
-revoke all on function public.commit_import(text, text, jsonb) from public, anon;
-grant execute on function public.commit_import(text, text, jsonb) to authenticated;
+revoke all on function public.commit_import(text, text, jsonb, uuid) from public, anon;
+grant execute on function public.commit_import(text, text, jsonb, uuid) to authenticated;
 
 -- -------------------------------------------------------------------- undo_import
 --
@@ -967,11 +1122,17 @@ grant execute on function public.commit_import(text, text, jsonb) to authenticat
 --
 -- So the promise is now the truth, in three places: here, in `docs/privacy.md`, and in the
 -- return value -- which carries the counts of what went with the pulls, so the screen that
--- eventually hangs off this can say "this also removes 2 questions you wrote and 5 grades"
--- BEFORE the reader confirms, rather than after.
+-- eventually hangs off this can say "this also removed 2 questions you wrote and 5 grades".
+-- AFTER the fact, and the earlier version of this sentence said before, which this function
+-- cannot do: the counts are computed on the way past and returned once the rows are gone.
+-- Saying it first needs a dry run, which does not exist and belongs with the screen that
+-- would call it.
 --
--- The work is left standing. Nothing has to clean it up, because 20260905101000 already
--- decides what a work with nothing readable behind it is worth: invisible.
+-- The work does not always stand. A work this batch created that nothing else now uses --
+-- no summary at all, no item from another batch -- goes with the highlights, and so does
+-- a contributor left with no work. That is not tidiness: the ceiling bounds shared-row
+-- creation by the room left under it, an Undo gives that room back, and without this the
+-- two cancel into unbounded growth. See the delete below.
 create function public.undo_import(p_import_id uuid)
 returns jsonb
 language plpgsql
@@ -989,6 +1150,8 @@ declare
   v_lost_highlights int := 0;
   v_lost_explanations int := 0;
   v_lost_convictions  int := 0;
+  v_orphan_works uuid[] := '{}';
+  v_orphan_contributors uuid[] := '{}';
 begin
   if uid is null then
     raise exception 'undo_import requires an authenticated user';
@@ -1022,7 +1185,9 @@ begin
    * Counted before the delete, because after it there is nothing left to count.
    *
    * These are the reader's own writing, and they are about to go. The numbers exist so
-   * the caller can say what an Undo costs while it is still a question.
+   * the caller can say what an Undo cost -- past tense, and the earlier version of this
+   * sentence said "while it is still a question", which is a dry run this function does
+   * not have. Counting here rather than after is what makes even the past tense possible.
    */
   select
     count(*) filter (where t.kind = 'question'),
@@ -1106,6 +1271,64 @@ begin
      and s.author_id = uid
      and s.visibility = 'private'
      and not exists (select 1 from public.pulls p where p.summary_id = s.id);
+
+  /*
+   * AND THE SHARED ROWS THIS BATCH CREATED AND NOTHING ELSE USES.
+   *
+   * Round 4 bounded shared-catalogue creation by the room left under the ceiling.
+   * Round 3 had already made an Undo free that room, by not counting tombstoned items
+   * -- and together those two correct fixes cancel: import 500 fresh titles, undo,
+   * repeat. Measured: five cycles as one ordinary reader added 500 `works` and 500
+   * `contributors` with `held` back at 0 every time, repeatable forever, which put the
+   * growth this feature causes back outside every bound the function claims.
+   *
+   * The honest counterpart to "an Undo takes back what the import added" is that it
+   * takes back the shared rows too -- but only the ones NOTHING else is now using. A
+   * work another reader also imported still has their summary behind it; a work in the
+   * catalogue is not `user_owned`; a work whose items are only tombstoned still has
+   * `import_items` pointing at it, so a re-import finds the same row. What is left is
+   * exactly the orphan: `user_owned`, no summary at all, no item -- invisible to
+   * everyone under 20260905101000 and collected by nothing.
+   *
+   * The contributors go with them, and that closes a second thing: a byline lost.
+   * `attribute_work` reuses a contributor only when the caller can already see a work
+   * behind it, so a reader who imported an author, undid it, and imported them again
+   * got no byline the second time -- the guard could not tell their own abandoned row
+   * from a stranger's. There is no abandoned row now.
+   */
+  -- Read BEFORE the works go, because `work_contributors` cascades with them.
+  select coalesce(array_agg(distinct wc.contributor_id), '{}')
+    into v_orphan_contributors
+    from public.work_contributors wc
+   where wc.work_id in (
+     select ii.work_id from public.import_items ii
+      where ii.import_id = p_import_id and ii.user_id = uid and ii.work_id is not null
+   );
+
+  with orphaned as (
+    delete from public.works w
+     where w.rights_status = 'user_owned'
+       and w.id in (
+         select ii.work_id from public.import_items ii
+          where ii.import_id = p_import_id and ii.user_id = uid and ii.work_id is not null
+       )
+       and not exists (select 1 from public.summaries s2 where s2.work_id = w.id)
+       and not exists (
+         select 1 from public.import_items ii2
+          where ii2.work_id = w.id and ii2.import_id <> p_import_id
+       )
+    returning w.id
+  )
+  select coalesce(array_agg(id), '{}') into v_orphan_works from orphaned;
+
+  -- `work_contributors` cascaded with the works above, so a contributor with no link
+  -- left is one nothing can reach: `contributors_read_readable` needs a readable work
+  -- behind them, and the seed always attaches its own.
+  delete from public.contributors c
+   where c.id = any(v_orphan_contributors)
+     and not exists (
+       select 1 from public.work_contributors wc where wc.contributor_id = c.id
+     );
 
   update public.imports set undone_at = now() where id = p_import_id;
 
@@ -1454,10 +1677,13 @@ comment on function public.grade_recall is
 -- Verified before fixing: the flipped summary and its imported pull both survived, body
 -- intact, `author_id` null.
 --
--- The predicate now matches the update policy's own: anything not genuinely published to
--- the world goes with its author. One that WAS published to the world stays, which is the
--- existing and deliberate behaviour -- it is part of the catalogue by then, and
--- `20260830203352` is what makes reaching that state a decision rather than an accident.
+-- The predicate deliberately does NOT match the update policy's own, and the two
+-- attempts that did are recorded beside it below. Anything the reader did not publish to
+-- the world goes with them, and so does anything they IMPORTED, however they have since
+-- moved or re-labelled it. A summary genuinely published to the world and not imported
+-- stays, which is the existing and deliberate behaviour -- it is part of the catalogue by
+-- then, and `20260830203352` is what makes reaching that state a decision rather than an
+-- accident.
 create or replace function public.delete_my_account()
 returns void
 language plpgsql
@@ -1493,17 +1719,32 @@ begin
    * shared catalogue content the project paid for and stranded its work. Verified:
    * the summary and its pulls were both gone.
    *
-   * An imported summary is always on a `user_owned` work, so that is the leg to add
-   * rather than a broader status test. The reachable draft+public flip this migration
-   * had to close is closed for imports, and canonical drafts are left alone.
+   * THE SECOND VERSION READ THE WORK'S CURRENT `rights_status`, AND THE READER CAN
+   * MOVE THE SUMMARY. `summaries_author_update` constrains `author_id`, the
+   * published+public pair, and `work_is_authorable(work_id)` -- which is true of every
+   * catalogue work, because every catalogue work carries a published public summary.
+   * `authenticated` holds column UPDATE on `work_id`, so one PATCH sets
+   * `work_id = <any seeded work>, status = 'draft', visibility = 'public'` and neither
+   * leg matches any more. Verified: the summary and its pulls survived
+   * `delete_my_account` with the reader's `auth.users` row gone, leaving an ownerless
+   * summary whose pulls hold a publisher's paragraphs -- the exact state described
+   * above, reached by the one column the predicate did not look at.
+   *
+   * So it asks PROVENANCE instead, which the reader cannot move: `import_items` is
+   * read-only through the API, `pulls` has no update policy, and the item names the
+   * pull it created. A summary this reader imported into goes, wherever its work now
+   * points and whatever they set its visibility to. A canonical draft has no
+   * `import_items` behind it and stays.
    */
   delete from public.summaries s
    where s.author_id = uid
      and (
        s.visibility <> 'public'
        or exists (
-         select 1 from public.works w
-          where w.id = s.work_id and w.rights_status = 'user_owned'
+         select 1
+           from public.import_items ii
+           join public.pulls p on p.id = ii.pull_id
+          where ii.user_id = uid and p.summary_id = s.id
        )
      );
 

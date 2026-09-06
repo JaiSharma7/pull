@@ -2068,7 +2068,12 @@ export type Database = {
         Returns: string
       }
       commit_import: {
-        Args: { p_file_hash: string; p_items: Json; p_source_kind: string }
+        Args: {
+          p_file_hash: string
+          p_import_id?: string
+          p_items: Json
+          p_source_kind: string
+        }
         Returns: Json
       }
       delete_my_account: { Args: never; Returns: undefined }

@@ -35,7 +35,16 @@
 --     re-import creates no empty summary, so the book does not come back
 --   * the 20,000 ceiling is charged per row stored, so a duplicate-only upload at
 --     the ceiling is still accepted -- and a reader with no room left creates no
---     shared `works` or `contributors` rows, which no per-reader ceiling covers
+--     shared `works` or `contributors` rows, which no per-reader ceiling covers.
+--     Below the ceiling the pre-pass is a superset by design and can create up to
+--     `room - 1` works nothing ends up using; that is bounded and paid for 1:1 in
+--     the reader's own quota, which is the trade the loop's raise-on-missing-work
+--     requires, and it is not the same claim as the one asserted here
+--   * an Undo gives the shared rows back, or the ceiling and the Undo cancel: the
+--     ceiling bounds creation by the room left under it and an Undo frees that room
+--   * every book by one author in a chunk keeps its byline, not just the first
+--   * a chunk joins the batch the client NAMES, and only one the reader still holds
+--   * closing the account takes an import with it however the summary has been moved
 --
 -- Everything that can run as a real reader under RLS does. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -115,6 +124,11 @@ declare
 
   n         int;
   n_before  int;
+  c_before  int;
+  closer    uuid := extensions.gen_random_uuid();
+  closer_sess uuid := extensions.gen_random_uuid();
+  seeded_work uuid;
+  batch_one uuid;
   work_oracle uuid;
   refused   boolean;
   ks        public.knowledge_states;
@@ -710,8 +724,20 @@ begin
    where s.author_id = reader_a;
   if n <> 3 then raise exception 'Undo could not be undone (% pulls back of 3)', n; end if;
 
-  select count(*) into n from public.works w where w.id in (work_med, work_wal);
+  -- BY SLUG, not by the id captured before the Undo, and the difference is the point.
+  -- An Undo now deletes the works its batch created when nothing else uses them --
+  -- no summary at all, no item from another batch -- because otherwise the ceiling
+  -- that bounds shared-row creation and the Undo that frees room under it cancel into
+  -- unbounded growth (measured: five import-and-undo cycles added 500 permanent
+  -- `works` rows with `held` back at 0 every time). The slug is deterministic, so a
+  -- re-import lands on the same book; the row behind it is new, and nothing a reader
+  -- can see or hold ever referred to the old one -- its pulls went with the Undo.
+  select count(*) into n
+    from public.works w
+   where w.slug like 'imported-meditations%' or w.slug like 'imported-walden%';
   if n <> 2 then raise exception 'the restored books did not come back into view'; end if;
+  select w.id into work_med from public.works w where w.slug like 'imported-meditations%';
+  select w.id into work_wal from public.works w where w.slug like 'imported-walden%';
 
   -- And the tombstones were revived rather than duplicated: the unique key is
   -- (user_id, content_hash), so a second row would have raised rather than counted.
@@ -959,13 +985,210 @@ begin
       res ->> 'added', res ->> 'ceilingReached';
   end if;
 
+  -- ------------------- 12. an Undo takes the shared rows it made, or the bound cancels
+  --
+  -- Round 4 bounded shared-catalogue creation by the room left under the item ceiling.
+  -- Round 3 had already made an Undo free that room by not counting tombstones. The two
+  -- correct fixes cancel: import fresh titles, undo, repeat. Measured on the unfixed
+  -- function -- five cycles as one ordinary reader added 500 permanent `works` and 500
+  -- `contributors` with `held` back at 0 every time, repeatable forever, which put the
+  -- growth this feature causes back outside every bound the header claims.
+  perform pg_temp.as_owner();
+  select count(*) into n_before from public.works;
+  select count(*) into c_before from public.contributors;
+  perform pg_temp.become(reader_b);
+
+  for n in 1..3 loop
+    -- A distinct file hash per cycle, because every row in this file shares one
+    -- transaction clock: `now()` is the same for all of them, so the reuse window
+    -- would join all three cycles -- and section 9d's paste -- into one batch.
+    res := public.commit_import('csv', repeat(n::text, 64), (
+      select jsonb_agg(jsonb_build_object(
+               'title', 'Cycle Volume ' || n || '-' || g,
+               'author', 'Cycle Writer ' || n || '-' || g,
+               'text', 'a highlight from cycle ' || n || ', book ' || g))
+        from generate_series(1, 4) g
+    ));
+    if (res ->> 'added')::int <> 4 then
+      raise exception 'cycle % stored % of 4', n, res ->> 'added';
+    end if;
+    perform public.undo_import((res ->> 'importId')::uuid);
+  end loop;
+
+  perform pg_temp.as_owner();
+  select count(*) into n from public.works;
+  if n <> n_before then
+    raise exception 'three import-and-undo cycles left % shared works behind', n - n_before;
+  end if;
+  select count(*) into n from public.contributors;
+  if n <> c_before then
+    raise exception 'three import-and-undo cycles left % contributors behind', n - c_before;
+  end if;
+  perform pg_temp.become(reader_b);
+
+  -- And the byline comes back with the book. `attribute_work` reuses a contributor only
+  -- when the caller can already see a work behind it, so a reader who imported an
+  -- author, undid it, and imported them again got nothing the second time -- the oracle
+  -- guard could not tell their own abandoned row from a stranger's. There is no
+  -- abandoned row now.
+  res := public.commit_import('csv', repeat('9', 64), jsonb_build_array(
+    jsonb_build_object('title', 'Cycle Volume 1-1', 'author', 'Cycle Writer 1-1',
+      'text', 'the same book, imported again after an undo')
+  ));
+  if (res ->> 'added')::int <> 1 then
+    raise exception 'the re-import after three undos stored %', res ->> 'added';
+  end if;
+  select count(*) into n
+    from public.work_contributors wc
+    join public.works w on w.id = wc.work_id
+   where w.slug like 'imported-cycle-volume-1-1%';
+  if n <> 1 then
+    raise exception 'a book re-imported after an Undo came back with % bylines', n;
+  end if;
+
+  -- ------------------------------- 13. every book by an author keeps its byline
+  --
+  -- The contributors pre-pass was `distinct on (author)`, which passed `attribute_work`
+  -- the lexicographically smallest slug and dropped the byline on every other book by
+  -- that author in the same call. Section 9d could not see it: both of its fixtures are
+  -- separate one-item calls. A Kindle export is grouped by book and chunked at 500, so
+  -- several books by one author in one chunk is the ordinary case.
+  res := public.commit_import('csv', repeat('a', 63) || 'b', jsonb_build_array(
+    jsonb_build_object('title', 'Alpha Volume', 'author', 'Prolific Diarist',
+      'text', 'the first of three by one author'),
+    jsonb_build_object('title', 'Mu Volume', 'author', 'Prolific Diarist',
+      'text', 'the second of three by one author'),
+    jsonb_build_object('title', 'Zeta Volume', 'author', 'Prolific Diarist',
+      'text', 'the third of three by one author')
+  ));
+  if (res ->> 'added')::int <> 3 then
+    raise exception 'the three-book fixture stored %', res ->> 'added';
+  end if;
+  select count(*) into n
+    from public.work_contributors wc
+    join public.contributors c on c.id = wc.contributor_id
+   where c.slug operator(extensions.=) 'prolific-diarist'::extensions.citext;
+  if n <> 3 then
+    raise exception 'three books by one author in one call were attributed % times', n;
+  end if;
+
+  -- ------------------------------- 14. a chunk names the batch it continues
+  --
+  -- The reuse window is a heuristic: `source_kind` alone cannot tell chunk two of a
+  -- paste from an unrelated paste, and at six hours two unrelated pastes merged so that
+  -- undoing the second took the first one's highlights -- the one thing an Undo must not
+  -- do. Five minutes shrinks that window without closing it. A client chunking an upload
+  -- knows the answer and can now say it.
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Named Batch', 'text', 'chunk one of a long paste')
+  ));
+  batch_one := (res ->> 'importId')::uuid;
+
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Named Batch', 'text', 'chunk two of the same paste')
+  ), batch_one);
+  if (res ->> 'importId')::uuid <> batch_one then
+    raise exception 'a named chunk opened a new batch instead of joining %', batch_one;
+  end if;
+
+  -- A batch that is not yours is not a batch you may write into, and neither is one you
+  -- have already taken back.
+  perform pg_temp.become(reader_a);
+  refused := false;
+  begin
+    perform public.commit_import('paste', null, jsonb_build_array(
+      jsonb_build_object('title', 'Not Mine', 'text', 'writing into a stranger''s batch')
+    ), batch_one);
+  exception when others then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a reader wrote into another reader''s import batch';
+  end if;
+  perform pg_temp.become(reader_b);
+
+  perform public.undo_import(batch_one);
+  refused := false;
+  begin
+    perform public.commit_import('paste', null, jsonb_build_array(
+      jsonb_build_object('title', 'A Named Batch', 'text', 'chunk three, after the undo')
+    ), batch_one);
+  exception when others then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a chunk joined a batch the reader had already undone';
+  end if;
+
+  -- ---------------- 15. closing the account takes the import wherever it has been moved
+  --
+  -- `delete_my_account` deleted the reader's summaries unless they were genuinely
+  -- published to the world, which destroyed canonical drafts mid-generation; round 4
+  -- narrowed that to the work's `rights_status = 'user_owned'`, and the reader can move
+  -- the summary. `summaries_author_update` constrains `author_id`, the published+public
+  -- pair and `work_is_authorable(work_id)` -- true of every catalogue work -- and
+  -- `authenticated` holds column UPDATE on `work_id`. So one PATCH left an ownerless
+  -- summary whose pulls hold a publisher's paragraphs, which is exactly the retention
+  -- the RPC exists to prevent. Provenance is the thing the reader cannot move.
+  perform pg_temp.as_owner();
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at, is_anonymous,
+                          raw_app_meta_data, raw_user_meta_data)
+  values (closer, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+          'closer@example.test', 'x', now(), now(), now(), false, '{}'::jsonb, '{}'::jsonb);
+  select w.id into seeded_work from public.works w where w.slug = 'on-liberty';
+  -- `delete_my_account` refuses a session older than the reauth window, so the fixture
+  -- needs a real one; `account_security.sql` §5 is where that rule is asserted.
+  insert into auth.sessions (id, user_id, created_at, updated_at)
+  values (closer_sess, closer, now(), now());
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', closer, 'role', 'authenticated',
+                      'session_id', closer_sess)::text, true);
+  perform pg_temp.assert_is_reader();
+
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Publisher''s Book', 'author', 'Some Publisher',
+      'text', 'A verbatim paragraph the publisher owns, kept by the reader.')
+  ));
+
+  update public.summaries s
+     set work_id = seeded_work, status = 'draft', visibility = 'public'
+   where s.author_id = closer;
+  get diagnostics n = row_count;
+  if n <> 1 then
+    raise exception 'the fixture could not move the summary (% rows), so it proves nothing', n;
+  end if;
+
+  perform public.delete_my_account();
+
+  perform pg_temp.as_owner();
+  select count(*) into n from public.summaries s where s.author_id = closer;
+  if n <> 0 then
+    raise exception 'a moved import survived the account it belonged to (% summaries)', n;
+  end if;
+  select count(*) into n
+    from public.pulls p
+   where p.body = 'A verbatim paragraph the publisher owns, kept by the reader.';
+  if n <> 0 then
+    raise exception 'the publisher''s paragraph outlived the reader (% pulls)', n;
+  end if;
+  -- And the summary is not merely ownerless: `delete_my_account` deletes the auth row,
+  -- so an orphan here would be unreachable and permanent.
+  select count(*) into n from auth.users u where u.id = closer;
+  if n <> 0 then
+    raise exception 'delete_my_account left the account behind';
+  end if;
+  perform pg_temp.become(reader_a);
+
   raise notice 'imports: kept, deduped, shared by work and by nothing else, '
     'invisible to everyone but their reader (contributors included), never in the feed, '
     'refused to guests, scheduled and saved so Review and the Library see them, graded '
     'only against their own questions, bounded by what is stored rather than what is '
-    'offered -- in shared catalogue rows as well as their own -- never an oracle for '
-    'what a stranger has imported, and reversible exactly once with no empty book '
-    'left behind';
+    'offered -- in shared catalogue rows as well as their own, which an Undo gives back '
+    'rather than leaving behind -- attributed on every book rather than the first, '
+    'joinable only to a batch the reader names and still holds, and gone with the '
+    'account however the summary has since been moved';
 end $$;
 
 rollback;
