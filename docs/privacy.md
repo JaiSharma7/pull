@@ -94,13 +94,83 @@ own history to yourself, not about retaining it against your wishes.
 
 This is the category most services describe vaguely, so here it is precisely:
 
-| Data                                                            | Table                               | What it is                                                       |
-| --------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
-| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                  | Stops the feed repeating itself                                  |
-| What you opened and for how long                                | `history_events` (incl. `dwell_ms`) | Your history, and the reading-time signal                        |
-| Recall state per idea                                           | `knowledge_states`                  | Stability and last-seen, from which Half-Life is computed        |
-| A numeric summary of what you know                              | `user_knowledge_vectors`            | The centroid the Delta compares candidates against               |
-| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds` | Bounds interleaved questions and backs off when you dismiss them |
+| Data                                                            | Table                                                        | What it is                                                                          |
+| --------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Which ideas you were shown, where in the feed, and what you did | `feed_impressions`                                           | Stops the feed repeating itself                                                     |
+| What you opened and for how long                                | `history_events` (incl. `dwell_ms`)                          | Your history, and the reading-time signal                                           |
+| Recall state per idea                                           | `knowledge_states`                                           | Stability and last-seen, from which Half-Life is computed                           |
+| A numeric summary of what you know                              | `user_knowledge_vectors`                                     | The centroid the Delta compares candidates against                                  |
+| Questions shown, answered or dismissed                          | `interrupt_events`, `session_seeds`                          | Bounds interleaved questions and backs off when you dismiss them                    |
+| Each recall attempt, as it happened                             | `recall_events`                                              | The grade, your stated confidence and what you typed, so a retry never counts twice |
+| Highlights you chose to keep                                    | `imports`, `import_items`, and pulls under a private summary | Your own copy of your own reading, so the product can schedule and search it        |
+| Questions you wrote for yourself                                | `user_questions`                                             | Asked in Review before ours, because yours is the one you wanted                    |
+
+**Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
+export, the text of each highlight is stored verbatim — that is the point of keeping it —
+under a summary marked private that only you can read, on a source marked as your own
+material. Four consequences, and each is enforced by the database rather than by our
+intentions:
+
+- It never enters anybody's feed. The feed draws only from summaries that are both
+  published and public, and yours is neither.
+- It is never sent to a model to write a public summary. Imports do not enter canonical
+  generation at all, and nothing else reads them.
+- Nobody else can see it, or see that it exists. A source with nothing readable behind it
+  is invisible, so another reader listing our catalogue does not learn the titles of the
+  books you have been reading.
+- It is deleted with your account, along with the batch record and the questions you wrote
+  about it. Undo will also let you take back a whole batch — the highlights, the review
+  schedule and the saves that came with them — in one action, from Library. The database
+  side of that is built; the screen it hangs off is not yet, so today an import is
+  something we can do and not yet something you can.
+
+**What an Undo leaves behind, exactly.** Not nothing, and it is worth being precise
+because the point of an Undo is that you decide. We keep a one-way fingerprint of each
+highlight's text, which cannot be turned back into the highlight, and where in the book it
+was. Two reasons, both of which cut in your favour. It is what lets an Undo be undone —
+upload the same file again and the highlights come back. And it is what stops an ordinary
+re-upload of a file you have already imported from duplicating everything in it.
+
+The record of the book does stay, and we would rather say so. Your highlights go, your
+notes and grades go, the private page that held them goes — what is left is a catalogue
+entry saying a book with that title and author exists, with nothing of yours attached to
+it and nothing readable behind it, which means no other reader can see it at all.
+
+That entry is yours alone: two readers who import the same book now get one entry each.
+For a while they shared a single row, and the sentence here said so — until we found that
+sharing it meant the second reader could read back the first reader's exact spelling of
+the title and the moment they imported it, just by importing the same book. So the entry
+is keyed to you, and the only thing the shared row ever shared was one reader's private
+library with another's.
+
+It stays rather than being deleted because deleting it is worse. We tried that: a delete
+raced other readers' imports and took their highlights with it, in twelve of fourteen
+attempts. Losing somebody else's work is not a price worth paying for tidiness, and now
+that the row is yours there is nobody else's copy behind it to lose.
+
+It also stays when you close your account, which is the one place this is weaker than we
+would like: the highlights and everything you wrote about them are deleted, and the
+catalogue entry is not. There is a ceiling on how many of these one account can ever
+create, so this cannot grow without bound — but it is a title and an author name that
+outlive the account that typed them, and that belongs in this list rather than in a
+footnote.
+
+**The text comes back; the work you built on it does not.** This paragraph used to say the
+highlights came back "exactly as they were", and that was not true. A re-import creates the
+idea afresh, so anything attached to the old one — a question you wrote about it, your
+grades and review history for it, notes and highlights you made on it — is gone for good
+when you undo, and re-uploading does not bring it back. We would rather you knew that
+before you tapped it than discovered it afterwards. What we can tell you today is exact
+but late: an Undo hands back the count of everything that went with the highlights —
+questions, grades, notes, highlights, explanations, stances — so the screen can say what
+it took. Saying it _first_ needs a rehearsal the database does not do yet, and it will
+land with the screen rather than before it, because a warning nothing can show is not a
+protection. If what you want is the highlights out of the way but the work kept, an
+Undo is the wrong tool and we do not currently have the right one.
+
+All of it goes with your account. If you want an import gone rather than undone, deleting
+your account is currently the only way to reach that, and we would rather say so than
+imply otherwise.
 
 `user_knowledge_vectors` deserves a sentence of its own. It is a vector — a list of numbers
 — averaged from the ideas you have engaged with. It is not readable prose and it is not
@@ -240,8 +310,8 @@ this product refuses to charge for, so we are not going to quietly trim it.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,
-knowledge states, vectors, convictions and explanations. That is a foreign-key cascade in
-the schema, not a scheduled cleanup job.
+knowledge states, recall events, vectors, convictions and explanations. That is a foreign-key
+cascade in the schema, not a scheduled cleanup job.
 
 You do this yourself, from **Account → Delete this account**. It is not a request you
 send us and wait on: the deletion happens when you confirm it. Because it cannot be
@@ -255,13 +325,22 @@ the pipeline fetched into `job_steps.output` — sitting in the database with yo
 taken off it. That is not deletion. `delete_my_account` now removes those rows outright
 before the account goes.
 
-Three things survive, none of them attached to you:
+Four things survive, none of them attached to you:
 
 - **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
   so deleting an account cannot erase a moderation trail.
 - **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
   token count and a cost. It never held a user id, and it is how this project can state
   what generation costs. Nothing in it identifies you.
+- **The catalogue entry for a book you imported** — its title and its author, and nothing
+  else. Not your highlights, which go; not the page that held them, which goes; not any
+  link between it and you, which goes with your account. It stays because deleting it
+  raced other readers' imports and took their highlights with it, in twelve of fourteen
+  attempts, and losing somebody else's work is not a price worth paying for tidiness.
+  There is a ceiling on how many of these one account can ever create, and it counts rows
+  that exist rather than rows we expect to make — which it did not always, so for a while
+  the ceiling could be walked past. This is the fourth, and it was three until we looked
+  properly.
 - **Backups**, for up to 30 days, after which they roll off.
 
 **A guest session is deleted for you.** Unused for a day, it is removed outright from the
@@ -287,12 +366,12 @@ Anything published under a future community feature is covered in the Terms.
 Four of these you do yourself, without asking and without waiting, from
 **Account**:
 
-| Control                     | What it does                                                                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Download everything**     | Every row stored against your account, as one JSON file. Paged, so a large library is not silently truncated at a hundred rows. |
-| **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                       |
-| **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                      |
-| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                     |
+| Control                     | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Download everything**     | Every row stored against your account, as one JSON file — including each recall attempt as it happened, the reports you have filed, the seeds that decided your reading order, and the vector described above. Paged in a fixed order, so a large library is neither truncated nor double-counted. Two things are held back on purpose: your unspent recovery codes, which exist to be shown once and not written into a file you might email yourself, and the operational rate counters, which are not yours in any meaningful sense. If any table cannot be read, the file names it rather than quietly leaving it out. |
+| **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 A note on ending a session, because the honest version is less impressive than the
 usual claim: it stops that device getting a _new_ token. A token it already holds keeps
