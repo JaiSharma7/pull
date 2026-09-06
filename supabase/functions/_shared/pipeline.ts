@@ -443,6 +443,12 @@ export function qualityFromDraft(summary: {
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 
+/** `quiz_questions_prompt_length` and `_answer_length`, as the writer sees them. */
+const MAX_QUESTION_TEXT = 2000;
+/** The two halves of `quiz_questions_distractors_shape`. */
+const MAX_DISTRACTORS = 8;
+const MAX_DISTRACTORS_TEXT = 20000;
+
 /**
  * The quiz questions that are safe to write, paired to the Pulls that were.
  *
@@ -459,12 +465,6 @@ export function qualityFromDraft(summary: {
  * exactly this reason — a question attached to the wrong idea is invisible and
  * permanent.
  */
-/** `quiz_questions_prompt_length` and `_answer_length`, as the writer sees them. */
-const MAX_QUESTION_TEXT = 2000;
-/** The two halves of `quiz_questions_distractors_shape`. */
-const MAX_DISTRACTORS = 8;
-const MAX_DISTRACTORS_TEXT = 20000;
-
 export function questionsToWrite(
   pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
   written: readonly { ordinal: number; id: string }[],
@@ -483,7 +483,9 @@ export function questionsToWrite(
      * THE BOUNDS THE TABLE NOW CARRIES, MET BY THE WRITER RATHER THAN HIT BY IT.
      *
      * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
-     * `_distractors_shape`, and this function is the table's only writer. It trims and
+     * `_distractors_shape`, and this function is the table's only RUNTIME writer -- the
+     * seeds in 20260829131109 and 20260902180000 also insert, and their fourteen rows
+     * satisfy every new bound (max prompt 113, max answer 150). It trims and
      * filters and never truncates, so a model returning a 2,100-character prompt made the
      * `cards` step raise 23514 -- AFTER `insertPulls` had committed and after the
      * synthesis had been paid for. `synthesize`'s output replays from `job_step_outputs`,
@@ -508,7 +510,24 @@ export function questionsToWrite(
           .filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
           .slice(0, MAX_DISTRACTORS)
       : [];
-    while (distractors.length > 0 && JSON.stringify(distractors).length > MAX_DISTRACTORS_TEXT) {
+    /*
+     * `+ length - 1` BECAUSE POSTGRES AND `JSON.stringify` DO NOT RENDER THE SAME STRING.
+     *
+     * Round six, found by two reviewers, and it is this clamp making the mistake the
+     * clamp exists to stop. The constraint measures `length(distractors::text)`, and
+     * jsonb renders an array as `["a", "b", "c"]` -- a space after every separator --
+     * while `JSON.stringify` gives `["a","b","c"]`. For n elements the stored text is
+     * n-1 characters longer than what was measured, so at the count cap of eight this
+     * passed an array whose stored form is 20,007 against a bound of 20,000. Both
+     * reviewers reproduced the 23514, in the step that can never converge.
+     *
+     * Conservative everywhere else: JS `.length` counts UTF-16 units and Postgres
+     * `length()` counts characters, so astral text is over-counted here, never under.
+     */
+    while (
+      distractors.length > 0 &&
+      JSON.stringify(distractors).length + distractors.length - 1 > MAX_DISTRACTORS_TEXT
+    ) {
       distractors = distractors.slice(0, -1);
     }
 

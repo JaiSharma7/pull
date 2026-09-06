@@ -238,7 +238,7 @@ describe('questionsToWrite', () => {
    * THE BOUNDS THE TABLE CARRIES, MET HERE RATHER THAN HIT.
    *
    * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
-   * `_distractors_shape`, and this function is the only writer. Before the clamp, a model
+   * `_distractors_shape`, and this function is the only writer at runtime. Before the clamp, a model
    * returning a 2,100-character prompt raised 23514 in the `cards` step -- after
    * `insertPulls` had committed and after the synthesis had been paid for -- and, because
    * `synthesize` replays from `job_step_outputs`, failed identically on every retry.
@@ -256,6 +256,26 @@ describe('questionsToWrite', () => {
     expect(questionsToWrite([q({ prompt: 'x'.repeat(2001) }), q()], written)).toEqual([
       { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
     ]);
+  });
+
+  it('measures the size the way Postgres will, spaces and all', () => {
+    /*
+     * Round six, found by two reviewers. `length(distractors::text)` is measured on the
+     * JSONB rendering, which puts a space after every separator -- `["a", "b"]` -- while
+     * `JSON.stringify` gives `["a","b"]`. For n elements the stored text is n-1 longer
+     * than the clamp believed, so at the count cap of eight an array whose compact form
+     * is exactly 20,000 stores as 20,007 and is refused with 23514, in the step that can
+     * never converge.
+     *
+     * Eight strings whose `JSON.stringify` length is exactly the bound: 25 characters of
+     * punctuation plus 19,975 of content.
+     */
+    const exact = [...Array.from({ length: 7 }, () => 'z'.repeat(2497)), 'z'.repeat(2496)];
+    expect(JSON.stringify(exact)).toHaveLength(20000);
+    const kept = questionsToWrite([q({ distractors: exact })], written)[0]?.distractors ?? [];
+    expect(kept).toHaveLength(7);
+    // What Postgres will actually measure, spaces included, is now under the bound.
+    expect(JSON.stringify(kept).length + kept.length - 1).toBeLessThanOrEqual(20000);
   });
 
   it('clamps distractors by count AND by size', () => {

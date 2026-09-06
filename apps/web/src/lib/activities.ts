@@ -30,7 +30,7 @@ import type { RecallGrade } from './grades.js';
  * `quiz_questions.kind` was plain `text not null default 'recall'` with nothing but
  * the unique `(pull_id, kind)` index on it, and this comment said so — the set was
  * *intended* and unenforced, so a row could arrive carrying a kind that is not here.
- * `20260905120000_a_question_that_can_be_wrong.sql` closes that: the check on
+ * `20260905120001_and_the_question_it_asks.sql` closes that: the check on
  * `quiz_questions.kind` is these six values, in this order, and
  * `supabase/tests/questions.sql` refuses an unknown one.
  *
@@ -212,9 +212,11 @@ export function seededShuffle<T>(items: readonly T[], seed: string | number): T[
  * two right answers or two identical wrong ones.
  *
  * PASS THE QUESTION ID AS THE SEED. Nothing here can enforce it -- the seed is whatever
- * the caller hands over -- and an index, a `Date.now()`, or anything else per-session
- * reshuffles the options under the reader's finger: between two loads of one card, or
- * between a render and a re-render, so the click lands on an option they did not read.
+ * the caller hands over -- and the two obvious substitutes fail differently. A
+ * `Date.now()` reshuffles between a render and a re-render, so the click lands on an
+ * option the reader did not read. An INDEX is stable across a re-render and wrong in
+ * another way: every card on the page then shares one permutation, and it moves the
+ * moment the due list re-orders.
  * `seededShuffle` is deterministic; the id is what makes the determinism worth having.
  */
 export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: string | number) {
@@ -945,10 +947,31 @@ export function gradeCloze(
  * phantom step.
  */
 export function orderingSteps(q: Pick<Question, 'answer'>): string[] {
-  return (q.answer ?? '')
+  const steps = (q.answer ?? '')
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+
+  /*
+   * FEWER THAN TWO DISTINCT STEPS IS NOT RENDERABLE, and round six found both halves of
+   * that wrong.
+   *
+   * Round five put the floor in `gradeOrdering` only, so a malformed ordering still went
+   * on screen: the reader dragged the one step into the one slot -- the sole arrangement
+   * there is -- and was told they forgot it. That increments `lapses`, which the sibling
+   * migration newly surfaces so a card can say "you keep losing this one". A false `easy`
+   * had become a false lapse, which is better and still wrong. `mcqOptions` has refused
+   * at THIS boundary since round three, and a screen already checks its length before
+   * rendering; the same signal here means one branch serves both kinds.
+   *
+   * And DISTINCT, because counting steps let the case straight back in:
+   * `"Boil the water\nBoil the water"` is two steps with one possible arrangement, so
+   * every arrangement graded `easy` -- verbatim what the guard below condemns.
+   * `mcqOptions` dedupes through its `seen` set BEFORE applying its floor, and this had
+   * copied the floor without the dedupe. `['a','a','b']` still has three arrangements
+   * and stays gradeable.
+   */
+  return new Set(steps).size < 2 ? [] : steps;
 }
 
 /**
@@ -1019,9 +1042,19 @@ export function gradeOrdering(
    * not be got wrong. That is the round-three MCQ finding at the kind round three did
    * not reach, and `mcqOptions` carries the same floor for the same reason.
    *
-   * The floor is here and not only in the schema because `Question.answer` is
-   * `string | null` in TypeScript: a reader's own self-graded question reaches this
-   * function without passing through Postgres at all.
+   * The floor is here because the SCHEMA has none. `quiz_questions` gets
+   * `_mcq_has_distractors` and `_cloze_has_text` in the sibling migration and no matching
+   * rule for `ordering`; `quiz_questions_answer_length` bounds length only and, unlike
+   * its `user_questions` twin, carries no blank check. So `answer = ' '` is a storable
+   * canonical row giving ZERO steps, and a single-line answer is a storable one-step
+   * ordering. The client is the only place either can be caught.
+   *
+   * An earlier version of this paragraph said instead that a reader's own question
+   * reaches here without passing through Postgres. Both halves were false, and two
+   * reviewers said so: `user_questions_kind_known` does not permit `ordering` at all, so
+   * a by-kind dispatch never routes one here -- and the rows that CAN reach this come
+   * from `quiz_questions`, which is to say through Postgres. It named the one path that
+   * cannot happen and missed the two that can.
    */
   if (steps.length < 2) {
     return {
@@ -1063,8 +1096,9 @@ export function gradeOrdering(
  *
  * "THE ANSWER" HERE MEANS EXACTLY THE ANSWER, and for a cloze that is stricter than the
  * grader. `gradeCloze` accepts a typing slip and a spelling variant -- `colour` for
- * `color` grades `correct: true` -- while this compares trimmed strings, and so returns
- * a reason for the same input. That is right for the MCQ case the function was written
+ * `color` grades `correct: true` -- while this compares trimmed strings, so it does not
+ * treat that reader as right. What it returns is then whatever the question carries: the
+ * matching rationale, or the general explanation, or null when it has neither. That is right for the MCQ case the function was written
  * for, where picking an option either is or is not the answer, and it means a screen
  * must NOT decide whether to show a reason by asking whether this is null. Show one when
  * the GRADER said the reader was wrong; ask this only for the words to put in it.

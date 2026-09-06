@@ -64,9 +64,13 @@
  * order every READER takes them, was therefore the whole fix. Also false, and this is
  * the one that mattered, because it surveyed readers and no writers. A CASCADE DELETE
  * takes the pair the other way: `delete from public.pulls` fires its referential
- * triggers in trigger-name order, and `quiz_questions_pull_id_fkey` (20260829124507)
- * has a lower OID than `user_questions_pull_id_fkey` (20260905110000), so the canonical
- * table goes first. Review reproduced the deadlock three times -- including on a pull
+ * triggers in trigger-name order, and those names embed the trigger's own oid as decimal
+ * text -- `RI_ConstraintTrigger_a_18579` for `quiz_questions_pull_id_fkey`
+ * (20260829124507) against `RI_ConstraintTrigger_a_19771` for its `user_questions` twin
+ * (20260905110000), so the canonical table goes first. It is a LEXICOGRAPHIC comparison
+ * rather than a numeric one, and "older constraint fires first" holds only while both
+ * oids have the same digit count. They do, here and on hosted after ninety-one
+ * migrations, and the cascade order was observed directly rather than inferred. Review reproduced the deadlock three times -- including on a pull
  * with no rows in either question table, because the cascade issues the delete anyway
  * and the statement still locks the table. The reachable callers are `undo_import` and
  * `delete_my_account`, both granted to `authenticated`: a reader deleting their account
@@ -197,11 +201,18 @@ alter table public.user_questions
    * write their own questions, deliberately -- so the amplification is the problem rather
    * than the storage.
    *
-   * IT DOES NOT CLOSE THE CEILING and is not claimed to. The residual is
-   * prompt + answer + explanation + cloze, about 7 KB a question. Bounding that is a
-   * shape change -- carrying the long fields only on `questions -> 0`, since the screen
-   * asks one question at a time -- which belongs with 3d, the PR that builds the screen.
-   * Recorded there rather than half-done here.
+   * IT DOES NOT CLOSE THE CEILING and is not claimed to. The residual is FIVE fields --
+   * prompt, answer, explanation, cloze, and the 2,000 characters of `options` this bound
+   * still admits, which is the one an earlier draft of this paragraph forgot. Measured at
+   * 9.8 KB a question: 30,513 bytes a card, so about 3.05 MB at `p_limit := 100`, which
+   * is the figure worth quoting because 100 is what the function permits.
+   *
+   * Shippable, and reviewed as such rather than assumed: a reader can only inflate their
+   * OWN response -- cross-reader isolation was reproduced under RLS -- arming it costs
+   * them 2.7 MB of uploads first, and the armed call still returns in 18.6 ms, so it is
+   * bytes rather than time. Bounding it properly is a shape change, carrying the long
+   * fields only on `questions -> 0` since the screen asks one question at a time, and
+   * that belongs with 3d.
    */
   add constraint user_questions_options_budget
     check (length(options::text) <= 2000);

@@ -1,9 +1,12 @@
 -- ---------------------------------------------------------------------------
 -- A question that can be wrong.
 --
--- 20260905120000 gives `quiz_questions` a checked `kind`, an explanation, a cloze
--- and a per-distractor rationale; gives `user_questions` the first two; and makes
--- `get_due_reviews` return an ARRAY of questions rather than one prompt.
+-- 20260905120000 gives `user_questions` an explanation and a cloze. 20260905120001
+-- gives `quiz_questions` a checked `kind`, the same two columns and a per-distractor
+-- rationale, and makes `get_due_reviews` return an ARRAY of questions rather than one
+-- prompt. TWO files because a transaction holding ACCESS EXCLUSIVE on both question
+-- tables deadlocks with a referential cascade whichever order it takes them in; the
+-- account is in the first file's header.
 --
 -- What is asserted, and each is a way the change could be wrong:
 --
@@ -137,9 +140,17 @@ end $fn$;
  * before the limit -- leaving 121 readable ones competing for the 100 this helper asks
  * for. Most carry the `stability 1.0` and `last_seen_at now()` defaults, `now()` is the
  * transaction timestamp, and `retrievability` is therefore exactly 1.0 for each -- so
- * `order by retrievability asc limit 100` drops twenty-one of them under an unspecified
- * tiebreak. Today's plan happens to keep the first-inserted row; that is a property of
- * the plan, not of the fixture.
+ * `order by retrievability asc, ks.pull_id limit 100` drops twenty-one of them. The
+ * tiebreak is SPECIFIED now -- round five added it, because retrievability alone is not
+ * a total order and ties are the normal case rather than a corner -- so the twenty-one
+ * dropped are the highest `pull_id`s, which is not insertion order: pull ids are random
+ * v4.
+ *
+ * The pull under test survives on its id rather than on luck. `pull_1` is drawn
+ * `order by p.id limit 1` over the seeded pulls that carry a canonical question, so it is
+ * the minimum of that set and has only to beat twenty of a hundred and twenty fresh
+ * uuids. Review measured its quantile at 0.058 and put the odds of exclusion at about
+ * 1.6e-10 across resets.
  */
 create or replace function pg_temp.questions_for(p_pull uuid, p_where text)
 returns jsonb

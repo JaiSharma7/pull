@@ -183,6 +183,28 @@ describe('mcqOptions', () => {
     });
   });
 
+  it('disagrees with gradeCloze on a spelling variant, which is why a screen must ask the grader', () => {
+    /*
+     * Round six wanted this pinned rather than described. `gradeCloze` folds a typing slip
+     * and a spelling variant into `correct`; `whyWrong` compares trimmed strings, so it
+     * still has something to say about the same input. That is right for the MCQ case it
+     * was written for -- picking an option either is or is not the answer -- and it means
+     * a screen must decide whether to show a reason from the GRADER's verdict, never from
+     * whether this returned null. `gradeCloze`'s folding has been edited in three rounds
+     * now; without this the gap could move with nothing failing.
+     */
+    expect(gradeCloze('colour', 'color', 'sure', 100).correct).toBe(true);
+    expect(
+      whyWrong(
+        { answer: 'color', explanation: 'The American spelling is the one stored.', rationale: [] },
+        'colour',
+      ),
+    ).not.toBeNull();
+    // And null when the question carries nothing to say -- the half the comment used to
+    // overstate.
+    expect(whyWrong({ answer: 'color', explanation: null, rationale: [] }, 'colour')).toBeNull();
+  });
+
   it('always includes the answer', () => {
     const options = mcqOptions(mcq(), 'seed');
     expect(options).toContain('The material of the work');
@@ -634,6 +656,32 @@ describe('gradeOrdering', () => {
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering).grade).toBe('easy');
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering + 1).grade).toBe('good');
     expect(gradeOrdering(order, q, 'unsure', 1_000).grade).toBe('good');
+  });
+
+  it('treats two identical steps as one, because there is still one arrangement', () => {
+    // Round six. The floor counted steps and not DISTINCT steps, so
+    // `"Boil the water\nBoil the water"` had two of them, one possible arrangement, and
+    // graded `easy` -- verbatim what the guard's own comment condemns. `mcqOptions`
+    // dedupes through its `seen` set BEFORE applying the same floor; this had copied the
+    // floor without the dedupe.
+    const dup = { answer: 'Boil the water\nBoil the water' };
+    expect(orderingSteps(dup)).toEqual([]);
+    expect(gradeOrdering(['Boil the water', 'Boil the water'], dup, 'sure', 100)).toMatchObject({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // Three steps with a repeat still has three arrangements, so it stays gradeable.
+    expect(orderingSteps({ answer: 'a\na\nb' })).toEqual(['a', 'a', 'b']);
+  });
+
+  it('refuses to render a one-step ordering at all, as mcqOptions does', () => {
+    // The floor round five put only in the grader. A one-step ordering still reached the
+    // screen, the reader made the only arrangement there is, and the guard then booked
+    // them a lapse for it -- a false `easy` turned into a false `forgot`. `mcqOptions`
+    // has refused at this boundary since round three.
+    expect(orderingSteps({ answer: 'Boil the water' })).toEqual([]);
+    expect(orderingSteps({ answer: '   ' })).toEqual([]);
   });
 
   it('refuses to grade a one-step ordering as anything', () => {
