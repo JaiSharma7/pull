@@ -109,10 +109,16 @@ but only the first four kinds: `ordering` and `scenario` are generated forms tha
 and an answer cannot express.
 
 **Neither of those two rules is on `user_questions`, and that is deliberate.**
-`remember_pull` is the only writer and it cannot write `options` or `cloze` at all, so a
-constraint requiring either would refuse every call for that kind — permanently, as a 400
-from PostgREST. A constraint the only writer cannot satisfy forbids a kind rather than
-guarding one. Both wait for the screen that can supply the missing column. Recorded here
+`remember_pull` — the RPC the product writes these rows through — has no parameter for
+`options` or `cloze`, so a constraint requiring either would refuse every call it makes
+for that kind, permanently, as a 400 from PostgREST. A constraint the only writer that
+matters cannot satisfy forbids a kind rather than guarding one. Both wait for the screen
+that can supply the missing column.
+
+It is not that the columns are unwritable: `user_questions_insert_own` places no
+restriction on which columns a row carries, so a signed-in reader can POST either
+straight to `/rest/v1/user_questions` — and this migration's own blank-prompt rule exists
+because that path is real. The point is narrower and it is about the RPC. Recorded here
 because this file is what someone reads before adding the obvious missing constraint.
 
 `get_due_reviews` returns up to three questions per card, the reader's own first. The

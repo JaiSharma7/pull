@@ -63,28 +63,6 @@ export const QUESTION_KINDS = [
 ] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
-/**
- * The kinds a READER may write, which is four of the six.
- *
- * `user_questions_kind_known` (`20260905110000_your_highlights_are_yours_to_keep.sql:167`)
- * permits `recall`, `cloze`, `mcq` and `short_answer`. `ordering` and `scenario` are
- * generated forms that a prompt and an answer cannot express, so the reader's table has
- * never accepted them.
- *
- * It exists because the difference was documented and not expressible: with only
- * `QuestionKind` to hand, the 2d/2e "Remember this" writer would typecheck
- * `remember_pull({ kind: 'ordering' })` and find out at runtime, as a 23514 that
- * PostgREST returns as a 400. `satisfies` keeps it a subset, so a seventh kind added to
- * `QUESTION_KINDS` cannot silently widen this one.
- */
-export const USER_QUESTION_KINDS = [
-  'recall',
-  'cloze',
-  'mcq',
-  'short_answer',
-] as const satisfies readonly QuestionKind[];
-export type UserQuestionKind = (typeof USER_QUESTION_KINDS)[number];
-
 /** Why a particular wrong answer is wrong — shown after the reader picks it. */
 export interface DistractorRationale {
   distractor: string;
@@ -120,9 +98,12 @@ export interface Question {
    * deliberately exempts `recall` and `short_answer`, which are self-graded and have
    * nothing to store, and `get_due_reviews` passes `uq.answer` straight through. This
    * said `string` while the RPC returned `{"kind":"recall","answer":null}` -- measured
-   * against the local stack -- so every entry point below took `.trim()` on null and
-   * threw. They are narrowed rather than the type being widened alone: each already had
-   * an "an empty answer is malformed" guard one line down, and `?? ''` feeds it.
+   * against the local stack -- so every entry point below threw on it: `.trim()` in
+   * `mcqOptions`, `gradeMcq` and `whyWrong`, `.split()` in `orderingSteps`. They are
+   * narrowed rather than the type being widened alone, because each already refuses an
+   * empty answer just below -- three by an explicit guard, `orderingSteps` by filtering
+   * out the blank lines that are all an empty string can produce -- and `?? ''` feeds
+   * that existing refusal rather than adding a second one.
    */
   answer: string | null;
   /** Wrong options, for `mcq`. Empty for every other kind. */
@@ -269,14 +250,17 @@ export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: st
    * measured.
    *
    * What the reader would then get is a card headed as multiple choice with a single
-   * button on it -- the right answer -- and tapping the only thing on screen grades
-   * `easy` with `confidentlyWrong: false`. The memory model records a perfect recall
+   * button on it -- the right answer -- and tapping the only thing on screen is scored
+   * `correct` with `confidentlyWrong: false`: `good`, or `easy` if they were quick and
+   * sure, since `gradeFrom` requires both. Either way the memory model records a PASS
    * for a question that could not be got wrong, which is the exact failure this whole
    * schema exists to make representable.
    *
-   * Empty is the honest answer, and the caller already has to handle it: `if (!answer)
-   * return []` twenty lines up returns the same thing for the same reason, and 3d
-   * degrades a question with no options to free recall.
+   * Empty is the honest answer, and the caller already has to handle it: the
+   * `if (!answer) return []` at the top of this function returns the same thing for the
+   * same reason. A question with no options is one 3d will have to degrade to free
+   * recall -- stated as what it will need to do, since 3d does not exist yet and nothing
+   * imports this module but its own test.
    */
   if (options.length < 2) return [];
   return seededShuffle(options, seed);
@@ -372,7 +356,21 @@ export function gradeMcq(
   // reader did should be graded `easy` on the strength of it. Null included: a
   // self-graded kind stores none, and `get_due_reviews` returns it as it is.
   const answer = (q.answer ?? '').trim();
-  const correct = answer.length > 0 && picked.trim() === answer;
+  /*
+   * AND IT CANNOT MAKE THEM CONFIDENTLY WRONG EITHER, which widening `answer` to
+   * `string | null` is what made reachable. `confidentlyWrong` is the one signal this
+   * whole schema exists to record -- a reader who was sure and mistaken -- and it feeds
+   * the repair list on the progress screen. Reporting it for a question that had nothing
+   * to be wrong ABOUT would put a false belief in front of a reader who never held one,
+   * with no reason shown beside it, because `whyWrong` correctly returns null for the
+   * same input.
+   *
+   * A reader's own `recall` or `short_answer` stores no answer -- the constraint exempts
+   * both, deliberately, because they are self-graded -- so this is a valid row reaching
+   * a grader that cannot score it, not a malformed one. Wrong, but not damning.
+   */
+  if (!answer) return { grade: 'forgot', correct: false, confidentlyWrong: false };
+  const correct = picked.trim() === answer;
   return gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.mcq);
 }
 
@@ -875,6 +873,12 @@ export function gradeCloze(
   confidence: Confidence = 'unsure',
   latencyMs: number | null | undefined = null,
 ): GradeResult & { similarity: number } {
+  // Nothing to compare against is not a misconception. See `gradeMcq`: a reader's own
+  // self-graded question stores no answer, and scoring them `confidentlyWrong` for one
+  // would put a false belief on the repair list that they never held.
+  if (!answer.trim()) {
+    return { grade: 'forgot', correct: false, confidentlyWrong: false, similarity: 0 };
+  }
   const similarity = answerSimilarity(typed, answer);
   const exact = normaliseAnswer(typed) === normaliseAnswer(answer);
   const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);

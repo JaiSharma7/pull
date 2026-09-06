@@ -150,8 +150,23 @@ describe('mcqOptions', () => {
     // the local stack. `Question.answer` said `string`, so every entry point took
     // `.trim()` on null.
     expect(mcqOptions({ answer: null, distractors: ['a', 'b'] }, 'seed')).toEqual([]);
-    expect(gradeMcq('anything', { answer: null }, 'sure', 100).correct).toBe(false);
     expect(orderingSteps({ answer: null })).toEqual([]);
+
+    // WRONG, BUT NOT CONFIDENTLY WRONG. `confidentlyWrong` is the signal this whole
+    // schema exists to record and it feeds the repair list; reporting it for a question
+    // that had nothing to be wrong ABOUT would put a false belief in front of a reader
+    // who never held one -- with no reason beside it, since `whyWrong` correctly returns
+    // null for the same input. A reader's own self-graded question is a VALID row that
+    // stores no answer, not a malformed one.
+    expect(gradeMcq('anything', { answer: null }, 'sure', 100)).toEqual({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    expect(gradeCloze('anything', '', 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
   });
 
   it('always includes the answer', () => {

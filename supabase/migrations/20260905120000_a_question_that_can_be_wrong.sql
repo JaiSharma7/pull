@@ -50,16 +50,30 @@
  * demonstrated one -- with the READER as the victim, which is a Review that answers 500
  * mid-session because a deploy was running.
  *
- * How much that can bite depends on the runner, and this project's does not wrap a
- * migration file in a transaction: each statement commits on its own, so the two locks
- * are never held at once and the deadlock is unreachable here. That is a property of the
- * runner rather than of this file, though. A `lock table ... in access exclusive mode`
- * taking both up front in reader order would have said so explicitly and been immune to
- * either -- it is rejected with 25P01 for exactly the same reason, since `LOCK TABLE`
- * needs a transaction block.
+ * THE ORDERING IS THE WHOLE FIX, not belt-and-braces, and an earlier version of this
+ * paragraph said the opposite. It claimed the runner does not wrap a migration file, so
+ * the two locks are never held at once and the deadlock was unreachable here. Both
+ * reviewers disproved it, the same way and separately.
  *
- * So the ordering is the fix that survives both: free, and correct under a runner that
- * does wrap.
+ * The runner DOES wrap. A probe migration of `create table zz; select 1/0;` leaves no
+ * table behind under either `supabase migration up` or `pnpm db:reset` -- the file is
+ * atomic. And `pg_locks` polled through a running migration shows both ACCESS EXCLUSIVE
+ * locks held at the same time. So the deadlock is reachable, and reordering is the only
+ * thing preventing it.
+ *
+ * `lock table public.user_questions, public.quiz_questions in access exclusive mode`
+ * would say all of this in one line, and is refused with 25P01. Not because there is no
+ * transaction -- the paragraph's original error -- but because the CLI pipelines the
+ * file's statements without an intermediate Sync, so commit is deferred to the end while
+ * `IsTransactionBlock()` stays false. A pipelined implicit block is not a transaction
+ * BLOCK, which is exactly the thing `LOCK TABLE` asks for.
+ *
+ * One consequence of the file being atomic, worth knowing before a `db push`: ACCESS
+ * EXCLUSIVE on `user_questions` is now held from the first statement through both
+ * tables' constraint-validation scans, which is a longer write block on the
+ * reader-writable table than the old order gave. That is the right trade against a
+ * deadlock whose victim Postgres picks, and it is bounded -- hosted holds 0
+ * `user_questions` rows and 222 `quiz_questions`.
  */
 
 -- ------------------------------------------------------------- user_questions
@@ -80,8 +94,11 @@
 --
 -- No `mcq needs two options` rule on this table to match the canonical one, deliberately:
 -- `remember_pull` has no way to write `options` at all, so the constraint would forbid a
--- kind that the only writer cannot satisfy. It belongs with 2d/2e, which is where the
--- screen that writes choices lands, and where a reader can actually meet it.
+-- kind THROUGH THE RPC the product writes these rows with. Not through every path -- a
+-- reader can POST the column directly under `user_questions_insert_own`, which is why
+-- the blank-prompt rule below exists -- but the RPC is what the screens call, so the
+-- constraint would make the kind unreachable in practice. It belongs with 2d/2e, which
+-- is where the screen that writes choices lands, and where a reader can actually meet it.
 --
 -- THE KIND SET STAYS AT FOUR here, and that is deliberate rather than an oversight of the
 -- six above. `ordering` and `scenario` are generated forms: an ordering question needs its
@@ -288,9 +305,10 @@ alter table public.quiz_questions
   -- IT COUNTS ELEMENTS, NOT OPTIONS, and the difference is not academic. Like the shape
   -- check above it says nothing about what is IN the array, so `[1, 2]` satisfies it --
   -- and `mcqOptions` drops both as non-strings, leaving the answer alone on screen.
-  -- Tapping the only thing there grades `easy` with `confidentlyWrong: false`: a perfect
-  -- recall recorded for a question that could not be got wrong, which is the failure
-  -- this whole migration exists to make representable. Expressing the real floor here
+  -- Tapping the only thing there is scored `correct` with `confidentlyWrong: false` --
+  -- `good`, or `easy` if they were quick and sure, since `gradeFrom` wants both. Either
+  -- way it is a PASS recorded for a question that could not be got wrong, which is the
+  -- failure this whole migration exists to make representable. Expressing the real floor here
   -- would take a jsonpath filter over the members inside a CHECK; the cheaper and more
   -- reliable place is the renderer, so `mcqOptions` returns `[]` when fewer than two
   -- options survive its filter, and `activities.test.ts` covers it. This check remains
@@ -303,6 +321,17 @@ alter table public.quiz_questions
   -- `btrim` strips spaces only, so a cloze of a single newline passed as "has its blank".
   add constraint quiz_questions_cloze_has_text
     check (kind <> 'cloze' or (cloze is not null and cloze !~ '^\s*$'));
+
+-- THE FOUR/SIX SPLIT IS NOT MIRRORED IN TYPESCRIPT, and an attempt to do it here was
+-- removed rather than kept. `activities.ts` briefly gained a `USER_QUESTION_KINDS`
+-- constant for it, with a comment claiming `satisfies readonly QuestionKind[]` stopped a
+-- writer typechecking `remember_pull({ kind: 'ordering' })`. Both halves were wrong:
+-- `satisfies` accepts `'ordering'` precisely because it IS a `QuestionKind`, and the
+-- generated `remember_pull` signature takes `p_kind?: string`, so nothing narrows a
+-- direct `supabase.rpc` call anyway. It was also imported by nothing -- a dead export
+-- argued for with a false fact, which is the shape `CLAUDE.md` records commit 4507a7f
+-- for. The constant belongs in 2d, beside the writer that would use it and a test that
+-- pins it against this constraint.
 
 -- --------------------------------------------------------------- get_due_reviews
 --

@@ -171,6 +171,8 @@ declare
   cloze_id uuid;
   own_1    uuid;
   own_2    uuid;
+  pull_later uuid;
+  pull_faded uuid;
 
   due      jsonb;
   qs2      jsonb;
@@ -530,8 +532,62 @@ begin
   if card ->> 'example' is distinct from 'For instance: the fixture set this.' then
     raise exception 'the card lost the pull''s example (got %)', card ->> 'example';
   end if;
-  if card ->> 'explanation' is null then
-    raise exception 'the card lost the pull''s explanation';
+  if card ->> 'explanation' is distinct from 'Because the fixture set that too.' then
+    raise exception 'the card lost the pull''s explanation (got %)', card ->> 'explanation';
+  end if;
+
+  /*
+   * AND THE TEN `DueReview` ACTUALLY DECLARES, which were the ones nothing checked.
+   *
+   * The five above are the fields this migration ADDS, and they got the attention
+   * because they are what changed. The fields the deployed Review screen reads --
+   * `lib/types.ts:40-52` -- had no assertion at all, and a review mutant wired nine of
+   * them to null or to a neighbouring column with `pnpm db:test` still exiting 0:
+   * `headline` served the body, `workTitle` served the slug, `stability` served
+   * `difficulty`, `reps` served `lapses`, and `body`, `whyItMatters`, `workSlug`,
+   * `retrievability` and `dueAt` came back null -- through a hand-written interface that
+   * declares six of those non-nullable, so typecheck could not see it either.
+   *
+   * `stability` and `reps` are the exact inverses of the two mutations the last round
+   * fixed, which is why the fixture already carries four distinct numbers.
+   */
+  if card ->> 'headline' is distinct from (select p.headline from public.pulls p where p.id = pull_1) then
+    raise exception 'the card lost its headline (got %)', card ->> 'headline';
+  end if;
+  if card ->> 'body' is distinct from (select p.body from public.pulls p where p.id = pull_1) then
+    raise exception 'the card lost its body';
+  end if;
+  if card ->> 'whyItMatters' is distinct from
+     (select p.why_it_matters from public.pulls p where p.id = pull_1) then
+    raise exception 'the card lost whyItMatters';
+  end if;
+  if card ->> 'workSlug' is distinct from (select w.slug from public.works w
+       join public.summaries s on s.work_id = w.id
+       join public.pulls p on p.summary_id = s.id where p.id = pull_1) then
+    raise exception 'the card lost its work slug (got %)', card ->> 'workSlug';
+  end if;
+  if card ->> 'workTitle' is distinct from (select w.title from public.works w
+       join public.summaries s on s.work_id = w.id
+       join public.pulls p on p.summary_id = s.id where p.id = pull_1) then
+    raise exception 'workTitle is not the work''s title (got %)', card ->> 'workTitle';
+  end if;
+  if (card ->> 'stability')::numeric is distinct from 3.50 then
+    raise exception 'stability is not the scheduler''s stability (got %, and difficulty is 0.77)',
+      card ->> 'stability';
+  end if;
+  if card ->> 'reps' is distinct from '9' then
+    raise exception 'reps is not the scheduler''s reps (got %, and lapses is 4)', card ->> 'reps';
+  end if;
+  if (card ->> 'retrievability')::numeric is null then
+    raise exception 'retrievability came back null, and the feed orders on it';
+  end if;
+  -- Compared as a timestamp rather than as text: the JSON rendering of a `timestamptz`
+  -- carries an offset (`+00:00`) rather than a `Z`, and pinning the spelling would make
+  -- this fail on a change of presentation rather than of meaning.
+  if (card ->> 'dueAt')::timestamptz is distinct from
+     (select ks.next_due_at from public.knowledge_states ks
+       where ks.user_id = reader_a and ks.pull_id = pull_1) then
+    raise exception 'dueAt is not next_due_at (got %)', card ->> 'dueAt';
   end if;
 
   -- Every canonical question carries the new columns, and the MCQ carries its
@@ -540,6 +596,13 @@ begin
     from jsonb_array_elements(qs) e where e ->> 'id' = mcq_id::text;
   if card is null then
     raise exception 'the mcq did not survive the cap';
+  end if;
+  -- `prompt` on THIS branch too. The comment above promised both branches and three
+  -- assertions followed, all on the reader's -- so `'prompt', qq.prompt` could be wired
+  -- to null with the suite green, on the field the Review card renders for every reader
+  -- who has not written their own question, which is every reader in the corpus today.
+  if card ->> 'prompt' is distinct from 'Which of these follows from the idea?' then
+    raise exception 'the canonical mcq lost its prompt (got %)', card ->> 'prompt';
   end if;
   if card ->> 'kind' is distinct from 'mcq' then
     raise exception 'the canonical mcq lost its kind (got %)', card ->> 'kind';
@@ -695,6 +758,76 @@ begin
   if jsonb_array_length(public.get_due_reviews(null)) <> 20 then
     raise exception 'a null p_limit did not fall back to the default of 20';
   end if;
+
+  /*
+   * A ROW THAT IS NOT DUE YET IS NOT RETURNED, and nothing checked it.
+   *
+   * Every `knowledge_states` row this file inserts is due an hour ago, so the fixture
+   * had no negative case at all and `ks.next_due_at <= now()` could be DELETED with the
+   * whole of `db:test` still exiting 0 -- a Review screen that hands a reader every idea
+   * they hold, on the day they saved it. Flipping the comparison IS caught, which is
+   * precisely what hid the deletion.
+   */
+  perform pg_temp.as_owner();
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (bulk_summary, 900, 'Not due for a month', 'Body', 5)
+  returning id into pull_later;
+
+  -- Not due, AND the most forgotten thing this reader holds. The second half is what
+  -- makes the assertion reliable: at the default stability it would tie at
+  -- retrievability 1.0 with a hundred and twenty others, so a page of 100 might not
+  -- contain it whether the filter worked or not, and the test would pass for the wrong
+  -- reason. At 0.5 stability and 400 days it sorts first -- so if the due filter is
+  -- deleted it is unmissable, and if it works it is absent.
+  insert into public.knowledge_states
+    (user_id, pull_id, acquired_via, next_due_at, stability, last_seen_at)
+  values (reader_a, pull_later, 'saved', now() + interval '30 days', 0.5, now() - interval '400 days');
+  perform pg_temp.become(reader_a);
+
+  if exists (
+    select 1 from jsonb_array_elements(public.get_due_reviews(100)) e
+     where e ->> 'pullId' = pull_later::text
+  ) then
+    raise exception
+      'an idea due in thirty days came back from get_due_reviews. The due filter is not '
+      'filtering, and Review would show a reader everything they hold.';
+  end if;
+
+  /*
+   * AND THE MOST FORGOTTEN COME FIRST, which is the whole point of the screen.
+   *
+   * `order by retrievability asc` could be reversed to `desc` with `db:test` green,
+   * because the readable fixture rows all carry the default `stability 1.0` and
+   * `last_seen_at now()` and therefore tie at exactly 1.0 -- the helper's own comment
+   * records the tie, and the tie is what made the direction unobservable. One row with a
+   * genuinely lower retrievability is enough to fix that: reversed, it goes last instead
+   * of first, and a reader is served the hundred ideas they know best while the ones
+   * they are losing fall off the page.
+   */
+  perform pg_temp.as_owner();
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (bulk_summary, 901, 'Nearly gone', 'Body', 5)
+  returning id into pull_faded;
+
+  insert into public.knowledge_states
+    (user_id, pull_id, acquired_via, next_due_at, stability, last_seen_at)
+  values (reader_a, pull_faded, 'saved', now() - interval '1 hour', 0.5, now() - interval '400 days');
+  perform pg_temp.become(reader_a);
+
+  if (public.get_due_reviews(100) -> 0 ->> 'pullId') is distinct from pull_faded::text then
+    raise exception
+      'the most forgotten idea is not first (got %). Review is ordered by what the '
+      'reader is losing, and this is the term that decides it.',
+      public.get_due_reviews(100) -> 0 ->> 'pullId';
+  end if;
+
+  -- AND TAKEN BACK OUT, because it is the most forgotten idea this reader has and would
+  -- otherwise occupy the first slot of every page below -- displacing `pull_1`, which
+  -- every later section opens. A fixture that changes what the sections after it are
+  -- looking at is worse than no fixture: `pg_temp.questions_for` raised on exactly that.
+  perform pg_temp.as_owner();
+  delete from public.knowledge_states ks where ks.pull_id = pull_faded;
+  perform pg_temp.become(reader_a);
 
   -- A CARD'S QUESTIONS ARE ITS OWN, which nothing asserted until now.
   --
