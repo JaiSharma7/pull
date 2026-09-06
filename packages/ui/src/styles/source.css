@@ -267,3 +267,31 @@
   padding: var(--space-2) 0;
   border-top: 1px solid var(--rule);
 }
+
+/*
+ * The answer the reader stored, beside the question they asked.
+ *
+ * Set apart by weight and colour rather than by a box or a second accent — it is the
+ * back of their own card, not a status. Blocked so a long answer does not run into the
+ * Retire button on a narrow screen.
+ */
+.source__ask-answer {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--step--1);
+  margin-top: var(--space-1);
+}
+
+/*
+ * The answer the reader stored, under the question they asked.
+ *
+ * Set apart by weight and colour rather than by a box or a second accent — it is the
+ * back of their own card, not a status. On its own line so a long answer does not run
+ * into the Retire button on a narrow screen.
+ */
+.source__ask-answer {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--step--1);
+  margin-top: var(--space-1);
+}

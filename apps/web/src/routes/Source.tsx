@@ -183,6 +183,20 @@ export function Source({
   const [askError, setAskError] = useState<string | null>(null);
   const [asked, setAsked] = useState<string | null>(null);
   const [askBusy, setAskBusy] = useState(false);
+  /*
+   * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
+   *
+   * Review finding. It was minted inside the send, so a retry after a lost response
+   * carried a NEW id -- and `remember_pull` deduplicates on `(user_id,
+   * client_mutation_id)`, so a first write it could not report back was invisible to the
+   * second. The reader presses Keep twice and owns two copies of one question, which
+   * then splits their per-question history in half.
+   *
+   * Held until the write is confirmed, and cleared when the reader EDITS. An id that
+   * outlived an edit would be worse than a fresh one: the RPC would answer with the
+   * FIRST question and silently discard the new wording.
+   */
+  const askMutation = useRef<string | null>(null);
   const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
@@ -309,10 +323,16 @@ export function Source({
    * plain `live`, but this cannot live inside one effect run — two of its three
    * callers are event handlers.
    */
+  const questionLoad = useRef(0);
   const highlightLoad = useRef(0);
   const highlightsLive = useRef(true);
 
   /** Invalidate the loads in flight, and take the ticket for a new one. */
+  const claimQuestionLoad = useCallback(() => {
+    questionLoad.current += 1;
+    return questionLoad.current;
+  }, []);
+
   const claimHighlightLoad = useCallback(() => {
     highlightLoad.current += 1;
     return highlightLoad.current;
@@ -351,13 +371,20 @@ export function Source({
 
   const reloadQuestions = useCallback(() => {
     if (!userId || !detail || detail.pulls.length === 0) return;
+    const ticket = claimQuestionLoad();
     fetchUserQuestions(detail.pulls.map((p) => p.id))
-      .then(setMyQuestions)
+      .then((rows) => {
+        // Review finding. Saving a question reloads while the page's first load may
+        // still be in flight, and whichever answered LAST won regardless of which
+        // snapshot it read -- so a question just kept could vanish, or an optimistically
+        // retired one come back, until the page was remounted.
+        if (ticket === questionLoad.current) setMyQuestions(rows);
+      })
       // Supplementary in the same sense the highlights are: the source reads perfectly
       // well without the reader's own questions, and failing to load them must not take
       // the page down.
       .catch((e: unknown) => console.error('Could not load your questions', e));
-  }, [userId, detail]);
+  }, [userId, detail, claimQuestionLoad]);
 
   useEffect(reloadQuestions, [reloadQuestions]);
 
@@ -390,8 +417,9 @@ export function Source({
           prompt: draft.prompt,
           answer: draft.answer,
           kind: draft.kind,
-          mutationId: mutationId(),
+          mutationId: (askMutation.current ??= mutationId()),
         });
+        askMutation.current = null;
         setAskPrompt('');
         setAskAnswer('');
         setAsking(null);
@@ -595,6 +623,12 @@ export function Source({
         <ol className="source__pulls">
           {pulls.map((p) => {
             const minutes = readingMinutes(p.estimatedReadSeconds);
+            // Filtered once. This used to be a `.some()` guard followed by a `.filter()`
+            // inside an immediately-invoked function -- and that IIFE runs during render,
+            // so `react-hooks/refs` traced the ticket ref `reloadQuestions` now touches
+            // through it and refused the file. Two passes became one, and the rule can
+            // see that an `onClick` is not render.
+            const mine = myQuestions.filter((q) => q.pullId === p.id);
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
                 <h3 className="source__pull-headline">{p.headline}</h3>
@@ -752,7 +786,10 @@ export function Source({
                       className="field__textarea"
                       rows={2}
                       value={askPrompt}
-                      onChange={(e) => setAskPrompt(e.target.value)}
+                      onChange={(e) => {
+                        setAskPrompt(e.target.value);
+                        askMutation.current = null;
+                      }}
                       placeholder="What does an obstacle become?"
                     />
                     <label className="field__label" htmlFor={`ask-answer-${p.id}`}>
@@ -763,7 +800,8 @@ export function Source({
                         sentence, and law 1 leaves typography to do the work rather than
                         raising the app's voice at the reader mid-explanation. */}
                     <p className="source__ask-hint" id={`ask-answer-hint-${p.id}`}>
-                      Optional. Leave it empty to recall the answer from memory and mark yourself.
+                      Optional, and kept with the question so you can read it back here. Review
+                      shows you the idea and you mark yourself either way.
                     </p>
                     <textarea
                       id={`ask-answer-${p.id}`}
@@ -771,7 +809,10 @@ export function Source({
                       aria-describedby={`ask-answer-hint-${p.id}`}
                       rows={2}
                       value={askAnswer}
-                      onChange={(e) => setAskAnswer(e.target.value)}
+                      onChange={(e) => {
+                        setAskAnswer(e.target.value);
+                        askMutation.current = null;
+                      }}
                     />
                     {askError && (
                       <p className="meta" role="alert">
@@ -800,44 +841,48 @@ export function Source({
                   </p>
                 )}
 
-                {userId &&
-                  myQuestions.some((q) => q.pullId === p.id) &&
-                  (() => {
-                    const mine = myQuestions.filter((q) => q.pullId === p.id);
-                    return (
-                      <div className="source__ask-list">
-                        <p className="meta">
-                          {mine.length === 1
-                            ? 'Your question about this idea'
-                            : `Your ${mine.length} questions about this idea`}
-                        </p>
-                        <ul>
-                          {mine.map((q) => (
-                            <li key={q.id}>
-                              {q.prompt}{' '}
-                              <button
-                                type="button"
-                                className="btn btn--plain"
-                                onClick={() => {
-                                  // Optimistic here, unlike the write: removing a row
-                                  // from a list the reader is looking at is reversible
-                                  // by the reload in the catch, and a Retire that takes
-                                  // a round trip to disappear reads as a dead button.
-                                  setMyQuestions((prev) => prev.filter((x) => x.id !== q.id));
-                                  retireQuestion(q.id).catch((e: unknown) => {
-                                    console.error('Could not retire the question', e);
-                                    reloadQuestions();
-                                  });
-                                }}
-                              >
-                                Retire
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })()}
+                {userId && mine.length > 0 && (
+                  <div className="source__ask-list">
+                    <p className="meta">
+                      {mine.length === 1
+                        ? 'Your question about this idea'
+                        : `Your ${mine.length} questions about this idea`}
+                    </p>
+                    <ul>
+                      {mine.map((q) => (
+                        <li key={q.id}>
+                          {q.prompt}
+                          {/* THE ANSWER THEY TYPED, SHOWN BACK TO THEM.
+                                  Review finding: supplying one stores the question as a
+                                  `short_answer`, and nothing put those words in front of
+                                  the reader again -- the field asked for something and
+                                  then swallowed it. Review reveals the idea's own body on
+                                  this release and 3d is what renders the reader's answer
+                                  against it; until then, this is where they can read what
+                                  they wrote. */}
+                          {q.answer && <span className="source__ask-answer">{q.answer}</span>}{' '}
+                          <button
+                            type="button"
+                            className="btn btn--plain"
+                            onClick={() => {
+                              // Optimistic here, unlike the write: removing a row
+                              // from a list the reader is looking at is reversible
+                              // by the reload in the catch, and a Retire that takes
+                              // a round trip to disappear reads as a dead button.
+                              setMyQuestions((prev) => prev.filter((x) => x.id !== q.id));
+                              retireQuestion(q.id).catch((e: unknown) => {
+                                console.error('Could not retire the question', e);
+                                reloadQuestions();
+                              });
+                            }}
+                          >
+                            Retire
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </li>
             );
           })}

@@ -10,6 +10,7 @@
  * `user_questions_update_own` directly.
  */
 
+import { pageAll } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -83,21 +84,37 @@ export async function rememberPull(
 export async function fetchUserQuestions(pullIds: readonly string[]): Promise<UserQuestion[]> {
   if (pullIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from('user_questions')
-    .select('id, pull_id, kind, prompt, answer, created_at')
-    .in('pull_id', pullIds as string[])
-    .is('retired_at', null)
-    // `id` after `created_at`, because `created_at` alone is not a total order. Two
-    // questions written inside one transaction share it to the microsecond, and Postgres
-    // may then return them either way round -- so a reader's own list would reorder
-    // itself between two loads of the same page. `get_due_reviews` carries the same
-    // tiebreak on the same column for the same reason.
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: true });
+  // PAGED, because `max_rows = 100` in `supabase/config.toml` is a silent cap rather
+  // than an error. Review finding. Law 3 makes writing your own questions unlimited and
+  // this list presents itself as the complete set, so a reader past a hundred live
+  // questions on one source's ideas would watch the older ones vanish -- and there is no
+  // other screen that can retire them.
+  const data = await pageAll<{
+    id: string;
+    pull_id: string;
+    kind: string;
+    prompt: string;
+    answer: string | null;
+    created_at: string;
+  }>((from, to) =>
+    supabase
+      .from('user_questions')
+      .select('id, pull_id, kind, prompt, answer, created_at')
+      .in('pull_id', pullIds as string[])
+      .is('retired_at', null)
+      // `id` after `created_at`, because `created_at` alone is not a total order. Two
+      // questions written inside one transaction share it to the microsecond, and Postgres
+      // may then return them either way round -- so a reader's own list would reorder
+      // itself between two loads of the same page. `get_due_reviews` carries the same
+      // tiebreak on the same column for the same reason.
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
 
-  if (error) throw rpcError(error);
-  return (data ?? []).map((r) => ({
+  return data.map((r) => ({
     id: r.id,
     pullId: r.pull_id,
     kind: r.kind,
