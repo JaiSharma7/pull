@@ -102,11 +102,26 @@ export function Review() {
     ])
       .then(([rows, queuedFor]) => {
         if (cancelled) return;
-        // Filtered rather than trusted, from both halves. A queued grade has not
-        // reached the server, so it answers this request with the card the reader
-        // already judged — whether they judged it a moment ago on this mount or
-        // before a tab switch that emptied the ref.
-        setDue(rows.filter((row) => !graded.current.has(row.pullId) && !queuedFor.has(row.pullId)));
+        /*
+         * Filtered rather than trusted, from both halves. A queued grade has not
+         * reached the server, so it answers this request with the card the reader
+         * already judged — whether they judged it a moment ago on this mount or before
+         * a tab switch that emptied the ref.
+         *
+         * `queuedFor` is null when the queue could not be READ, and the card is shown.
+         * That is a decision rather than a default: a store that will not open is also
+         * a store `queueMutation` could not write to, so the grade was reported lost
+         * rather than silently held, and the card genuinely is still due. The case it
+         * does not cover is a store that was writable then and is blocked now — an
+         * older tab holding the database at the previous version — where the ref is
+         * the only guard left. Refusing to show any card would close that and break
+         * offline review, which is one of the five things law 3 promises free.
+         */
+        setDue(
+          rows.filter(
+            (row) => !graded.current.has(row.pullId) && !(queuedFor?.has(row.pullId) ?? false),
+          ),
+        );
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -196,14 +211,26 @@ export function Review() {
      * a retry of a write that DID land is now a no-op, and there is no longer a
      * reason to drop an ambiguous failure: every failure is queued.
      */
-    const mutationId = crypto.randomUUID();
-    const submittedAt = nextSubmissionStamp();
+    /*
+     * Inside the `try`, because `crypto.randomUUID` is not always there.
+     *
+     * It is undefined in a non-secure context — `lib/offline.ts` names that condition
+     * as live and aborts an upgrade over it — and these two statements sat between
+     * `setGrading(true)` and the `try`. A throw there set the guard and never cleared
+     * it, so every later tap returned early and the screen was wedged on one card with
+     * its answer showing: exactly the outcome the `finally` below says it prevents,
+     * reached through the four lines it did not cover.
+     */
+    let mutationId: string | null = null;
+    let submittedAt: number | null = null;
     // Advance regardless. A grade that fails to reach the server is a lost
     // measurement, but leaving the card on screen with its answer already
     // revealed is worse: the reader cannot grade it honestly a second time, and
     // offline is one of the five things promised free, so this page has to keep
     // working without a connection rather than wedging on the first card.
     try {
+      mutationId = crypto.randomUUID();
+      submittedAt = nextSubmissionStamp();
       await api.gradeRecall(card.pullId, g, {
         mutationId,
         submittedAt,
@@ -221,8 +248,14 @@ export function Review() {
        * `getCurrentUserId()` returning null is not always a session that ended — a
        * token refresh in flight reads the same way — so this flag could be raised by
        * a blip and then contradicted by the very next card, leaving a reader who is
-       * signed in reading that their session ended. `lostGrade` is left alone on
-       * purpose: a later success does not un-lose the earlier grade.
+       * signed in reading that their session ended.
+       *
+       * `lostGrade` is deliberately NOT cleared here, and the asymmetry is the point
+       * rather than an oversight. Both banners report a grade that reached neither the
+       * server nor the queue, but they carry different DIAGNOSES: "your session ended"
+       * is falsified by a write landing, and "this device could not hold on to it" is
+       * not — a network success says nothing about the store. Retracting a diagnosis
+       * the evidence has overturned is not the same as retracting the loss.
        */
       setSignedOut(false);
     } catch (e: unknown) {
@@ -232,7 +265,13 @@ export function Review() {
        * it is. The queue is drained by `Feed.tsx`, which stays mounted.
        */
       const userId = getCurrentUserId();
+      // A grade with no id cannot be queued: `grade_recall` recognises a replay by the
+      // id and nothing else, so an entry without one is a write that would apply twice.
+      // Only reachable if `crypto.randomUUID` itself threw, which is the case the try
+      // above was widened for.
       const queued =
+        mutationId !== null &&
+        submittedAt !== null &&
         userId !== null &&
         (await queueMutation(
           userId,
@@ -269,45 +308,51 @@ export function Review() {
       }
     } finally {
       /*
-       * IN A `finally`, because everything after it is what lets the reader carry on.
+       * ALL OF IT IN THE `finally`, because all of it is what lets the reader carry on.
        *
-       * `setGrading(false)` sat after the catch block, so anything the RECOVERY path
-       * threw — `getCurrentUserId` on a torn-down client, `queueMutation` rejecting
-       * rather than returning false — left `grading` true forever. The guard at the
-       * top of this function then refused every subsequent tap, and the screen was
-       * wedged on one card with its answer showing: a reader who cannot grade and
-       * cannot move on. The failure that gets there is rare; being unable to review
-       * until a reload is not a rare consequence.
+       * The first version put only `setGrading(false)` here and left the advance after
+       * the try — which is worse than the wedge it replaced rather than better. A throw
+       * from the RECOVERY path (`getCurrentUserId` on a torn-down client, `queueMutation`
+       * rejecting rather than returning false — it notifies its listeners outside its own
+       * catch) then re-enabled the buttons on a card that had not advanced and had not
+       * been recorded as answered. The next tap re-entered with a FRESH mutation id, and
+       * two ids are two grades: the P1 the guard at the top of this function exists to
+       * stop, arriving through the fix for the wedge.
+       *
+       * `void grade(...)` at the button swallows the rejection, so nothing downstream
+       * recovers. Advancing is the only safe thing to do with a grade whose fate is
+       * unknown — the reader answered it, and a card left revealed cannot be answered
+       * honestly a second time.
        */
       setGrading(false);
+      // Answered, whatever became of the write. See `graded`.
+      graded.current.add(card.pullId);
+      setRevealed(false);
+      setRevealedAt(null);
+      /*
+       * When the page empties, ask for the next one instead of declaring victory.
+       *
+       * `fetchDueReviews` takes `limit = 20` (api.ts). Grading the twentieth card left
+       * `due` empty, and the empty state below says "Nothing is fading. Everything you
+       * have saved is still solid" — to a reader who may have fifty more due. That is
+       * the exact lie this file's header comment was written about, arriving from the
+       * other direction: the original bug rendered it on a failed request, and this one
+       * rendered it on a successful but partial one.
+       *
+       * Bumping `reloads` reuses the effect rather than adding a second fetch path, so
+       * the cancellation and the offline handling stay in one place. The refetch is
+       * cheap and only happens once per twenty cards; if it comes back empty, the empty
+       * state is finally telling the truth.
+       *
+       * Computed from `due` and applied outside the updater, not inside it. A functional
+       * `setDue` may be invoked more than once for one update — StrictMode does it
+       * deliberately — so a `setReloads` in there would fire twice and fetch twice. An
+       * updater has to be pure; this is the reason why.
+       */
+      const rest = (due ?? []).slice(1);
+      setDue(rest);
+      if (rest.length === 0) setReloads((n) => n + 1);
     }
-    // Answered, whatever became of the write. See `graded`.
-    graded.current.add(card.pullId);
-    setRevealed(false);
-    setRevealedAt(null);
-    /*
-     * When the page empties, ask for the next one instead of declaring victory.
-     *
-     * `fetchDueReviews` takes `limit = 20` (api.ts). Grading the twentieth card left
-     * `due` empty, and the empty state below says "Nothing is fading. Everything you
-     * have saved is still solid" — to a reader who may have fifty more due. That is
-     * the exact lie this file's header comment was written about, arriving from the
-     * other direction: the original bug rendered it on a failed request, and this one
-     * rendered it on a successful but partial one.
-     *
-     * Bumping `reloads` reuses the effect rather than adding a second fetch path, so
-     * the cancellation and the offline handling stay in one place. The refetch is
-     * cheap and only happens once per twenty cards; if it comes back empty, the empty
-     * state is finally telling the truth.
-     *
-     * Computed from `due` and applied outside the updater, not inside it. A functional
-     * `setDue` may be invoked more than once for one update — StrictMode does it
-     * deliberately — so a `setReloads` in there would fire twice and fetch twice. An
-     * updater has to be pure; this is the reason why.
-     */
-    const rest = (due ?? []).slice(1);
-    setDue(rest);
-    if (rest.length === 0) setReloads((n) => n + 1);
   }
 
   return (
@@ -317,9 +362,10 @@ export function Review() {
       </p>
 
       {/*
-        Said once, and it stays said for as long as this screen is open.
+        Said once, and it stays said for as long as this screen is open — except that
+        `signedOut` retracts when a later write lands, because that falsifies it.
 
-        Not "for the rest of the session", which the earlier comment claimed and the
+        Not "for the rest of the session", which an earlier comment claimed and the
         code has never done: Review is a tab, so both of these die on the next tab
         switch along with everything else in this component. Saying what actually
         happens is worth more than a promise the screen cannot keep.

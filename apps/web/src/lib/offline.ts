@@ -320,7 +320,6 @@ export async function queueMutation(
 }
 
 /**
-/**
  * The pulls this account has a queued grade for, which is the durable answer to
  * "did the reader already judge this card".
  *
@@ -334,10 +333,17 @@ export async function queueMutation(
  *
  * A pending grade is exactly the condition — the write has not applied, so the
  * server still calls the card due, and the reader has still answered it.
+ *
+ * NULL IS "COULD NOT READ", not "nothing queued", and the distinction is the same one
+ * `hasPending` pays a retry for. An empty set is a claim about the queue; a store that
+ * will not open supports no claim at all, and a caller that cannot tell them apart
+ * treats a blocked database as a clean bill of health. The caller decides what to do
+ * about it — see `Review.tsx`.
  */
-export async function pendingRecallPullIds(userId: string): Promise<Set<string>> {
+export async function pendingRecallPullIds(userId: string): Promise<Set<string> | null> {
   try {
     const database = await db();
+    if (!database) return null;
     const all = await database.getAll('pending');
     return new Set(
       all
@@ -345,9 +351,7 @@ export async function pendingRecallPullIds(userId: string): Promise<Set<string>>
         .map((item) => (item as { pullId: string }).pullId),
     );
   } catch {
-    // The store being unreadable is not a reason to hide the card; it is a reason to
-    // fall back on the in-mount set, which the caller still keeps.
-    return new Set();
+    return null;
   }
 }
 

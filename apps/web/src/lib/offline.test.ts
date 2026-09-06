@@ -758,6 +758,20 @@ describe('queueMutation reports whether it persisted', () => {
     });
   });
 
+  it('says it does not know, rather than that nothing is queued', async () => {
+    /*
+     * `pendingRecallPullIds` is the durable half of "has the reader already judged this
+     * card", and an empty set is a CLAIM about the queue. A store that will not open
+     * supports no claim at all, so it answers null and `Review.tsx` decides. Returning
+     * an empty set here would tell a caller whose whole job is preventing a doubled
+     * grade that a blocked database is a clean bill of health — which is the trade
+     * `queueMutation` and `hasPending` both refuse one function along.
+     */
+    await withBrokenStore(async (offline) => {
+      await expect(offline.pendingRecallPullIds('broken-store-user')).resolves.toBeNull();
+    });
+  });
+
   /*
    * The half the previous revision left untested, and the one whose absence would let the
    * regression back in silently: re-propagating `queueMutation`'s answer through
@@ -939,11 +953,11 @@ describe('the pulls a queued grade already covers', () => {
       mutationId: 'm1',
       submittedAt: Date.now(),
     });
-    expect([...(await pendingRecallPullIds(USER_A))]).toEqual(['p-graded']);
+    expect([...(await pendingRecallPullIds(USER_A))!]).toEqual(['p-graded']);
     await drain(USER_A);
     // And stops naming it once the grade has actually applied, or the card would
     // never come round again.
-    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
   });
 
   it("never names another account's", async () => {
@@ -954,8 +968,8 @@ describe('the pulls a queued grade already covers', () => {
       mutationId: 'm2',
       submittedAt: Date.now(),
     });
-    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
-    expect((await pendingRecallPullIds(USER_B)).has('p-theirs')).toBe(true);
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
+    expect((await pendingRecallPullIds(USER_B))?.has('p-theirs')).toBe(true);
     await drain(USER_B);
   });
 
@@ -964,7 +978,7 @@ describe('the pulls a queued grade already covers', () => {
     // overreaching into the one place it has no business.
     await queueMutation(USER_A, { kind: 'save', pullId: 'p-saved' });
     await queueMutation(USER_A, { kind: 'read', pullId: 'p-read' });
-    expect((await pendingRecallPullIds(USER_A)).size).toBe(0);
+    expect((await pendingRecallPullIds(USER_A))?.size).toBe(0);
     await drain(USER_A);
   });
 });
