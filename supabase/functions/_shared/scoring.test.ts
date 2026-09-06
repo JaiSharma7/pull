@@ -178,15 +178,26 @@ describe('questionsToWrite', () => {
     { ordinal: 1, id: 'p1' },
   ];
 
+  /** A pull carrying ONE question in the singular shape a provider used to return. */
   const q = (over: Record<string, unknown> = {}) => ({
     question: { prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'], ...over },
   });
 
+  /** What the singular shape now becomes: a `recall` row with the new columns empty. */
+  const asRow = (over: Record<string, unknown> = {}) => ({
+    pullId: 'p0',
+    kind: 'recall',
+    prompt: 'Why?',
+    answer: 'Because.',
+    distractors: ['a', 'b', 'c'],
+    cloze: null,
+    explanation: null,
+    rationale: [],
+    ...over,
+  });
+
   it('pairs a question to the Pull that was actually written', () => {
-    expect(questionsToWrite([q(), q()], written)).toEqual([
-      { pullId: 'p0', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    expect(questionsToWrite([q(), q()], written)).toEqual([asRow(), asRow({ pullId: 'p1' })]);
   });
 
   it('pairs by ordinal, not by array position', () => {
@@ -197,15 +208,13 @@ describe('questionsToWrite', () => {
       { ordinal: 0, id: 'first' },
     ];
     expect(questionsToWrite([q({ prompt: 'A' }), q({ prompt: 'B' })], shuffled)).toEqual([
-      { pullId: 'first', prompt: 'A', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'second', prompt: 'B', answer: 'Because.', distractors: ['a', 'b', 'c'] },
+      asRow({ pullId: 'first', prompt: 'A' }),
+      asRow({ pullId: 'second', prompt: 'B' }),
     ]);
   });
 
   it('skips a Pull with no question rather than writing an empty one', () => {
-    expect(questionsToWrite([{}, q()], written)).toEqual([
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    expect(questionsToWrite([{}, q()], written)).toEqual([asRow({ pullId: 'p1' })]);
   });
 
   it('drops a question missing either half', () => {
@@ -221,13 +230,114 @@ describe('questionsToWrite', () => {
   });
 
   it('keeps only string distractors, and tolerates a missing list', () => {
-    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual({
-      pullId: 'p0',
-      prompt: 'Why?',
-      answer: 'Because.',
-      distractors: ['a', 'b'],
-    });
+    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual(
+      asRow({ distractors: ['a', 'b'] }),
+    );
     expect(questionsToWrite([q({ distractors: undefined })], written)[0]?.distractors).toEqual([]);
+  });
+
+  // ----------------------------------------------------------------- the array
+
+  /** A pull carrying the plural shape. */
+  const qs = (...questions: Record<string, unknown>[]) => ({ questions });
+
+  const recall = { kind: 'recall', prompt: 'Why?', answer: 'Because.' };
+  const mcq = {
+    kind: 'mcq',
+    prompt: 'Which?',
+    answer: 'This one.',
+    distractors: ['wrong a', 'wrong b'],
+    rationale: [{ distractor: 'wrong a', why: 'it reverses the direction' }],
+  };
+  const cloze = {
+    kind: 'cloze',
+    prompt: 'Fill the blank.',
+    answer: 'material',
+    cloze: 'The obstacle is the ____.',
+  };
+
+  it('writes every kind a Pull offers', () => {
+    const out = questionsToWrite([qs(recall, mcq, cloze)], written);
+    expect(out.map((r) => r.kind)).toEqual(['recall', 'mcq', 'cloze']);
+    expect(out.every((r) => r.pullId === 'p0')).toBe(true);
+  });
+
+  it('keeps only the first question of each kind', () => {
+    // `quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and the insert
+    // upserts on that pair. Postgres refuses a statement whose conflict target is
+    // hit twice -- "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    // -- which fails the whole batch, not the duplicate. So the duplicate must not
+    // reach the insert at all.
+    const out = questionsToWrite([qs(recall, { ...recall, prompt: 'Second try?' })], written);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.prompt).toBe('Why?');
+  });
+
+  it('refuses an mcq that cannot be got wrong', () => {
+    // `quiz_questions_mcq_has_distractors` wants two. Dropping it here rather than
+    // letting the database refuse it is the difference between losing one question
+    // and losing every question on a summary already paid for.
+    expect(questionsToWrite([qs({ ...mcq, distractors: ['only one'] })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...mcq, distractors: [] })], written)).toEqual([]);
+  });
+
+  it('refuses a cloze with no blank to fill', () => {
+    expect(questionsToWrite([qs({ ...cloze, cloze: '   ' })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...cloze, cloze: undefined })], written)).toEqual([]);
+  });
+
+  it('never lets the answer sit among its own distractors', () => {
+    // A model that lists every option rather than the wrong ones would otherwise
+    // make `mcqOptions` render the right answer twice, one of them marked wrong.
+    const out = questionsToWrite(
+      [qs({ ...mcq, distractors: ['This one.', 'wrong a', 'wrong b'] })],
+      written,
+    );
+    expect(out[0]?.distractors).toEqual(['wrong a', 'wrong b']);
+  });
+
+  it('drops a rationale for an option the question does not offer', () => {
+    // `whyWrong` matches on `distractor`, so one naming an absent option could
+    // never fire. Keeping it would be a row that promises an explanation the
+    // screen cannot show.
+    const out = questionsToWrite(
+      [
+        qs({
+          ...mcq,
+          rationale: [
+            { distractor: 'wrong a', why: 'kept' },
+            { distractor: 'not an option', why: 'dropped' },
+            { distractor: 'wrong b', why: '' },
+          ],
+        }),
+      ],
+      written,
+    );
+    expect(out[0]?.rationale).toEqual([{ distractor: 'wrong a', why: 'kept' }]);
+  });
+
+  it('files an unknown kind as recall rather than dropping the question', () => {
+    // `quiz_questions_kind_known` would refuse the row and take the batch with it.
+    // The prompt and answer are usable; only the claim about the form is lost.
+    const out = questionsToWrite([qs({ ...recall, kind: 'interpretive_dance' })], written);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe('recall');
+  });
+
+  it('clears a cloze sentence off a kind that is not a cloze', () => {
+    const out = questionsToWrite([qs({ ...recall, cloze: 'The obstacle is the ____.' })], written);
+    expect(out[0]?.cloze).toBeNull();
+  });
+
+  it('reads the singular field only when the array is absent', () => {
+    // A step output PERSISTED BY AN EARLIER BUILD comes back with `question` and no
+    // `questions`; `resume` replays exactly that. When both are present the array
+    // wins, because it is the shape the current provider returns.
+    const both = { ...qs(mcq), question: { prompt: 'Old', answer: 'Older' } };
+    expect(questionsToWrite([both], written).map((r) => r.kind)).toEqual(['mcq']);
+    expect(
+      questionsToWrite([{ questions: [], question: { prompt: 'Old', answer: 'Older' } }], written),
+    ).toEqual([]);
   });
 
   it('drops a question whose Pull was never written', () => {

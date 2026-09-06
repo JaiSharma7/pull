@@ -25,7 +25,7 @@ export const PROMPTS = {
     "messages": [
       {
         "role": "user",
-        "text": "You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.\n\nSource: {{workTitle}}\nMedium: {{kind}}\n\nWrite an original analysis of the ideas in this work: its claims, the arguments\nbehind them, and what follows from them. Do not retell the work section by section,\nand do not produce anything that could substitute for reading it. Quote only where a\nphrase itself is the point, and keep quotations short.\n\nEach pull must be one atomic idea that stands on its own out of context, in plain\nlanguage, with a headline that states the idea rather than teasing it. Its\n\"whyItMatters\" should say what changes if the reader believes it -- not restate\nthe body. Provide a concrete \"example\" to ground the claim in a real case or demonstration,\nand an \"explanation\" unpacking the full depth, underlying causal mechanism, or nuance for readers\nwho choose the deep dive stop.\n\nFile this work under one to four topics, most central first. Choose the narrowest\nthat genuinely fit. A parent topic is the right answer only when no child of it\ndoes — filing a work under a topic it merely touches is worse than filing it under\nfewer.\n\nContext:\n{{context}}\n\nTopicSlug\n----\n- philosophy\n- ethics\n- stoicism\n- logic\n- metaphysics\n- aesthetics\n- psychology\n- attention\n- habits\n- learning\n- emotion\n- science\n- evolution\n- physics\n- chemistry\n- astronomy\n- medicine\n- society\n- economics\n- liberty\n- government\n- justice\n- education\n- arts-and-letters\n- literature\n- rhetoric\n- criticism\n- history\n- biography\n- revolutions\n- mathematics\n- computation\n- architecture\n- world-philosophy\n- strategy\n- ecology\n\nAnswer in JSON using this schema:\n{\n  title: string,\n  elevatorPitch: string,\n  whyItMatters: string,\n  pulls: [\n    {\n      headline: string,\n      body: string,\n      whyItMatters: string,\n      example: string or null,\n      explanation: string or null,\n      question: {\n        prompt: string,\n        answer: string,\n        distractors: string[],\n      } or null,\n    }\n  ],\n  topics: TopicSlug[],\n}"
+        "text": "You are writing for What a Pull, a knowledge feed whose unit is one idea worth keeping.\n\nSource: {{workTitle}}\nMedium: {{kind}}\n\nWrite an original analysis of the ideas in this work: its claims, the arguments\nbehind them, and what follows from them. Do not retell the work section by section,\nand do not produce anything that could substitute for reading it. Quote only where a\nphrase itself is the point, and keep quotations short.\n\nEach pull must be one atomic idea that stands on its own out of context, in plain\nlanguage, with a headline that states the idea rather than teasing it. Its\n\"whyItMatters\" should say what changes if the reader believes it -- not restate\nthe body. Provide a concrete \"example\" to ground the claim in a real case or demonstration,\nand an \"explanation\" unpacking the full depth, underlying causal mechanism, or nuance for readers\nwho choose the deep dive stop.\n\nFor each pull write up to three questions, and AT MOST ONE OF EACH KIND. Three\nrecall questions about one idea are one question asked three ways, and only the\nfirst is kept.\n\nA \"recall\" question asks the reader to produce the idea from memory; it has no\ndistractors. An \"mcq\" needs at least two wrong options, each a mistake somebody\ncould genuinely make about this idea -- a near-miss, a reversed direction, a\nplausible confusion with a neighbouring idea -- and never a filler option nobody\nwould pick. Give each wrong option a \"rationale\" entry naming the mistake it\nrepresents, in one sentence, without restating the answer. A \"cloze\" is one\nsentence of your own analysis with the single word or phrase that carries the\nidea removed and marked \"____\"; its \"answer\" is exactly the removed text, and it\nhas no distractors.\n\nEvery question carries an \"explanation\" saying why the answer is the answer.\nWrite no question at all for a pull the source is too thin to support one for: a\nquestion with an invented answer teaches the reader something the work does not\nsay.\n\nFile this work under one to four topics, most central first. Choose the narrowest\nthat genuinely fit. A parent topic is the right answer only when no child of it\ndoes — filing a work under a topic it merely touches is worse than filing it under\nfewer.\n\nContext:\n{{context}}\n\nTopicSlug\n----\n- philosophy\n- ethics\n- stoicism\n- logic\n- metaphysics\n- aesthetics\n- psychology\n- attention\n- habits\n- learning\n- emotion\n- science\n- evolution\n- physics\n- chemistry\n- astronomy\n- medicine\n- society\n- economics\n- liberty\n- government\n- justice\n- education\n- arts-and-letters\n- literature\n- rhetoric\n- criticism\n- history\n- biography\n- revolutions\n- mathematics\n- computation\n- architecture\n- world-philosophy\n- strategy\n- ecology\n\nAnswer in JSON using this schema:\n{\n  title: string,\n  elevatorPitch: string,\n  whyItMatters: string,\n  pulls: [\n    {\n      headline: string,\n      body: string,\n      whyItMatters: string,\n      example: string or null,\n      explanation: string or null,\n      questions: [\n        {\n          kind: 'recall' or 'mcq' or 'cloze',\n          prompt: string,\n          answer: string,\n          distractors: string[],\n          cloze: string or null,\n          explanation: string or null,\n          rationale: [\n            {\n              distractor: string,\n              why: string,\n            }\n          ],\n        }\n      ],\n    }\n  ],\n  topics: TopicSlug[],\n}"
       }
     ],
     "schema": {
@@ -66,42 +66,80 @@ export const PROMPTS = {
                   "null"
                 ]
               },
-              "question": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "prompt": {
-                        "type": "string"
-                      },
-                      "answer": {
-                        "type": "string"
-                      },
-                      "distractors": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 3,
-                        "maxItems": 3
-                      }
+              "questions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "recall",
+                        "mcq",
+                        "cloze"
+                      ]
                     },
-                    "required": [
-                      "prompt",
-                      "answer",
-                      "distractors"
-                    ]
+                    "prompt": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "string"
+                    },
+                    "distractors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 8
+                    },
+                    "cloze": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "explanation": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rationale": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "distractor": {
+                            "type": "string"
+                          },
+                          "why": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "distractor",
+                          "why"
+                        ]
+                      },
+                      "maxItems": 8
+                    }
                   },
-                  {
-                    "type": "null"
-                  }
-                ]
+                  "required": [
+                    "kind",
+                    "prompt",
+                    "answer",
+                    "distractors",
+                    "rationale"
+                  ]
+                },
+                "maxItems": 3
               }
             },
             "required": [
               "headline",
               "body",
-              "whyItMatters"
+              "whyItMatters",
+              "questions"
             ]
           },
           "minItems": 1

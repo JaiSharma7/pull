@@ -833,6 +833,8 @@ const _CLASS_ENTRIES: Record<string, () => unknown> = {
   "testing.TestSetReport$stream": () => (__leaf_55 as Record<string, unknown>)["TestSetReport$stream"],
   "user.CanonicalSummary": () => (__leaf_0 as Record<string, unknown>)["CanonicalSummary"],
   "user.CanonicalSummary$stream": () => (__leaf_0 as Record<string, unknown>)["CanonicalSummary$stream"],
+  "user.DistractorRationale": () => (__leaf_0 as Record<string, unknown>)["DistractorRationale"],
+  "user.DistractorRationale$stream": () => (__leaf_0 as Record<string, unknown>)["DistractorRationale$stream"],
   "user.Pull": () => (__leaf_0 as Record<string, unknown>)["Pull"],
   "user.Pull$stream": () => (__leaf_0 as Record<string, unknown>)["Pull$stream"],
   "user.RecallQuestion": () => (__leaf_0 as Record<string, unknown>)["RecallQuestion"],
@@ -860,6 +862,7 @@ const _ENUM_ENTRIES: Record<string, () => unknown> = {
   "baml.csv.CsvErrorKind": () => (__leaf_13 as Record<string, unknown>)["CsvErrorKind"],
   "baml.future.FutureState": () => (__leaf_17 as Record<string, unknown>)["FutureState"],
   "openai.internal.ChatAuth": () => (__leaf_54 as Record<string, unknown>)["ChatAuth"],
+  "user.QuestionKind": () => (__leaf_0 as Record<string, unknown>)["QuestionKind"],
   "user.TopicSlug": () => (__leaf_0 as Record<string, unknown>)["TopicSlug"],
 };
 

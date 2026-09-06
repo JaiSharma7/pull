@@ -333,15 +333,18 @@ export interface PipelineDb {
   ): Promise<{ ordinal: number; id: string }[]>;
   setPullEmbeddings(rows: { id: string; embedding: number[] }[]): Promise<void>;
   /**
-   * Recall questions, one per Pull that has one.
+   * The questions, up to one of each kind per Pull that has any.
    *
    * Keyed by the written Pull's id rather than by array position, for the reason
    * `insertPulls` returns ordinals at all: a question attached to the wrong idea
    * is invisible and permanent.
+   *
+   * `(pullId, kind)` must be unique across `rows`. The implementation upserts on
+   * that pair, and Postgres refuses a statement whose conflict target is hit twice
+   * -- so a duplicate here fails the write for every question in the batch, not
+   * just for itself. `questionsToWrite` is what guarantees it.
    */
-  insertQuizQuestions(
-    rows: { pullId: string; prompt: string; answer: string; distractors: string[] }[],
-  ): Promise<void>;
+  insertQuizQuestions(rows: QuizQuestionRow[]): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
   /**
@@ -443,40 +446,142 @@ export function qualityFromDraft(summary: {
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 
+/** The kinds generation may produce, and the only ones `quiz_questions.kind` will take
+ *  from it. The database accepts six (`20260905120000`); `ordering` and `scenario` are
+ *  not generated yet and `short_answer` is what a reader writes. */
+const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
+
+/** What `quiz_questions_mcq_has_distractors` requires of an `mcq`. */
+const MIN_MCQ_DISTRACTORS = 2;
+
+export interface QuizQuestionRow {
+  pullId: string;
+  kind: string;
+  prompt: string;
+  answer: string;
+  distractors: string[];
+  cloze: string | null;
+  explanation: string | null;
+  rationale: { distractor: string; why: string }[];
+}
+
+interface RawQuestion {
+  kind?: unknown;
+  prompt?: unknown;
+  answer?: unknown;
+  distractors?: unknown;
+  cloze?: unknown;
+  explanation?: unknown;
+  rationale?: unknown;
+}
+
+function cleanString(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+function cleanStringArray(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+    : [];
+}
+
 /**
  * The quiz questions that are safe to write, paired to the Pulls that were.
  *
- * Narrowed rather than trusted. The provider's schema requires all three fields,
- * but a stub or a future provider does not go through Gemini at all — and this
- * repo has already lost a run to four values TypeScript accepted and Postgres
- * refused, discovered only after the expensive call had been paid for.
+ * Narrowed rather than trusted. The provider's schema requires the fields, but a stub
+ * or a future provider does not go through Gemini at all -- and this repo has already
+ * lost a run to four values TypeScript accepted and Postgres refused, discovered only
+ * after the expensive call had been paid for. Every rule below is one a CHECK in
+ * `20260905120000_a_question_that_can_be_wrong.sql` also enforces, and the point of
+ * repeating it here is WHERE the refusal lands: `insertQuizQuestions` writes the whole
+ * batch in one statement, so one malformed question would abort the write for every
+ * good one on a summary that has already been generated and paid for.
  *
  * A question missing either half is dropped rather than written half-formed:
  * `get_due_reviews` copes with a Pull that has no question, and cannot cope with
  * one whose answer is the string "undefined".
  *
+ * AT MOST ONE OF EACH KIND PER PULL, and this is the rule the array made necessary.
+ * `quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and
+ * `insertQuizQuestions` upserts on that pair, so two `recall` questions for one idea
+ * are not two rows -- Postgres refuses the whole statement with "ON CONFLICT DO UPDATE
+ * command cannot affect row a second time", which is a failure of the entire step
+ * rather than of the duplicate. The first of each kind wins, in the order the model
+ * returned them, because the prompt asks for the most useful first.
+ *
  * Paired by ORDINAL, never by array position. `insertPulls` returns ordinals for
- * exactly this reason — a question attached to the wrong idea is invisible and
+ * exactly this reason -- a question attached to the wrong idea is invisible and
  * permanent.
  */
 export function questionsToWrite(
-  pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
+  pulls: readonly { questions?: readonly RawQuestion[]; question?: RawQuestion }[],
   written: readonly { ordinal: number; id: string }[],
-): { pullId: string; prompt: string; answer: string; distractors: string[] }[] {
+): QuizQuestionRow[] {
   const byOrdinal = new Map(written.map((w) => [w.ordinal, w.id]));
-  const out: { pullId: string; prompt: string; answer: string; distractors: string[] }[] = [];
+  const out: QuizQuestionRow[] = [];
 
   pulls.forEach((p, ordinal) => {
     const pullId = byOrdinal.get(ordinal);
-    const q = p.question;
-    if (!pullId || !q) return;
-    const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
-    const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
-    if (!prompt || !answer) return;
-    const distractors = Array.isArray(q.distractors)
-      ? q.distractors.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
-      : [];
-    out.push({ pullId, prompt, answer, distractors });
+    if (!pullId) return;
+
+    // The singular is the older shape, read only when the plural is absent, so a
+    // provider written before this change keeps working and its one question is
+    // still a `recall`.
+    const offered: readonly RawQuestion[] = Array.isArray(p.questions)
+      ? p.questions
+      : p.question
+        ? [p.question]
+        : [];
+
+    const seen = new Set<string>();
+
+    for (const q of offered) {
+      const prompt = cleanString(q.prompt);
+      const answer = cleanString(q.answer);
+      if (!prompt || !answer) continue;
+
+      // An unrecognised kind is written as `recall` rather than dropped: the prompt
+      // and answer are usable, and `quiz_questions_kind_known` would refuse the row
+      // and take the batch with it. Defaulting keeps the question and loses only the
+      // claim about its form.
+      const rawKind = cleanString(q.kind);
+      const kind = GENERATED_KINDS.has(rawKind) ? rawKind : 'recall';
+      if (seen.has(kind)) continue;
+
+      const distractors = cleanStringArray(q.distractors).filter((d) => d !== answer);
+      const cloze = cleanString(q.cloze) || null;
+
+      // The two per-kind rules the database states, applied here so a question that
+      // cannot be stored does not cost the ones that can.
+      if (kind === 'mcq' && distractors.length < MIN_MCQ_DISTRACTORS) continue;
+      if (kind === 'cloze' && !cloze) continue;
+
+      const rationale = Array.isArray(q.rationale)
+        ? q.rationale
+            .filter((r): r is { distractor: string; why: string } => {
+              if (!r || typeof r !== 'object') return false;
+              const d = cleanString((r as { distractor?: unknown }).distractor);
+              const why = cleanString((r as { why?: unknown }).why);
+              // A rationale naming an option that is not on the question explains a
+              // choice the reader cannot make. `whyWrong` matches on `distractor`,
+              // so it would simply never fire; dropping it keeps the array honest.
+              return Boolean(d) && Boolean(why) && distractors.includes(d);
+            })
+            .map((r) => ({ distractor: cleanString(r.distractor), why: cleanString(r.why) }))
+        : [];
+
+      seen.add(kind);
+      out.push({
+        pullId,
+        kind,
+        prompt,
+        answer,
+        distractors,
+        cloze: kind === 'cloze' ? cloze : null,
+        explanation: cleanString(q.explanation) || null,
+        rationale,
+      });
+    }
   });
 
   return out;
@@ -944,6 +1049,20 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
               whyItMatters: string;
               example?: string;
               explanation?: string;
+              // Both shapes, because this reads a step output that may have been
+              // PERSISTED BY AN EARLIER BUILD. `resume` replays a job from
+              // `job_steps.output`, so a summary written before this change comes
+              // back with the singular field and no array; `questionsToWrite`
+              // normalises the two.
+              questions?: {
+                kind?: unknown;
+                prompt?: unknown;
+                answer?: unknown;
+                distractors?: unknown;
+                cloze?: unknown;
+                explanation?: unknown;
+                rationale?: unknown;
+              }[];
               question?: { prompt?: unknown; answer?: unknown; distractors?: unknown };
             }[];
           }

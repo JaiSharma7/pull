@@ -63,11 +63,21 @@ function pullItems(schema: JsonSchema): JsonSchema {
   return node;
 }
 
+/**
+ * `pulls[].questions[]`, which used to be `pulls[].question` followed through a
+ * `T | null`. A pull now carries an ARRAY of questions rather than at most one, so
+ * there is no null to follow: an idea with nothing worth asking has an empty list.
+ */
 function recallQuestion(schema: JsonSchema): JsonSchema {
-  const q = pullItems(schema).properties?.question;
-  const inner = q?.anyOf?.find((b) => b.type !== 'null');
-  if (!inner) throw new Error('pulls[].question is not a `T | null` in the exported schema');
-  return inner;
+  const node = pullItems(schema).properties?.questions?.items;
+  if (!node) throw new Error('pulls[].questions[] is not in the exported schema');
+  return node;
+}
+
+function distractorRationale(schema: JsonSchema): JsonSchema {
+  const node = recallQuestion(schema).properties?.rationale?.items;
+  if (!node) throw new Error('pulls[].questions[].rationale[] is not in the exported schema');
+  return node;
 }
 
 /**
@@ -112,6 +122,7 @@ describe('exported schema shape', () => {
     ['CanonicalSummary', (s: JsonSchema) => s],
     ['Pull', pullItems],
     ['RecallQuestion', recallQuestion],
+    ['DistractorRationale', distractorRationale],
   ] as const)('carries every field %s declares', (className, pick) => {
     const node = pick(exportedSchema());
     const declared = classFields(className);
@@ -139,9 +150,29 @@ describe('exported schema shape', () => {
     const schema = exportedSchema();
     expect(schema.properties?.pulls).toMatchObject({ minItems: 1 });
     expect(schema.properties?.topics).toMatchObject({ minItems: 1, maxItems: 4 });
-    expect(recallQuestion(schema).properties?.distractors).toMatchObject({
-      minItems: 3,
-      maxItems: 3,
-    });
+    expect(pullItems(schema).properties?.questions).toMatchObject({ maxItems: 3 });
+    expect(recallQuestion(schema).properties?.rationale).toMatchObject({ maxItems: 8 });
+
+    // A CEILING AND NO FLOOR, which is the assertion rather than an incomplete one.
+    // It used to be `{ minItems: 3, maxItems: 3 }` -- exactly three wrong options,
+    // correct while every question was MCQ-shaped. A `recall` question has no
+    // distractors and neither has a `cloze`, and this schema is enforced by the
+    // provider, so a floor of three would fail the whole synthesis rather than the
+    // one question. The per-kind floor is `quiz_questions_mcq_has_distractors` in
+    // `20260905120000`, where a rule about one kind can be expressed.
+    const distractors = recallQuestion(schema).properties?.distractors;
+    expect(distractors).toMatchObject({ maxItems: 8 });
+    expect(distractors?.minItems).toBeUndefined();
+  });
+
+  it('offers the model only the kinds something renders', () => {
+    // Three of the six `quiz_questions.kind` accepts. `ordering` and `scenario` are
+    // in the database so the column need not change when they arrive, and
+    // `short_answer` is what a reader writes; asking for any of them would spend
+    // tokens on a row Review cannot use. The values are the DATABASE's, not the
+    // generated TypeScript identifiers -- `QuestionKind.Mcq` is `'mcq'` here and
+    // `'Mcq'` in `baml_sdk`, and only the alias may reach Postgres.
+    const kind = recallQuestion(exportedSchema()).properties?.kind;
+    expect(kind?.enum?.slice().sort()).toEqual(['cloze', 'mcq', 'recall']);
   });
 });
