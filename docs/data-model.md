@@ -68,8 +68,13 @@ summary the reader authors at `visibility = 'private'`, and one pull per highlig
 is no second content path — Review schedules them and the Library holds them — and there
 is no second privacy story either, because `get_feed` pools on
 `published AND public` and `works_read_readable` hides a work whose only summary is
-somebody else's. The `works` row is shared between two readers who import the same book;
-nothing else about it is. `import_items` carries the sha256 that makes a re-import a
+somebody else's. The `works` row is the reader's own — `imported_work_slug` hashes the
+owner in alongside the title and author, so two readers importing one book get a row each.
+It used to be one shared row, and that made it an oracle: the second importer read back
+the first one's exact title casing and import timestamp through their own summary, which
+is the one thing `works_read_readable` cannot hide, because the second reader can
+legitimately see the row. `contributors` is namespaced the same way and for the same
+reason. Nothing an import creates is shared with another reader. `import_items` carries the sha256 that makes a re-import a
 no-op, and it deliberately outlives the pull it created, so Undo does not hand back
 everything the reader just removed. Two mechanics do not reach them yet.
 Search does not: `search_catalogue` filters `visibility = 'public'` in all three of its

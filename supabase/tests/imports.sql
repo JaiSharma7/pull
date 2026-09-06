@@ -11,8 +11,9 @@
 --   * a batch lands: three highlights, two books, private summaries, user_owned
 --     works, and pulls a reader can actually read
 --   * the same file again adds nothing and counts three duplicates, in one batch
---   * a second reader importing the same book shares the work row and nothing
---     else -- not the summary, not the pulls, not the items
+--   * a second reader importing the same book gets their OWN work row -- and reads
+--     back their own title casing and their own timestamp, never the first
+--     importer's, because a shared row was an oracle over a private library
 --   * neither reader can see the other's work, pulls, imports, items or questions
 --   * an imported pull never reaches the feed, which pools published AND public
 --   * a guest is refused, on `auth.users` rather than the JWT claim
@@ -35,11 +36,11 @@
 --     re-import creates no empty summary, so the book does not come back
 --   * the 20,000 ceiling is charged per row stored, so a duplicate-only upload at
 --     the ceiling is still accepted -- and a reader with no room left creates no
---     shared `works` or `contributors` rows, which no per-reader ceiling covers.
---     Below the ceiling the pre-pass is a superset by design and can create up to
---     `room - 1` works nothing ends up using; that is bounded and paid for 1:1 in
---     the reader's own quota, which is the trade the loop's raise-on-missing-work
---     requires, and it is not the same claim as the one asserted here
+--     `works` or `contributors` rows at all. Every work is created in the step that
+--     stores the highlight needing it, so the book counter and the rows agree
+--     exactly; there is no window that can forecast more than the loop then uses
+--   * a book refused by the book ceiling does not end the chunk: later highlights
+--     of books the reader already owns still land
 --   * an Undo gives the highlights back and not the book ceiling -- nothing shared is
 --     ever deleted, because deleting it races every other reader's import, so creation
 --     is bounded instead by the books this reader has ever imported into
@@ -47,13 +48,14 @@
 --   * a chunk joins the batch the client NAMES, and only one the reader still holds
 --   * closing the account takes an import with it however the summary has been moved
 --
--- ONE THING THIS FILE CANNOT ASSERT, said here rather than left to be assumed: the lock
--- ordering. `commit_import` takes `works` locks in slug order and `contributors` locks in
--- CONTRIBUTOR-SLUG order, and a deadlock needs two sessions, which a psql script does not
--- have. It is proven by a two-process harness instead: two readers whose files spell one
--- author two ways (`Émile Zola` and `Ámile Zola`, both slugging to `mile-zola`, with
--- `Bob Smith` sorting between them) deadlocked 11 times in 12 when the loop ordered by the
--- raw author string, and 0 in 14 ordering by the slug the lock is actually taken on.
+-- THE LOCK ORDERING THIS FILE USED TO CAVEAT IS GONE, and so is the deadlock it avoided.
+-- `commit_import` used to create every work and contributor a chunk might need ahead of
+-- the loop, in slug order, because find-or-create inside the loop deadlocked two readers
+-- with crossing files 12 times in 12. Two readers can no longer name the same `works` or
+-- `contributors` row at all -- the slug carries the owner -- and a reader against
+-- themselves is serialised by the advisory lock, so there is no shared resource left to
+-- order. Still not assertable from one psql session; it is now unreachable rather than
+-- ordered, which is the stronger of the two.
 --
 -- Everything that can run as a real reader under RLS does. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -117,6 +119,12 @@ declare
   import_2  uuid;
 
   work_med  uuid;
+  work_med_b uuid;
+  slug_oq_a text;
+  slug_oq_b text;
+  slug_pd_b text;
+  closer_two uuid := extensions.gen_random_uuid();
+  closer_two_sess uuid := extensions.gen_random_uuid();
   work_wal  uuid;
   pull_a    uuid;
   pull_b    uuid;
@@ -288,11 +296,19 @@ begin
   select count(*) into n from public.imports where user_id = reader_a;
   if n <> 1 then raise exception 'reader A has % batches, expected 1', n; end if;
 
-  -- --------------------------------- 3. a second reader shares the work, nothing else
+  -- ------------------------- 3. a second reader gets their own work, and no oracle
+  --
+  -- The work row used to be SHARED, keyed on a slug hashed from title and author alone,
+  -- and the claim was that two readers still "see each other's nothing" because a work
+  -- is visible only behind a readable summary. That held for the pulls and not for the
+  -- row: B's own private summary makes the shared work readable to B, so B read back
+  -- A's exact capitalisation of the title and the moment A imported it. B sends the
+  -- title in lower case here for exactly that reason -- if the row were shared, the
+  -- reply would come back in A's casing, which is the whole oracle in one assertion.
   perform pg_temp.become(reader_b);
 
   res := public.commit_import('readwise', repeat('b', 64), jsonb_build_array(
-    jsonb_build_object('title', 'Meditations', 'author', 'Marcus Aurelius',
+    jsonb_build_object('title', 'meditations', 'author', 'marcus aurelius',
       'text', 'The impediment to action advances action.', 'locator', 'loc 12')
   ));
   import_2 := (res ->> 'importId')::uuid;
@@ -300,44 +316,85 @@ begin
   if (res ->> 'added')::int <> 1 then
     raise exception 'reader B added % highlights, expected 1', res ->> 'added';
   end if;
-  if ((res -> 'works' -> 0) ->> 'workId')::uuid <> work_med then
-    raise exception 'reader B created a second work row for the same book';
+  work_med_b := ((res -> 'works' -> 0) ->> 'workId')::uuid;
+  if work_med_b = work_med then
+    raise exception 'reader B landed on reader A''s work row for the same book';
+  end if;
+  if ((res -> 'works' -> 0) ->> 'title') <> 'meditations' then
+    raise exception
+      'reader B was handed the title % -- another reader''s casing is an oracle',
+      (res -> 'works' -> 0) ->> 'title';
   end if;
 
-  -- B sees one summary and one pull on the shared work: their own. A's are not hidden
-  -- by a filter in the RPC, they are hidden by the policies, which is the only kind of
-  -- hiding that holds against a client that writes its own queries.
+  -- B sees one summary and one pull, on their own work. A's are not hidden by a filter
+  -- in the RPC, they are hidden by the policies, which is the only kind of hiding that
+  -- holds against a client that writes its own queries.
   select count(*) into n
-    from public.summaries s where s.work_id = work_med;
+    from public.summaries s where s.work_id = work_med_b;
   if n <> 1 then
-    raise exception 'reader B can see % summaries of a shared work, expected only their own', n;
+    raise exception 'reader B can see % summaries of their own work, expected 1', n;
   end if;
 
   select count(*) into n
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
-   where s.work_id = work_med;
+   where s.work_id = work_med_b;
   if n <> 1 then
-    raise exception 'reader B can see % pulls of a shared work, expected only their own', n;
+    raise exception 'reader B can see % pulls of their own work, expected 1', n;
   end if;
 
-  -- And the sharing is real rather than an absence: from outside RLS the one work row
-  -- carries a summary for each reader and all three of their highlights.
+  -- AND A'S ROW IS NOT MERELY EMPTY TO B, IT IS ABSENT. An empty row still answers
+  -- "somebody imported this book"; that was the oracle.
+  select count(*) into n from public.works w where w.id = work_med;
+  if n <> 0 then
+    raise exception 'reader B can see the work row reader A''s import created';
+  end if;
+
+  -- From outside RLS: two rows, one per reader, each carrying only its own reader's
+  -- highlights, and A's still spelled the way A typed it.
   perform pg_temp.as_owner();
-  select count(*) into n from public.summaries s where s.work_id = work_med;
+  select count(*) into n from public.works w where w.slug like 'imported-meditations%';
   if n <> 2 then
-    raise exception 'Meditations carries % summaries, expected one per reader', n;
+    raise exception 'two readers importing one book made % work rows, expected 2', n;
+  end if;
+  select count(*) into n from public.works w
+   where w.id = work_med and w.title = 'Meditations';
+  if n <> 1 then
+    raise exception 'reader A''s title was rewritten by reader B''s import';
+  end if;
+  select count(*) into n from public.summaries s where s.work_id = work_med;
+  if n <> 1 then
+    raise exception 'reader A''s Meditations carries % summaries, expected 1', n;
   end if;
   select count(*) into n
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
    where s.work_id = work_med;
-  if n <> 3 then
-    raise exception 'the shared work carries % pulls, expected 2 from A and 1 from B', n;
+  if n <> 2 then
+    raise exception 'reader A''s work carries % pulls, expected 2', n;
   end if;
-  select count(*) into n from public.works w where w.slug like 'imported-meditations%';
+  select count(*) into n
+    from public.pulls p
+    join public.summaries s on s.id = p.summary_id
+   where s.work_id = work_med_b;
   if n <> 1 then
-    raise exception 'two readers importing one book made % work rows', n;
+    raise exception 'reader B''s work carries % pulls, expected 1', n;
+  end if;
+  -- The byline is on B's own contributor row, not the one A's import created. Round 7
+  -- measured the guard this replaces refusing B a byline entirely, 14 times in 14.
+  select count(*) into n
+    from public.work_contributors wc
+    join public.contributors c on c.id = wc.contributor_id
+   where wc.work_id = work_med_b;
+  if n <> 1 then
+    raise exception 'reader B''s book carries % bylines, expected 1', n;
+  end if;
+  select count(*) into n
+    from public.work_contributors wa
+    join public.work_contributors wb on wb.contributor_id = wa.contributor_id
+   where wa.work_id = work_med and wb.work_id = work_med_b;
+  if n <> 0 then
+    raise exception 'both readers landed on one contributor row';
   end if;
   perform pg_temp.become(reader_b);
 
@@ -355,7 +412,7 @@ begin
   select p.id into pull_b
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
-   where s.work_id = work_med
+   where s.work_id = work_med_b
    limit 1;
 
   -- ------------------------------------------- 4. no imported pull reaches the feed
@@ -813,10 +870,25 @@ begin
   -- their own, which they can read. That hands them both the fact that somebody on this
   -- instance imported that author and the exact string that reader typed.
   --
+  -- Rounds 4 and 5 guarded the reuse. Round 7 measured what a guard leaves: the byline's
+  -- ABSENCE answers the same question, and the second reader of any author outside the
+  -- public catalogue got no byline at all -- the readability leg needed a
+  -- `work_contributors` row the guard was itself refusing to create. So the rows are
+  -- namespaced per reader instead, and this section asserts BOTH halves: the stranger
+  -- is invisible, and the byline is still there. A guard that cost every reader their
+  -- byline would satisfy the first half alone, which is why the second half is here.
+  --
   -- The author below appears in no seed, and that is the point. 9b asks this of
   -- `marcus-aurelius`, who is seeded on the PUBLIC `meditations` work, so a mutant
   -- restoring `contributors_read_all using (true)` survived the whole file: the
   -- assertion was true of the catalogue whatever the policy said.
+  -- Both expected slugs, derived once as owner. `imported_contributor_slug` is revoked
+  -- from `authenticated`, correctly -- it is an internal derivation, not something a
+  -- reader may ask for -- so the assertions below compare against captured text.
+  perform pg_temp.as_owner();
+  select public.imported_contributor_slug('Ottoline Quennevil', reader_a) into slug_oq_a;
+  select public.imported_contributor_slug('Ottoline Quennevil', reader_b) into slug_oq_b;
+
   perform pg_temp.become(reader_a);
   res := public.commit_import('paste', null, jsonb_build_array(
     jsonb_build_object('title', 'A Private Notebook', 'author', 'Ottoline Quennevil',
@@ -831,7 +903,8 @@ begin
   select count(*) into n
     from public.work_contributors wc
     join public.contributors c on c.id = wc.contributor_id
-   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+   where c.slug operator(extensions.=)
+         slug_oq_a::extensions.citext;
   if n <> 1 then
     raise exception 'a reader''s own imported author was attributed % times, expected 1', n;
   end if;
@@ -845,7 +918,8 @@ begin
   select count(*) into n
     from public.work_contributors wc
     join public.contributors c on c.id = wc.contributor_id
-   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+   where c.slug operator(extensions.=)
+         slug_oq_a::extensions.citext;
   if n <> 2 then
     raise exception 'a reader lost the byline on their own second book (% links)', n;
   end if;
@@ -867,27 +941,49 @@ begin
     raise exception 'the second reader''s import did not create its work';
   end if;
 
+  -- B GETS THE BYLINE. This is the half a guard could not deliver: measured at 0 links
+  -- in 14 of 14 runs, because the row B was refused was the only one that existed.
   select count(*) into n
     from public.work_contributors wc where wc.work_id = work_oracle;
-  if n <> 0 then
-    raise exception 'a reader reached a stranger''s contributor row through their own work';
+  if n <> 1 then
+    raise exception 'the second reader of an author got % bylines, expected 1', n;
+  end if;
+
+  -- ON THEIR OWN ROW, and A's is not reachable from it.
+  select count(*) into n
+    from public.work_contributors wc
+    join public.contributors c on c.id = wc.contributor_id
+   where wc.work_id = work_oracle
+     and c.slug operator(extensions.=)
+         slug_oq_b::extensions.citext;
+  if n <> 1 then
+    raise exception 'the second reader''s byline is not on their own contributor row';
   end if;
 
   select count(*) into n
     from public.contributors c
-   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+   where c.slug operator(extensions.=)
+         slug_oq_a::extensions.citext;
   if n <> 0 then
     raise exception 'a reader can list a contributor only a stranger''s private import made';
   end if;
 
-  -- Skipping is skipping: no second row was minted under the other reader either, which
-  -- would have leaked the same fact by way of a duplicate.
+  -- Two rows, one per reader, each carrying that reader's own spelling. From outside RLS
+  -- so the count is of what exists rather than of what one reader can see.
   perform pg_temp.as_owner();
   select count(*) into n
     from public.contributors c
+   where c.slug operator(extensions.=) any (array[slug_oq_a, slug_oq_b]::extensions.citext[]);
+  if n <> 2 then
+    raise exception 'the instance holds % contributor rows for one author, expected 2', n;
+  end if;
+  -- And the undecorated slug belongs to nobody, so nothing landed on a shared row by a
+  -- path this file has not thought of.
+  select count(*) into n
+    from public.contributors c
    where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
-  if n <> 1 then
-    raise exception 'the instance holds % contributor rows for one author, expected 1', n;
+  if n <> 0 then
+    raise exception 'an import created a shared contributor row after all';
   end if;
   perform pg_temp.become(reader_a);
 
@@ -1291,6 +1387,64 @@ begin
     raise exception 'a reader one book from the ceiling created % works, expected 1',
       n - n_before;
   end if;
+
+  -- ------- 12b. a book refused by the ceiling does not throw away the rest of the file
+  --
+  -- The loop used to `exit` on the first title it could not create, which discarded
+  -- later items sitting on books the reader ALREADY owns -- costing no book quota and
+  -- well inside their item room. Measured: the same 500 items stored 0 or 499 depending
+  -- only on where the one new title fell in the file, and a Kindle export is grouped by
+  -- book, so that is wherever it lands.
+  select count(*) into n_before from public.works;
+  select count(*) into c_before from public.contributors;
+  perform pg_temp.become(capped);
+
+  res := public.commit_import('csv', repeat('9', 64), jsonb_build_array(
+    jsonb_build_object('title', 'A Title Past The Ceiling', 'author', 'Refused Author',
+      'text', 'this one needs a book the reader may not create'),
+    jsonb_build_object('title', 'The Two Thousandth Book',
+      'text', 'but this one is a second highlight of a book they already hold')
+  ));
+  if (res ->> 'added')::int <> 1 then
+    raise exception
+      'a title refused by the book ceiling cost the reader % of the rest of the file',
+      1 - (res ->> 'added')::int;
+  end if;
+  if (res ->> 'ceilingReached')::boolean is not true then
+    raise exception 'the book ceiling was reached and not reported';
+  end if;
+
+  -- AND NOTHING WAS CREATED FOR THE ITEM IT DECLINED. Creation used to run ahead of the
+  -- loop in a window sized from the room left, so works were made for items the loop
+  -- then never stored -- rows no `import_items` row points at, which is exactly what the
+  -- book counter counts. Measured at +750 works and +750 contributors over three
+  -- import-undo cycles with the counter unmoved.
+  perform pg_temp.as_owner();
+  select count(*) into n from public.works;
+  if n <> n_before then
+    raise exception 'a refused title still created % work row(s)', n - n_before;
+  end if;
+  select count(*) into n from public.contributors;
+  if n <> c_before then
+    raise exception 'a refused title still created % contributor row(s)', n - c_before;
+  end if;
+
+  -- No work of this reader's is unreferenced, which is the invariant the counter rests
+  -- on: `v_books` counts distinct `import_items.work_id`, so a work with no item is a
+  -- row the ceiling cannot see.
+  select count(*) into n
+    from public.works w
+   where w.rights_status = 'user_owned'
+     and w.slug like 'imported-%'
+     and exists (
+       select 1 from public.summaries s2 where s2.work_id = w.id and s2.author_id = capped
+     )
+     and not exists (
+       select 1 from public.import_items ii where ii.work_id = w.id and ii.user_id = capped
+     );
+  if n <> 0 then
+    raise exception '% of this reader''s works are referenced by no import item', n;
+  end if;
   perform pg_temp.become(reader_a);
 
   -- ------------------------------- 13. every book by an author keeps its byline
@@ -1305,6 +1459,9 @@ begin
   -- left active, so inserting a section between them silently moved both to another
   -- reader — and section 14, whose whole assertion is that a STRANGER cannot write into
   -- a batch, quietly became a reader writing into their own, and passed.
+  perform pg_temp.as_owner();
+  select public.imported_contributor_slug('Prolific Diarist', reader_b) into slug_pd_b;
+
   perform pg_temp.become(reader_b);
   res := public.commit_import('csv', repeat('a', 63) || 'b', jsonb_build_array(
     jsonb_build_object('title', 'Alpha Volume', 'author', 'Prolific Diarist',
@@ -1320,7 +1477,7 @@ begin
   select count(*) into n
     from public.work_contributors wc
     join public.contributors c on c.id = wc.contributor_id
-   where c.slug operator(extensions.=) 'prolific-diarist'::extensions.citext;
+   where c.slug operator(extensions.=) slug_pd_b::extensions.citext;
   if n <> 3 then
     raise exception 'three books by one author in one call were attributed % times', n;
   end if;
@@ -1433,17 +1590,77 @@ begin
   if n <> 0 then
     raise exception 'delete_my_account left the account behind';
   end if;
+
+  -- --------- 15b. moved AND undone, which is what got past both predicates at once
+  --
+  -- Provenance was called "the thing the reader cannot move", and an Undo moves it:
+  -- deleting the pull nulls `import_items.pull_id`, so the join that identified an
+  -- imported summary found nothing. Undo's own delete did not collect it either, because
+  -- that asked for `visibility = 'private'` and the reader had just PATCHed it public.
+  -- The two gaps line up exactly, and a summary walked between them -- measured, left
+  -- behind with `auth.users` gone: permanent, unreachable and uncollectable.
+  perform pg_temp.as_owner();
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at, is_anonymous,
+                          raw_app_meta_data, raw_user_meta_data)
+  values (closer_two, '00000000-0000-0000-0000-000000000000', 'authenticated',
+          'authenticated', 'closer2@example.test', 'x', now(), now(), now(), false,
+          '{}'::jsonb, '{}'::jsonb);
+  insert into auth.sessions (id, user_id, created_at, updated_at)
+  values (closer_two_sess, closer_two, now(), now());
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', closer_two, 'role', 'authenticated',
+                      'session_id', closer_two_sess)::text, true);
+
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Diary Of My Illness', 'author', 'A Private Person',
+      'text', 'A sentence the reader would not want left on a server forever.')
+  ));
+
+  update public.summaries s
+     set status = 'draft', visibility = 'public'
+   where s.author_id = closer_two;
+  get diagnostics n = row_count;
+  if n <> 1 then
+    raise exception 'the fixture could not make the summary public (% rows)', n;
+  end if;
+
+  perform public.undo_import((res ->> 'importId')::uuid);
+
+  -- ASKED HERE, BEFORE THE CLOSE, because the two fixes mask each other otherwise. The
+  -- Undo is the one that acts: `delete_my_account` grew a `user_owned` leg for the same
+  -- gap, and with either one in place the end state is right, so a test that only looked
+  -- after the close passed with either reverted. This pins the Undo.
+  perform pg_temp.as_owner();
+  select count(*) into n from public.summaries s where s.author_id = closer_two;
+  if n <> 0 then
+    raise exception 'an Undo left a summary the reader had made public (% rows)', n;
+  end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', closer_two, 'role', 'authenticated',
+                      'session_id', closer_two_sess)::text, true);
+
+  perform public.delete_my_account();
+
+  perform pg_temp.as_owner();
+  select count(*) into n from public.summaries s where s.author_id = closer_two;
+  if n <> 0 then
+    raise exception
+      'a summary the reader made public and then undid survived the account (% rows)', n;
+  end if;
   perform pg_temp.become(reader_a);
 
-  raise notice 'imports: kept, deduped, shared by work and by nothing else, '
-    'invisible to everyone but their reader (contributors included), never in the feed, '
-    'refused to guests, scheduled and saved so Review and the Library see them, graded '
-    'only against their own questions, bounded by what is stored rather than what is '
-    'offered -- in shared catalogue rows as well as their own, bounded by the books a '
-    'reader has ever imported rather than by what an Undo hands back -- attributed on '
-    'every book rather than the first, '
-    'joinable only to a batch the reader names and still holds, and gone with the '
-    'account however the summary has since been moved';
+  raise notice 'imports: kept, deduped, and shared with nobody -- a second reader of '
+    'the same book gets their own work, their own byline and their own timestamp, and '
+    'cannot see that the first reader exists; never in the feed, refused to guests, '
+    'scheduled and saved so Review and the Library see them, graded only against their '
+    'own questions, bounded by rows that exist rather than by a window that forecast '
+    'them, a refused book costing only itself, an Undo giving back the highlights and '
+    'not the ceiling, attributed on every book rather than the first, joinable only to '
+    'a batch the reader names and still holds, and gone with the account however the '
+    'summary has since been moved or undone';
 end $$;
 
 rollback;

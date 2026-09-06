@@ -134,11 +134,19 @@ re-upload of a file you have already imported from duplicating everything in it.
 The record of the book does stay, and we would rather say so. Your highlights go, your
 notes and grades go, the private page that held them goes — what is left is a catalogue
 entry saying a book with that title and author exists, with nothing of yours attached to
-it and nothing readable behind it, which means no other reader can see it at all. It stays
-because two readers who import the same book share that one entry, and deleting it the
-moment one of them changes their mind would take the other reader's copy with it. We tried;
-it did, in twelve of fourteen attempts. Losing somebody else's highlights is not a price
-worth paying for tidiness.
+it and nothing readable behind it, which means no other reader can see it at all.
+
+That entry is yours alone: two readers who import the same book now get one entry each.
+For a while they shared a single row, and the sentence here said so — until we found that
+sharing it meant the second reader could read back the first reader's exact spelling of
+the title and the moment they imported it, just by importing the same book. So the entry
+is keyed to you, and the only thing the shared row ever shared was one reader's private
+library with another's.
+
+It stays rather than being deleted because deleting it is worse. We tried that: a delete
+raced other readers' imports and took their highlights with it, in twelve of fourteen
+attempts. Losing somebody else's work is not a price worth paying for tidiness, and now
+that the row is yours there is nobody else's copy behind it to lose.
 
 It also stays when you close your account, which is the one place this is weaker than we
 would like: the highlights and everything you wrote about them are deleted, and the
@@ -308,10 +316,13 @@ Four things survive, none of them attached to you:
   what generation costs. Nothing in it identifies you.
 - **The catalogue entry for a book you imported** — its title and its author, and nothing
   else. Not your highlights, which go; not the page that held them, which goes; not any
-  link between it and you, which goes with your account. It stays because two readers who
-  import the same book share one entry, and deleting it when one of them leaves would take
-  the other reader's copy with it. There is a ceiling on how many of these one account can
-  ever create. This is the fourth, and it was three until we looked properly.
+  link between it and you, which goes with your account. It stays because deleting it
+  raced other readers' imports and took their highlights with it, in twelve of fourteen
+  attempts, and losing somebody else's work is not a price worth paying for tidiness.
+  There is a ceiling on how many of these one account can ever create, and it counts rows
+  that exist rather than rows we expect to make — which it did not always, so for a while
+  the ceiling could be walked past. This is the fourth, and it was three until we looked
+  properly.
 - **Backups**, for up to 30 days, after which they roll off.
 
 **A guest session is deleted for you.** Unused for a day, it is removed outright from the

@@ -263,19 +263,24 @@ create policy user_questions_delete_own on public.user_questions
 -- ------------------------------------------ and the door attribution left open
 --
 -- Review finding, and it defeats the point of the migration above it. `commit_import`
--- calls `attribute_work` when an imported book names an author, which inserts a
--- `contributors` row and a `work_contributors` row joining it to the work. Both tables
--- have carried `using (true)` since 20260829124730, and both are selectable by `anon` --
--- so one `GET /rest/v1/work_contributors?select=work_id,contributor_id` handed any
--- visitor the UUID of every private imported work and the author it is by. The `works`
--- policy from 20260905101000 was hiding the title while the join table published the row.
+-- writes a `contributors` row and a `work_contributors` row when an imported book names
+-- an author. Both tables have carried `using (true)` since 20260829124730, and both are
+-- selectable by `anon` -- so one
+-- `GET /rest/v1/work_contributors?select=work_id,contributor_id` handed any visitor the
+-- UUID of every private imported work and the author it is by. The `works` policy from
+-- 20260905101000 was hiding the title while the join table published the row.
 --
--- Superseded rather than skipped, because the attribution itself is right: an imported
--- book by Marcus Aurelius should reach the same contributor row the seeded one does, so
--- that a reader's own copy and the catalogue's agree about who wrote it. What was wrong
--- was that the join was world-readable. It is now readable exactly when the work is,
+-- Superseded rather than skipped, because the attribution itself is right: a reader's
+-- imported book should carry its byline. It is now readable exactly when the work is,
 -- which is the same sentence the `works` policy makes and reuses its answer: the
 -- subquery runs under the caller's own RLS, so a work they cannot see yields no row.
+--
+-- The row it reaches is the reader's OWN, which round 7 changed and this comment used to
+-- get wrong. It said an imported Marcus Aurelius "should reach the same contributor row
+-- the seeded one does, so that a reader's own copy and the catalogue's agree about who
+-- wrote it" -- and sharing that row is what made `contributors` an oracle over other
+-- readers' private libraries. See `imported_contributor_slug`. The catalogue's own
+-- contributors are untouched; only rows an import creates are namespaced.
 --
 -- `contributors` follows, one step further out. A name on its own looks harmless, but a
 -- row created by an import exists only because somebody imported that author, so an
@@ -321,7 +326,22 @@ comment on policy contributors_read_readable on public.contributors is
 -- seeded `meditations` would attach a reader's private pulls to a public work. The
 -- readable stem is for whoever reads the table; the hash is what actually keeps two
 -- books apart.
-create function public.imported_work_slug(p_title text, p_author text)
+--
+-- AND THE OWNER IS IN THE HASH, so two readers importing the same book get two rows.
+--
+-- It used to hash the title and author alone, so they got one -- and the claim beside
+-- it was that they still "see each other's nothing", because 20260905101000 makes a
+-- work visible only behind a summary the caller can read. That was true of the pulls
+-- and false of the row: B's own private summary makes the SHARED work readable to B, so
+-- B could read back `works.title` -- A's exact capitalisation -- and `works.created_at`,
+-- the moment A imported it. Measured: B sent one throwaway highlight titled in lower
+-- case and read A's string and A's timestamp under B's own RLS. `docs/privacy.md` says
+-- "Nobody else can see it, or see that it exists", and the second half was false.
+--
+-- Nothing is lost by separating them. `imported-` was already namespaced away from
+-- catalogue slugs, so an imported work NEVER attached to a canonical one; the only
+-- thing the shared row ever shared was one stranger's private library with another's.
+create function public.imported_work_slug(p_title text, p_author text, p_owner uuid)
 returns text
 language sql
 immutable
@@ -347,14 +367,63 @@ as $$
     -- an offline search; 64 is not.
     || left(
          encode(
-           sha256(convert_to(lower(p_title) || '|' || lower(coalesce(p_author, '')), 'UTF8')),
+           sha256(convert_to(
+             lower(p_title) || '|' || lower(coalesce(p_author, '')) || '|' || p_owner::text,
+             'UTF8')),
            'hex'
          ),
          16
        );
 $$;
 
-revoke all on function public.imported_work_slug(text, text) from public, anon, authenticated;
+revoke all on function public.imported_work_slug(text, text, uuid)
+  from public, anon, authenticated;
+
+-- ------------------------------------------------- imported_contributor_slug
+--
+-- The same treatment for the byline, and for the same reason twice over.
+--
+-- `attribute_work` deduplicates on a slug derived from the name and REUSES an existing
+-- row, which made `contributors` the identical oracle in a second table: import a
+-- one-line paste naming an obscure author and learn whether anybody on this instance
+-- has imported them, and in what capitalisation. Rounds 4 and 5 answered that with a
+-- guard admitting the row only when the caller could already reach it -- and round 7
+-- measured what the guard leaves: the byline's ABSENCE is the same boolean. A
+-- stranger's author yielded no byline on the caller's own book; a name nobody held
+-- yielded one. The guard turned "the string A typed" into "somebody typed it" and
+-- called it closed.
+--
+-- A contributor created for an import is this reader's own, so nothing is reused and
+-- nothing can be probed. It also fixes what the guard broke: the second reader of any
+-- author outside the public catalogue never got a byline at all, and could not -- the
+-- readability leg needed a `work_contributors` row the guard was itself refusing to
+-- create. Measured at 0 bylines in 14 of 14 runs. Now the byline always appears.
+create function public.imported_contributor_slug(p_author text, p_owner uuid)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select 'imported-'
+    || coalesce(
+         nullif(
+           left(btrim(regexp_replace(lower(p_author), '[^a-z0-9]+', '-', 'g'), '-'), 60),
+           ''
+         ),
+         'anonymous'
+       )
+    || '-'
+    || left(
+         encode(
+           sha256(convert_to(lower(p_author) || '|' || p_owner::text, 'UTF8')),
+           'hex'
+         ),
+         16
+       );
+$$;
+
+revoke all on function public.imported_contributor_slug(text, uuid)
+  from public, anon, authenticated;
 
 -- --------------------------------------------------------------- attribute_work
 --
@@ -437,6 +506,11 @@ $$;
 -- and the advisory lock serialises a reader against themselves, so two chunks in flight
 -- cannot both read the same ordinal or both create the same work.
 --
+-- The shared rows are bounded because they are no longer shared. Every `works` and
+-- `contributors` row this function makes is namespaced to the caller and created only
+-- in the step that stores the highlight needing it, so `max_works_per_user` counts what
+-- exists rather than what a window forecast.
+--
 -- Refused to guests, on the authoritative fact rather than the JWT claim, for the reason
 -- 20260901190000 sets out at length: an identity that costs nothing to mint makes a
 -- per-identity ceiling meaningless, and this is the one door here that writes rows a
@@ -508,7 +582,6 @@ declare
   v_locator    text;
   v_clean      text;
   v_slug       text;
-  v_pre        record;
   v_contributor_id uuid;
   v_hash       text;
   v_work_id    uuid;
@@ -524,10 +597,7 @@ declare
   v_books      int;
   v_batches    int;
   v_touched    uuid[] := '{}';
-  /** Contributors this call created or attributed, which the guard below may reuse. */
-  v_mine       uuid[] := '{}';
   v_works_out  jsonb;
-  v_needed     jsonb;
 begin
   if uid is null then
     raise exception 'commit_import requires an authenticated user';
@@ -596,6 +666,11 @@ begin
 
   -- EVERY book ever, tombstones included: the counter an Undo does not refund. See
   -- `max_works_per_user`.
+  --
+  -- Exact, now that a work is created only in the step that stores a highlight into it.
+  -- While creation ran ahead of storage this undercounted by every work the pre-pass
+  -- made and the loop then declined to use, which is how a reader reached ~500,000
+  -- `works` rows against a ceiling of 2,000 without the counter moving once.
   select count(distinct ii.work_id) into v_books
     from public.import_items ii
    where ii.user_id = uid and ii.work_id is not null;
@@ -672,266 +747,6 @@ begin
     returning id into v_import_id;
   end if;
 
-  /*
-   * EVERY WORK AND AUTHOR THIS CHUNK NEEDS, WORKED OUT ONCE AND CREATED FIRST.
-   *
-   * The find-or-create used to sit inside the item loop, so `works` row locks were
-   * taken in the order the reader's file happened to list its books. Two readers whose
-   * files name the same new titles in different orders then built a lock cycle, and
-   * Postgres killed one of them: two ordinary `commit_import` calls -- no stretched
-   * transactions, just what two PostgREST requests look like -- deadlocked on 12 of 12
-   * attempts with `40P01`, losing up to 500 highlights to an error the reader cannot
-   * act on. It gets MORE likely the more popular a book is, which is the wrong way
-   * round for a feature whose whole premise is that two readers own the same books.
-   *
-   * The advisory lock above does not help: it is keyed on `uid`, so it serialises a
-   * reader against themselves and never against anybody else.
-   *
-   * Hoisting it fixed that and opened something else, because it also hoisted the
-   * creation above the dedupe and the ceiling: the pre-pass built shared rows for items
-   * the loop then skipped. Measured -- a reader at exactly 20,000 held items called this
-   * twice with 500 fresh titles and added 1,000 orphan `works` and about as many
-   * `contributors`, `added: 0` both times, repeatable forever. Those are SHARED
-   * CATALOGUE tables: no per-reader ceiling covers them, no sweep collects them, and
-   * this feature is itself what makes `works` grow, so it fed the very scan the index
-   * fix below calls a bomb with its own fuse. It also made the header's own claim --
-   * that the worst a hostile caller can do is fill their own quota -- false.
-   *
-   * Refusing the whole call at the ceiling was the first attempt at that and was wrong:
-   * a duplicate-only upload at the ceiling is deliberately accepted, and refusing it
-   * threw away the `duplicates` count the reader is shown. The bound belongs on the SET
-   * this pre-pass walks, not on the call.
-   *
-   * So the set below is what the loop can actually store: items whose hash the reader
-   * does not already hold, in the order the loop will meet them, capped at the room left
-   * under the ceiling. The cap counts DISTINCT SLUGS rather than items, and that is
-   * still a superset of what the loop needs -- the loop stores at most `room` items, and
-   * each one's slug first occurs at or before it, so at most `room` slugs can first
-   * occur that early. A superset is the safe direction: an item reaching the loop to
-   * find its work missing is raised on rather than created for, because creating one
-   * there would be in item order and would reopen the deadlock.
-   *
-   * Worked out once and read twice, because the two loops want it in two orders.
-   */
-  select coalesce(
-           jsonb_agg(jsonb_build_object(
-             'slug', needed.slug, 'title', needed.title, 'author', needed.author)),
-           '[]'::jsonb)
-    into v_needed
-    from (
-      select ranked.slug, ranked.title, ranked.author
-        from (
-          select first_seen.*, row_number() over (order by first_seen.ord) as rank
-            from (
-              select distinct on (item.slug) item.ord, item.slug, item.title, item.author
-                from (
-                  select
-                    e.ord,
-                    left(btrim(coalesce(e.value ->> 'title', '')), 200) as title,
-                    nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
-                      as author,
-                    public.imported_work_slug(
-                      left(btrim(coalesce(e.value ->> 'title', '')), 200),
-                      nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
-                    ) as slug,
-                    encode(sha256(convert_to(
-                      public.imported_work_slug(
-                        left(btrim(coalesce(e.value ->> 'title', '')), 200),
-                        nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
-                      ) || '|' || lower(btrim(regexp_replace(
-                        coalesce(e.value ->> 'text', ''), '\s+', ' ', 'g'))),
-                      'UTF8')), 'hex') as hash
-                    from jsonb_array_elements(p_items) with ordinality as e(value, ord)
-                   -- Malformed items are skipped rather than raised on here. The item
-                   -- loop owns validation and says which item is wrong; a raise from
-                   -- inside a pre-pass would name none of them.
-                   where jsonb_typeof(e.value) = 'object'
-                     and jsonb_typeof(e.value -> 'title') = 'string'
-                     and btrim(coalesce(e.value ->> 'title', '')) <> ''
-                     and (not (e.value ? 'author')
-                          or jsonb_typeof(e.value -> 'author') = 'string')
-                ) item
-               -- `undone_at is null` matches the loop's own dedupe: a highlight the
-               -- reader has taken back is one a re-import may store again.
-               -- ANY row, tombstone included, and not just a live one. A tombstoned
-               -- hash is a revival: the loop stores it, but its work is already there
-               -- (nothing deletes works now), so it needs no creation room and must not
-               -- consume a rank slot that a genuinely new item needs.
-               where not exists (
-                 select 1 from public.import_items ii
-                  where ii.user_id = uid and ii.content_hash = item.hash
-               )
-               order by item.slug, item.ord
-            ) first_seen
-        ) ranked
-       -- BOTH CEILINGS, and `rank` is already a count of DISTINCT SLUGS -- the rows it
-       -- numbers are one per slug -- so a book ceiling and an item ceiling are both
-       -- upper bounds on it. The holding one stops a reader at the ceiling creating
-       -- anything; the book one stops import-undo-repeat refunding the room that bounds
-       -- creation. The window is still a superset of what the loop needs: the k-th item
-       -- the loop stores has slug rank <= k <= the item room.
-       where ranked.rank <= greatest(
-               least(max_items_per_user - v_held, max_works_per_user - v_books), 0)
-    ) needed;
-
-  -- The works first, and in slug order: every caller takes the same locks in the same
-  -- order, and two orders consistently applied cannot form a cycle.
-  for v_pre in
-    select x.value ->> 'slug' as slug, x.value ->> 'title' as title
-      from jsonb_array_elements(v_needed) x
-     order by 1
-  loop
-    if exists (
-      select 1 from public.works w
-       where w.slug operator(extensions.=) v_pre.slug::extensions.citext
-    ) then
-      continue;
-    end if;
-
-    insert into public.works (kind, title, slug, rights_status)
-    values ('book', v_pre.title, v_pre.slug, 'user_owned')
-    on conflict (slug) do nothing;
-  end loop;
-
-  /*
-   * AND THE CONTRIBUTORS AFTER THEM, IN THEIR OWN ORDER.
-   *
-   * `attribute_work` used to run inside the works loop, which meant `contributors` row
-   * locks were taken in WORKS-slug order -- a different total order from the one they
-   * need. Two readers importing different books by the same two new authors in crossing
-   * order still deadlocked: measured 8 of 12, with `40P01 ... while inserting index
-   * tuple in relation "contributors"`. Ordering works alone fixed four scenarios and
-   * left this one, which is the more likely of the two, because two readers sharing an
-   * AUTHOR is commoner than two readers sharing a book.
-   *
-   * So: every works lock in slug order, then every contributor lock in author order.
-   */
-  --
-  -- EVERY (author, work) PAIR, not one per author. The first version was `distinct on
-  -- (author)`, which passed `attribute_work` the lexicographically smallest slug and
-  -- silently dropped the byline on every other book by that author in the same call.
-  -- A Kindle export is grouped by book and chunked at 500, so several books by one
-  -- author in one chunk is the ordinary case, not the edge: measured, three books by
-  -- one new author in one call produced one link. The de-duplication bought nothing --
-  -- the lock order is the `order by`, and re-locking a contributor this transaction
-  -- already holds is free.
-  --
-  -- ORDERED BY THE SLUG, WHICH IS WHAT IS LOCKED. Ordering by the raw author string
-  -- looked equivalent and is not: `attribute_work` locks
-  -- `btrim(regexp_replace(lower(author),'[^a-z0-9]+','-','g'),'-')`, and that map is
-  -- many-to-one -- every non-ASCII letter is stripped, so `Emile Zola`, `Émile Zola`
-  -- and `Ámile Zola` are one contributor sorting in three places, with any ordinary
-  -- name in between crossing them. Measured 12 deadlocks in 12 attempts with two
-  -- readers whose files spell one author two ways, both losing their whole chunk:
-  -- `40P01 ... while inserting index tuple in relation "contributors"`. Sorting by the
-  -- key the lock is taken on is the only thing that makes the order total.
-  for v_pre in
-    select a.author, a.slug
-      from (
-        select distinct
-               x.value ->> 'author' as author,
-               x.value ->> 'slug' as slug,
-               btrim(regexp_replace(lower(x.value ->> 'author'), '[^a-z0-9]+', '-', 'g'),
-                     '-') as author_slug
-          from jsonb_array_elements(v_needed) x
-      ) a
-     where a.author is not null
-     order by a.author_slug, a.slug
-  loop
-    select w.id into v_work_id
-      from public.works w
-     where w.slug operator(extensions.=) v_pre.slug::extensions.citext;
-    if v_work_id is null then
-      continue;
-    end if;
-
-    /*
-     * Attribution, but never onto a contributor this reader cannot already see.
-     *
-     * `attribute_work` deduplicates on the slug and REUSES an existing row, which made
-     * `contributors` a confirmation oracle: reader B imports a one-line paste naming an
-     * obscure author, lands on the row reader A's private import created, and then
-     * reads back A's exact capitalisation and punctuation -- learning both that
-     * somebody on this instance imported that author and what string they typed.
-     *
-     * THE FIRST ATTEMPT AT THIS GUARD DID NOTHING, and the reason is worth keeping.
-     * It asked `exists (select 1 from public.works w where w.id = wc.work_id)` and
-     * relied on RLS to make that false for a work the caller cannot see. But this
-     * function is `security definer` owned by `postgres`, which owns `works`, and no
-     * table here sets `force row level security` -- so the subquery ran with RLS
-     * BYPASSED and was true for every work. The guard degenerated to "the contributor
-     * is attached to something", which is true of every row `attribute_work` has ever
-     * made. Verified: the oracle was still open with the guard in place.
-     *
-     * Readability is therefore asked explicitly, with the predicate the rest of the
-     * schema uses. `auth.uid()` is still the caller inside a definer, so
-     * `summary_is_readable` answers for the right reader.
-     */
-    select c.id into v_contributor_id
-      from public.contributors c
-     where c.slug operator(extensions.=)
-           btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
-               ::extensions.citext;
-
-    /*
-     * `v_mine` is the third admitting condition and it is not an optimisation.
-     *
-     * The readability leg asks for a summary the caller can read behind the
-     * contributor -- and inside THIS call there is none yet: the pre-pass runs ahead of
-     * the item loop, which is what creates the summaries. So for three books by one new
-     * author in one chunk, the first created the contributor and the next two found it
-     * and were refused by their own reader's row. Measured: one byline of three, on the
-     * ordinary case for a Kindle export, which is grouped by book.
-     *
-     * A contributor this call created or has already legitimately attributed is one the
-     * caller demonstrably reaches, so admitting it discloses nothing a stranger could
-     * not already have inferred from their own import succeeding.
-     */
-    if v_contributor_id is null
-       or v_contributor_id = any(v_mine)
-       /*
-        * OR THIS READER HAS IMPORTED THAT AUTHOR BEFORE, tombstones included.
-        *
-        * The readability leg asks for a summary the caller can read behind the
-        * contributor, and an Undo deletes exactly that summary -- so a reader who
-        * imported an author, took it back, and imported them again got no byline the
-        * second time. The guard could not tell their own abandoned row from a
-        * stranger's. Round 5 answered that by DELETING the abandoned row, which turned
-        * out to race every other reader's import; this asks the question directly.
-        *
-        * It discloses nothing: the leg is true only when the caller has themselves
-        * imported a book this contributor is on, which is a fact they already hold.
-        */
-       or exists (
-         select 1
-           from public.import_items ii
-           join public.work_contributors wc2 on wc2.work_id = ii.work_id
-          where ii.user_id = uid and wc2.contributor_id = v_contributor_id
-       )
-       or exists (
-         select 1
-           from public.work_contributors wc
-           join public.summaries s on s.work_id = wc.work_id
-          where wc.contributor_id = v_contributor_id
-            and public.summary_is_readable(s.*)
-       )
-    then
-      perform public.attribute_work(v_work_id, v_pre.author);
-      -- Re-read rather than reused: on the first book of an author `v_contributor_id`
-      -- was null, and it is `attribute_work` that decided the id.
-      select c.id into v_contributor_id
-        from public.contributors c
-       where c.slug operator(extensions.=)
-             btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
-                 ::extensions.citext;
-      if v_contributor_id is not null and not (v_contributor_id = any(v_mine)) then
-        v_mine := v_mine || v_contributor_id;
-      end if;
-    end if;
-    v_contributor_id := null;
-  end loop;
-  v_work_id := null;
-
   for v_item in select value from jsonb_array_elements(p_items) loop
     if jsonb_typeof(v_item) <> 'object' then
       raise exception 'commit_import: every item must be a JSON object'
@@ -979,12 +794,12 @@ begin
         length(v_clean) using errcode = '22023';
     end if;
 
-    -- Deterministic and namespaced. `imported-` can never collide with a catalogue slug,
-    -- which matters: adopting the seeded `meditations` would attach a reader's private
-    -- pulls to a public work and put their book in the catalogue's shape. The hash
-    -- suffix keeps two different books that slugify alike apart; the readable stem is
-    -- there so an operator reading the table can tell what a row is.
-    v_slug := public.imported_work_slug(v_title, v_author);
+    -- Deterministic, namespaced, and this reader's. `imported-` can never collide with a
+    -- catalogue slug, which matters: adopting the seeded `meditations` would attach a
+    -- reader's private pulls to a public work and put their book in the catalogue's
+    -- shape. The hash keeps two books that slugify alike apart AND keeps two readers of
+    -- the same book apart -- see `imported_work_slug` for what the shared row leaked.
+    v_slug := public.imported_work_slug(v_title, v_author, uid);
 
     v_hash := encode(sha256(convert_to(v_slug || '|' || lower(v_clean), 'UTF8')), 'hex');
 
@@ -1007,56 +822,156 @@ begin
     -- against the whole incoming chunk it refused a reader at 19,800 highlights who
     -- re-uploaded a 500-item file of which 498 were duplicates -- an operation that
     -- would have added two rows.
-    v_held := v_held + 1;
-    if v_held > max_items_per_user then
+    --
+    -- ASKED BEFORE ANYTHING IS CREATED, and the increment follows the store. Charging it
+    -- first and creating the work afterwards is what left works behind: the loop could
+    -- stop on a later item having already made rows for this one.
+    if v_held + 1 > max_items_per_user then
       -- STOP, do not raise. A raise here aborts the transaction and rolls back every
       -- row already added in this call, so a reader with room for two of a
       -- five-hundred-item chunk stored none of them -- and with the client chunking
       -- at 500, the last few hundred highlights they had room for were all lost with
       -- a message that did not say how many would have fitted. Keeping what fits and
       -- reporting the stop is the same bound with none of that.
+      --
+      -- `exit` rather than `continue` is right HERE and only here: past the item ceiling
+      -- nothing later in the chunk can be stored either. The book ceiling below is the
+      -- opposite case and continues.
       v_ceiling_reached := true;
       exit;
     end if;
 
-    -- The work is shared: two readers who import the same book land on the same row, and
-    -- see each other's nothing, because 20260905101000 makes a work visible only behind a
-    -- summary the caller can read and each holds only their own.
-    --
-    -- Qualified rather than cast to text, and this is a performance fact rather than a
-    -- style one. `works.slug` is `citext` with a unique btree, and `lower(w.slug::text)`
-    -- wraps the column in a function the index cannot answer -- so this ran a SEQUENTIAL
-    -- SCAN, once per highlight. Measured: 0.20 s for a 500-item chunk against the 16
-    -- seeded works, and 13.4 s against 60,000. `authenticated` carries an 8 s
-    -- `statement_timeout`, so a full chunk begins failing outright at roughly 37,000
-    -- works and the whole transaction aborts, storing nothing. This feature is itself
-    -- what makes `works` grow, so it was a bomb with its own fuse.
-    --
-    -- The earlier comment said an unqualified `citext` cast cannot resolve under
-    -- `search_path = ''`, which is true, and concluded that comparing as text was better
-    -- anyway, which was wrong. Schema-qualifying the operator resolves fine and keeps the
-    -- index: 25.4 ms -> 0.10 ms on the same 60,000 rows.
+    /*
+     * THE WORK, FOUND OR MADE HERE -- in the step that is about to store the highlight
+     * needing it, and nowhere else.
+     *
+     * This used to be a pre-pass: every work the chunk might need, created ahead of the
+     * loop in slug order, because find-or-create inside the loop took `works` locks in
+     * whatever order the reader's file listed its books and two readers with crossing
+     * files deadlocked 12 times out of 12. That fix worked and cost more than it saved,
+     * because creation then ran ahead of the decisions that bound it:
+     *
+     *   * The window was `least(item room, book room)` ranks of DISTINCT SLUGS, but the
+     *     loop's stores were not confined to it -- revivals of tombstoned hashes were
+     *     excluded from the pre-pass and still charged the item ceiling. A chunk of 250
+     *     revivals then 250 fresh titles spent the whole item room before the loop
+     *     reached a created slug, so every work the pre-pass made was an orphan no
+     *     `import_items` row pointed at -- and `v_books` counts exactly those rows.
+     *     Measured: +750 works and +750 contributors over three import-undo cycles with
+     *     the book counter unmoved, extrapolating to ~500,000 rows an account against a
+     *     documented ceiling of 2,000.
+     *   * A rank slot was spent on books whose `works` row already existed, so a reader
+     *     with five books of room offered five new books created none of them.
+     *   * And the loop stopped at the first title the window had declined, discarding
+     *     later items that needed no new book at all: the same 500 items stored 0 or 499
+     *     depending only on where one new title sat in the file.
+     *
+     * The deadlock it was avoiding cannot happen any more. Two readers never name the
+     * same `works` or `contributors` row -- the slug carries the owner -- and a reader
+     * against themselves is serialised by the advisory lock above. So the ordering
+     * machinery has nothing left to order, and creation moves back to the one place that
+     * knows whether the row is wanted.
+     *
+     * Qualified rather than cast to text, and this is a performance fact rather than a
+     * style one. `works.slug` is `citext` with a unique btree, and `lower(w.slug::text)`
+     * wraps the column in a function the index cannot answer -- so this ran a SEQUENTIAL
+     * SCAN, once per highlight. Measured: 0.20 s for a 500-item chunk against the 16
+     * seeded works, and 13.4 s against 60,000. `authenticated` carries an 8 s
+     * `statement_timeout`, so a full chunk begins failing outright at roughly 37,000
+     * works and the whole transaction aborts, storing nothing.
+     *
+     * The earlier comment said an unqualified `citext` cast cannot resolve under
+     * `search_path = ''`, which is true, and concluded that comparing as text was better
+     * anyway, which was wrong. Schema-qualifying the operator resolves fine and keeps the
+     * index: 25.4 ms -> 0.10 ms on the same 60,000 rows.
+     */
     select w.id into v_work_id
       from public.works w
      where w.slug operator(extensions.=) v_slug::extensions.citext;
-    /*
-     * MISSING MEANS THE BOOK CEILING STOPPED IT, and that is the only thing it can mean
-     * now -- so this stops the call rather than raising.
-     *
-     * It used to raise `no work for %`, on the reasoning that the pre-pass creates
-     * every work and anything absent is an item the validation should have refused.
-     * That reasoning had a second case even then, and round 6 measured it: a concurrent
-     * `undo_import` deleting the work between the pre-pass and here, 3 of 3, aborting a
-     * 500-highlight chunk with an internal error naming a slug. That delete is gone.
-     * What is left is the pre-pass declining a slug because this reader is at
-     * `max_works_per_user` -- a ceiling, and every other ceiling here stops and reports
-     * rather than rolling back what the reader had room for.
-     */
+
     if v_work_id is null then
-      v_ceiling_reached := true;
-      exit;
+      /*
+       * THE BOOK CEILING IS CHARGED WHERE THE ROW IS MADE, and declining one book does
+       * not end the chunk.
+       *
+       * `continue`, not `exit`: a later item may sit on a book this reader already owns,
+       * which costs no book quota and which they have item room for. Exiting here threw
+       * those away -- and threw away a different number of them depending on where the
+       * new title happened to fall in the file.
+       */
+      v_books := v_books + 1;
+      if v_books > max_works_per_user then
+        v_books := max_works_per_user;
+        v_ceiling_reached := true;
+        continue;
+      end if;
+
+      insert into public.works (kind, title, slug, rights_status)
+      values ('book', v_title, v_slug, 'user_owned')
+      on conflict (slug) do nothing
+      returning id into v_work_id;
+
+      -- `do nothing` returns no row when it conflicted. Only this reader can hold this
+      -- slug and the advisory lock serialises them against themselves, so this is belt
+      -- and braces rather than a live path -- but a silent null here would attach the
+      -- pull to nothing, so it is asked rather than assumed.
+      if v_work_id is null then
+        select w.id into v_work_id
+          from public.works w
+         where w.slug operator(extensions.=) v_slug::extensions.citext;
+      end if;
+
+      if v_work_id is null then
+        raise exception 'commit_import: could not create the work for %', v_title
+          using errcode = 'XX000';
+      end if;
+
+      /*
+       * AND THE BYLINE, ON A CONTRIBUTOR ROW THAT IS ALSO THIS READER'S OWN.
+       *
+       * `attribute_work` is not called any more, because it deduplicates on a slug
+       * derived from the name and REUSES an existing row -- which made `contributors`
+       * the same oracle `works` was. Rounds 4 and 5 guarded the reuse; round 7 measured
+       * what the guard leaves, which is that the byline's ABSENCE answers the same
+       * question, and that the second reader of any author outside the public catalogue
+       * never got a byline at all: the readability leg needed a `work_contributors` row
+       * the guard was itself refusing to create. 0 bylines in 14 of 14 runs.
+       *
+       * A per-reader row has neither problem. Nothing is reused, so nothing can be
+       * probed, and the byline always appears.
+       */
+      if v_author is not null then
+        select c.id into v_contributor_id
+          from public.contributors c
+         where c.slug operator(extensions.=)
+               public.imported_contributor_slug(v_author, uid)::extensions.citext;
+
+        if v_contributor_id is null then
+          insert into public.contributors (name, slug)
+          values (v_author, public.imported_contributor_slug(v_author, uid))
+          on conflict (slug) do nothing
+          returning id into v_contributor_id;
+
+          if v_contributor_id is null then
+            select c.id into v_contributor_id
+              from public.contributors c
+             where c.slug operator(extensions.=)
+                   public.imported_contributor_slug(v_author, uid)::extensions.citext;
+          end if;
+        end if;
+
+        if v_contributor_id is not null then
+          insert into public.work_contributors (work_id, contributor_id, role)
+          values (v_work_id, v_contributor_id, 'author')
+          on conflict do nothing;
+        end if;
+
+        v_contributor_id := null;
+      end if;
     end if;
 
+    -- The row is going in now, so the holding count moves with it.
+    v_held := v_held + 1;
     -- `summaries unique (work_id, version, author_id)` is what makes this one row per
     -- reader per book. Published so it is reachable by the reader's own paths, private so
     -- it reaches nobody else: `get_feed` pools on published AND public.
@@ -1208,11 +1123,15 @@ grant execute on function public.commit_import(text, text, jsonb, uuid) to authe
 -- Saying it first needs a dry run, which does not exist and belongs with the screen that
 -- would call it.
 --
--- The work does not always stand. A work this batch created that nothing else now uses --
--- no summary at all, no item from another batch -- goes with the highlights, and so does
--- a contributor left with no work. That is not tidiness: the ceiling bounds shared-row
--- creation by the room left under it, an Undo gives that room back, and without this the
--- two cancel into unbounded growth. See the delete below.
+-- THE WORK STANDS. An Undo removes the reader's highlights and the private page that
+-- held them; the catalogue row for the book stays, and so does its byline.
+--
+-- This paragraph used to say the opposite and point at a delete below it. Round 5 wrote
+-- that delete, round 6 removed it after measuring three separate ways it lost other
+-- readers' data, and this sentence outlived it -- so the passage a reader consults first
+-- asserted the reverse of what the function does. `docs/privacy.md` says the same thing
+-- the code now does. The bound that delete was reaching for lives in `commit_import`,
+-- which charges `max_works_per_user` in the step that creates the row.
 create function public.undo_import(p_import_id uuid)
 returns jsonb
 language plpgsql
@@ -1230,8 +1149,6 @@ declare
   v_lost_highlights int := 0;
   v_lost_explanations int := 0;
   v_lost_convictions  int := 0;
-  v_orphan_works uuid[] := '{}';
-  v_orphan_contributors uuid[] := '{}';
 begin
   if uid is null then
     raise exception 'undo_import requires an authenticated user';
@@ -1346,10 +1263,20 @@ begin
   -- a second summary of the same book (`summaries` is unique per work, version and
   -- author), so a draft about the very book being undone would still have gone. Only
   -- the summary a deleted pull actually hung from is this batch's to clean up.
+  --
+  -- VISIBILITY IS NOT PART OF THE TEST, because the reader can change it. `authenticated`
+  -- holds column UPDATE on `summaries`, and `summaries_author_update` bars only the
+  -- published-and-public combination -- so one PATCH to `visibility: 'public'` made an
+  -- imported summary survive its own Undo. It then survived `delete_my_account` too,
+  -- whose provenance leg joins `pulls` on `import_items.pull_id`, which the Undo had
+  -- just nulled. Measured: an ownerless row left behind with `auth.users` gone.
+  --
+  -- What identifies this batch's summaries is `v_emptied` -- the summaries its own
+  -- deleted pulls hung from -- plus authorship and emptiness. All three are facts the
+  -- reader cannot PATCH.
   delete from public.summaries s
    where s.id = any(v_emptied)
      and s.author_id = uid
-     and s.visibility = 'private'
      and not exists (select 1 from public.pulls p where p.summary_id = s.id);
 
   /*
@@ -1383,7 +1310,9 @@ begin
    * written to close.
    *
    * The bound belongs where the row is CREATED, which is a decision one transaction
-   * can make about itself. See `max_created_per_user` in `commit_import`.
+   * can make about itself. See `max_works_per_user` in `commit_import`, which is charged
+   * in the step that inserts the work -- not forecast by a window that the storing loop
+   * was then free to disagree with.
    */
   update public.imports set undone_at = now() where id = p_import_id;
 
@@ -1791,10 +1720,31 @@ begin
    * points and whatever they set its visibility to. A canonical draft has no
    * `import_items` behind it and stays.
    */
+  --
+  -- THE WORK IS A THIRD LEG, and it is a second line rather than the fix -- said that way
+  -- because the mutation test says so. Round 7 found a summary surviving this call: the
+  -- reader PATCHed an imported summary to `public`, then undid the batch, and provenance
+  -- is only as durable as `import_items.pull_id`, which `undo_import` nulls by deleting
+  -- the pull. Both other legs missed it and it outlived `auth.users` -- permanent,
+  -- unreachable and uncollectable.
+  --
+  -- The fix for that is in `undo_import`, which now collects the summary whatever its
+  -- visibility, so by the time this runs there is nothing left to catch: reverting this
+  -- leg alone leaves `imports.sql` green, and reverting the Undo alone does not. It is
+  -- kept because `rights_status = 'user_owned'` is a fact about the BOOK rather than
+  -- about the reader's rows, so no Undo can move it -- which is what makes it worth
+  -- having against a future change to the Undo. It is also exactly the right boundary:
+  -- an imported summary always sits on a `user_owned` work, and a canonical generation
+  -- -- draft-and-public with the requester as author for the whole of its run -- never
+  -- does, so the catalogue content the project paid for is still left alone.
   delete from public.summaries s
    where s.author_id = uid
      and (
        s.visibility <> 'public'
+       or exists (
+         select 1 from public.works w
+          where w.id = s.work_id and w.rights_status = 'user_owned'
+       )
        or exists (
          select 1
            from public.import_items ii
