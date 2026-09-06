@@ -257,9 +257,28 @@ export interface RecallEventRow {
   pull_id: string;
   quiz_question_id: string | null;
   user_question_id: string | null;
+  kind: string;
   grade: string;
   applied_at: string;
+  submitted_at: string | null;
 }
+
+/**
+ * The `recall_events.kind` values that are an attempt to REMEMBER something.
+ *
+ * Review finding. `recall_events_kind_known` permits seven, and four of them are not
+ * retrieval: `conviction` and `counterpull` record what a reader believes, `delta_probe`
+ * asks whether they already know an idea, and `calibration` is the census asking them to
+ * declare it. None of those is a study attempt, and every one of them carries a null
+ * question id -- which is precisely the shape `summariseHistory` spreads across EVERY
+ * question on the Pull. So a reader who had used the census once exported `reps` and
+ * `lapses` claiming study they never did, and a `last:` tag from an answer to a different
+ * question entirely.
+ *
+ * `Feed.tsx` already draws this line for the interrupt kinds; this is the same line at
+ * the export.
+ */
+const RETRIEVAL_KINDS = new Set(['review', 'recall', 'say_it_back']);
 
 function isGrade(value: string): value is RecallGrade {
   return (RECALL_GRADES as readonly string[]).includes(value);
@@ -285,11 +304,26 @@ export function reviewEvents(rows: readonly RecallEventRow[]): ReviewEvent[] {
   const out: ReviewEvent[] = [];
   for (const r of rows) {
     if (!isGrade(r.grade)) continue;
+    if (!RETRIEVAL_KINDS.has(r.kind)) continue;
     out.push({
       pullId: r.pull_id,
       questionId: r.quiz_question_id ?? r.user_question_id ?? null,
       grade: r.grade,
-      appliedAt: r.applied_at,
+      /*
+       * WHEN THE READER ANSWERED, not when the row was written.
+       *
+       * Review finding. `applied_at` defaults to `now()` at insert, and a grade taken
+       * offline is inserted whenever the device next reaches the server -- which
+       * `lib/offline.ts` exists to make routine. `submitted_at` is the column
+       * 20260905100000 added to keep the earlier decision time, and `lib/submission.ts`
+       * mints a strictly increasing stamp for it precisely so two attempts can be
+       * ordered. Read the wrong one and a queued answer landing after a newer one makes
+       * the OLDER grade the `last:` tag -- the deck then says a reader is failing a card
+       * they have since got right.
+       *
+       * Nullable, because rows written before that migration have none.
+       */
+      appliedAt: r.submitted_at ?? r.applied_at,
     });
   }
   return out;

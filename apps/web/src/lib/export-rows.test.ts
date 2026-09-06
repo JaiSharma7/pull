@@ -269,8 +269,10 @@ describe('reviewEvents', () => {
     pull_id: 'pull-1',
     quiz_question_id: null,
     user_question_id: null,
+    kind: 'review',
     grade: 'good',
     applied_at: '2026-09-01T00:00:00Z',
+    submitted_at: null,
     ...over,
   });
 
@@ -287,6 +289,49 @@ describe('reviewEvents', () => {
   it('drops a grade this build cannot name', () => {
     expect(reviewEvents([event({ grade: 'brilliant' })])).toEqual([]);
     expect(reviewEvents([event({ grade: 'forgot' })])).toHaveLength(1);
+  });
+
+  /*
+   * ONLY THE KINDS THAT ARE AN ATTEMPT TO REMEMBER SOMETHING.
+   *
+   * Review finding. `recall_events_kind_known` permits seven and four of them are not
+   * retrieval: `conviction` and `counterpull` record a belief, `delta_probe` asks whether
+   * the reader already knows an idea, and `calibration` is the census asking them to
+   * declare it. Every one carries a null question id, which is the shape
+   * `summariseHistory` spreads across EVERY question on the Pull -- so a reader who used
+   * the census once exported `reps` and `lapses` claiming study they never did, and a
+   * `last:` tag from an answer to a different question entirely.
+   */
+  it('counts only retrieval, not what a reader declared', () => {
+    expect(
+      reviewEvents([
+        event({ kind: 'review' }),
+        event({ kind: 'recall' }),
+        event({ kind: 'say_it_back' }),
+      ]),
+    ).toHaveLength(3);
+    for (const kind of ['calibration', 'conviction', 'counterpull', 'delta_probe']) {
+      expect(reviewEvents([event({ kind })])).toEqual([]);
+    }
+  });
+
+  /*
+   * WHEN THE READER ANSWERED, NOT WHEN THE ROW WAS WRITTEN.
+   *
+   * Review finding. `applied_at` defaults to `now()` at insert, and a grade taken offline
+   * is inserted whenever the device next reaches the server -- which `lib/offline.ts`
+   * makes routine. Reading it makes a queued answer that lands after a newer one the
+   * `last:` tag, so the deck says a reader is failing a card they have since got right.
+   */
+  it('prefers submitted_at, and falls back for rows written before the column existed', () => {
+    expect(
+      reviewEvents([
+        event({ submitted_at: '2026-09-01T09:00:00Z', applied_at: '2026-09-03T00:00:00Z' }),
+      ])[0]?.appliedAt,
+    ).toBe('2026-09-01T09:00:00Z');
+    expect(reviewEvents([event({ submitted_at: null })])[0]?.appliedAt).toBe(
+      '2026-09-01T00:00:00Z',
+    );
   });
 
   /*

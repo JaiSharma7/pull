@@ -9,7 +9,7 @@ import {
 } from './export-rows.js';
 import type { Highlight } from './highlights.js';
 import { fetchHighlights } from './highlights-api.js';
-import { pageAll } from './paging.js';
+import { pageAfter } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -115,41 +115,71 @@ export interface AnkiDeck {
  * knows it.
  */
 export async function fetchAnkiDeck(userId: string): Promise<AnkiDeck> {
-  const savedRows = await pageAll<SavedRow>((from, to) =>
-    supabase
+  /*
+   * KEYSET, NOT OFFSET, on all three walks below.
+   *
+   * Review finding, and `buildAccountExport` had already measured it: `.range(from, to)`
+   * is `LIMIT/OFFSET`, and an insertion or deletion in another tab mid-export shifts
+   * every later page, so the deck silently carries one row twice and omits another. An
+   * export is exactly where that happens, because it runs long enough for a write to land
+   * underneath it. `id` is the cursor on each: unique within one reader's rows, so it is
+   * both a total order and something to ask for what sorts after.
+   */
+  const savedRows = await pageAfter<SavedRow & Record<string, unknown>>((after, limit) => {
+    let q = supabase
       .from('saved_items')
       .select(
-        'pull_id, pulls(id, quiz_questions(id, pull_id, kind, prompt, answer, distractors), summaries(works(title)))',
+        'id, pull_id, pulls(id, quiz_questions(id, pull_id, kind, prompt, answer, distractors), summaries(works(title)))',
       )
       .eq('user_id', userId)
       .not('pull_id', 'is', null)
-      // By `id`, for the reason `fetchExportData` gives: the walk needs a key that
-      // partitions the set, and `created_at` is neither unique nor a cursor.
       .order('id', { ascending: true })
-      .range(from, to),
-  ).catch((e: unknown) => {
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id').catch((e: unknown) => {
     throw rpcError(e);
   });
 
-  const ownRows = await pageAll<OwnRow>((from, to) =>
-    supabase
+  const ownRows = await pageAfter<OwnRow & Record<string, unknown>>((after, limit) => {
+    let q = supabase
       .from('user_questions')
       .select('id, pull_id, kind, prompt, answer, options, pulls(summaries(works(title)))')
       .eq('user_id', userId)
       .is('retired_at', null)
       .order('id', { ascending: true })
-      .range(from, to),
-  ).catch((e: unknown) => {
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id').catch((e: unknown) => {
     throw rpcError(e);
   });
 
-  const eventRows = await pageAll<RecallEventRow>((from, to) =>
-    supabase
-      .from('recall_events')
-      .select('pull_id, quiz_question_id, user_question_id, grade, applied_at')
-      .eq('user_id', userId)
-      .order('id', { ascending: true })
-      .range(from, to),
+  /*
+   * `kind` AND `submitted_at` ARE SELECTED BECAUSE `reviewEvents` NEEDS BOTH.
+   *
+   * Four of the seven `recall_events` kinds are not retrieval -- `conviction`,
+   * `counterpull`, `delta_probe` and `calibration` -- and each carries a null question
+   * id, which is the shape `summariseHistory` spreads across every question on the Pull.
+   * And `applied_at` is when the row was written, not when the reader answered: a grade
+   * queued offline lands late, and reading the wrong column makes the OLDER attempt the
+   * `last:` tag. Both are filtered and resolved in `export-rows.ts`, where they can be
+   * tested.
+   */
+  const eventRows = await pageAfter<RecallEventRow & { id: string } & Record<string, unknown>>(
+    (after, limit) => {
+      let q = supabase
+        .from('recall_events')
+        .select(
+          'id, pull_id, quiz_question_id, user_question_id, kind, grade, applied_at, submitted_at',
+        )
+        .eq('user_id', userId)
+        .order('id', { ascending: true })
+        .limit(limit);
+      if (after !== null) q = q.gt('id', after);
+      return q;
+    },
+    'id',
   ).catch((e: unknown) => {
     throw rpcError(e);
   });

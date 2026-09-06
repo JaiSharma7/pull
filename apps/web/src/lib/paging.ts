@@ -36,3 +36,53 @@ export async function pageAll<T>(
     if (rows.length < pageSize) return all;
   }
 }
+
+/**
+ * The same walk, cursored on a key instead of counted from the start.
+ *
+ * `pageAll` is `LIMIT/OFFSET`, and an offset is unstable under concurrent writes however
+ * well the rows are ordered: a row inserted before the current offset shifts every later
+ * page by one, so the caller gets one row twice and misses another. `buildAccountExport`
+ * measured exactly that on 250 rows — row 109 duplicated, the concurrently inserted row
+ * absent — and moved to a keyset walk for it. An export is the place it matters most,
+ * because it runs long enough for another tab to write underneath it.
+ *
+ * `key` must be a column unique WITHIN the rows this query returns, so that it is both a
+ * total order and a usable cursor. The caller applies `.order(key)` itself, because the
+ * order may need other terms in front of it.
+ *
+ * `buildAccountExport` has this walk inline and predates this helper. It should adopt it;
+ * that is a change to a merged file and does not belong in the PR that noticed.
+ */
+export async function pageAfter<T extends Record<string, unknown>>(
+  fetchAfter: (
+    after: string | number | null,
+    limit: number,
+  ) => PromiseLike<{
+    data: T[] | null;
+    error: unknown;
+  }>,
+  key: string,
+  pageSize = 100,
+): Promise<T[]> {
+  const all: T[] = [];
+  let after: string | number | null = null;
+
+  for (;;) {
+    const { data, error } = await fetchAfter(after, pageSize);
+    if (error) throw error;
+
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < pageSize) return all;
+
+    const cursor = rows[rows.length - 1]?.[key];
+    // A key that is absent, or of a type no cursor can be made from, would loop on the
+    // same page forever. A number is a cursor too: `history_events.id` is a `bigint` and
+    // PostgREST serialises it as a JSON number.
+    if (typeof cursor !== 'string' && typeof cursor !== 'number') {
+      throw new Error(`pageAfter: row has no usable ${key} to continue from`);
+    }
+    after = cursor;
+  }
+}
