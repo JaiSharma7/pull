@@ -104,10 +104,18 @@
       "mcp__Vercel__get_web_analytics",
       "mcp__Vercel__get_project_deployment_protection",
       "mcp__Vercel__web_fetch_vercel_url",
-      "mcp__Vercel__search_vercel_documentation"
+      "mcp__Vercel__search_vercel_documentation",
+      "mcp__github__merge_pull_request",
+      "mcp__github__enable_pr_auto_merge",
+      "mcp__github__get_me",
+      "mcp__github__get_release_by_tag",
+      "mcp__github__list_issues",
+      "mcp__github__search_pull_requests",
+      "mcp__Claude_Code_Remote__archive_session",
+      "mcp__Claude_Code_Remote__send_later",
+      "mcp__Claude_Code_Remote__list_repos"
     ],
     "ask": [
-      "Bash(supabase db push:*)",
       "mcp__Supabase__pause_project",
       "mcp__Supabase__restore_project",
       "mcp__Supabase__create_branch",
@@ -120,8 +128,7 @@
       "mcp__Vercel__pause_project",
       "mcp__Vercel__unpause_project",
       "mcp__Vercel__deploy_to_vercel",
-      "mcp__Vercel__create_git_project",
-      "mcp__github__merge_pull_request"
+      "mcp__Vercel__create_git_project"
     ],
     "deny": [
       "Bash(git push --force:*)",
