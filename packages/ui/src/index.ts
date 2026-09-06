@@ -1,5 +1,5 @@
 export { PullCard } from './components/PullCard.js';
-export type { PullCardProps, PullCardSource } from './components/PullCard.js';
+export type { PullCardProps, PullCardSource, PullCardTextField } from './components/PullCard.js';
 export {
   HEADLINE_SCALE,
   WORDS_PER_MINUTE,

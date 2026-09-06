@@ -223,3 +223,100 @@ describe('the source chip', () => {
     expect(html).toContain('On Liberty');
   });
 });
+
+/**
+ * The queue control — the same promise as Listen, one screen wider.
+ *
+ * A queue is what makes read-aloud a player rather than a button, and the card is
+ * where a reader meets it. The prop is optional for the reason `onListen` is, and
+ * carries the same risk: a screen that forgets it gets no error, only a card with
+ * no way into the queue. So both halves are asserted, and the pressed state is
+ * driven by the caller rather than inferred, since whether this card is already
+ * queued is the queue's knowledge.
+ */
+describe('the queue control', () => {
+  it('offers Queue when a handler is given', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, onQueue: () => {} }));
+    expect(html).toContain('>Queue<');
+    expect(html).toContain(`aria-label="Add to queue: ${base.headline}"`);
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it('omits Queue when no handler is given', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, base));
+    expect(html).not.toContain('Queue');
+  });
+
+  it('says Queued, and is pressed, once the caller says so', () => {
+    const html = renderToStaticMarkup(
+      createElement(PullCard, { ...base, onQueue: () => {}, queued: true }),
+    );
+    expect(html).toContain('>Queued<');
+    // The NAME says what pressing it does, in both states; `aria-pressed` says which
+    // state it is in. A name that flips to a status leaves a screen reader announcing a
+    // control it has not met before and no way to tell what activating it would do.
+    expect(html).toContain(`aria-label="Remove from queue: ${base.headline}"`);
+    expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('is independent of Listen', () => {
+    // Queue without Listen is a legitimate screen — the source page reads with
+    // the player, not card by card — and Listen without Queue is today's feed.
+    const queueOnly = renderToStaticMarkup(createElement(PullCard, { ...base, onQueue: () => {} }));
+    expect(queueOnly).not.toContain('Listen');
+    const listenOnly = renderToStaticMarkup(
+      createElement(PullCard, { ...base, onListen: () => {} }),
+    );
+    expect(listenOnly).not.toContain('Queue');
+  });
+
+  it('draws it in the action row, in the row’s own style', () => {
+    // Same class as Save, Ask, Share and Listen: no new control style, no new
+    // colour, radius from `.btn` and therefore from `--radius-sm`.
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, onQueue: () => {} }));
+    const footer = html.slice(html.indexOf('pull-card__footer'));
+    expect(footer).toMatch(/<button type="button" class="btn"[^>]*>Queue</);
+  });
+});
+
+/**
+ * `renderBody` — so a screen can put its own marks inside the text.
+ *
+ * The source page draws a reader's highlights as markup inside the passage, which
+ * a card rendering `{body}` as a string can never carry. Handing the string back
+ * to the caller for each stop is the whole mechanism; the assertions are that it
+ * is used for every passage and never for the headline, which is a title rather
+ * than a passage.
+ */
+describe('renderBody', () => {
+  const deep = {
+    ...base,
+    whyItMatters: 'Suppression costs the public more than it costs the suppressed.',
+    explanation: 'The argument runs in two directions.',
+    renderBody: (text: string, field: string) =>
+      createElement('mark', { 'data-field': field }, text),
+  };
+
+  it('renders the claim through the caller instead of as a plain string', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, deep));
+    expect(html).toContain(`<mark data-field="body">${base.body}</mark>`);
+  });
+
+  it('names the field for every passage the dial can reach', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...deep, depth: 3 }));
+    expect(html).toContain('<mark data-field="why_it_matters">');
+    expect(html).toContain('<mark data-field="explanation">');
+  });
+
+  it('never hands over the headline', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...deep, depth: 3 }));
+    expect(html).not.toContain(`<mark data-field="body">${base.headline}`);
+    expect(html).toContain(base.headline);
+  });
+
+  it('renders the plain string when no renderer is given', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, base));
+    expect(html).toContain(base.body);
+    expect(html).not.toContain('<mark');
+  });
+});

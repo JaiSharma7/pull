@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
+import { PROGRESS_COPY } from '../lib/progress.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
 
@@ -58,10 +59,45 @@ export function MetacognitiveDashboard({
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
           What you are holding on to
         </h1>
-        <p className="meta">
-          What you have read, and how well you are still holding on to it. Every number here is
-          computed from your own recall history — nothing is estimated.
-        </p>
+        {/*
+          NO `measure` CLASS, and the version of this comment that argued for one was
+          wrong in both of its facts.
+
+          It said the container is 42rem. `App.tsx` renders this screen inside
+          `<div className="shell__column">`, which `components.css` pins at
+          `max-width: var(--measure)` — so the rendered width is
+          `min(--measure, 42rem)`, and adding `.measure` sets `max-width: var(--measure)`
+          a second time, which cannot narrow a box already bounded by it. No viewport and
+          no appearance setting changes by a pixel. That conclusion is measured and holds.
+
+          WHAT IS NOT TRUE IS THAT THE 42rem IS DEAD. An earlier draft of this paragraph
+          said so, reasoning that `--measure` is always the smaller of the two. It is 34rem
+          with focus off, so it is smaller then — but `tokens.css` defines it again under
+          `:root[data-focus='on']` as `calc(var(--step-0) * 32)`, and `--step-0` is
+          `clamp(1.0625rem, 0.95rem + 0.6vw, 1.625rem)`, so the measure reaches 52rem and
+          crosses 42rem at a viewport of about 967px. Focus mode is a reader toggle
+          persisted on `documentElement`, so at the three desktop widths `docs/design.md`
+          says to test — 1128, 1504 and 1920 — the column is 832px and this container is
+          the operative 672px, left-aligned inside it because `.stack` has no
+          `margin-inline: auto`. The 42rem binds, on a screen a reader can reach in two
+          clicks. It is left alone here because removing it changes the layout, which
+          belongs to a change that owns the layout rather than the copy — but it is left
+          alone as a live value, not as a dead one.
+
+          It also said `--measure` follows large text. `tokens.css` defines it twice —
+          `:root` at 34rem and `:root[data-focus='on']` from `--step-0`.
+          `[data-text='large']` sets the type steps and not the measure, so with focus
+          off, which is the default, the column is a flat 34rem while `--step--1` rises
+          from 0.78rem to 1rem. The line gets SHORTER in characters, not longer.
+
+          One thing this paragraph really is wearing wrongly, and it predates this
+          change: `.meta` is mono, uppercase and `--step--1`, so four sentences of
+          provenance render as small capitals. It is the disclosure that makes every
+          number above it honest, and it is the least readable text on the screen. That
+          is a type-ramp decision for a change that owns the screen's design, and it is
+          recorded here rather than fixed in a copy PR.
+        */}
+        <p className="meta">{PROGRESS_COPY.provenance}</p>
       </header>
 
       {error ? (
