@@ -412,6 +412,7 @@ declare
   v_held       int;
   v_touched    uuid[] := '{}';
   v_works_out  jsonb;
+  v_needed     jsonb;
 begin
   if uid is null then
     raise exception 'commit_import requires an authenticated user';
@@ -478,6 +479,7 @@ begin
     from public.import_items
    where user_id = uid and undone_at is null;
 
+
   -- One batch per file, even when the file arrives in six calls. Outside the window a
   -- fresh batch is right: re-importing a clippings file that has grown since is a new
   -- act, and its already-held highlights fall out as duplicates rather than as rows.
@@ -498,7 +500,16 @@ begin
    where i.user_id = uid
      and i.source_kind = p_source_kind
      and i.undone_at is null
-     and i.created_at > now() - reuse_window
+     and i.created_at > now() - (
+       -- A HASHLESS SOURCE GETS A MUCH SHORTER WINDOW, because `source_kind` alone
+       -- cannot tell "chunk 2 of this paste" from "a different paste entirely".
+       -- At six hours it could not: two unrelated pastes five hours apart merged
+       -- into one batch, and undoing the second took the first one's highlights
+       -- with it -- a reader losing something they never asked to remove, which is
+       -- the one thing an Undo must not do. Minutes still cover a chunked upload,
+       -- which arrives as fast as the client can post it.
+       case when p_file_hash is null then interval '5 minutes' else reuse_window end
+     )
      and (
        (p_file_hash is not null and i.file_hash = p_file_hash)
        or (p_file_hash is null and i.file_hash is null)
@@ -513,7 +524,7 @@ begin
   end if;
 
   /*
-   * EVERY WORK THIS CHUNK NEEDS, CREATED FIRST AND IN SLUG ORDER.
+   * EVERY WORK AND AUTHOR THIS CHUNK NEEDS, WORKED OUT ONCE AND CREATED FIRST.
    *
    * The find-or-create used to sit inside the item loop, so `works` row locks were
    * taken in the order the reader's file happened to list its books. Two readers whose
@@ -527,31 +538,90 @@ begin
    * The advisory lock above does not help: it is keyed on `uid`, so it serialises a
    * reader against themselves and never against anybody else.
    *
-   * Sorted by slug, so every caller takes the same locks in the same order and no cycle
-   * can form. Malformed items are skipped rather than raised on here -- the loop below
-   * owns validation and says something useful about which item is wrong.
+   * Hoisting it fixed that and opened something else, because it also hoisted the
+   * creation above the dedupe and the ceiling: the pre-pass built shared rows for items
+   * the loop then skipped. Measured -- a reader at exactly 20,000 held items called this
+   * twice with 500 fresh titles and added 1,000 orphan `works` and about as many
+   * `contributors`, `added: 0` both times, repeatable forever. Those are SHARED
+   * CATALOGUE tables: no per-reader ceiling covers them, no sweep collects them, and
+   * this feature is itself what makes `works` grow, so it fed the very scan the index
+   * fix below calls a bomb with its own fuse. It also made the header's own claim --
+   * that the worst a hostile caller can do is fill their own quota -- false.
    *
-   * A work created for an item the loop then skips (a duplicate, or one past the
-   * ceiling) is an orphan `works` row with no summary behind it, which 20260905101000
-   * makes invisible to everyone. That is the cost, and it is smaller than the deadlock.
+   * Refusing the whole call at the ceiling was the first attempt at that and was wrong:
+   * a duplicate-only upload at the ceiling is deliberately accepted, and refusing it
+   * threw away the `duplicates` count the reader is shown. The bound belongs on the SET
+   * this pre-pass walks, not on the call.
+   *
+   * So the set below is what the loop can actually store: items whose hash the reader
+   * does not already hold, in the order the loop will meet them, capped at the room left
+   * under the ceiling. The cap counts DISTINCT SLUGS rather than items, and that is
+   * still a superset of what the loop needs -- the loop stores at most `room` items, and
+   * each one's slug first occurs at or before it, so at most `room` slugs can first
+   * occur that early. A superset is the safe direction: an item reaching the loop to
+   * find its work missing is raised on rather than created for, because creating one
+   * there would be in item order and would reopen the deadlock.
+   *
+   * Worked out once and read twice, because the two loops want it in two orders.
    */
+  select coalesce(
+           jsonb_agg(jsonb_build_object(
+             'slug', needed.slug, 'title', needed.title, 'author', needed.author)),
+           '[]'::jsonb)
+    into v_needed
+    from (
+      select ranked.slug, ranked.title, ranked.author
+        from (
+          select first_seen.*, row_number() over (order by first_seen.ord) as rank
+            from (
+              select distinct on (item.slug) item.ord, item.slug, item.title, item.author
+                from (
+                  select
+                    e.ord,
+                    left(btrim(coalesce(e.value ->> 'title', '')), 200) as title,
+                    nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
+                      as author,
+                    public.imported_work_slug(
+                      left(btrim(coalesce(e.value ->> 'title', '')), 200),
+                      nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
+                    ) as slug,
+                    encode(sha256(convert_to(
+                      public.imported_work_slug(
+                        left(btrim(coalesce(e.value ->> 'title', '')), 200),
+                        nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
+                      ) || '|' || lower(btrim(regexp_replace(
+                        coalesce(e.value ->> 'text', ''), '\s+', ' ', 'g'))),
+                      'UTF8')), 'hex') as hash
+                    from jsonb_array_elements(p_items) with ordinality as e(value, ord)
+                   -- Malformed items are skipped rather than raised on here. The item
+                   -- loop owns validation and says which item is wrong; a raise from
+                   -- inside a pre-pass would name none of them.
+                   where jsonb_typeof(e.value) = 'object'
+                     and jsonb_typeof(e.value -> 'title') = 'string'
+                     and btrim(coalesce(e.value ->> 'title', '')) <> ''
+                     and (not (e.value ? 'author')
+                          or jsonb_typeof(e.value -> 'author') = 'string')
+                ) item
+               -- `undone_at is null` matches the loop's own dedupe: a highlight the
+               -- reader has taken back is one a re-import may store again.
+               where not exists (
+                 select 1 from public.import_items ii
+                  where ii.user_id = uid
+                    and ii.undone_at is null
+                    and ii.content_hash = item.hash
+               )
+               order by item.slug, item.ord
+            ) first_seen
+        ) ranked
+       where ranked.rank <= greatest(max_items_per_user - v_held, 0)
+    ) needed;
+
+  -- The works first, and in slug order: every caller takes the same locks in the same
+  -- order, and two orders consistently applied cannot form a cycle.
   for v_pre in
-    select distinct on (slug) slug, title, author
-      from (
-        select
-          public.imported_work_slug(
-            left(btrim(coalesce(e.value ->> 'title', '')), 200),
-            nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '')
-          ) as slug,
-          left(btrim(coalesce(e.value ->> 'title', '')), 200) as title,
-          nullif(left(btrim(coalesce(e.value ->> 'author', '')), 200), '') as author
-          from jsonb_array_elements(p_items) e
-         where jsonb_typeof(e.value) = 'object'
-           and jsonb_typeof(e.value -> 'title') = 'string'
-           and btrim(coalesce(e.value ->> 'title', '')) <> ''
-           and (not (e.value ? 'author') or jsonb_typeof(e.value -> 'author') = 'string')
-      ) needed
-     order by slug
+    select x.value ->> 'slug' as slug, x.value ->> 'title' as title
+      from jsonb_array_elements(v_needed) x
+     order by 1
   loop
     if exists (
       select 1 from public.works w
@@ -562,44 +632,78 @@ begin
 
     insert into public.works (kind, title, slug, rights_status)
     values ('book', v_pre.title, v_pre.slug, 'user_owned')
-    on conflict (slug) do nothing
-    returning id into v_work_id;
+    on conflict (slug) do nothing;
+  end loop;
+
+  /*
+   * AND THE CONTRIBUTORS AFTER THEM, IN THEIR OWN ORDER.
+   *
+   * `attribute_work` used to run inside the works loop, which meant `contributors` row
+   * locks were taken in WORKS-slug order -- a different total order from the one they
+   * need. Two readers importing different books by the same two new authors in crossing
+   * order still deadlocked: measured 8 of 12, with `40P01 ... while inserting index
+   * tuple in relation "contributors"`. Ordering works alone fixed four scenarios and
+   * left this one, which is the more likely of the two, because two readers sharing an
+   * AUTHOR is commoner than two readers sharing a book.
+   *
+   * So: every works lock in slug order, then every contributor lock in author order.
+   */
+  for v_pre in
+    select distinct on (author) author, slug
+      from (
+        select x.value ->> 'author' as author, x.value ->> 'slug' as slug
+          from jsonb_array_elements(v_needed) x
+      ) a
+     where a.author is not null
+     order by author, slug
+  loop
+    select w.id into v_work_id
+      from public.works w
+     where w.slug operator(extensions.=) v_pre.slug::extensions.citext;
+    if v_work_id is null then
+      continue;
+    end if;
 
     /*
      * Attribution, but never onto a contributor this reader cannot already see.
      *
      * `attribute_work` deduplicates on the slug and REUSES an existing row, which made
      * `contributors` a confirmation oracle: reader B imports a one-line paste naming an
-     * obscure author, lands on the row reader A's private import created, and then reads
-     * back A's exact capitalisation and punctuation through `contributors_read_readable`
-     * -- learning both that somebody on this instance imported that author and what
-     * string they typed. That is precisely the signal the policy added last round was
-     * written to stop, arriving through the write path instead of the read path.
+     * obscure author, lands on the row reader A's private import created, and then
+     * reads back A's exact capitalisation and punctuation -- learning both that
+     * somebody on this instance imported that author and what string they typed.
      *
-     * So: attribute when the contributor is new (creating it discloses nothing), or when
-     * it is already visible to this caller -- seeded contributors sit on public works, so
-     * the catalogue case is untouched and a reader's Marcus Aurelius still reaches the
-     * same row. Otherwise skip it. The import succeeds and the book carries no author
-     * link, which costs this reader a byline and costs the other reader nothing.
+     * THE FIRST ATTEMPT AT THIS GUARD DID NOTHING, and the reason is worth keeping.
+     * It asked `exists (select 1 from public.works w where w.id = wc.work_id)` and
+     * relied on RLS to make that false for a work the caller cannot see. But this
+     * function is `security definer` owned by `postgres`, which owns `works`, and no
+     * table here sets `force row level security` -- so the subquery ran with RLS
+     * BYPASSED and was true for every work. The guard degenerated to "the contributor
+     * is attached to something", which is true of every row `attribute_work` has ever
+     * made. Verified: the oracle was still open with the guard in place.
+     *
+     * Readability is therefore asked explicitly, with the predicate the rest of the
+     * schema uses. `auth.uid()` is still the caller inside a definer, so
+     * `summary_is_readable` answers for the right reader.
      */
-    if v_work_id is not null and v_pre.author is not null then
-      select c.id into v_contributor_id
-        from public.contributors c
-       where c.slug operator(extensions.=)
-             btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
-                 ::extensions.citext;
+    select c.id into v_contributor_id
+      from public.contributors c
+     where c.slug operator(extensions.=)
+           btrim(regexp_replace(lower(v_pre.author), '[^a-z0-9]+', '-', 'g'), '-')
+               ::extensions.citext;
 
-      if v_contributor_id is null
-         or exists (
-           select 1 from public.work_contributors wc
-            where wc.contributor_id = v_contributor_id
-              and exists (select 1 from public.works w where w.id = wc.work_id)
-         )
-      then
-        perform public.attribute_work(v_work_id, v_pre.author);
-      end if;
-      v_contributor_id := null;
+    if v_contributor_id is null
+       or exists (
+         select 1
+           from public.work_contributors wc
+           join public.summaries s on s.work_id = wc.work_id
+          where wc.contributor_id = v_contributor_id
+            and public.summary_is_readable(s.*)
+       )
+    then
+      perform public.attribute_work(v_work_id, v_pre.author);
     end if;
+    v_contributor_id := null;
   end loop;
   v_work_id := null;
 
@@ -883,6 +987,8 @@ declare
   v_lost_grades     int := 0;
   v_lost_notes      int := 0;
   v_lost_highlights int := 0;
+  v_lost_explanations int := 0;
+  v_lost_convictions  int := 0;
 begin
   if uid is null then
     raise exception 'undo_import requires an authenticated user';
@@ -922,8 +1028,11 @@ begin
     count(*) filter (where t.kind = 'question'),
     count(*) filter (where t.kind = 'grade'),
     count(*) filter (where t.kind = 'note'),
-    count(*) filter (where t.kind = 'highlight')
-    into v_lost_questions, v_lost_grades, v_lost_notes, v_lost_highlights
+    count(*) filter (where t.kind = 'highlight'),
+    count(*) filter (where t.kind = 'explanation'),
+    count(*) filter (where t.kind = 'conviction')
+    into v_lost_questions, v_lost_grades, v_lost_notes, v_lost_highlights,
+         v_lost_explanations, v_lost_convictions
     from (
       select 'question' as kind from public.user_questions q
        where q.user_id = uid and q.pull_id in (
@@ -942,6 +1051,20 @@ begin
       union all
       select 'highlight' from public.highlights h
        where h.user_id = uid and h.pull_id in (
+         select ii.pull_id from public.import_items ii
+          where ii.import_id = p_import_id and ii.user_id = uid and ii.pull_id is not null)
+      -- The header names SIX tables of the reader's own writing that cascade from
+      -- `pulls`, and the first version of this counted four. A confirmation screen
+      -- built on it would have been wrong by two whole categories, in the change
+      -- whose stated purpose was that the promise is now the truth.
+      union all
+      select 'explanation' from public.explanations x
+       where x.user_id = uid and x.pull_id in (
+         select ii.pull_id from public.import_items ii
+          where ii.import_id = p_import_id and ii.user_id = uid and ii.pull_id is not null)
+      union all
+      select 'conviction' from public.convictions c
+       where c.user_id = uid and c.pull_id in (
          select ii.pull_id from public.import_items ii
           where ii.import_id = p_import_id and ii.user_id = uid and ii.pull_id is not null)
     ) t;
@@ -986,8 +1109,16 @@ begin
 
   update public.imports set undone_at = now() where id = p_import_id;
 
-  -- `alsoRemoved` is what a screen needs to warn with. See the header: a re-import
-  -- brings the text back and reattaches none of this.
+  -- `alsoRemoved` is the count of everything that went with the highlights, AFTER it
+  -- has gone. See the header: a re-import brings the text back and reattaches none of
+  -- it, so this is what a Library screen reports rather than what it warns with --
+  -- warning beforehand needs a dry run, which this function does not have and which
+  -- belongs with the screen that would call it.
+  --
+  -- It counts every category that cascades, which the first version did not: it named
+  -- four of the six tables of the reader's own writing the header lists, so a
+  -- confirmation built on it would have been wrong by two whole categories, in the
+  -- change whose stated purpose is that the promise is now the truth.
   return jsonb_build_object(
     'importId', p_import_id,
     'removed', v_removed,
@@ -996,7 +1127,9 @@ begin
       'questions', v_lost_questions,
       'grades', v_lost_grades,
       'notes', v_lost_notes,
-      'highlights', v_lost_highlights
+      'highlights', v_lost_highlights,
+      'explanations', v_lost_explanations,
+      'convictions', v_lost_convictions
     )
   );
 end;
@@ -1348,9 +1481,31 @@ begin
   end if;
 
   delete from public.generation_jobs g where g.requester_id = uid;
+  /*
+   * Bounded to the reader's OWN material, which is what this migration widened it for.
+   *
+   * The first version was `not (status = 'published' and visibility = 'public')`,
+   * matching the update policy's predicate -- and that reached further than intended.
+   * `pipeline.ts` writes a canonical summary as `draft` + `public` with the requester
+   * as author, and it becomes `published` only at the final step; so a canonical
+   * generation sits in exactly that state for the whole run, and permanently for any
+   * job that dies before publishing. One requester closing their account destroyed
+   * shared catalogue content the project paid for and stranded its work. Verified:
+   * the summary and its pulls were both gone.
+   *
+   * An imported summary is always on a `user_owned` work, so that is the leg to add
+   * rather than a broader status test. The reachable draft+public flip this migration
+   * had to close is closed for imports, and canonical drafts are left alone.
+   */
   delete from public.summaries s
    where s.author_id = uid
-     and not (s.status = 'published' and s.visibility = 'public');
+     and (
+       s.visibility <> 'public'
+       or exists (
+         select 1 from public.works w
+          where w.id = s.work_id and w.rights_status = 'user_owned'
+       )
+     );
 
   delete from auth.users u where u.id = uid;
 end;

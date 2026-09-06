@@ -28,12 +28,14 @@
 --   * a grade cannot be filed against a question belonging to another pull, or to
 --     another reader
 --   * attributing an imported author does not publish the private work through
---     `work_contributors`, which was world-readable
+--     `work_contributors`, which was world-readable -- nor through the WRITE path,
+--     where reusing a stranger's contributor row would confirm the same fact
 --   * Undo removes the pulls and everything that cascades from them, keeps the
 --     dedupe record so a re-import stays a no-op, and is idempotent -- and that
 --     re-import creates no empty summary, so the book does not come back
 --   * the 20,000 ceiling is charged per row stored, so a duplicate-only upload at
---     the ceiling is still accepted
+--     the ceiling is still accepted -- and a reader with no room left creates no
+--     shared `works` or `contributors` rows, which no per-reader ceiling covers
 --
 -- Everything that can run as a real reader under RLS does. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -112,6 +114,8 @@ declare
   row_one   jsonb;
 
   n         int;
+  n_before  int;
+  work_oracle uuid;
   refused   boolean;
   ks        public.knowledge_states;
   bulk_user uuid := extensions.gen_random_uuid();
@@ -759,6 +763,94 @@ begin
     raise exception 'reader B unwound reader A''s import';
   end if;
 
+  -- ------------------------- 9d. and the WRITE path is not an oracle either
+  --
+  -- 9b closes the read path: a contributor with no readable work behind them is not
+  -- listable. The write path leaked the same fact and no policy can see it.
+  -- `attribute_work` deduplicates on the author slug and REUSES the row, so a reader
+  -- importing a one-line paste naming an obscure author landed on the row a STRANGER's
+  -- private import had created -- and `work_contributors` then attached it to a work of
+  -- their own, which they can read. That hands them both the fact that somebody on this
+  -- instance imported that author and the exact string that reader typed.
+  --
+  -- The author below appears in no seed, and that is the point. 9b asks this of
+  -- `marcus-aurelius`, who is seeded on the PUBLIC `meditations` work, so a mutant
+  -- restoring `contributors_read_all using (true)` survived the whole file: the
+  -- assertion was true of the catalogue whatever the policy said.
+  perform pg_temp.become(reader_a);
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Private Notebook', 'author', 'Ottoline Quennevil',
+      'text', 'Only one reader on this instance has ever typed that author.')
+  ));
+  if (res ->> 'added')::int <> 1 then
+    raise exception 'the oracle fixture stored % highlights, expected 1', res ->> 'added';
+  end if;
+
+  -- The reader who created the row is still attributed. A guard that cost every reader
+  -- their byline would pass every assertion below and be a worse feature.
+  select count(*) into n
+    from public.work_contributors wc
+    join public.contributors c on c.id = wc.contributor_id
+   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+  if n <> 1 then
+    raise exception 'a reader''s own imported author was attributed % times, expected 1', n;
+  end if;
+
+  -- And a SECOND book by that author, imported by the same reader, still attributes:
+  -- the row is now readable to them through the first one.
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'A Second Private Notebook', 'author', 'Ottoline Quennevil',
+      'text', 'The same reader, the same author, a second book.')
+  ));
+  select count(*) into n
+    from public.work_contributors wc
+    join public.contributors c on c.id = wc.contributor_id
+   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+  if n <> 2 then
+    raise exception 'a reader lost the byline on their own second book (% links)', n;
+  end if;
+
+  -- A DIFFERENT reader, a different book, the same author.
+  perform pg_temp.become(reader_b);
+  res := public.commit_import('paste', null, jsonb_build_array(
+    jsonb_build_object('title', 'Another Notebook Entirely', 'author', 'Ottoline Quennevil',
+      'text', 'A different book, the same author, a different reader.')
+  ));
+  if (res ->> 'added')::int <> 1 then
+    raise exception 'the second reader''s import stored % highlights, expected 1',
+      res ->> 'added';
+  end if;
+
+  select w.id into work_oracle
+    from public.works w where w.slug like 'imported-another-notebook-entirely%';
+  if work_oracle is null then
+    raise exception 'the second reader''s import did not create its work';
+  end if;
+
+  select count(*) into n
+    from public.work_contributors wc where wc.work_id = work_oracle;
+  if n <> 0 then
+    raise exception 'a reader reached a stranger''s contributor row through their own work';
+  end if;
+
+  select count(*) into n
+    from public.contributors c
+   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+  if n <> 0 then
+    raise exception 'a reader can list a contributor only a stranger''s private import made';
+  end if;
+
+  -- Skipping is skipping: no second row was minted under the other reader either, which
+  -- would have leaked the same fact by way of a duplicate.
+  perform pg_temp.as_owner();
+  select count(*) into n
+    from public.contributors c
+   where c.slug operator(extensions.=) 'ottoline-quennevil'::extensions.citext;
+  if n <> 1 then
+    raise exception 'the instance holds % contributor rows for one author, expected 1', n;
+  end if;
+  perform pg_temp.become(reader_a);
+
   -- ------------------------------------------ 11. the ceiling counts what is stored
   --
   -- Charged per row inserted rather than against the incoming chunk. Counted the old
@@ -807,6 +899,47 @@ begin
       res ->> 'added', res ->> 'ceilingReached';
   end if;
 
+  -- AND NOTHING SHARED IS CREATED FOR IT EITHER.
+  --
+  -- The find-or-create was hoisted out of the item loop to fix a deadlock, which put it
+  -- above the dedupe and the ceiling as well: a reader with no room left still ran the
+  -- pre-pass and committed its `works` and `contributors`. Measured on the unfixed
+  -- function -- this reader called it twice with 500 fresh titles and added 1,000 orphan
+  -- works and about as many contributors, `added: 0` both times, repeatable forever.
+  -- Those are SHARED CATALOGUE tables: no per-reader ceiling covers them, no sweep
+  -- collects them, and this feature is itself what makes `works` grow, so it fed the
+  -- sequential scan the slug index exists to prevent.
+  --
+  -- Counted from outside RLS because the point is that the rows do not EXIST, which no
+  -- reader can observe -- 20260905101000 hides an orphan work from everyone, so a
+  -- reader's own query cannot tell an unbounded leak from a clean refusal.
+  perform pg_temp.as_owner();
+  select count(*) into n_before from public.works;
+  perform pg_temp.become(bulk_user);
+
+  res := public.commit_import('kindle', repeat('d', 64), (
+    select jsonb_agg(jsonb_build_object(
+             'title', 'Orphan Volume ' || g,
+             'author', 'Orphan Author ' || g,
+             'text', 'A fresh highlight, number ' || g || ', that will not be stored.'))
+      from generate_series(1, 50) g
+  ));
+  if (res ->> 'added')::int <> 0 or (res ->> 'ceilingReached')::boolean is not true then
+    raise exception 'a reader at the ceiling stored % of 50 fresh highlights', res ->> 'added';
+  end if;
+
+  perform pg_temp.as_owner();
+  select count(*) into n from public.works;
+  if n <> n_before then
+    raise exception 'a reader at the ceiling created % shared works', n - n_before;
+  end if;
+  select count(*) into n
+    from public.contributors c where c.slug::text like 'orphan-author-%';
+  if n <> 0 then
+    raise exception 'a reader at the ceiling created % shared contributors', n;
+  end if;
+  perform pg_temp.become(bulk_user);
+
   -- And a chunk that CROSSES the ceiling keeps what fits. The reader is at 20,000 with
   -- one item undone below, so exactly one slot is free.
   perform pg_temp.as_owner();
@@ -830,7 +963,9 @@ begin
     'invisible to everyone but their reader (contributors included), never in the feed, '
     'refused to guests, scheduled and saved so Review and the Library see them, graded '
     'only against their own questions, bounded by what is stored rather than what is '
-    'offered, and reversible exactly once with no empty book left behind';
+    'offered -- in shared catalogue rows as well as their own -- never an oracle for '
+    'what a stranger has imported, and reversible exactly once with no empty book '
+    'left behind';
 end $$;
 
 rollback;

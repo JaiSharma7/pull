@@ -137,8 +137,12 @@ highlights came back "exactly as they were", and that was not true. A re-import 
 idea afresh, so anything attached to the old one — a question you wrote about it, your
 grades and review history for it, notes and highlights you made on it — is gone for good
 when you undo, and re-uploading does not bring it back. We would rather you knew that
-before you tapped it than discovered it afterwards, so an Undo will tell you what it is
-about to take. If what you want is the highlights out of the way but the work kept, an
+before you tapped it than discovered it afterwards. What we can tell you today is exact
+but late: an Undo hands back the count of everything that went with the highlights —
+questions, grades, notes, highlights, explanations, stances — so the screen can say what
+it took. Saying it _first_ needs a rehearsal the database does not do yet, and it will
+land with the screen rather than before it, because a warning nothing can show is not a
+protection. If what you want is the highlights out of the way but the work kept, an
 Undo is the wrong tool and we do not currently have the right one.
 
 All of it goes with your account. If you want an import gone rather than undone, deleting
