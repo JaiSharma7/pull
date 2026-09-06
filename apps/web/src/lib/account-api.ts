@@ -262,14 +262,28 @@ export async function buildAccountExport(
         if (got.length < PAGE) break;
         const last = got[got.length - 1] as Record<string, unknown>;
         const cursor = last[key];
-        // A page of rows whose key cannot be read is a walk that cannot continue, and
-        // looping on the same cursor would repeat that page forever. Recorded as an
-        // incomplete table, which is what this function does with everything it
-        // cannot finish.
-        if (typeof cursor !== 'string') {
+        /*
+         * A NUMBER IS A CURSOR TOO, and requiring a string here lost whole tables.
+         *
+         * `history_events.id` and `feed_impressions.id` are `bigint`, which PostgREST
+         * serialises as a JSON number. The first draft of this guard threw on the
+         * second page of either — and because `data[table] = rows` sits after the loop
+         * inside the same `try`, the table did not merely truncate: it vanished from
+         * the export entirely, including the hundred rows already fetched, with
+         * `incomplete` blaming an unreadable id. Every reader with more than 100
+         * history events, which is every real reader, lost their whole reading history
+         * from the file that exists to say their words are theirs. Law 3 calls
+         * unlimited history free forever; the old offset walk exported all of it.
+         *
+         * `.gt()` compares server-side against the column's own type, so the string
+         * form of a bigint orders correctly. What the guard is actually for is a key
+         * that is absent or of a type no cursor can be made from — looping on that
+         * would repeat one page forever — and it still catches exactly that.
+         */
+        if (typeof cursor !== 'string' && typeof cursor !== 'number') {
           throw new Error(`the ${key} of the last row on a page was not readable`);
         }
-        after = cursor;
+        after = String(cursor);
       }
       data[table] = rows;
     } catch (e) {
