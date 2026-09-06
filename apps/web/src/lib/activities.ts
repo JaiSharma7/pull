@@ -26,15 +26,28 @@ import type { RecallGrade } from './grades.js';
 /**
  * The kinds a question can be.
  *
- * NOT a mirror of a database constraint, and this comment claimed it was.
- * `quiz_questions.kind` is plain `text not null default 'recall'` with no check
- * on it — the only constraint the column carries is the unique `(pull_id, kind)`
- * index from 20260901040000. 3a is the migration that adds the check; until it
- * lands, this list is the *intended* set and nothing in Postgres enforces it, so
- * a row can arrive with a kind that is not here. Every consumer must treat an
- * unknown kind as ungraded rather than assume the set is closed. (The sibling
- * claim about `confidence` mirroring `recall_events` is true: 20260905100000
- * does check it.)
+ * A mirror of a database constraint again, and this time it is one.
+ * `quiz_questions.kind` was plain `text not null default 'recall'` with nothing but
+ * the unique `(pull_id, kind)` index on it, and this comment said so — the set was
+ * *intended* and unenforced, so a row could arrive carrying a kind that is not here.
+ * `20260905120000_a_question_that_can_be_wrong.sql` closes that: the check on
+ * `quiz_questions.kind` is these six values, in this order, and
+ * `supabase/tests/questions.sql` refuses an unknown one.
+ *
+ * NOTHING MAKES THE TWO MOVE TOGETHER. `packages/db/src/enum-parity.ts` asserts
+ * against Postgres ENUM types, and this is a text column with a check, which the
+ * generated types render as plain `string`. So a seventh kind added to the migration
+ * and not to this list typechecks and ships. Treating an unknown kind as ungraded is
+ * therefore still the rule for every consumer — not because Postgres permits one, but
+ * because this file and Postgres can still drift.
+ *
+ * `user_questions.kind` is deliberately the FIRST FOUR only. `ordering` needs its
+ * steps in a canonical sequence and `scenario` needs a situation composed around the
+ * idea; neither is something the "Remember this" box — a prompt and an answer — can
+ * express, so a reader who wants either writes a `short_answer`.
+ *
+ * (The sibling claim about `confidence` mirroring `recall_events` is true:
+ * 20260905100000 does check it.)
  *
  * Only three are graded here. `recall`, `short_answer` and `scenario` stay
  * self-graded: there is no deterministic way to mark a paragraph the reader
