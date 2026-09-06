@@ -60,13 +60,32 @@ export function MetacognitiveDashboard({
           What you are holding on to
         </h1>
         {/*
-          `measure` because this is the only block of body copy on the screen, and the
-          container around it is 42rem — a tile grid width, not a reading column. At
-          42rem this paragraph sets about 82 characters a line instead of the ~66
-          `--measure` is for, and it stays 42rem when a reader turns on large text,
-          which is the one setting a reading column exists to follow.
+          NO `measure` CLASS, and the version of this comment that argued for one was
+          wrong in both of its facts.
+
+          It said the container is 42rem. `App.tsx` renders this screen inside
+          `<div className="shell__column">`, which `components.css` pins at
+          `max-width: var(--measure)` — so the rendered width is
+          `min(--measure, 42rem)` and the paragraph was already at the measure. Adding
+          `.measure` set the same value a second time: no viewport and no appearance
+          setting changed by a pixel. The `42rem` on the container below is likewise
+          dead for the same reason, and removing it belongs to a change that owns the
+          layout rather than the copy.
+
+          It also said `--measure` follows large text. `tokens.css` defines it twice —
+          `:root` at 34rem and `:root[data-focus='on']` from `--step-0`.
+          `[data-text='large']` sets the type steps and not the measure, so with focus
+          off, which is the default, the column is a flat 34rem while `--step--1` rises
+          from 0.78rem to 1rem. The line gets SHORTER in characters, not longer.
+
+          One thing this paragraph really is wearing wrongly, and it predates this
+          change: `.meta` is mono, uppercase and `--step--1`, so four sentences of
+          provenance render as small capitals. It is the disclosure that makes every
+          number above it honest, and it is the least readable text on the screen. That
+          is a type-ramp decision for a change that owns the screen's design, and it is
+          recorded here rather than fixed in a copy PR.
         */}
-        <p className="meta measure">{PROGRESS_COPY.provenance}</p>
+        <p className="meta">{PROGRESS_COPY.provenance}</p>
       </header>
 
       {error ? (

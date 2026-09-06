@@ -30,9 +30,22 @@ export { SAMPLE_GRAPH };
  * A graph is a derived view one RPC rebuilds; until that RPC answers, the honest thing to
  * show is that we do not know, which `graphAbsence` reports as `unreachable`.
  */
+/**
+ * How many ideas a personal graph is built from, and the number the screen SAYS.
+ *
+ * Exported because `PROGRESS_COPY.provenance` tells the reader "your 150 most recently
+ * seen ideas", and a literal in the copy beside a literal in the default is two numbers
+ * that agree until somebody tunes one. That is the class of claim this whole PR exists
+ * to stop, so the sentence interpolates this and a test pins the two together.
+ *
+ * The RPC takes the most recent by `last_seen_at desc`, so past this many read ideas a
+ * new one evicts the least recently seen.
+ */
+export const GRAPH_LIMIT = 150;
+
 export async function fetchKnowledgeGraph(
   userId: string | null,
-  limit = 150,
+  limit = GRAPH_LIMIT,
 ): Promise<KnowledgeGraphData> {
   // Still asked, and still meaning what it meant: whether there is a reader who could
   // have a personal graph at all. It no longer gates a cache, because there is none.

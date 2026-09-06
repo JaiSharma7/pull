@@ -1,3 +1,5 @@
+import { GRAPH_LIMIT } from './graph-api.js';
+
 /**
  * What the progress screen promises about its own numbers.
  *
@@ -78,6 +80,6 @@ export const PROGRESS_COPY = {
     'did. Connections and tensions are relationships the library draws between ideas, not ' +
     'judgements about you — but only the ones running between ideas you have read are ' +
     'counted, so that number is about your reading too. Every figure here is drawn from ' +
-    'your 150 most recently seen ideas rather than everything you have ever read. ' +
+    `your ${GRAPH_LIMIT} most recently seen ideas rather than everything you have ever read. ` +
     'Nothing here asks you today.',
 } as const;

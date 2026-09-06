@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GRAPH_LIMIT } from '../lib/graph-api.js';
 import { computeGraphStats, SAMPLE_GRAPH } from '../lib/graph.js';
 import { PROGRESS_COPY } from '../lib/progress.js';
 
@@ -58,7 +59,12 @@ describe('what the dashboard promises about its own numbers', () => {
      * does the other thing.
      */
     expect(PROGRESS_COPY.provenance).not.toContain('moves as you read');
-    expect(PROGRESS_COPY.provenance).toContain('150 most recently seen');
+    // The NUMBER, from the default it describes rather than from a literal beside it.
+    // Asserting the string '150' would let somebody tune `fetchKnowledgeGraph` and
+    // leave the sentence claiming the old cap, with this test green — which is the
+    // exact shape of claim this file exists to catch.
+    expect(PROGRESS_COPY.provenance).toContain(`your ${GRAPH_LIMIT} most recently seen`);
+    expect(GRAPH_LIMIT).toBe(150);
   });
 
   it('does not tell a reader the curve moves only when they recall something', () => {
