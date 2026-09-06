@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   commitImport,
   hashFile,
   type ImportResult,
   type ImportSourceKind,
+  mergeAttempts,
   PartialImportError,
+  type UndoResult,
   undoImport,
 } from '../lib/import-api.js';
 import {
@@ -21,6 +23,30 @@ import {
  * by navigation the Delta sync this screen does not perform; removing the destination
  * left the callback and its button doing nothing at all, so both are gone.
  */
+/**
+ * What an Undo took beyond the highlights, in a sentence, or null if it took nothing.
+ *
+ * `undo_import` deletes the batch's Pulls and everything that cascades off them. The
+ * counts come back in `alsoRemoved` precisely so a reader can be told; naming them is
+ * the difference between an Undo and a surprise.
+ */
+function collateral(u: UndoResult): string | null {
+  const parts = [
+    [u.alsoRemoved.questions, 'question', 'questions'],
+    [u.alsoRemoved.grades, 'recorded review', 'recorded reviews'],
+    [u.alsoRemoved.notes, 'note', 'notes'],
+    [u.alsoRemoved.highlights, 'highlight of your own', 'highlights of your own'],
+    [u.alsoRemoved.explanations, 'explanation', 'explanations'],
+    [u.alsoRemoved.convictions, 'recorded stance', 'recorded stances'],
+  ] as const;
+  const said = parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+  // `at(-1)` rather than an index, because `noUncheckedIndexedAccess` widens every
+  // index to `| undefined` and the emptiness is already decided one line up.
+  const last = said.at(-1);
+  if (last === undefined) return null;
+  return said.length === 1 ? last : `${said.slice(0, -1).join(', ')} and ${last}`;
+}
+
 export function Ingestion() {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState<IngestionSummary | null>(null);
@@ -35,9 +61,27 @@ export function Ingestion() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [skipped, setSkipped] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [undone, setUndone] = useState(false);
+  const [undone, setUndone] = useState<UndoResult | null>(null);
+  /*
+   * WHICH INPUT A PENDING REQUEST BELONGS TO.
+   *
+   * The file input and the textarea stay editable while `commitImport` is in flight, and
+   * `handleParse` clears the result -- but the in-flight request still resolves, and it
+   * used to write its answer under whatever is on screen by then. Two ways that hurt:
+   * the counts describe a file the reader is no longer looking at, and "Keep the rest"
+   * would then send the OLD batch id with the NEW file's items. `commit_import`'s
+   * explicit-id branch checks that the batch is yours and open, not that it is the same
+   * source or the same file -- so two unrelated uploads would become one batch, and one
+   * Undo would take back both.
+   *
+   * A counter rather than an AbortController because the work is a chain of RPCs that
+   * have already stored rows; the request cannot be recalled, only its answer ignored.
+   */
+  const generation = useRef(0);
 
   const handleParse = (text: string, kind: ImportSourceKind = 'paste') => {
+    // Anything still in flight now belongs to a file the reader has moved on from.
+    generation.current += 1;
     setRawText(text);
     setSourceKind(kind);
     // A new file is a new import: the previous result described a different upload, and
@@ -45,7 +89,7 @@ export function Ingestion() {
     // has had to have removed before.
     setResult(null);
     setError(null);
-    setUndone(false);
+    setUndone(null);
     setSkipped(0);
 
     if (!text.trim()) {
@@ -74,6 +118,7 @@ export function Ingestion() {
 
   const handleKeep = async () => {
     if (!summary || keeping) return;
+    const mine = generation.current;
     setKeeping(true);
     setError(null);
     try {
@@ -89,7 +134,11 @@ export function Ingestion() {
       // The batch an earlier attempt opened, so a retry joins it rather than starting a
       // second one. Null on a first attempt, which is when `commit_import` opens one.
       const resume = result?.importId ?? null;
-      setResult(await commitImport(sourceKind, await hashFile(rawText), items, resume));
+      const attempt = await commitImport(sourceKind, await hashFile(rawText), items, resume);
+      if (generation.current !== mine) return;
+      // MERGED, not replaced. A retry resends the whole file, so its counters describe
+      // the attempt and not the batch -- see `mergeAttempts`.
+      setResult((prev) => mergeAttempts(prev, attempt));
     } catch (e) {
       /*
        * A chunk that fails after an earlier one landed is not a failed import -- it is a
@@ -101,17 +150,17 @@ export function Ingestion() {
        * So both are shown: the counts and the Undo button from `partial`, and the
        * failure above them.
        */
+      if (generation.current !== mine) return;
+      // Merged for the same reason a success is, which also covers the case that used to
+      // need its own guard: a retry failing on its first chunk carries the batch id and
+      // zeroes, and `mergeAttempts` adds zero rather than overwriting the earlier counts.
       if (e instanceof PartialImportError) {
-        // Only when THIS attempt landed something. A retry that fails on its first chunk
-        // carries the batch id and zeroes, and writing those over the earlier counts
-        // would tell a reader whose library holds 1,500 highlights that it holds none.
-        // The id is the same either way, so Undo stays reachable regardless.
         const { partial } = e;
-        setResult((prev) => (prev && partial.added === 0 ? prev : partial));
+        setResult((prev) => mergeAttempts(prev, partial));
       }
       setError(e instanceof Error ? e.message : 'The import did not go through.');
     } finally {
-      setKeeping(false);
+      if (generation.current === mine) setKeeping(false);
     }
   };
 
@@ -120,8 +169,7 @@ export function Ingestion() {
     setKeeping(true);
     setError(null);
     try {
-      await undoImport(result.importId);
-      setUndone(true);
+      setUndone(await undoImport(result.importId));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The undo did not go through.');
     } finally {
@@ -278,9 +326,25 @@ export function Ingestion() {
           )}
 
           {undone && (
-            <p className="meta" role="status" style={{ marginBottom: 'var(--space-3)' }}>
-              Removed. Uploading the same file again brings them back.
-            </p>
+            <div role="status" style={{ marginBottom: 'var(--space-3)' }}>
+              <p className="meta">
+                {undone.alreadyUndone
+                  ? 'Already removed.'
+                  : `Removed ${undone.removed} ${undone.removed === 1 ? 'highlight' : 'highlights'}.`}{' '}
+                Uploading the same file again brings them back.
+              </p>
+              {/* WHAT ELSE WENT WITH THEM. `undo_import` cascades through anything a
+                  reader built ON these Pulls, and it returns `alsoRemoved` for exactly
+                  this -- so discarding it and saying only "Removed" let one click
+                  destroy work the reader had done in another tab without ever naming
+                  it. Re-importing restores the highlights; it does not restore these. */}
+              {collateral(undone) && (
+                <p className="meta">
+                  That also removed {collateral(undone)}. Re-importing brings the highlights back,
+                  but not those.
+                </p>
+              )}
+            </div>
           )}
 
           {error && (

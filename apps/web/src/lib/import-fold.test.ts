@@ -3,6 +3,7 @@ import {
   type CommitChunk,
   foldChunks,
   type ImportResult,
+  mergeAttempts,
   PartialImportError,
 } from './import-fold.js';
 import type { ImportItem } from './ingestion.js';
@@ -83,18 +84,24 @@ describe('foldChunks', () => {
     expect(total.works.map((w) => w.title)).toEqual(['Meditations', 'Walden']);
   });
 
-  it('stops sending once a ceiling is reported', async () => {
-    // Past the item ceiling nothing later can be stored either, so the remaining chunks
-    // would each be a round trip that adds nothing. `commit_import` reports the stop
-    // rather than raising precisely so the client can act on it.
+  it('keeps sending after a ceiling, because the flag does not say which one', async () => {
+    // `commit_import` raises `ceilingReached` at BOTH its ceilings and behaves
+    // oppositely at each: the item ceiling `exit`s the chunk, the book ceiling declines
+    // one title and carries on, "because a later item may sit on a book this reader
+    // already owns, which costs no book quota". One boolean cannot tell those apart.
+    //
+    // This test asserted the opposite until Codex pointed at the migration. Stopping
+    // meant a reader at the 2,000-book ceiling importing a library silently lost every
+    // chunk after the first new title -- including highlights on books they already had
+    // room for. The third chunk below is exactly that case.
     const { call, calls } = recorder([
       { importId: 'i', added: 500 },
       { added: 12, ceilingReached: true },
       { added: 500 },
     ]);
     const total = await foldChunks(many(1500), call);
-    expect(calls).toHaveLength(2);
-    expect(total).toMatchObject({ added: 512, ceilingReached: true });
+    expect(calls).toHaveLength(3);
+    expect(total).toMatchObject({ added: 1012, ceilingReached: true });
   });
 
   it('makes no call at all when nothing survived shaping', async () => {
@@ -174,6 +181,65 @@ describe('foldChunks', () => {
     // disappears on the retry that was meant to restore it.
     const { call } = recorder([{ added: 3 }]);
     const total = await foldChunks(many(2), call, 'batch-1');
+    expect(total.importId).toBe('batch-1');
+  });
+});
+
+describe('mergeAttempts', () => {
+  const base = (over: Partial<ImportResult> = {}): ImportResult => ({
+    importId: 'i',
+    added: 0,
+    duplicates: 0,
+    ceilingReached: false,
+    works: [],
+    ...over,
+  });
+
+  it('is the retry itself when there was no earlier attempt', () => {
+    const only = base({ added: 3 });
+    expect(mergeAttempts(null, only)).toBe(only);
+  });
+
+  it('sums what landed, so a retry does not report only its own share', () => {
+    // The case Codex named: 500 of 600 land, the retry resends all 600 and reports
+    // `added: 100, duplicates: 500`. Read off the retry alone, the screen tells a reader
+    // who kept 600 highlights that they kept 100.
+    const total = mergeAttempts(base({ added: 500 }), base({ added: 100, duplicates: 500 }));
+    expect(total.added).toBe(600);
+  });
+
+  it("does not count the first attempt's own rows as duplicates", () => {
+    // `duplicates` means "already in your library BEFORE this import". On the retry,
+    // 500 of them are the first attempt's own rows, and 20 were genuinely already held.
+    const total = mergeAttempts(
+      base({ added: 500, duplicates: 20 }),
+      base({ added: 100, duplicates: 520 }),
+    );
+    expect(total.duplicates).toBe(20);
+  });
+
+  it('clamps rather than going negative when the counts do not line up', () => {
+    // The two numbers come from different calls; an Undo in between can lower the
+    // retry's duplicate count. Nothing guarantees the subtraction stays positive.
+    const total = mergeAttempts(base({ added: 500 }), base({ added: 0, duplicates: 1 }));
+    expect(total.duplicates).toBe(0);
+  });
+
+  it('keeps a book the first attempt created and the retry did not touch', () => {
+    const a = { workId: 'w1', title: 'Meditations', slug: 'meditations' };
+    const b = { workId: 'w2', title: 'Walden', slug: 'walden' };
+    const total = mergeAttempts(base({ works: [b] }), base({ works: [a] }));
+    expect(total.works.map((w) => w.title)).toEqual(['Meditations', 'Walden']);
+  });
+
+  it('takes the latest ceiling answer rather than latching it', () => {
+    // Room can be freed by an Undo between attempts, and the retry is the newer fact.
+    const total = mergeAttempts(base({ ceilingReached: true }), base({ ceilingReached: false }));
+    expect(total.ceilingReached).toBe(false);
+  });
+
+  it('keeps the earlier batch id when a retry answers without one', () => {
+    const total = mergeAttempts(base({ importId: 'batch-1' }), base({ importId: null }));
     expect(total.importId).toBe('batch-1');
   });
 });

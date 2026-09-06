@@ -24,7 +24,13 @@ export interface ImportResult {
   importId: string | null;
   added: number;
   duplicates: number;
-  /** True when a ceiling stopped the import short. The screen says which count is short. */
+  /**
+   * True when `commit_import` hit one of its two ceilings -- 20,000 live items or 2,000
+   * books. It does NOT say which, and the two behave oppositely on the server: the item
+   * ceiling ends the chunk, the book ceiling declines one title and carries on. So it is
+   * a message for the reader ("that is as many as this account can hold"), not a signal
+   * to stop sending. See the loop in `foldChunks`.
+   */
   ceilingReached: boolean;
   works: ImportedWork[];
 }
@@ -124,6 +130,8 @@ export class PartialImportError extends Error {
  * time window, and six chunks could land in six batches -- so one Undo would take back
  * a sixth of a library.
  *
+ * EVERY chunk is sent, including after a ceiling is reported. The loop says why.
+ *
  * A chunk that fails after an earlier one landed raises `PartialImportError` carrying
  * what did land, so the batch id survives and Undo stays reachable. A first chunk that
  * fails raises whatever it raised.
@@ -137,6 +145,46 @@ export class PartialImportError extends Error {
  *
  * Exported for its tests. `commitImport` is this with the RPC wired in.
  */
+/**
+ * Fold a retry's result into the one already on screen.
+ *
+ * A resumed attempt resends the WHOLE file, so its counters describe that attempt and
+ * not the batch. Writing them over the earlier ones tells a reader who kept 600
+ * highlights that they kept 100: `commit_import` counts the 500 the first attempt
+ * stored as duplicates of themselves, and reports only the books the last 100 touched.
+ *
+ * So:
+ *   `added`      sums. Both attempts stored rows and the batch holds all of them.
+ *   `duplicates` means "highlights in your file you already had BEFORE this import".
+ *                The retry re-walked the WHOLE file, so its count already includes every
+ *                pre-existing duplicate the first attempt found -- it is the first
+ *                attempt's own stored rows that have to come out of it, and the earlier
+ *                count must NOT be added back on top or those pre-existing ones are
+ *                counted twice. (Written the other way first; the test below caught it.)
+ *                Clamped at zero rather than trusted: the two numbers come from
+ *                different calls and nothing guarantees their relationship if a row was
+ *                removed in between.
+ *   `works`      is a union by id -- a book the first attempt created is in the batch
+ *                whether or not the retry touched it again.
+ *   the ceiling  is the latest answer, not a latch: room can be freed by an Undo
+ *                between attempts.
+ *
+ * Pure, and exported for its tests.
+ */
+export function mergeAttempts(prev: ImportResult | null, next: ImportResult): ImportResult {
+  if (!prev) return next;
+  const byWorkId = new Map<string, ImportedWork>();
+  for (const w of prev.works) byWorkId.set(w.workId, w);
+  for (const w of next.works) byWorkId.set(w.workId, w);
+  return {
+    importId: next.importId ?? prev.importId,
+    added: prev.added + next.added,
+    duplicates: Math.max(0, next.duplicates - prev.added),
+    ceilingReached: next.ceilingReached,
+    works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
+  };
+}
+
 export async function foldChunks(
   items: readonly ImportItem[],
   call: CommitChunk,
@@ -171,10 +219,31 @@ export async function foldChunks(
     total.ceilingReached = total.ceilingReached || Boolean(result.ceilingReached);
     for (const w of result.works ?? []) byWorkId.set(w.workId, w);
 
-    // Past a ceiling nothing later can be stored either, so the remaining chunks would
-    // each be a round trip that adds nothing. `commit_import` reports the stop rather
-    // than raising precisely so the client can act on it.
-    if (total.ceilingReached) break;
+    /*
+     * NO EARLY STOP, and the reason is that `ceilingReached` is two different facts
+     * under one name.
+     *
+     * `commit_import` raises the flag at both of its ceilings and behaves oppositely at
+     * each, which its own comments spell out. At the ITEM ceiling it `exit`s -- "past
+     * the item ceiling nothing later in the chunk can be stored either"
+     * (20260905110000:889). At the BOOK ceiling it `continue`s -- "declining one book
+     * does not end the chunk: a later item may sit on a book this reader already owns,
+     * which costs no book quota and which they have item room for" (:948).
+     *
+     * One boolean cannot tell those apart, so any stopping rule built on it throws away
+     * highlights in the second case. An earlier revision of this loop broke here and
+     * justified it with the item ceiling's sentence alone; for a reader at the 2,000-book
+     * ceiling importing a library, that silently discarded every chunk after the first
+     * new title -- including highlights on books they already owned, which cost no quota
+     * and which they had room for.
+     *
+     * The cost of not stopping is bounded and in the right direction: past the item
+     * ceiling the remaining chunks are round trips that store nothing, which is slow.
+     * Losing a reader's highlights is not recoverable by waiting.
+     *
+     * The real fix is server-side -- report WHICH ceiling -- and it needs a migration,
+     * so it belongs with the next schema change that touches imports rather than here.
+     */
   }
 
   total.works = [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title));

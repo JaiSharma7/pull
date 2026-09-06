@@ -27,7 +27,7 @@ export type {
   ImportSourceKind,
   UndoResult,
 } from './import-fold.js';
-export { foldChunks, hashFile, PartialImportError } from './import-fold.js';
+export { foldChunks, hashFile, mergeAttempts, PartialImportError } from './import-fold.js';
 
 /**
  * Keep a batch of highlights.
