@@ -864,20 +864,51 @@ describe('a spelling is not a misconception, and a confusion is', () => {
     }
   });
 
-  it('refuses a typo inside a variant word only where the fold changes its length', () => {
+  it('refuses a typo at or before the folded part of a variant word, whatever the fold', () => {
     /*
-     * The named price of removing the raw retry, stated precisely rather than
-     * generally. It costs a typo only where the fold is an INDEL: `colour` -> `color`
-     * drops a letter, so a reader who also dropped one has written a substitution
-     * against the folded answer, and a substitution is never a slip. No shape separates
-     * that from `fires`/`fibres` — only a dictionary would.
+     * The named price of removing the raw retry — and the two cases this used to assert
+     * were the two that made it look self-limiting.
      *
-     * Where the fold is a transposition the length is unchanged, so a dropped letter is
-     * still a dropped letter: `theatr` for `theatre` survives. Most of the `-re` family
-     * is that shape, which is why the cost is smaller than "a typo inside a variant".
+     * Its name and its comment said the cost bites "only where the fold is an INDEL", so
+     * that the `-re` family, being transpositions, was safe. Both examples happen to
+     * agree with that story and the story is false: an exhaustive sweep found 2,581 of
+     * the 7,969 regressions on SAME-LENGTH folds. `theatr` survives because the dropped
+     * letter falls past `-tre`, not because `theatre` -> `theater` keeps its length —
+     * drop one before or inside the folded region and it is refused, with the fold's
+     * shape unchanged. So the extra cases below are the ones that pin the real rule; the
+     * two originals stay because they are still true, just no longer the whole story.
      */
     expect(gradeCloze('colur', 'colour').correct).toBe(false);
     expect(gradeCloze('theatr', 'theatre').correct).toBe(true);
+
+    // Same word, same fold shape, slip moved earlier: refused.
+    for (const [typed, answer] of [
+      ['teatre', 'theatre'],
+      ['thatre', 'theatre'],
+      ['cntre', 'centre'],
+      ['clibre', 'calibre'],
+    ] as const) {
+      expect(gradeCloze(typed, answer).correct, `${typed} for ${answer}`).toBe(false);
+    }
+
+    // And a substitution fold regresses too, which "only where the fold is an indel"
+    // denied outright.
+    expect(gradeCloze('sceptc', 'sceptic').correct).toBe(false);
+  });
+
+  it('discloses that a doubled keystroke in a variant word is called a misconception', () => {
+    /*
+     * Not an endorsement — a disclosure. `centtre` is one doubled letter from a word the
+     * variant list exists to protect, and answered `sure` it grades `forgot` AND sets
+     * `confidentlyWrong`, routing a British reader into the misconception loop for a
+     * typing slip. Withholding the flag on the SHAPE of a typo was tried and `gradeCloze`
+     * records why it was worse: eleven real confusions have that shape and all went
+     * silent. So this is asserted rather than fixed, and a future change that quietly
+     * alters it has to come through here.
+     */
+    const graded = gradeCloze('centtre', 'centre', 'sure');
+    expect(graded.correct).toBe(false);
+    expect(graded.confidentlyWrong).toBe(true);
   });
 
   it('still flags a confident answer that is simply a different idea', () => {

@@ -391,13 +391,18 @@ function foldVariants(text: string): string {
 }
 
 /**
-/**
- * `foldSpelling` exists for `answerSimilarity`, which reports how close two answers came
- * and should not be told they are the same word.
+ * THE FOLD IS NOT OPTIONAL, and the parameter that said it was is gone.
+ *
+ * It was `normaliseAnswer(text, foldSpelling = true)`, justified by a sentence saying
+ * the flag "exists for `answerSimilarity`, which reports how close two answers came and
+ * should not be told they are the same word". No caller ever passed `false` --
+ * `answerSimilarity`, `wordsAreClose` and `gradeCloze` all take the default -- and the
+ * sentence is false of the code it describes: `answerSimilarity('centre', 'center')` is
+ * 1, measured. A dead exported flag argued for with a false fact is the failure
+ * `CLAUDE.md` records commit 4507a7f for.
  */
-export function normaliseAnswer(text: string, foldSpelling = true): string {
-  return foldIf(
-    foldSpelling,
+export function normaliseAnswer(text: string): string {
+  return foldVariants(
     text
       .normalize('NFKD')
       .replace(/\p{M}/gu, '')
@@ -467,9 +472,6 @@ export function normaliseAnswer(text: string, foldSpelling = true): string {
  * That is verbatim the outcome the paragraphs above call unacceptable, produced by the
  * change that exists to remove it, and reachable by capitalising one letter.
  */
-function foldIf(fold: boolean, lowered: string): string {
-  return fold ? foldVariants(lowered) : lowered;
-}
 
 /**
  * The punctuation in an answer that is part of the answer.
@@ -723,11 +725,34 @@ function slipShape(a: string, b: string): boolean {
  * No shape separates the two cases — `colur` and `fires` are both one indel from the
  * unfolded answer, and only a dictionary knows that one of them is a word.
  *
- * And the cost is narrower than "a typo inside a variant": it bites only where the fold
- * is itself an INDEL, because that is what turns a dropped letter into a substitution.
- * `colour` -> `color` drops one, so `colur` is refused; `theatre` -> `theater` is a
- * transposition and keeps the length, so `theatr` is still a slip. Most of the `-re`
- * family is the second shape.
+ * AND THE COST IS ~7,969 SLIP/ANSWER PAIRS, which is the number this paragraph used to
+ * avoid. It was written as "52 pairs the raw retry newly accepts" against a cost given
+ * only as a class, and a trade stated one-sided is not a trade a reader can check.
+ * Measured the same way as the 52: every single deletion, doubling and adjacent
+ * transposition of all 8,099 words in a 370,105-word list that the fold rewrites,
+ * graded before and after. 7,969 accepted before and refused now; 0 the other way.
+ *
+ * The direction is still right, and that is why this stands. A refused slip grades
+ * `forgot` and the idea comes round again; an accepted wrong word grades up to `easy`
+ * and takes the idea out of review for a fortnight, which this module calls the one
+ * outcome a grader must never produce. 52 of the second is worse than 7,969 of the
+ * first.
+ *
+ * The earlier account of WHICH slips was also wrong, and worth correcting because it
+ * made the cost sound self-limiting. It said the cost bites "only where the fold is
+ * itself an INDEL" -- `colour` -> `color` drops a letter, `theatre` -> `theater` keeps
+ * its length -- so the `-re` family was safe. It is not: 2,581 of the regressions are on
+ * same-length folds, and `sceptic` -> `skeptic` and `grey` -> `gray` are substitutions
+ * that regress too. `theatr` survives by where the slip falls, not by the shape of the
+ * fold -- past the folded region it is still an indel, and `teatre`, `thatre` and
+ * `cntre` are all refused. What decides is whether the typo lands at or before the
+ * folded region, not what the fold does.
+ *
+ * One consequence is worth naming because it is the one a reader feels: a doubled
+ * keystroke in `centre`, answered `sure`, now grades `forgot` AND sets
+ * `confidentlyWrong`. Withholding that flag on the SHAPE of a typo was tried and is
+ * recorded in `gradeCloze` as worse -- it silenced eleven real confusions with exactly
+ * that shape -- so it is disclosed here rather than patched.
  */
 function wordsAreClose(typed: string, answer: string): boolean {
   const a = normaliseAnswer(typed).split(' ').filter(Boolean);
