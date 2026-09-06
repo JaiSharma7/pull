@@ -42,15 +42,30 @@
  *
  * AND THE REPLACEMENT OVERSHOT IN THE OTHER DIRECTION. It said "Connections and
  * tensions describe the library itself, not you", and that is false of the number on
- * the screen. `MetacognitiveDashboard` counts `undirectedEdges(measured.edges)`, and
- * `measured` is `personalGraph(...)` — `filterConnectedEdges` has already dropped
- * every edge without BOTH ends among the ideas this reader has read. So the count
- * moves only as the reader reads, and a reader told it was nothing to do with them
- * would have no way to explain it going up.
+ * the screen. `MetacognitiveDashboard` counts `undirectedEdges(measured.edges)` off
+ * `personalGraph(...)`, and the RPC behind it — `user_edges` in
+ * `20260903000000_user_knowledge_graph_rpc.sql` — keeps only edges with BOTH ends in
+ * `active_pull_ids`, the reader's own `knowledge_states`. So the count moves as the
+ * reader reads, and a reader told it was nothing to do with them would have no way to
+ * explain it going up.
+ *
+ * That mechanism is named precisely because the first version of this paragraph named
+ * `filterConnectedEdges`, which has no production callers at all: `personalGraph` is
+ * `graph?.source === 'personal' ? graph : null` and filters nothing. The claim was
+ * true and the reason given for it was dead code, in the one file whose whole subject
+ * is the product asserting things the code does not do.
  *
  * Both halves are true and the sentence has to hold them together: the relationships
  * belong to the library, the selection belongs to the reader. Which is also the one
  * thing worth saying here, because it is why the number is not a score.
+ *
+ * AND THE SELECTION HAS A CEILING. `fetchKnowledgeGraph` asks for 150 and the RPC
+ * takes the 150 most recent by `last_seen_at desc`, so past 150 read ideas a new one
+ * EVICTS the least recently seen and the count can fall while the reader reads. A
+ * clause promising it only rises would be the same defect as the one above, arriving
+ * from the other direction — so the sentence says recent rather than promising a
+ * direction. The same cap silently bounds the solid, refreshing and fading counts;
+ * this is the commit that started making a claim about it, so this is where it is said.
  */
 export const PROGRESS_COPY = {
   /** Under the title. Says where each kind of number comes from. */
@@ -62,5 +77,7 @@ export const PROGRESS_COPY = {
     'refreshing and fading counts are readings off that curve rather than records of what you ' +
     'did. Connections and tensions are relationships the library draws between ideas, not ' +
     'judgements about you — but only the ones running between ideas you have read are ' +
-    'counted, so that number moves as you read. Nothing here asks you today.',
+    'counted, so that number is about your reading too. Every figure here is drawn from ' +
+    'your 150 most recently seen ideas rather than everything you have ever read. ' +
+    'Nothing here asks you today.',
 } as const;

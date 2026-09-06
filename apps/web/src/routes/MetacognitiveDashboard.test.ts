@@ -35,10 +35,10 @@ describe('what the dashboard promises about its own numbers', () => {
     /*
      * "Connections and tensions describe the library itself, not you" was the fix for
      * the previous claim and overshot it. The tile counts
-     * `undirectedEdges(measured.edges)`, and `measured` is the PERSONAL graph:
-     * `filterConnectedEdges` keeps only edges with both ends among the ideas this
-     * reader has read, so the number moves as they read and as nothing else. A reader
-     * told it had nothing to do with them could not explain it going up.
+     * `undirectedEdges(measured.edges)` off the PERSONAL graph, and the RPC's
+     * `user_edges` CTE keeps only edges with both ends in the reader's own
+     * `knowledge_states`, so the number is about their reading. A reader told it had
+     * nothing to do with them could not explain it moving at all.
      *
      * Both halves have to survive — the relationships are the library's, the selection
      * is the reader's — because together they are why the count is not a score.
@@ -46,6 +46,19 @@ describe('what the dashboard promises about its own numbers', () => {
     expect(PROGRESS_COPY.provenance).not.toContain('describe the library itself, not you');
     expect(PROGRESS_COPY.provenance).toContain('relationships the library draws between ideas');
     expect(PROGRESS_COPY.provenance).toContain('ideas you have read are counted');
+  });
+
+  it('promises no direction it cannot keep', () => {
+    /*
+     * `fetchKnowledgeGraph` asks for 150 and the RPC takes the 150 most recent by
+     * `last_seen_at desc`, so past 150 read ideas a new one evicts the least recently
+     * seen: the connections count can FALL while the reader reads. "That number moves
+     * as you read" was the only directional promise on the screen and it is the kind
+     * this file exists to stop — a sentence that explains a number until the number
+     * does the other thing.
+     */
+    expect(PROGRESS_COPY.provenance).not.toContain('moves as you read');
+    expect(PROGRESS_COPY.provenance).toContain('150 most recently seen');
   });
 
   it('does not tell a reader the curve moves only when they recall something', () => {
