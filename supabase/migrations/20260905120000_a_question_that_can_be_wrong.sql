@@ -107,8 +107,10 @@ alter table public.quiz_questions
     check (kind <> 'mcq' or jsonb_array_length(distractors) >= 2),
   -- And a cloze needs its blank. Without one `gradeCloze` has nothing to render and the
   -- reader is shown a prompt with no gap to fill.
+  -- `!~ '^\s*$'` for the reason given on the reader's answer bound below: one-argument
+  -- `btrim` strips spaces only, so a cloze of a single newline passed as "has its blank".
   add constraint quiz_questions_cloze_has_text
-    check (kind <> 'cloze' or (cloze is not null and length(btrim(cloze)) > 0));
+    check (kind <> 'cloze' or (cloze is not null and cloze !~ '^\s*$'));
 
 -- ------------------------------------------------------------- user_questions
 --
@@ -162,17 +164,42 @@ alter table public.user_questions
    * optional at all. `quiz_questions.answer` has been `not null` since
    * 20260829124507 for the same reason.
    */
+  /*
+   * `!~ '^\s*$'` rather than `length(btrim(answer)) > 0`. One-argument `btrim` strips
+   * SPACES ONLY, so an answer of a single tab or newline satisfied "non-blank" and the
+   * reader got an option-less question rather than a graded one. `\s` covers space,
+   * tab, newline, carriage return, form feed and vertical tab.
+   */
   add constraint user_questions_graded_kinds_need_an_answer
     check (
       kind in ('recall', 'short_answer')
-      or (answer is not null and length(btrim(answer)) > 0)
+      or (answer is not null and answer !~ '^\s*$')
     ),
   add constraint user_questions_explanation_length
     check (explanation is null or length(explanation) <= 2000),
   add constraint user_questions_cloze_length
-    check (cloze is null or length(cloze) <= 1000),
-  add constraint user_questions_cloze_has_text
-    check (kind <> 'cloze' or (cloze is not null and length(btrim(cloze)) > 0));
+    check (cloze is null or length(cloze) <= 1000);
+
+/*
+ * AND NO "a reader's cloze needs its blank" RULE, for exactly the reason this file gives
+ * for declining the matching MCQ rule -- which it gave, and then contradicted two
+ * constraints later.
+ *
+ * `remember_pull` writes `(user_id, pull_id, kind, prompt, answer, client_mutation_id)`
+ * and has no way to write `cloze`. `user_questions_kind_known` has permitted `cloze`
+ * since 20260905110000, so `remember_pull(pull, 'The obstacle is the ___', 'way',
+ * 'cloze', id)` succeeded before this migration; with a `cloze is not null` rule it
+ * raises 23514 and PostgREST answers 400, for every input, permanently -- a granted RPC
+ * made unusable for one of the four kinds it accepts.
+ *
+ * The `quiz_questions` twin stays, because there the rule is satisfiable: the pipeline
+ * writes `cloze` in the same insert as `kind`.
+ *
+ * So this waits for 2d/2e, alongside a writer that can satisfy it. Review caught it and
+ * the suite did not, because the suite asserts the refusal through a direct
+ * `insert into public.user_questions`, which can supply the column, and never through
+ * `remember_pull`, which cannot. There is now a test for the call that was broken.
+ */
 
 -- --------------------------------------------------------------- get_due_reviews
 --
@@ -260,12 +287,22 @@ begin
     -- ones sorting ahead of them got 0 back from `get_due_reviews(20)`. Review would
     -- have told them nothing was due while thirty ideas waited.
     --
-    -- The questions lateral stays OUTSIDE the limit, which is the half the first
-    -- version got right. As an outer-query expression it is evaluated for every due
-    -- idea the reader has and only then sorted and cut to a hundred. Measured, one
-    -- canonical question per pull, `get_due_reviews(100)`: 588.9 ms against 47.6 ms
-    -- at 5,000 due ideas, and 1,898.8 ms against 127.3 ms at 20,000 -- exactly the
-    -- import ceiling `commit_import` allows, so it is a backlog a reader can have.
+    -- The questions lateral joins THIS SET rather than the outer query, so it is
+    -- evaluated at most `lim` times.
+    --
+    -- AS AN OUTER LIMIT IT WOULD NOT BE, and that is the shape this replaces: the
+    -- lateral becomes an inner-row expression, evaluated for every due idea the reader
+    -- has and only then sorted and cut to a hundred, each evaluation two index lookups
+    -- and two aggregations building a document that is then thrown away. Measured, one
+    -- canonical question per pull, `get_due_reviews(100)`: 588.9 ms that way against
+    -- 47.6 ms this way at 5,000 due ideas, and 1,898.8 ms against 127.3 ms at 20,000 --
+    -- exactly the import ceiling `commit_import` allows, so it is a backlog a reader can
+    -- have.
+    --
+    -- Written as a counterfactual because an earlier revision of this paragraph put it
+    -- in the present tense, which read as a description of the code below it and so
+    -- credited the speedup to the arrangement it condemns.
+    --
     -- The same shape as the sequential scan 20260905110000 had to fix in
     -- `commit_import`: correct, and linear in the one direction the product grows.
     from (

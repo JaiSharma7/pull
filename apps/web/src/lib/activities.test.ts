@@ -75,6 +75,27 @@ describe('seededShuffle', () => {
 });
 
 describe('mcqOptions', () => {
+  it('drops a distractor that is not a string, rather than throwing on it', () => {
+    // `distractors` is `string[]` here and jsonb in Postgres, and it arrives through
+    // `supabase.rpc('get_due_reviews')` under an unchecked cast. Neither table
+    // constrains the MEMBERS -- `quiz_questions_distractors_shape` and
+    // `user_questions_options_size` both check the container only -- and
+    // `user_questions.options` is written by the reader directly through PostgREST, so
+    // `[1, null]` is a storable 201 that `get_due_reviews` then surfaces here as
+    // `distractors`. Calling `.trim()` on that threw inside the render.
+    //
+    // Filtered rather than coerced: `String(1)` would offer "1" as a choice.
+    const junk = [1, null, { text: 'wrong' }, 'a real one'] as unknown as string[];
+    const options = mcqOptions(mcq({ distractors: junk }), 'seed');
+    expect(options).toEqual(expect.arrayContaining(['The material of the work', 'a real one']));
+    expect(options).toHaveLength(2);
+  });
+
+  it('survives a distractors field that is not an array at all', () => {
+    const options = mcqOptions(mcq({ distractors: { nope: true } as unknown as string[] }), 'seed');
+    expect(options).toEqual(['The material of the work']);
+  });
+
   it('always includes the answer', () => {
     const options = mcqOptions(mcq(), 'seed');
     expect(options).toContain('The material of the work');

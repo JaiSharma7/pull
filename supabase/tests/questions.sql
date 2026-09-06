@@ -27,7 +27,10 @@
 --     serves both tables and a reader's MCQ does not arrive with no choices
 --   * an MCQ with fewer than two distractors is refused, because it cannot be got
 --     wrong, and a cloze with no blank is refused, because there is nothing to fill
---   * `distractors` and `rationale` refuse a non-array and refuse an enormous one
+--   * `distractors` and `rationale` refuse a non-array, refuse an enormous one AND
+--     refuse a ninth entry -- the count bound and the byte bound are separate, and one
+--     huge element trips only the second
+--   * `prompt` and `answer` are length-bounded on `quiz_questions` too
 --   * `explanation` and `cloze` are length-bounded on BOTH tables
 --   * a reader's own question is theirs alone: B's `get_due_reviews` on the same
 --     pull never carries A's question -- and see the note below on WHERE that comes
@@ -37,7 +40,13 @@
 --   * a reader's own questions are bounded per BRANCH, so however many they write
 --     about one idea, `get_due_reviews` builds three
 --   * a question graded by comparison -- `mcq`, `cloze` -- cannot be stored with no
---     answer to compare against
+--     answer to compare against, and BOTH self-graded kinds keep the optional one
+--   * "blank" means any whitespace, not just spaces: a tab is not an answer
+--   * `remember_pull` can still write every kind `user_questions_kind_known` permits --
+--     a constraint the only writer cannot satisfy is an unusable RPC, not a guard
+--   * every lookup of a card under test goes through `pg_temp.questions_for`, which
+--     raises rather than returning NULL: an assertion against NULL takes no branch and
+--     passes without testing anything
 --
 -- WHAT THIS FILE CANNOT PROVE, said plainly because a mutation run measured it. The
 -- `id` at the end of the questions ordering makes it TOTAL, and removing it does not
@@ -85,6 +94,37 @@ begin
   perform set_config('request.jwt.claims', '', true);
 end $fn$;
 
+/*
+ * The `questions` array for one pull, or an exception naming the section that asked.
+ *
+ * A plain `select ... into qs where pullId = ...` leaves `qs` NULL when the card is not
+ * in the page, and every `if qs -> 0 ->> 'source' <> 'user'` against NULL is NULL --
+ * so no branch is taken and the section passes having asserted nothing. That is
+ * reachable here rather than theoretical: by section 6 reader A holds 161 due cards,
+ * `knowledge_states` defaults to `stability 1.0` and `last_seen_at now()`, `now()` is
+ * the transaction timestamp, and `retrievability` is therefore exactly 1.0 for every
+ * one of them -- so `order by retrievability asc limit 50` picks fifty under an
+ * unspecified tiebreak. Today's plan happens to keep the first-inserted row; that is a
+ * property of the plan, not of the fixture.
+ */
+create or replace function pg_temp.questions_for(p_pull uuid, p_where text)
+returns jsonb
+language plpgsql as $fn$
+declare
+  found jsonb;
+begin
+  select e -> 'questions' into found
+    from jsonb_array_elements(public.get_due_reviews(100)) e
+   where e ->> 'pullId' = p_pull::text;
+
+  if found is null then
+    raise exception
+      '%: the pull under test is not in the page, so every assertion below it would '
+      'have compared against NULL and passed without testing anything.', p_where;
+  end if;
+  return found;
+end $fn$;
+
 do $$
 declare
   reader_a uuid := extensions.gen_random_uuid();
@@ -130,12 +170,23 @@ begin
 
   select q.id into seeded_q from public.quiz_questions q where q.pull_id = pull_1 limit 1;
 
+  -- A pull with NO canonical question, because section 1 writes one of each kind onto
+  -- it. Without the guard this drew any published pull at random -- `pulls.id` is a
+  -- fresh `gen_random_uuid()` on every `db:reset`, so `order by p.id` is a fresh draw --
+  -- and 14 of the 34 seeded published pulls already carry a `recall` question. Landing
+  -- on one made the six-kinds insert hit `quiz_questions_pull_kind_key` with an
+  -- UNCAUGHT `unique_violation` and abort the whole file, about one reset in six.
   select p.id into pull_2
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
    where s.status = 'published' and s.visibility = 'public' and p.id <> pull_1
+     and not exists (select 1 from public.quiz_questions q where q.pull_id = p.id)
    order by p.id
    limit 1;
+
+  if pull_2 is null then
+    raise exception 'the seed has no published pull without a canonical question';
+  end if;
 
   ---------------------------------------------------------------------------
   -- 1. THE NEW COLUMNS EXIST AND ARE BOUNDED.
@@ -196,11 +247,22 @@ begin
   exception when check_violation then null;
   end;
 
-  -- A cloze with nothing to fill in.
+  -- A cloze with nothing to fill in -- spaces, and then the whitespace that is not a
+  -- space. One-argument `btrim` strips spaces only, so a cloze of a single newline
+  -- passed as "has its blank" and rendered a prompt with no gap in it. A mutation run
+  -- found this half missing: reverting the check to `length(btrim(cloze)) > 0` passed
+  -- the whole file on the spaces case alone.
   begin
     insert into public.quiz_questions (pull_id, prompt, answer, kind, cloze)
     values (pull_2, 'p', 'a', 'cloze', '   ');
     raise exception 'a cloze with a blank cloze was accepted';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind, cloze)
+    values (pull_2, 'p', 'a', 'cloze', E'\t\n');
+    raise exception 'a cloze of whitespace was accepted';
   exception when check_violation then null;
   end;
 
@@ -228,6 +290,52 @@ begin
     insert into public.quiz_questions (pull_id, prompt, answer, kind, rationale)
     values (pull_2, 'p', 'a', 'recall', '{"not":"an array"}'::jsonb);
     raise exception 'a non-array rationale was accepted';
+  exception when check_violation then null;
+  end;
+
+  -- And an enormous rationale, which the header claimed was covered and was not. Both
+  -- size halves of `quiz_questions_rationale_shape` could be deleted and the file passed.
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind, rationale)
+    values (pull_2, 'p', 'a', 'recall',
+            jsonb_build_array(jsonb_build_object('distractor', 'd', 'why', repeat('x', 25000))));
+    raise exception 'a 25 kB rationale was accepted';
+  exception when check_violation then null;
+  end;
+
+  -- THE COUNT BOUNDS, separately from the byte bounds. The "enormous" cases above are
+  -- one huge element each, so they trip `length(...::text) <= 20000` and never
+  -- `jsonb_array_length(...) <= 8`. Nine small entries is the other half.
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind, distractors)
+    values (pull_2, 'p', 'a', 'recall',
+            (select jsonb_agg('d' || g) from generate_series(1, 9) g));
+    raise exception 'nine distractors were accepted';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind, rationale)
+    values (pull_2, 'p', 'a', 'recall',
+            (select jsonb_agg(jsonb_build_object('distractor', 'd' || g, 'why', 'w'))
+               from generate_series(1, 9) g));
+    raise exception 'nine rationale entries were accepted';
+  exception when check_violation then null;
+  end;
+
+  -- The prompt and answer bounds, which were the one pair of new bounds with nothing
+  -- behind them at all.
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind)
+    values (pull_2, repeat('p', 2001), 'a', 'recall');
+    raise exception 'a 2001-character prompt was accepted';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.quiz_questions (pull_id, prompt, answer, kind)
+    values (pull_2, 'p', repeat('a', 2001), 'recall');
+    raise exception 'a 2001-character answer was accepted';
   exception when check_violation then null;
   end;
 
@@ -385,9 +493,7 @@ begin
    where id = own_1;
   perform pg_temp.become(reader_a);
 
-  select e -> 'questions' into qs
-    from jsonb_array_elements(public.get_due_reviews(50)) e
-   where e ->> 'pullId' = pull_1::text;
+  qs := pg_temp.questions_for(pull_1, 'section 5 (a retired question falls out)');
 
   if qs -> 0 ->> 'id' <> own_2::text then
     raise exception 'the newer of A''s own questions is not asked first';
@@ -395,9 +501,7 @@ begin
 
   update public.user_questions set retired_at = now() where id = own_2;
 
-  select e -> 'questions' into qs
-    from jsonb_array_elements(public.get_due_reviews(50)) e
-   where e ->> 'pullId' = pull_1::text;
+  qs := pg_temp.questions_for(pull_1, 'section 5 (the newer question is asked first)');
 
   if qs -> 0 ->> 'id' <> own_1::text then
     raise exception 'a retired question did not fall out (got %)', qs -> 0 ->> 'id';
@@ -474,9 +578,7 @@ begin
    where id = own_1;
   perform pg_temp.become(reader_a);
 
-  select e -> 'questions' into qs
-    from jsonb_array_elements(public.get_due_reviews(50)) e
-   where e ->> 'pullId' = pull_1::text;
+  qs := pg_temp.questions_for(pull_1, 'section 6b (a reader''s own options reach the array)');
 
   if qs -> 0 ->> 'source' <> 'user' then
     raise exception 'the reader''s own question is no longer first';
@@ -563,9 +665,7 @@ begin
     from generate_series(1, 200) g;
   perform pg_temp.become(reader_a);
 
-  select e -> 'questions' into qs
-    from jsonb_array_elements(public.get_due_reviews(50)) e
-   where e ->> 'pullId' = pull_1::text;
+  qs := pg_temp.questions_for(pull_1, 'section 6d (a reader cannot make their card expensive)');
 
   if jsonb_array_length(qs) <> 3 then
     raise exception
@@ -600,9 +700,7 @@ begin
   insert into public.knowledge_states (user_id, pull_id, acquired_via, next_due_at)
   values (reader_b, pull_1, 'saved', now() - interval '1 hour');
 
-  select e -> 'questions' into qs
-    from jsonb_array_elements(public.get_due_reviews(50)) e
-   where e ->> 'pullId' = pull_1::text;
+  qs := pg_temp.questions_for(pull_1, 'section 7 (a question is the reader''s own)');
 
   select count(*) into n
     from jsonb_array_elements(qs) e where e ->> 'source' = 'user';
@@ -631,17 +729,23 @@ begin
   exception when check_violation then null;
   end;
 
-  begin
-    insert into public.user_questions (user_id, pull_id, kind, prompt, cloze)
-    values (reader_b, pull_1, 'recall', 'p', repeat('x', 1001));
-    raise exception 'a 1001-character cloze was accepted on user_questions';
-  exception when check_violation then null;
-  end;
+  -- A READER'S CLOZE WITH NO BLANK IS ACCEPTED, and that is deliberate rather than a
+  -- hole. `remember_pull` cannot write the `cloze` column at all, so a rule requiring
+  -- one would make `kind = 'cloze'` unwritable through the only RPC that writes these
+  -- rows -- 23514 on every call, for a kind `user_questions_kind_known` permits. The
+  -- rule waits for 2d/2e, alongside a screen that can supply the sentence. Asserted so
+  -- that adding it back without a writer fails here rather than in production.
+  if (public.remember_pull(pull_1, 'The obstacle is the ___', 'way', 'cloze',
+                           extensions.gen_random_uuid()) ->> 'questionId') is null then
+    raise exception 'remember_pull could not write a cloze question';
+  end if;
 
+  -- The reader's cloze is still LENGTH-bounded, which is the half that is satisfiable
+  -- without a writer for the column.
   begin
-    insert into public.user_questions (user_id, pull_id, kind, prompt, cloze)
-    values (reader_b, pull_1, 'cloze', 'p', '  ');
-    raise exception 'a reader''s cloze with no blank was accepted';
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer, cloze)
+    values (reader_b, pull_1, 'cloze', 'p', 'material', repeat('x', 1001));
+    raise exception 'a 1001-character cloze was accepted on user_questions';
   exception when check_violation then null;
   end;
 
@@ -675,11 +779,39 @@ begin
   exception when check_violation then null;
   end;
 
-  -- Self-graded kinds keep the optional answer: a reader who writes a prompt and
-  -- reveals from memory has nothing to store.
+  -- AND "BLANK" MEANS ANY WHITESPACE. One-argument `btrim` strips spaces only, so a tab
+  -- or a newline satisfied `length(btrim(answer)) > 0` and stored a graded question with
+  -- nothing to grade against -- the reader then gets an option-less MCQ rather than the
+  -- exception the constraint was added to prevent, which is quieter and no better.
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
+    values (reader_b, pull_1, 'mcq', 'p', E'\t');
+    raise exception 'an mcq answered with a tab was accepted';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
+    values (reader_b, pull_1, 'mcq', 'p', E'\n  \r');
+    raise exception 'an mcq answered with newlines was accepted';
+  exception when check_violation then null;
+  end;
+
+  -- BOTH self-graded kinds keep the optional answer, and both are asserted. A reader
+  -- who writes a prompt and reveals from memory has nothing to store.
+  --
+  -- `short_answer` was claimed as covered and was not: narrowing the exemption to
+  -- `kind in ('recall')` passed the whole file, and a reader's self-graded short answer
+  -- would have started being refused by `remember_pull` in production. That is exactly
+  -- the asymmetry this PR's own merge commit argues about the kind check -- assert what
+  -- is ACCEPTED, not only what is refused -- and it was not applied here.
   if (public.remember_pull(pull_1, 'A recall with no answer?', null, 'recall',
                            extensions.gen_random_uuid()) ->> 'questionId') is null then
     raise exception 'a recall question with no answer was refused';
+  end if;
+  if (public.remember_pull(pull_1, 'A short answer with none stored?', null, 'short_answer',
+                           extensions.gen_random_uuid()) ->> 'questionId') is null then
+    raise exception 'a short_answer question with no answer was refused';
   end if;
 
   perform pg_temp.as_owner();

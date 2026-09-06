@@ -199,7 +199,19 @@ export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: st
   if (!answer) return [];
   const seen = new Set<string>([answer]);
   const options = [answer];
-  for (const raw of q.distractors) {
+  // NARROWED LIKE `whyWrong` NARROWS ITS OWN, and for the same reason one paragraph
+  // further down: `distractors` is `string[]` in TypeScript and jsonb in Postgres, and
+  // it arrives through `supabase.rpc('get_due_reviews')` under an unchecked cast. The
+  // constraints on both sides check the CONTAINER -- an array, at most eight, under a
+  // size cap -- and say nothing about the members. `user_questions.options` is the one
+  // a reader writes directly through PostgREST, so `[1, null]` is a storable 201, and
+  // `get_due_reviews` surfaces it here as `distractors`. Calling `.trim()` on that
+  // threw inside the render, on a screen a reader cannot get past.
+  //
+  // Filtered rather than coerced: a number where an option should be is a malformed
+  // question, and `String(1)` would render "1" as a choice.
+  for (const raw of Array.isArray(q.distractors) ? q.distractors : []) {
+    if (typeof raw !== 'string') continue;
     const d = raw.trim();
     if (!d || seen.has(d)) continue;
     seen.add(d);
@@ -942,9 +954,9 @@ export function whyWrong(
   const expected = q.answer.trim();
   if (!expected || chosen === expected) return null;
 
-  // `rationale` is not a column on `quiz_questions` yet -- 3a adds it -- so a row
-  // read today arrives without it, and when it does arrive it is jsonb: the
-  // elements are as unvalidated as the array. Guarding only the array left
+  // `rationale` is jsonb, and `quiz_questions_rationale_shape` checks that it is an
+  // array of at most eight entries and nothing about what is IN it -- so the
+  // elements are as unvalidated as the array was. Guarding only the array left
   // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing inside the
   // feedback path after a reader answered, taking the render with them. Both
   // halves are narrowed here so nothing below can.
