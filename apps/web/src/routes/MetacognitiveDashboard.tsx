@@ -59,7 +59,14 @@ export function MetacognitiveDashboard({
         <h1 style={{ marginTop: 'var(--space-1)', marginBottom: 'var(--space-2)' }}>
           What you are holding on to
         </h1>
-        <p className="meta">{PROGRESS_COPY.provenance}</p>
+        {/*
+          `measure` because this is the only block of body copy on the screen, and the
+          container around it is 42rem — a tile grid width, not a reading column. At
+          42rem this paragraph sets about 82 characters a line instead of the ~66
+          `--measure` is for, and it stays 42rem when a reader turns on large text,
+          which is the one setting a reading column exists to follow.
+        */}
+        <p className="meta measure">{PROGRESS_COPY.provenance}</p>
       </header>
 
       {error ? (
