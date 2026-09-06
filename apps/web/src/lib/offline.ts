@@ -295,7 +295,6 @@ let dbPromise: Promise<Handle> | null = null;
 /** The open connection behind `dbPromise`, so it can be closed synchronously when asked to yield. */
 let live: IDBPDatabase<WapDB> | null = null;
 
-
 function db(): Promise<Handle> {
   dbPromise ??= open().catch((error: unknown) => {
     // A FAILED OPEN IS NOT REMEMBERED. Every reason one fails is transient — an
