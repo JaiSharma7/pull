@@ -1361,30 +1361,39 @@ export type Database = {
       quiz_questions: {
         Row: {
           answer: string
+          cloze: string | null
           created_at: string
           distractors: Json
+          explanation: string | null
           id: string
           kind: string
           prompt: string
           pull_id: string
+          rationale: Json
         }
         Insert: {
           answer: string
+          cloze?: string | null
           created_at?: string
           distractors?: Json
+          explanation?: string | null
           id?: string
           kind?: string
           prompt: string
           pull_id: string
+          rationale?: Json
         }
         Update: {
           answer?: string
+          cloze?: string | null
           created_at?: string
           distractors?: Json
+          explanation?: string | null
           id?: string
           kind?: string
           prompt?: string
           pull_id?: string
+          rationale?: Json
         }
         Relationships: [
           {
@@ -1866,7 +1875,9 @@ export type Database = {
         Row: {
           answer: string | null
           client_mutation_id: string | null
+          cloze: string | null
           created_at: string
+          explanation: string | null
           id: string
           kind: string
           options: Json
@@ -1879,7 +1890,9 @@ export type Database = {
         Insert: {
           answer?: string | null
           client_mutation_id?: string | null
+          cloze?: string | null
           created_at?: string
+          explanation?: string | null
           id?: string
           kind?: string
           options?: Json
@@ -1892,7 +1905,9 @@ export type Database = {
         Update: {
           answer?: string | null
           client_mutation_id?: string | null
+          cloze?: string | null
           created_at?: string
+          explanation?: string | null
           id?: string
           kind?: string
           options?: Json

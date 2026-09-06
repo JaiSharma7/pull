@@ -244,7 +244,14 @@ function scrambled(stepsInOrder: readonly string[]): string[] {
   return rotated.join('\n') === stepsInOrder.join('\n') ? sorted : rotated;
 }
 
-/** An ordering's steps: its `answer`, one per line. Mirrors `orderingSteps`. */
+/**
+ * An ordering's steps: its `answer`, one per line.
+ *
+ * Mirrors how `orderingSteps` SPLITS, and deliberately not its floor: that function
+ * returns `[]` below two distinct steps because such an ordering must not be RENDERED as
+ * one, and a card in a deck file has no render to refuse. A one-step answer here is a
+ * one-line back, which is a perfectly usable card.
+ */
 function steps(answer: string): string[] {
   return answer
     .split(/\r?\n/)
