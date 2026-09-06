@@ -273,9 +273,27 @@ What the app does put on your device, all of it first-party and all of it necess
 
 Clearing your browser's site data removes all four, and signs you out.
 
-Read-aloud uses your browser's built-in speech synthesis. **No audio is recorded and none is
-sent to us.** Some browsers fetch higher-quality voices from their own vendor's servers; that
-is between your browser and its vendor, and we neither see nor control it.
+Read-aloud uses your browser's built-in speech synthesis. **No audio is recorded, and nothing
+is sent to us.**
+
+Your browser is a different matter, and the distinction is worth being exact about. Voices
+come in two kinds. A **local** voice is installed on your device and speaks entirely on it —
+nothing leaves the machine, and it works with no connection. A **remote** voice (Chrome's
+"Google" voices, for example) is synthesised on the vendor's servers, which means **the text
+of the Pull being read is sent to them**. That is between your browser and its vendor; we
+neither see it nor control it, but it is not the same as fetching a voice file, and the
+earlier wording implied it was.
+
+So the app prefers a local voice **in a language you read** — your own, or failing that
+another variety of it — and leaves the choice to your browser when your device has none it
+could pick. That is a narrower promise than "when your device has no local voice at all",
+and the difference is deliberate: a device may carry local voices in languages you do not
+read, and reading an English Pull in an Afrikaans voice is not a kindness. When we hand the
+choice back, your browser may well reach for a remote voice, so the paragraph above applies
+— on that reading, the text is sent to your browser's vendor. Choosing a voice for yourself is coming
+— the Listening settings are being built and will list local voices first — and when they
+land, picking a remote voice will be a trade you make knowingly. Today the app makes the
+quieter choice on your behalf.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's
