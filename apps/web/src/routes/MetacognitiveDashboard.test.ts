@@ -28,8 +28,24 @@ describe('what the dashboard promises about its own numbers', () => {
     // numbers come from, and that the three kinds are not run together.
     expect(PROGRESS_COPY.provenance).toContain('comes from your own history');
     expect(PROGRESS_COPY.provenance).toContain('readings off that curve');
-    expect(PROGRESS_COPY.provenance).toContain('describe the library itself, not you');
     expect(PROGRESS_COPY.provenance).toContain('is an estimate');
+  });
+
+  it('does not disown the one number the reader controls', () => {
+    /*
+     * "Connections and tensions describe the library itself, not you" was the fix for
+     * the previous claim and overshot it. The tile counts
+     * `undirectedEdges(measured.edges)`, and `measured` is the PERSONAL graph:
+     * `filterConnectedEdges` keeps only edges with both ends among the ideas this
+     * reader has read, so the number moves as they read and as nothing else. A reader
+     * told it had nothing to do with them could not explain it going up.
+     *
+     * Both halves have to survive — the relationships are the library's, the selection
+     * is the reader's — because together they are why the count is not a score.
+     */
+    expect(PROGRESS_COPY.provenance).not.toContain('describe the library itself, not you');
+    expect(PROGRESS_COPY.provenance).toContain('relationships the library draws between ideas');
+    expect(PROGRESS_COPY.provenance).toContain('ideas you have read are counted');
   });
 
   it('does not tell a reader the curve moves only when they recall something', () => {

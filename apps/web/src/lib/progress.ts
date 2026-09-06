@@ -33,16 +33,24 @@
  *   very next sentence disclaims, not of anything recalled.
  *
  *   "Connections" and "N dialectical tensions" count `pull_relations` edges, which
- *   are corpus data written by the seed. They have nothing to do with this reader.
+ *   are corpus data written by the seed rather than by anything the reader did.
  *
  * So a reader was told all of it came from what they had done, then shown "12 solid ·
  * 3 fading" and "47 connections" and reasonably believed it. That is the same defect
  * this file exists to fix, one sentence along — and the test below had begun asserting
  * the false version, which is how a wrong claim becomes load-bearing.
  *
- * The sentence now separates the three kinds it actually shows: what the reader has
- * read, what is estimated from that, and what belongs to the library rather than to
- * them.
+ * AND THE REPLACEMENT OVERSHOT IN THE OTHER DIRECTION. It said "Connections and
+ * tensions describe the library itself, not you", and that is false of the number on
+ * the screen. `MetacognitiveDashboard` counts `undirectedEdges(measured.edges)`, and
+ * `measured` is `personalGraph(...)` — `filterConnectedEdges` has already dropped
+ * every edge without BOTH ends among the ideas this reader has read. So the count
+ * moves only as the reader reads, and a reader told it was nothing to do with them
+ * would have no way to explain it going up.
+ *
+ * Both halves are true and the sentence has to hold them together: the relationships
+ * belong to the library, the selection belongs to the reader. Which is also the one
+ * thing worth saying here, because it is why the number is not a score.
  */
 export const PROGRESS_COPY = {
   /** Under the title. Says where each kind of number comes from. */
@@ -52,6 +60,7 @@ export const PROGRESS_COPY = {
     'rather than a measurement: it is read off a curve that starts again each time you open or ' +
     'recall the idea, and stretches further the better you recalled it — so the solid, ' +
     'refreshing and fading counts are readings off that curve rather than records of what you ' +
-    'did. Connections and tensions describe the library itself, not you. Nothing here asks you ' +
-    'today.',
+    'did. Connections and tensions are relationships the library draws between ideas, not ' +
+    'judgements about you — but only the ones running between ideas you have read are ' +
+    'counted, so that number moves as you read. Nothing here asks you today.',
 } as const;
