@@ -144,24 +144,101 @@ export async function unusedRecoveryCodeCount(): Promise<number> {
  * `mfa_recovery_codes` is deliberately absent. It holds hashes of a live credential;
  * putting them in a file the reader downloads and forwards is a way to leak one.
  */
-const EXPORTED: { table: string; column: string }[] = [
-  { table: 'profiles', column: 'id' },
-  { table: 'preference_profiles', column: 'user_id' },
-  { table: 'stashes', column: 'user_id' },
-  { table: 'saved_items', column: 'user_id' },
-  { table: 'notes', column: 'user_id' },
-  { table: 'highlights', column: 'user_id' },
-  { table: 'history_events', column: 'user_id' },
-  { table: 'progress', column: 'user_id' },
-  { table: 'knowledge_states', column: 'user_id' },
-  { table: 'convictions', column: 'user_id' },
-  { table: 'explanations', column: 'user_id' },
-  { table: 'interrupt_events', column: 'user_id' },
-  { table: 'feed_impressions', column: 'user_id' },
-  { table: 'feed_recipes', column: 'user_id' },
-  { table: 'follows', column: 'follower_id' },
-  { table: 'generation_jobs', column: 'requester_id' },
+/*
+ * Every table holding rows that belong to a reader, the column that says so, and a
+ * column that ORDERS them.
+ *
+ * The order is not decoration, and neither is what is done with it. This used to order
+ * by `column` — the same value on every row that survived the filter, so it ordered
+ * nothing, and PostgREST was free to return page 2 overlapping page 1.
+ *
+ * A TOTAL ORDER WAS NECESSARY AND NOT SUFFICIENT, and the first version of this comment
+ * claimed otherwise: it said the ordering fixed the case where another tab inserts a row
+ * mid-export. It does not. `.range(from, from + 99)` is `LIMIT/OFFSET`, and an offset is
+ * unstable under concurrent writes however well ordered the rows are — a row that lands
+ * before the current offset shifts every later page by one, so the file carries one row
+ * twice and omits another while `incomplete` stays empty. Measured on 250 rows: row 109
+ * duplicated, the concurrently inserted row absent, and the document still claiming to
+ * be whole. Because `id` is `gen_random_uuid()`, an inserted row lands at a random
+ * position, so roughly half of all mid-export writes do this.
+ *
+ * So the walk is keyset now: order by `key`, ask for what sorts after the last one seen,
+ * and carry that forward. Nothing shifts under a cursor that names a row rather than
+ * counting from the start.
+ *
+ * `key` is therefore a column unique WITHIN one reader's rows, which makes it both a
+ * total order and a usable cursor: the primary key where it is a single `id`, and the
+ * other half of a composite key where it is not.
+ */
+const EXPORTED: { table: string; column: string; key: string }[] = [
+  { table: 'profiles', column: 'id', key: 'id' },
+  { table: 'preference_profiles', column: 'user_id', key: 'user_id' },
+  { table: 'stashes', column: 'user_id', key: 'id' },
+  { table: 'saved_items', column: 'user_id', key: 'id' },
+  { table: 'notes', column: 'user_id', key: 'id' },
+  { table: 'highlights', column: 'user_id', key: 'id' },
+  { table: 'history_events', column: 'user_id', key: 'id' },
+  { table: 'progress', column: 'user_id', key: 'summary_id' },
+  { table: 'knowledge_states', column: 'user_id', key: 'pull_id' },
+  { table: 'convictions', column: 'user_id', key: 'id' },
+  { table: 'explanations', column: 'user_id', key: 'id' },
+  { table: 'interrupt_events', column: 'user_id', key: 'id' },
+  // Every recall attempt as it happened, which is the evidence behind
+  // `knowledge_states` rather than a duplicate of it: the grade, the stated
+  // confidence, what was typed, and the stability before and after. An export
+  // that carried only the derived numbers would hand a reader the conclusions
+  // and keep the working.
+  { table: 'recall_events', column: 'user_id', key: 'id' },
+  { table: 'feed_impressions', column: 'user_id', key: 'id' },
+  { table: 'feed_recipes', column: 'user_id', key: 'id' },
+  { table: 'follows', column: 'follower_id', key: 'followee_id' },
+  { table: 'generation_jobs', column: 'requester_id', key: 'id' },
+  // Three more that `docs/privacy.md` names as the reader's own and this list did
+  // not carry, which made "every row stored against your account" untrue of it.
+  // `user_knowledge_vectors` is the centroid the Delta compares candidates
+  // against — the policy calls it personal data and says it is deleted with the
+  // account, so it is the reader's to take. `session_seeds` is what decides the
+  // order they were shown things in. `reports` is what they have told us about
+  // somebody else's content, which is their own writing and readable by them
+  // through `reports_own`.
+  { table: 'session_seeds', column: 'user_id', key: 'id' },
+  { table: 'user_knowledge_vectors', column: 'user_id', key: 'user_id' },
+  { table: 'reports', column: 'reporter_id', key: 'id' },
+  /*
+   * AND THE THREE AN IMPORT CREATES. `docs/privacy.md` promises "every row stored
+   * against your account, as one JSON file" and names these as the reader's own, and
+   * the moment `20260905110000` lands they exist and this list did not carry them —
+   * a promise that goes false on somebody else's merge is still this file's to keep.
+   *
+   * The note below used to say they "arrive with the PR that lets a reader create
+   * one, so that this list and the tables it names land together". They did not: that
+   * PR shipped `imports`, `import_items` and `user_questions` and never came back
+   * here. Naming them from this side is what makes the two land together, and it
+   * costs nothing before the migration is applied — `buildAccountExport` catches a
+   * read per table and records it in `incomplete`, so a table that does not exist yet
+   * is reported rather than thrown.
+   */
+  { table: 'imports', column: 'user_id', key: 'id' },
+  { table: 'import_items', column: 'user_id', key: 'id' },
+  { table: 'user_questions', column: 'user_id', key: 'id' },
 ];
+
+/*
+ * WHAT IS DELIBERATELY NOT HERE, so a future reader does not assume an omission.
+ *
+ *   mfa_recovery_codes  A list of unspent second factors. Writing them into a
+ *                       file the reader will email themselves is the opposite of
+ *                       what they are for; the account screen shows them once, at
+ *                       the moment they are generated, and that is the only place
+ *                       they should ever appear.
+ *   rate_limits         Operational counters keyed to the account rather than
+ *                       anything the reader did. Nothing in them is theirs.
+ *
+ * `imports`, `import_items` and `user_questions` ARE here, above. They were left out
+ * on the reasoning that they would arrive with the PR that creates them; that PR
+ * shipped without them, which is how "every row stored against your account" came to
+ * be false of a file whose whole job is making it true.
+ */
 
 export interface AccountExport {
   exportedAt: string;
@@ -180,23 +257,51 @@ export async function buildAccountExport(
   const data: Record<string, unknown[]> = {};
   const incomplete: { table: string; reason: string }[] = [];
 
-  for (const { table, column } of EXPORTED) {
+  for (const { table, column, key } of EXPORTED) {
     const rows: unknown[] = [];
     try {
-      for (let from = 0; ; from += PAGE) {
-        const { data: page, error } = await supabase
+      // The cursor: the `key` of the last row taken, or nothing on the first page.
+      let after: string | null = null;
+      for (;;) {
+        let query = supabase
           .from(table as never)
           .select('*')
           .eq(column, userId)
-          // Ordered so the pages partition the set rather than overlapping: without
-          // it PostgREST may return rows in any order and a range walk can repeat or
-          // skip. `column` is on every table here and is never null for these rows.
-          .order(column, { ascending: true })
-          .range(from, from + PAGE - 1);
+          // A column unique within this reader's rows, so this is a total order and
+          // every row has a distinct place in it — which is what makes it usable as a
+          // cursor as well as an order.
+          .order(key, { ascending: true })
+          .limit(PAGE);
+        if (after !== null) query = query.gt(key, after);
+        const { data: page, error } = await query;
         if (error) throw rpcError(error);
         const got = (page ?? []) as unknown[];
         rows.push(...got);
         if (got.length < PAGE) break;
+        const last = got[got.length - 1] as Record<string, unknown>;
+        const cursor = last[key];
+        /*
+         * A NUMBER IS A CURSOR TOO, and requiring a string here lost whole tables.
+         *
+         * `history_events.id` and `feed_impressions.id` are `bigint`, which PostgREST
+         * serialises as a JSON number. The first draft of this guard threw on the
+         * second page of either — and because `data[table] = rows` sits after the loop
+         * inside the same `try`, the table did not merely truncate: it vanished from
+         * the export entirely, including the hundred rows already fetched, with
+         * `incomplete` blaming an unreadable id. Every reader with more than 100
+         * history events, which is every real reader, lost their whole reading history
+         * from the file that exists to say their words are theirs. Law 3 calls
+         * unlimited history free forever; the old offset walk exported all of it.
+         *
+         * `.gt()` compares server-side against the column's own type, so the string
+         * form of a bigint orders correctly. What the guard is actually for is a key
+         * that is absent or of a type no cursor can be made from — looping on that
+         * would repeat one page forever — and it still catches exactly that.
+         */
+        if (typeof cursor !== 'string' && typeof cursor !== 'number') {
+          throw new Error(`the ${key} of the last row on a page was not readable`);
+        }
+        after = String(cursor);
       }
       data[table] = rows;
     } catch (e) {

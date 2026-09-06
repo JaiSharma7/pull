@@ -20,9 +20,24 @@ import { int, nonNull, rows, str } from './shape.js';
  * than drawn somewhere plausible.
  */
 
+import type { PullCardTextField } from '@wap/ui';
+
 /** The fields of a Pull a reader can highlight. Mirrors what the source page renders. */
 export const HIGHLIGHTABLE_FIELDS = ['body', 'explanation', 'why_it_matters'] as const;
 export type HighlightField = (typeof HIGHLIGHTABLE_FIELDS)[number];
+
+/*
+ * The mirror, asserted rather than described.
+ *
+ * `PullCardTextField` in `@wap/ui` names the same three columns and cannot
+ * import this file — the package does not depend on the app. `apps/web` depends
+ * on both, so this is the one place the two can be held together, and this repo's
+ * stated convention is that a mirror is compile-time enforced rather than
+ * commented. Both directions, so neither side can gain or lose a member alone.
+ */
+type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _fieldsMirrorTheCard: Exactly<HighlightField, PullCardTextField> = true;
+void _fieldsMirrorTheCard;
 
 export function isHighlightField(v: unknown): v is HighlightField {
   return typeof v === 'string' && (HIGHLIGHTABLE_FIELDS as readonly string[]).includes(v);

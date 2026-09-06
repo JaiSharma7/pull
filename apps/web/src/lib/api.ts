@@ -62,8 +62,61 @@ export async function recordRead(pullId: string, dwellMs: number, position: numb
   if (error) throw rpcError(error);
 }
 
-export async function gradeRecall(pullId: string, grade: RecallGrade) {
-  const { error } = await supabase.rpc('grade_recall', { p_pull_id: pullId, p_grade: grade });
+/**
+ * What travels with a grade beyond the grade itself.
+ *
+ * `mutationId` is the one that changes what the client may do. Until
+ * 20260905100000 `grade_recall` applied every call it received — it multiplies
+ * stability and increments `reps` — so a retry of a lost response roughly squared
+ * the interval and a card fell out of review for months. The client could
+ * therefore only queue a grade it could PROVE had never left the tab, and dropped
+ * every ambiguous failure on the floor. With the id, the server recognises a
+ * replay as the same attempt and returns the state untouched, so an ambiguous
+ * failure is queueable and a grade stops being losable.
+ *
+ * `submittedAt` is when the reader answered, not when the queue gave up, for the
+ * reason `setConviction` gives below: it is the only way to order two requests
+ * that overlap. The rest is evidence `recall_events` keeps per attempt —
+ * `confidence` is the half only the reader can supply, and a confident miss is
+ * the one worth repairing first.
+ */
+export interface GradeProvenance {
+  mutationId: string;
+  submittedAt: number;
+  confidence?: 'sure' | 'unsure';
+  /** A `quiz_questions` id, or one of the reader's own from `user_questions`. */
+  questionId?: string;
+  kind?: string;
+  latencyMs?: number;
+  answer?: string;
+}
+
+export async function gradeRecall(
+  pullId: string,
+  grade: RecallGrade,
+  provenance?: GradeProvenance,
+) {
+  const { error } = await supabase.rpc('grade_recall', {
+    p_pull_id: pullId,
+    p_grade: grade,
+    // Optional so a caller that has nothing to say behaves exactly as before:
+    // every added parameter defaults, and an absent mutation id means the write
+    // is applied rather than de-duplicated — which is what a replayed entry
+    // queued by an older build needs.
+    ...(provenance
+      ? {
+          p_mutation_id: provenance.mutationId,
+          p_submitted_at: new Date(provenance.submittedAt).toISOString(),
+          ...(provenance.confidence ? { p_confidence: provenance.confidence } : {}),
+          ...(provenance.questionId ? { p_question_id: provenance.questionId } : {}),
+          ...(provenance.kind ? { p_kind: provenance.kind } : {}),
+          ...(typeof provenance.latencyMs === 'number'
+            ? { p_latency_ms: provenance.latencyMs }
+            : {}),
+          ...(provenance.answer ? { p_answer: provenance.answer } : {}),
+        }
+      : {}),
+  });
   if (error) throw rpcError(error);
 }
 
@@ -74,6 +127,9 @@ export async function recordInterrupt(args: {
   response: 'answered' | 'dismissed' | 'expired';
   grade?: RecallGrade;
   latencyMs?: number;
+  mutationId?: string;
+  submittedAt?: number;
+  confidence?: 'sure' | 'unsure';
 }) {
   const { error } = await supabase.rpc('record_interrupt', {
     p_pull_id: args.pullId,
@@ -82,6 +138,14 @@ export async function recordInterrupt(args: {
     p_response: args.response,
     p_grade: args.grade as never,
     p_latency: args.latencyMs,
+    // `record_interrupt` stops at its own row on a replay and only then grades,
+    // so one id makes the interrupt, the grade and the session bump idempotent
+    // together.
+    ...(args.mutationId ? { p_mutation_id: args.mutationId } : {}),
+    ...(typeof args.submittedAt === 'number'
+      ? { p_submitted_at: new Date(args.submittedAt).toISOString() }
+      : {}),
+    ...(args.confidence ? { p_confidence: args.confidence } : {}),
   });
   if (error) throw rpcError(error);
 }

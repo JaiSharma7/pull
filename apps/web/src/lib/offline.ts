@@ -67,7 +67,31 @@ export type PendingWrite =
    * grade of a review session done on a plane — offline being one of the five things
    * law 3 promises free forever.
    */
-  | { kind: 'recall'; pullId: string; grade: RecallGrade }
+  | {
+      kind: 'recall';
+      pullId: string;
+      grade: RecallGrade;
+      /**
+       * Minted once per attempt, so a replay whose first response was lost is
+       * recognised by the server as the same grade rather than applied twice.
+       *
+       * OPTIONAL, and it has to stay optional: an entry queued by a build before
+       * this one carries none, and refusing to replay it would lose exactly the
+       * grade this whole mechanism exists to keep. Without an id `grade_recall`
+       * applies the write, which is the old behaviour and the right one for a
+       * write that was queued under the old rules.
+       */
+      mutationId?: string;
+      /** When the reader answered — not when the queue gave up on the request. */
+      submittedAt?: number;
+      /** The reader's own confidence before the answer was shown. */
+      confidence?: 'sure' | 'unsure';
+      questionId?: string;
+      /** Which screen asked: `review`, an interrupt kind, or `calibration`. */
+      recallKind?: string;
+      latencyMs?: number;
+      answer?: string;
+    }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
   | {
       kind: 'conviction';
@@ -264,8 +288,26 @@ export function onPendingQueued(handler: () => void): () => void {
  * the answer, which is right for them; the one that tells the reader their answer was
  * recorded needs to know the difference, because in a browser with site data blocked the
  * write reached neither Postgres nor IndexedDB and 'recorded' was untrue.
+ *
+ * `refusal` is the error that sent the caller here, when there was one, and passing it
+ * closes the second way this could report success it did not achieve. A write the server
+ * has already refused for a reason no retry can change is one `runDrain` deletes the
+ * moment it replays it — so accepting it here persisted something with no future, told
+ * the caller it was safe, and let the census advance onboarding over a calibration that
+ * was about to be thrown away. Refusing it instead makes every caller's existing
+ * "could not record" path the one that fires, which is what each of them already does
+ * correctly with the answer.
+ *
+ * Omitting it keeps the old behaviour, which is right for a caller that has no error to
+ * offer — a write queued because the reader is known to be offline, rather than because
+ * the server said no.
  */
-export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
+export async function queueMutation(
+  userId: string,
+  write: PendingWrite,
+  refusal?: unknown,
+): Promise<boolean> {
+  if (refusal !== undefined && refusedForGood(refusal, write, null)) return false;
   try {
     const database = await db();
     await database.add('pending', { ...write, userId, at: Date.now() });
@@ -278,6 +320,41 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 }
 
 /**
+ * The pulls this account has a queued grade for, which is the durable answer to
+ * "did the reader already judge this card".
+ *
+ * `Review.tsx` filtered its refetch through a `useRef` set, which is right for as
+ * long as the component is mounted and Review is a TAB — switching to Library and
+ * back destroys it. The card whose grade is still sitting in this queue then comes
+ * back due, is shown again, and grading it mints a SECOND mutation id: two ids are
+ * two grades, and this file's own header says what a doubled grade does to an
+ * interval. A reload has the same shape and the queue survives that too, which the
+ * ref never could.
+ *
+ * A pending grade is exactly the condition — the write has not applied, so the
+ * server still calls the card due, and the reader has still answered it.
+ *
+ * NULL IS "COULD NOT READ", not "nothing queued", and the distinction is the same one
+ * `hasPending` pays a retry for. An empty set is a claim about the queue; a store that
+ * will not open supports no claim at all, and a caller that cannot tell them apart
+ * treats a blocked database as a clean bill of health. The caller decides what to do
+ * about it — see `Review.tsx`.
+ */
+export async function pendingRecallPullIds(userId: string): Promise<Set<string> | null> {
+  try {
+    const database = await db();
+    if (!database) return null;
+    const all = await database.getAll('pending');
+    return new Set(
+      all
+        .filter((item) => item.userId === userId && item.kind === 'recall')
+        .map((item) => (item as { pullId: string }).pullId),
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** Whether this account still has queued writes — the signal to keep retrying. */
 export async function hasPending(userId: string): Promise<boolean> {
   try {
@@ -435,14 +512,27 @@ async function runDrain(
  * whole classification exists to end. The honest fix is not to let the text get
  * that long: the inputs are bounded to the columns' limits in the components.
  */
-function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
+function refusedForGood(
+  error: unknown,
+  write: PendingWrite,
+  queuedStashes: Set<string> | null,
+): boolean {
   if (!isPermanentFailure(error)) return false;
   const code = sqlState(error);
   if (code === '23503') {
+    /*
+     * Judged against the queue, which only a drain has in hand. `null` is the
+     * caller saying it cannot see the queue — `queueMutation` is deciding whether
+     * to enqueue at all, and the collection this write points at may be sitting
+     * one entry behind it — so the answer there is the conservative one: keep the
+     * write, and let a pass that can tell make the call.
+     */
     if (write.kind === 'stash-create') {
+      if (queuedStashes === null) return false;
       return write.parentId === null || !queuedStashes.has(write.parentId);
     }
     if (write.kind === 'organise') {
+      if (queuedStashes === null) return false;
       const target = write.patch.stashId;
       return typeof target !== 'string' || !queuedStashes.has(target);
     }
