@@ -279,6 +279,31 @@ describe('toImportItems', () => {
     expect(items[0]?.author).toBe('Marcus');
   });
 
+  it.each([
+    // The 200th unit is the LEADING half of a pair, so it must go. `0xD800` and `0xDBFF`
+    // are the ends of the high-surrogate range and were both unpinned: the only fixture
+    // used `0xD83D`, comfortably inside it, so `>= 0xd800` -> `> 0xd800` and
+    // `<= 0xdbff` -> `< 0xdbff` both survived while leaving a lone surrogate behind.
+    ['the low end of the range', 0x10000, 199],
+    ['the high end of the range', 0x10fc00, 199],
+    ['an ordinary emoji', 0x1f600, 199],
+    // And the pair that ENDS exactly at 200 must be kept whole. This is the case that
+    // matters most: widening the upper bound to `0xdfff` strips a valid LOW surrogate and
+    // so CREATES the lone high surrogate the guard exists to remove -- a mutant that made
+    // the defect rather than missing it, one boundary over from the fixture above.
+    ['a pair ending exactly at the bound', 0x1f600, 198],
+  ])('truncates around %s without leaving half a character', (_name, codePoint, xs) => {
+    const title = 'x'.repeat(xs) + String.fromCodePoint(codePoint) + 'tail';
+    const { items } = toImportItems([h({ bookTitle: title })]);
+    const kept = items[0]?.title ?? '';
+    expect(kept).toHaveLength(xs === 198 ? 200 : 199);
+    // No unpaired surrogate of either kind survives.
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(kept),
+    ).toBe(false);
+    expect(JSON.stringify(items)).not.toMatch(/\\ud[89ab][0-9a-f]{2}/i);
+  });
+
   it('does not cut a surrogate pair in half when it truncates', () => {
     /*
      * `left` counts CHARACTERS; `slice` counts UTF-16 CODE UNITS. A title whose 200th

@@ -37,6 +37,30 @@ function recorder(replies: Partial<ImportResult>[]) {
 }
 
 describe('foldChunks', () => {
+  it('reports the file complete only when it ran out of chunks', async () => {
+    const { call } = recorder([{ importId: 'i1' }, {}, {}]);
+    await expect(foldChunks(many(1201), call)).resolves.toMatchObject({ complete: true });
+  });
+
+  it('reports a chunk failure as incomplete, so the rest can still be offered', async () => {
+    /*
+     * The fact the screen lost three times over. It tracked "there is a rest" as a
+     * failure flag, and starting a keep, starting an Undo and re-parsing all clear that
+     * flag with nothing to re-raise it -- so a partial import reported itself finished
+     * while half the file had never been sent. Carried on the result, it survives all
+     * three.
+     */
+    let n = 0;
+    const call: CommitChunk = async () => {
+      n += 1;
+      if (n === 2) throw new Error('chunk two did not go through');
+      return { importId: 'i1', added: 500 };
+    };
+    await expect(foldChunks(many(1000), call)).rejects.toMatchObject({
+      partial: { complete: false, importId: 'i1', added: 500 },
+    });
+  });
+
   it('splits at the RPC ceiling, and sends every item exactly once', async () => {
     const { call, calls } = recorder([{ importId: 'i1' }, {}, {}]);
     const items = many(1201);
@@ -120,6 +144,10 @@ describe('foldChunks', () => {
       added: 0,
       duplicates: 0,
       ceilingReached: false,
+      // Trivially complete: there were no chunks, so none was left unsent. The screen
+      // never reaches this -- `handleKeep`'s backstop returns before the RPC -- but the
+      // honest answer here is "nothing remains", not "a rest is outstanding".
+      complete: true,
       works: [],
     });
   });
@@ -232,6 +260,7 @@ describe('mergeAttempts', () => {
     added: 0,
     duplicates: 0,
     ceilingReached: false,
+    complete: true,
     works: [],
     ...over,
   });
@@ -317,6 +346,14 @@ describe('mergeAttempts', () => {
    * test that was supposed to be pinning it. Both are gone; the property that is real --
    * that a partial retry keeps the earlier count -- is the test above.
    */
+
+  it('takes the latest attempt’s completeness rather than latching it', () => {
+    // Unlike the ceiling beside it: a retry that ran out of chunks sent the rest, so the
+    // batch is complete however the earlier attempt ended.
+    expect(mergeAttempts(base({ complete: false }), base({ complete: true })).complete).toBe(true);
+    // And a retry that failed again did not, whatever the earlier one reported.
+    expect(mergeAttempts(base({ complete: true }), base({ complete: false })).complete).toBe(false);
+  });
 
   it('keeps a book the first attempt created and the retry did not touch', () => {
     const a = { workId: 'w1', title: 'Meditations', slug: 'meditations' };

@@ -12,14 +12,15 @@ import {
 import {
   batchIsGone,
   canKeep,
-  failureLine,
   footerLine,
   forgetsOnParse,
   type ImportAction,
   type ImportFailure,
+  keepFailed,
   keepLabel,
   showsKeep,
   showsUndo,
+  undoFailed,
 } from '../lib/import-screen.js';
 import { collateral } from '../lib/undo-summary.js';
 import {
@@ -58,10 +59,18 @@ export function Ingestion() {
   const [skipped, setSkipped] = useState(0);
   const [shaped, setShaped] = useState<ReturnType<typeof toImportItems> | null>(null);
   /*
-   * WHICH ACTION FAILED, not merely that one did. A single `error` string gated the Keep
-   * button's visibility and its label, so a failed UNDO re-armed Keep as "Keep the rest"
-   * -- on an import that had fully succeeded and that the reader was trying to delete.
-   * Pressing it resent the whole file into the batch under deletion. See `import-screen`.
+   * WHICH ACTION FAILED -- and, now, ONLY for the wording.
+   *
+   * A single `error` string used to gate the Keep button's visibility and its label too,
+   * so a failed UNDO re-armed Keep as "Keep the rest" on an import that had fully
+   * succeeded and that the reader was trying to delete; pressing it resent the whole file
+   * into the batch under deletion. Splitting the flag by action fixed that and broke
+   * something else, because a flag is the wrong home for "there is a rest to send": three
+   * transitions clear this one and none can re-raise it, so a partial import lost its
+   * button whenever an Undo was attempted or a retry was superseded.
+   *
+   * So the affordances read `result.complete` instead (see `import-screen`), and this
+   * decides only which sentence is shown and that it is shown in the accent colour.
    */
   const [failure, setFailure] = useState<ImportFailure | null>(null);
   const [undone, setUndone] = useState<UndoResult | null>(null);
@@ -103,11 +112,11 @@ export function Ingestion() {
      *
      * THE FAILURE IS CLEARED WITH THEM RATHER THAN ALWAYS, which it was. Clearing it on
      * every parse removed "Keep the rest" from a partial import the moment the reader
-     * re-picked the same file -- `result` survived, so the button's `!result` disjunct
-     * was false and its `failure` disjunct had just been emptied. That left the batch
-     * strandable: the only way to get a Keep button back was to change the text, which
-     * clears `result` and therefore the id, and a changed file is a changed hash, so the
-     * rest of the highlights opened a SECOND batch the panel's Undo did not cover.
+     * re-picked the same file, back when the Keep button read the failure to decide
+     * whether a rest remained. The button reads `result.complete` now, so that particular
+     * stranding cannot recur through this path -- but the failure still belongs to the
+     * text it was raised for, and carrying it onto a different file would show the reader
+     * a sentence about an import they have moved on from.
      */
     if (forgetsOnParse(text, rawText)) {
       setResult(null);
@@ -235,7 +244,7 @@ export function Ingestion() {
        * wrapped: see its own comment for why the direct check could never match.
        */
       if (batchIsGone(e)) setResult(null);
-      setFailure({ action: 'keep', message: failureLine(e, 'The import did not go through.') });
+      setFailure(keepFailed(e));
     } finally {
       /*
        * UNCONDITIONALLY, and it was conditioned on the generation first.
@@ -277,7 +286,7 @@ export function Ingestion() {
       setResult(null);
     } catch (e) {
       if (generation.current !== mine) return;
-      setFailure({ action: 'undo', message: failureLine(e, 'The undo did not go through.') });
+      setFailure(undoFailed(e));
     } finally {
       setBusy(null);
     }
@@ -439,8 +448,12 @@ export function Ingestion() {
               button reading "Keep 0 highlights" that answered a press with an error. */}
           {skipped > 0 && (
             <p className="meta" style={{ marginBottom: 'var(--space-3)' }}>
-              {skipped} of these cannot be kept — each needs a title, some text, and fewer than
-              20,000 characters.
+              {/* "3 of these cannot be kept" reads as a subset, and for a three-highlight
+                  file it was the whole thing. */}
+              {shaped?.items.length === 0
+                ? 'None of these can be kept'
+                : `${skipped} of these cannot be kept`}{' '}
+              — each needs a title, some text, and fewer than 20,000 characters.
             </p>
           )}
 
@@ -450,7 +463,11 @@ export function Ingestion() {
                 {undone.alreadyUndone
                   ? 'Already removed.'
                   : `Removed ${undone.removed} ${undone.removed === 1 ? 'highlight' : 'highlights'}.`}{' '}
-                Uploading the same file again brings them back.
+                {/* It said "Uploading the same file again brings them back", and since a
+                    completed Undo now clears `result`, the Keep button is already back on
+                    screen with the file still parsed -- so a reader who followed that
+                    sentence uploaded the same file and watched nothing happen. */}
+                Keeping them again brings them back.
               </p>
               {/* WHAT ELSE WENT WITH THEM. `undo_import` cascades through anything a
                   reader built ON these Pulls, and it returns `alsoRemoved` for exactly

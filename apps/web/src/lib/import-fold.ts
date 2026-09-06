@@ -32,6 +32,23 @@ export interface ImportResult {
    * to stop sending. See the loop in `foldChunks`.
    */
   ceilingReached: boolean;
+  /**
+   * Was the WHOLE file sent? Not "did it succeed" -- whether a rest remains.
+   *
+   * A CLIENT FACT, not one the RPC reports: `commit_import` answers for one chunk and
+   * cannot know how many there were. `foldChunks` sets it true only after the loop runs
+   * out of chunks, so the result carried on `PartialImportError` is always false.
+   *
+   * IT LIVES ON THE RESULT BECAUSE EVERY OTHER PLACE TO PUT IT GETS CLEARED. The screen
+   * tracked "there is a rest" as a failure flag, and three separate transitions clear
+   * that flag with no matching path to re-raise it: starting another attempt, starting an
+   * Undo, and re-parsing. So a partial import whose retry was superseded, or whose Undo
+   * then failed, reported itself complete while half the file had never been sent -- and
+   * the only way to get the button back was to change the text, which drops the batch id
+   * and opens a second batch. Carried here, it is cleared exactly when the result it
+   * describes is, which is the only time it stops being true.
+   */
+  complete: boolean;
   works: ImportedWork[];
 }
 
@@ -182,6 +199,10 @@ export function mergeAttempts(prev: ImportResult | null, next: ImportResult): Im
     added: prev.added + next.added,
     duplicates: Math.max(prev.duplicates, next.duplicates - prev.added),
     ceilingReached: prev.ceilingReached || next.ceilingReached,
+    // The LATEST attempt's verdict, unlike the ceiling beside it. A retry that ran out of
+    // chunks sent the rest, so the batch is complete however the earlier attempt ended;
+    // a retry that failed again did not, whatever the earlier one reported.
+    complete: next.complete,
     works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
   };
 }
@@ -223,6 +244,8 @@ export async function foldChunks(
     added: 0,
     duplicates: 0,
     ceilingReached: false,
+    // Only the successful exit below sets this. Every early exit is a rest left unsent.
+    complete: false,
     works: [],
   };
 
@@ -276,5 +299,7 @@ export async function foldChunks(
   }
 
   total.works = [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title));
+  // Ran out of chunks rather than out of luck: there is no rest.
+  total.complete = true;
   return total;
 }
