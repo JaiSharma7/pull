@@ -167,6 +167,20 @@ describe('mcqOptions', () => {
       correct: false,
       confidentlyWrong: false,
     });
+    // AND THE THIRD GRADER, which this block asserted for two of three and left out --
+    // the miss two round-five reviewers found independently. `orderingSteps` above got
+    // its `?? ''` in the same commit and `gradeOrdering` got no guard at all, so a
+    // question with nothing to be wrong about scored `confidentlyWrong` for any reader
+    // who said they were sure.
+    expect(gradeOrdering(['anything'], { answer: null }, 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // The sharpest form: NOTHING was placed wrong, and the reader was still accused.
+    expect(gradeOrdering([], { answer: null }, 'sure', 100)).toMatchObject({
+      positionsWrong: 0,
+      confidentlyWrong: false,
+    });
   });
 
   it('always includes the answer', () => {
@@ -602,7 +616,13 @@ describe('gradeOrdering', () => {
   });
 
   it('is never right against a question with no steps', () => {
-    expect(gradeOrdering([], { answer: '' }).correct).toBe(false);
+    // `'sure'` explicitly. The default is `'unsure'`, which is the one confidence that
+    // hides `confidentlyWrong` -- so this line asserted the empty case for two rounds
+    // while the flag it should have been watching was free to be wrong.
+    expect(gradeOrdering([], { answer: '' }, 'sure', 100)).toMatchObject({
+      correct: false,
+      confidentlyWrong: false,
+    });
   });
 
   it('trims what the reader arranged', () => {
@@ -614,6 +634,24 @@ describe('gradeOrdering', () => {
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering).grade).toBe('easy');
     expect(gradeOrdering(order, q, 'sure', FAST_ANSWER_MS.ordering + 1).grade).toBe('good');
     expect(gradeOrdering(order, q, 'unsure', 1_000).grade).toBe('good');
+  });
+
+  it('refuses to grade a one-step ordering as anything', () => {
+    // The round-three MCQ finding at the kind round three did not reach. One step is one
+    // arrangement: the reader makes it, and a sure and quick answer used to return
+    // `{ grade: 'easy', correct: true }` -- stability multiplied by more than three for a
+    // question that could not be got wrong. `mcqOptions` has carried the same floor since
+    // round three; this is its ordering twin.
+    const one = { answer: 'Boil the water' };
+    expect(gradeOrdering(['Boil the water'], one, 'sure', 100)).toMatchObject({
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+    });
+    // Two is the floor and it still works, so the guard bounds the broken case only.
+    expect(
+      gradeOrdering(['a', 'b'], { answer: 'a\nb' }, 'sure', FAST_ANSWER_MS.ordering).grade,
+    ).toBe('easy');
   });
 });
 

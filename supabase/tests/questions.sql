@@ -1152,6 +1152,49 @@ begin
   exception when check_violation then null;
   end;
 
+  -- AND `options` NO LONGER GETS TEN TIMES THE BUDGET OF `answer`.
+  --
+  -- Review finding. `user_questions_options_size` allowed 20,000 characters beside a
+  -- 2,000-character answer, which was free while nothing read the column and stopped
+  -- being free in 20260905120001 -- the first thing to put reader-written content into
+  -- the review payload, three questions a card. Measured on 34 due pulls carrying three
+  -- maximal questions each: `get_due_reviews(20)` went from 19,637 bytes to 1,682,524,
+  -- and this bound takes it to 602,524. The rows that arm it are free to write: guests
+  -- may write their own questions, deliberately.
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt, answer, options)
+    values (reader_b, pull_1, 'mcq', 'p', 'a',
+            to_jsonb(array[repeat('x', 2100)]));
+    raise exception 'a 2100-character options array was accepted on user_questions';
+  exception when check_violation then null;
+  end;
+
+  -- Bounded and not forbidden: a real set of choices still fits.
+  insert into public.user_questions (user_id, pull_id, kind, prompt, answer, options)
+  values (reader_b, pull_1, 'mcq', 'a bounded mcq', 'the right one',
+          '["a wrong one","another wrong one","a third"]'::jsonb);
+
+  ---------------------------------------------------------------------------
+  -- 9. THE FUNCTION IS GRANTED THE WAY EVERY OTHER FUNCTION IS.
+  --
+  -- `get_due_reviews` carried PUBLIC execute from the day it was created, because it
+  -- was never given the revoke/grant pair 20260829124835 gives its neighbours. Harmless
+  -- while it is `security invoker` with a pinned `search_path` -- `anon` gets an empty
+  -- array and no timing signal -- and that is the point: what makes it harmless is a
+  -- property nothing asserted. A rewrite to `security definer` would make the ACL
+  -- load-bearing silently, exactly as this file says such a rewrite would make the
+  -- redundant `uq.user_id = uid` predicate load-bearing.
+  ---------------------------------------------------------------------------
+  if has_function_privilege('anon', 'public.get_due_reviews(int)', 'execute') then
+    raise exception 'anon can execute get_due_reviews';
+  end if;
+  if has_function_privilege('public', 'public.get_due_reviews(int)', 'execute') then
+    raise exception 'PUBLIC can execute get_due_reviews';
+  end if;
+  if not has_function_privilege('authenticated', 'public.get_due_reviews(int)', 'execute') then
+    raise exception 'authenticated cannot execute get_due_reviews, which is the whole point of it';
+  end if;
+
   -- And the four kinds a reader may write are still four: `ordering` and `scenario`
   -- are generated forms the "Remember this" box cannot express.
   --

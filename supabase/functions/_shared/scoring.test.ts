@@ -233,4 +233,42 @@ describe('questionsToWrite', () => {
   it('drops a question whose Pull was never written', () => {
     expect(questionsToWrite([q(), q(), q()], [{ ordinal: 0, id: 'p0' }])).toHaveLength(1);
   });
+
+  /*
+   * THE BOUNDS THE TABLE CARRIES, MET HERE RATHER THAN HIT.
+   *
+   * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
+   * `_distractors_shape`, and this function is the only writer. Before the clamp, a model
+   * returning a 2,100-character prompt raised 23514 in the `cards` step -- after
+   * `insertPulls` had committed and after the synthesis had been paid for -- and, because
+   * `synthesize` replays from `job_step_outputs`, failed identically on every retry.
+   * Nothing upstream clamps it: `BOUNDS` in `packages/prompts/scripts/export.mjs` bounds
+   * the distractor count and no length at all.
+   */
+  it('drops a question whose prompt or answer is over the column bound', () => {
+    expect(questionsToWrite([q({ prompt: 'x'.repeat(2001) })], written)).toEqual([]);
+    expect(questionsToWrite([q({ answer: 'y'.repeat(2001) })], written)).toEqual([]);
+    // Exactly at the bound is a question, not a casualty.
+    expect(questionsToWrite([q({ prompt: 'x'.repeat(2000) })], written)).toHaveLength(1);
+    expect(questionsToWrite([q({ answer: 'y'.repeat(2000) })], written)).toHaveLength(1);
+    // The pull keeps its place either way -- dropping the question is not dropping the
+    // idea, and a pull with no question is an outcome the schema already allows.
+    expect(questionsToWrite([q({ prompt: 'x'.repeat(2001) }), q()], written)).toEqual([
+      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
+    ]);
+  });
+
+  it('clamps distractors by count AND by size', () => {
+    // Both halves, because this stack has twice shipped the count half of a bound with
+    // the size half missing -- `quiz_questions_distractors_shape` checks
+    // `jsonb_array_length(...) <= 8` and `length(distractors::text) <= 20000`.
+    const nine = Array.from({ length: 9 }, (_, i) => `d${i}`);
+    expect(questionsToWrite([q({ distractors: nine })], written)[0]?.distractors).toHaveLength(8);
+
+    const huge = Array.from({ length: 8 }, () => 'z'.repeat(5000));
+    const kept = questionsToWrite([q({ distractors: huge })], written)[0]?.distractors ?? [];
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(20000);
+    // Some survive: the size clamp drops from the end rather than emptying the list.
+    expect(kept.length).toBeGreaterThan(0);
+  });
 });

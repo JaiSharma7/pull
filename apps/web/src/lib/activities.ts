@@ -182,9 +182,14 @@ function generator(seed: string | number): () => number {
  *
  * The order of a question's options must not change between a render and a
  * re-render, or the reader's click lands on a different option than the one they
- * read. Seeding on the question id (see `mcqOptions`) also means the same reader
- * sees the same order across sessions, so the answer never becomes "the one that
- * moved".
+ * read. Seed on the question id and the same reader also sees the same order across
+ * sessions, so the answer never becomes "the one that moved".
+ *
+ * THE SEED IS THE CALLER'S, and this paragraph used to say `mcqOptions` made it the
+ * question id. It does not and structurally cannot -- `mcqOptions` takes the seed as a
+ * parameter and its `q` does not carry an `id` -- so stability across sessions was
+ * asserted here and established nowhere. The requirement is stated at `mcqOptions`,
+ * which is where a caller reads it.
  */
 export function seededShuffle<T>(items: readonly T[], seed: string | number): T[] {
   const out = [...items];
@@ -205,6 +210,12 @@ export function seededShuffle<T>(items: readonly T[], seed: string | number): T[
  * dropped rather than shown twice, and so is a duplicate distractor — an authored
  * question should never contain either, but a question that does must not present
  * two right answers or two identical wrong ones.
+ *
+ * PASS THE QUESTION ID AS THE SEED. Nothing here can enforce it -- the seed is whatever
+ * the caller hands over -- and an index, a `Date.now()`, or anything else per-session
+ * reshuffles the options under the reader's finger: between two loads of one card, or
+ * between a render and a re-render, so the click lands on an option they did not read.
+ * `seededShuffle` is deterministic; the id is what makes the determinism worth having.
  */
 export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: string | number) {
   const answer = (q.answer ?? '').trim();
@@ -986,13 +997,51 @@ export function gradeOrdering(
   latencyMs: number | null | undefined = null,
 ): GradeResult & { positionsWrong: number; inSequence: number } {
   const steps = orderingSteps(q);
+
+  /*
+   * FEWER THAN TWO STEPS IS NOT AN ORDERING, and this is the guard `gradeMcq` and
+   * `gradeCloze` got in the last round and this function did not.
+   *
+   * Round five, found independently by two reviewers, and it is a defect the round
+   * before it introduced: widening `Question.answer` to `string | null` narrowed three
+   * of the four entry points that read it and left the fourth with only its `?? ''`.
+   * Both halves of the miss put something false in front of a reader.
+   *
+   * NO STEPS. A question with no answer scored `confidentlyWrong` whenever the reader
+   * said they were sure -- measured, including the case where `positionsWrong` is 0 and
+   * nothing was placed wrong at all. That flag is not a grade; it is the false-belief
+   * signal that routes an idea into the repair list, and there is no `whyWrong` for an
+   * ordering, so the reader is told they hold a misconception with no reason beside it.
+   * `gradeMcq` says exactly this six hundred lines up.
+   *
+   * ONE STEP. There is one arrangement, the reader makes it, and a sure and quick answer
+   * graded `easy` -- stability multiplied by more than three, for a question that could
+   * not be got wrong. That is the round-three MCQ finding at the kind round three did
+   * not reach, and `mcqOptions` carries the same floor for the same reason.
+   *
+   * The floor is here and not only in the schema because `Question.answer` is
+   * `string | null` in TypeScript: a reader's own self-graded question reaches this
+   * function without passing through Postgres at all.
+   */
+  if (steps.length < 2) {
+    return {
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+      positionsWrong: 0,
+      inSequence: 0,
+    };
+  }
+
   const given = order.map((s) => s.trim());
   let positionsWrong = 0;
   const length = Math.max(steps.length, given.length);
   for (let i = 0; i < length; i += 1) {
     if (steps[i] !== given[i]) positionsWrong += 1;
   }
-  const correct = steps.length > 0 && positionsWrong === 0;
+  // No `steps.length > 0` here any more: the guard above makes it unreachable, and a
+  // condition that cannot be false reads as though it were carrying the empty case.
+  const correct = positionsWrong === 0;
   return {
     ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.ordering),
     positionsWrong,
@@ -1011,6 +1060,14 @@ export function gradeOrdering(
  * worth more than a right one: the reader learns which specific confusion they
  * hold. Without one for this distractor, the general explanation stands in.
  * Picking the answer is not wrong, so there is nothing to say and this is null.
+ *
+ * "THE ANSWER" HERE MEANS EXACTLY THE ANSWER, and for a cloze that is stricter than the
+ * grader. `gradeCloze` accepts a typing slip and a spelling variant -- `colour` for
+ * `color` grades `correct: true` -- while this compares trimmed strings, and so returns
+ * a reason for the same input. That is right for the MCQ case the function was written
+ * for, where picking an option either is or is not the answer, and it means a screen
+ * must NOT decide whether to show a reason by asking whether this is null. Show one when
+ * the GRADER said the reader was wrong; ask this only for the words to put in it.
  */
 export function whyWrong(
   q: Pick<Question, 'answer' | 'explanation' | 'rationale'>,

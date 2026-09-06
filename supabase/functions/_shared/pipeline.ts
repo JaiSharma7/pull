@@ -459,6 +459,12 @@ export function qualityFromDraft(summary: {
  * exactly this reason — a question attached to the wrong idea is invisible and
  * permanent.
  */
+/** `quiz_questions_prompt_length` and `_answer_length`, as the writer sees them. */
+const MAX_QUESTION_TEXT = 2000;
+/** The two halves of `quiz_questions_distractors_shape`. */
+const MAX_DISTRACTORS = 8;
+const MAX_DISTRACTORS_TEXT = 20000;
+
 export function questionsToWrite(
   pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
   written: readonly { ordinal: number; id: string }[],
@@ -473,9 +479,39 @@ export function questionsToWrite(
     const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
     const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
     if (!prompt || !answer) return;
-    const distractors = Array.isArray(q.distractors)
-      ? q.distractors.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+    /*
+     * THE BOUNDS THE TABLE NOW CARRIES, MET BY THE WRITER RATHER THAN HIT BY IT.
+     *
+     * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
+     * `_distractors_shape`, and this function is the table's only writer. It trims and
+     * filters and never truncates, so a model returning a 2,100-character prompt made the
+     * `cards` step raise 23514 -- AFTER `insertPulls` had committed and after the
+     * synthesis had been paid for. `synthesize`'s output replays from `job_step_outputs`,
+     * so the model is not billed again and the step then fails identically on every
+     * retry: a generation that can never converge, which is the failure 20260901040000
+     * exists to prevent. Nothing upstream clamps it either -- `BOUNDS` in
+     * `packages/prompts/scripts/export.mjs` bounds the distractor COUNT and no length.
+     *
+     * A constraint its only writer cannot satisfy is not a guard. That argument is made
+     * at length for `user_questions` in the sibling migration and was not applied here.
+     *
+     * The question is dropped rather than truncated: a truncated prompt is a question
+     * that reads as though it were finished, and a pull with no question is an outcome
+     * the schema already allows.
+     */
+    if (prompt.length > MAX_QUESTION_TEXT || answer.length > MAX_QUESTION_TEXT) return;
+
+    // Count AND size. `quiz_questions_distractors_shape` bounds both, and this stack has
+    // twice shipped the count half of a bound with the other half missing.
+    let distractors = Array.isArray(q.distractors)
+      ? q.distractors
+          .filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+          .slice(0, MAX_DISTRACTORS)
       : [];
+    while (distractors.length > 0 && JSON.stringify(distractors).length > MAX_DISTRACTORS_TEXT) {
+      distractors = distractors.slice(0, -1);
+    }
+
     out.push({ pullId, prompt, answer, distractors });
   });
 
