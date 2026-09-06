@@ -13,8 +13,9 @@
 --   * A topic with nothing readable behind it is not a topic a reader can open.
 --
 -- And one that is access control: a work whose only summary is private must not
--- appear in a topic, because `works_read_all` is `using (true)` and the join
--- goes through `work_topics`, not through `summaries`.
+-- appear in a topic. The join goes through `work_topics`, not through `summaries`,
+-- so the count has to exclude it on its own -- and since 20260905101000 the
+-- `works` policy hides such a row as well, which this asserts from both sides.
 --
 -- Read-only in effect: everything below rolls back.
 \set ON_ERROR_STOP on
