@@ -1243,3 +1243,59 @@ describe('a connection that yields mid-drain', () => {
     await expect(hasPending(user)).resolves.toBe(false);
   });
 });
+
+/*
+ * A store call made while another tab is upgrading must still settle.
+ *
+ * Round 3 fixed a real fault — `blocking()` closed the handle under a running drain,
+ * so the post-apply delete threw and an applied grade stayed queued — by DEFERRING
+ * the close until the drain finished. That was worse than the fault. IndexedDB
+ * serialises the connection queue per database, so a connection that has not let go
+ * blocks every later `open()` from this tab too: a cache read issued during the
+ * deferral never settled, and a drain whose own work reopens the database deadlocked
+ * outright, wedging the queue for the life of the tab.
+ *
+ * The delete is resilient instead (`forget` reopens and retries), and `blocking()`
+ * does the one thing it is for. This pins the property that the deferral broke.
+ */
+describe('a version change from another tab', () => {
+  it('does not deadlock a drain whose own work reopens the database', async () => {
+    /*
+     * The deadlock, which is the sharp end of it. `forget` reopens the database to
+     * remove a write whose handle died, so a drain's own critical path can call
+     * `db()` — and a round-3 fix held the connection open until the drain finished.
+     * Each waited for the other: `inFlight.delete` never ran, so every later
+     * `drainPending(user)` returned the same hung promise and the queue was wedged
+     * for the life of the tab. Offline is one of the five law 3 keeps free forever.
+     *
+     * `blocking()` closes immediately again and the delete is made resilient
+     * instead, which is where the fix belonged.
+     */
+    const user = 'u-deadlock';
+    await queueMutation(user, { kind: 'save', pullId: 'p1' });
+    await queueMutation(user, { kind: 'save', pullId: 'p2' });
+
+    const bump = openDB('what-a-pull', 4, { upgrade() {} });
+
+    const drained = await Promise.race([
+      drainPending(user, async (m) => {
+        if ('pullId' in m && m.pullId === 'p1') {
+          // Another tab's upgrade lands mid-drain, then this drain reopens.
+          await new Promise((r) => setTimeout(r, 0));
+          await hasPending(user);
+        }
+      }).then((n) => `drained:${n}`),
+      new Promise<string>((r) => setTimeout(() => r('deadlocked'), 1000)),
+    ]);
+
+    expect(drained, 'the drain never finished').not.toBe('deadlocked');
+    // And the queue is not wedged: a second drain runs rather than returning the
+    // first one's hung promise.
+    const second = await Promise.race([
+      drainPending(user, async () => {}).then(() => 'ran'),
+      new Promise<string>((r) => setTimeout(() => r('wedged'), 1000)),
+    ]);
+    expect(second, 'the queue stayed wedged after the drain').toBe('ran');
+    (await bump).close();
+  });
+});

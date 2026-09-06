@@ -295,14 +295,6 @@ let dbPromise: Promise<Handle> | null = null;
 /** The open connection behind `dbPromise`, so it can be closed synchronously when asked to yield. */
 let live: IDBPDatabase<WapDB> | null = null;
 
-/**
- * A close another tab asked for, held until the drain using this handle is done.
- *
- * See `blocking()`. Set there, honoured in `drainPending`'s `finally` — the only
- * two places that know, respectively, that a close is wanted and that it is now
- * safe.
- */
-let closeWhenIdle = false;
 
 function db(): Promise<Handle> {
   dbPromise ??= open().catch((error: unknown) => {
@@ -442,30 +434,29 @@ function open(): Promise<Handle> {
       blocking() {
         if (!current()) return;
         /*
-         * The handle is dropped so the next caller reopens at the new version — but
-         * it is CLOSED only if no drain is using it.
+         * CLOSE IMMEDIATELY. A version change is another tab asking to upgrade, and
+         * every open on this database queues behind the connection that has not let
+         * go — so holding it does not merely delay that tab, it hangs every
+         * subsequent `open()` in THIS one.
          *
-         * `runDrain` captured this handle before its loop, and its post-apply
-         * `delete('pending', id)` is the last thing it does with it. Closing here,
-         * synchronously inside `versionchange`, made that delete throw
-         * `InvalidStateError` on a write that had ALREADY reached the server; the
-         * drain's outer catch swallowed it and the entry survived. For a save or a
-         * read that is harmless. For a recall grade it is the failure this file
-         * spends thirty lines saying it cannot afford: `grade_recall` multiplies
-         * stability and increments `reps`, so the replay roughly squares the interval
-         * and the card leaves review for months.
+         * A round-3 fix deferred the close while a drain was in flight, to stop
+         * `runDrain`'s post-apply delete throwing on a handle closed underneath it.
+         * That was the wrong mechanism and measurably worse than the fault: a
+         * `readCachedPulls()` issued during the deferral never settled, and a drain
+         * whose own work reopens the database -- `forget`'s fallback does exactly
+         * that -- deadlocked outright. `inFlight.delete` then never ran, so every
+         * later `drainPending` returned the same hung promise and the queue was
+         * wedged for the life of the tab. Offline reading is one of the five law 3
+         * calls free forever; making it hang is not a smaller bug than replaying a
+         * grade.
          *
-         * Deferring the close costs the upgrading tab a moment and costs nothing
-         * else: the drain is bounded by the queue it snapshotted, and `dbPromise` is
-         * already null so nothing new joins this connection.
+         * The delete is made resilient instead, which is where the fix belonged:
+         * `forget` reopens and retries, and a mutation test showed that alone is
+         * sufficient. This handler goes back to doing the one thing it is for.
          */
-        dbPromise = null;
-        if (inFlight.size > 0) {
-          closeWhenIdle = true;
-          return;
-        }
         live?.close();
         live = null;
+        dbPromise = null;
       },
       terminated() {
         if (!current()) return;
@@ -815,12 +806,6 @@ export function drainPending(
   const started = withCrossTabLock(userId, () => runDrain(userId, apply, isStillCurrent)).finally(
     () => {
       inFlight.delete(userId);
-      // The other tab is waiting to upgrade. Let it, now that nothing is mid-write.
-      if (inFlight.size === 0 && closeWhenIdle) {
-        closeWhenIdle = false;
-        live?.close();
-        live = null;
-      }
     },
   );
   inFlight.set(userId, started);
