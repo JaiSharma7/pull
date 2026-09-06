@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GRAPH_LIMIT } from '../lib/graph-api.js';
-import { computeGraphStats, SAMPLE_GRAPH } from '../lib/graph.js';
+import { computeGraphStats, GRAPH_LIMIT, SAMPLE_GRAPH } from '../lib/graph.js';
 import { PROGRESS_COPY } from '../lib/progress.js';
 
 /*
@@ -16,6 +15,15 @@ import { PROGRESS_COPY } from '../lib/progress.js';
  * A source check rather than a render: this route reads a live session and a
  * network call, and the claim lives in one paragraph of copy that a future edit
  * could quietly restore.
+ *
+ * EVERY IMPORT HERE IS PURE, and that is load-bearing rather than tidy. Reading
+ * `GRAPH_LIMIT` from `lib/graph-api.js` pulled in `lib/supabase.js`, which builds a
+ * client at module scope and throws when `VITE_SUPABASE_URL` is unset — and vitest
+ * runs in mode `test`, which loads neither `.env.development` nor `.env.production`.
+ * The suite then failed to COLLECT, so it reported zero tests while the run's summary
+ * still read `484 passed`, and the failure travelled to CI behind a number that
+ * looked right. Keeping this file on pure modules is what makes it a guard: if the
+ * copy it checks ever reaches a network client again, this suite stops collecting.
  */
 describe('what the dashboard promises about its own numbers', () => {
   it('does not claim that nothing is estimated', () => {

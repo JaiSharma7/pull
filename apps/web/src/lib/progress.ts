@@ -1,4 +1,4 @@
-import { GRAPH_LIMIT } from './graph-api.js';
+import { GRAPH_LIMIT } from './graph.js';
 
 /**
  * What the progress screen promises about its own numbers.
