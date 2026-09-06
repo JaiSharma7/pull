@@ -35,6 +35,30 @@ const cssFiles = STYLE_DIRS.flatMap((dir) =>
     .filter((f) => f.endsWith('.css'))
     .map((f) => join(dir, f)),
 );
+/**
+ * The one stylesheet allowed to hold colour, by PATH rather than by name.
+ *
+ * Four assertions exempt `tokens.css`, and each did it as
+ * `label(name) !== 'tokens.css'` — a basename test, applied to a list that now spans
+ * two directories. An `apps/web/src/styles/tokens.css` would therefore have been
+ * exempt from all four the moment somebody created it, and nothing would have said
+ * so. The palette is one file; the exemption should name that file.
+ */
+const TOKENS = join(STYLES, 'tokens.css');
+/** The stylesheets every colour law applies to, which is all of them but the palette. */
+const notTokens = cssFiles.filter((f) => f !== TOKENS);
+
+/**
+ * Everywhere a component can be written, for every walk that reads components.
+ *
+ * The inline-style walk was widened to the package root last round because a
+ * `Toast.tsx` beside `components/` was unscanned; the colour-literal walk and the
+ * display-face walk were left at `components/` and kept the hole. Sharing the roots
+ * is what stops them drifting apart again — three copies of a path is three chances
+ * to widen two of them.
+ */
+const COMPONENT_ROOTS = [WEB, join(import.meta.dirname)].filter(existsSync);
+
 /** Bare names still resolve in this package, which is where the named files live. */
 const read = (f: string) => readFileSync(f.includes('/') ? f : join(STYLES, f), 'utf8');
 /** What to call a stylesheet in a failure message. */
@@ -58,13 +82,21 @@ describe('The Archive design laws', () => {
     }
   });
 
-  it('uses no box-shadow for elevation — separation is by hairline rule', () => {
+  it('uses no shadow for elevation — separation is by hairline rule', () => {
     for (const f of cssFiles) {
       // The focus ring is the sole exception: there a shadow is an
       // accessibility affordance, not decoration.
       const shadows = [...code(f).matchAll(/box-shadow:\s*([^;]+);/g)].map((m) => m[1]!.trim());
       const decorative = shadows.filter((v) => !v.includes('--focus-ring'));
       expect(decorative, `${label(f)} uses box-shadow for elevation`).toEqual([]);
+
+      // The other two ways to write one. `box-shadow` was the whole of this law, so a
+      // `text-shadow: 0 1px 2px …` on a headline and a `filter: drop-shadow(…)` on
+      // anything at all were both legal in a stylesheet while the inline-style walk
+      // rejected them in a component — the same look, judged by where it was typed.
+      // Neither has a sanctioned form: the focus ring is a box-shadow.
+      expect(code(f), `${label(f)} uses text-shadow`).not.toMatch(/text-shadow:/);
+      expect(code(f), `${label(f)} uses a drop-shadow filter`).not.toMatch(/drop-shadow\s*\(/);
     }
   });
 
@@ -81,7 +113,7 @@ describe('The Archive design laws', () => {
     /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix)\(/g;
 
   it('defines colour only in tokens.css', () => {
-    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
+    for (const f of notTokens) {
       // Data-URI SVGs carry their own encoded markup; strip them before looking
       // for colour, or the embedded paper-grain filter reads as a literal.
       const withoutDataUris = code(f).replace(/url\("data:[^"]*"\)/g, '');
@@ -127,7 +159,7 @@ describe('The Archive design laws', () => {
     // else in the package was unscanned, and a `Toast.tsx` at the package root with
     // a 20px radius, a drop shadow, a gradient and a hex passed all 31 tests.
     // `styles/` is skipped because the stylesheet checks above own it.
-    const roots = [WEB, join(import.meta.dirname)].filter(existsSync);
+    const roots = COMPONENT_ROOTS;
     expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
 
     /**
@@ -141,6 +173,17 @@ describe('The Archive design laws', () => {
      *
      * Commas inside quotes and parentheses do not end a value — `0 0 0 2px
      * var(--accent), 0 0 0 4px var(--surface)` is one shadow, not two.
+     *
+     * AND IT ENDS AT ITS OBJECT, which it did not once the scan started from a whole
+     * file rather than from an extracted `style={{ … }}`. A property with no trailing
+     * comma — the last one before the brace, which is how most of them are written —
+     * ran the scan past the closing brace and on through the rest of the module until
+     * it met a comma or a semicolon. Anything sanctioned further down the file then
+     * excused it: a real `boxShadow: '0 8px 24px rgba(0,0,0,.3)'` on `PullCard`
+     * passed because a focus ring three declarations later was inside its "value".
+     * Mutation-tested: that object passes with the unbounded scan and fails with this
+     * one. A closer arriving at depth zero is the end of the value, because it is the
+     * end of the thing the value was written inside.
      */
     const valueAfter = (inline: string, from: number): string => {
       let quote = '';
@@ -150,9 +193,11 @@ describe('The Archive design laws', () => {
         if (quote) {
           if (ch === quote) quote = '';
         } else if (ch === "'" || ch === '"' || ch === '`') quote = ch;
-        else if (ch === '(') depth += 1;
-        else if (ch === ')') depth -= 1;
-        else if ((ch === ',' || ch === ';') && depth === 0) return inline.slice(from, i);
+        else if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+        else if (ch === ')' || ch === '}' || ch === ']') {
+          if (depth === 0) return inline.slice(from, i);
+          depth -= 1;
+        } else if ((ch === ',' || ch === ';') && depth === 0) return inline.slice(from, i);
       }
       return inline.slice(from);
     };
@@ -171,12 +216,23 @@ describe('The Archive design laws', () => {
     // accepts in the same object — so the plainest spelling of the banned thing,
     // the one lifted straight out of a stylesheet, was the one it could not see.
     // The optional closing quote is what lets a quoted key reach its colon.
+    //
+    // AND BY EVERY PROPERTY IN THE FAMILY, not the one everybody writes.
+    // `border-?radius` read `borderRadius` and `border-radius` and missed
+    // `borderTopLeftRadius`, which is four declarations away from a fully rounded
+    // card and is the spelling a contributor reaches for when rounding one corner.
+    // `box-?shadow` missed `textShadow` entirely — a different property, the same
+    // law, and the one that does not need a box to blur. Both were verified past the
+    // check before this line, on `PullCard`.
     const declared = (name: string) => new RegExp(`${name}['"\`]?\\s*:`, 'giu');
     const banned: [RegExp, string, RegExp | null][] = [
+      // `--focus-ring` is sanctioned as a BOX shadow only. A text-shadow spelt with it
+      // would be decoration wearing an accessibility affordance's clothes.
       [declared('box-?shadow'), 'a shadow', /var\(--focus-ring\)/u],
+      [declared('text-?shadow'), 'a shadow', null],
       [/\b(?:linear|radial|conic)-gradient\b/gu, 'a gradient', null],
       [/\bdrop-shadow\s*\(/gu, 'a shadow', null],
-      [declared('border-?radius'), 'a radius', /var\(--radius(?:-sm)?\)/u],
+      [declared('border[a-z-]*radius'), 'a radius', /var\(--radius(?:-sm)?\)/u],
     ];
 
     const offenders: string[] = [];
@@ -232,10 +288,10 @@ describe('The Archive design laws', () => {
   });
 
   it('lets no colour literal into component source either', () => {
-    const roots = [
-      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
-      join(import.meta.dirname, 'components'),
-    ].filter(existsSync);
+    // `COMPONENT_ROOTS`, so this reads the whole package as the inline-style walk
+    // does. It read `components/` alone, which left the same gap that walk closed
+    // last round: a file beside `components/` could name any colour it liked.
+    const roots = COMPONENT_ROOTS;
     expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
 
     const offenders: string[] = [];
@@ -281,8 +337,10 @@ describe('The Archive design laws', () => {
       const value = tokens.match(new RegExp(`${name}:\\s*([\\d.]+)px`))?.[1];
       expect(Number(value), `${name} is too round`).toBeLessThanOrEqual(ceiling);
     }
-    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
-      const literals = [...code(f).matchAll(/border-radius:\s*([\d.]+)px/g)].map((m) =>
+    for (const f of notTokens) {
+      // Every corner property, not just the shorthand: `border-top-left-radius: 18px`
+      // is the same candy corner written one property along, and it was unmeasured.
+      const literals = [...code(f).matchAll(/border-[a-z-]*radius:\s*([\d.]+)px/g)].map((m) =>
         Number(m[1]),
       );
       for (const px of literals) {
@@ -369,9 +427,9 @@ describe('The Archive design laws', () => {
   it('allows a non-px radius only where the shape is the affordance', () => {
     const offenders: string[] = [];
 
-    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
+    for (const f of notTokens) {
       for (const [, selector, body] of code(f).matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-        const radius = body!.match(/border-radius:\s*([^;]+)/)?.[1]?.trim();
+        const radius = body!.match(/border-[a-z-]*radius:\s*([^;]+)/)?.[1]?.trim();
         if (!radius) continue;
         // The px form is judged by the assertion above; anything else lands here.
         // A bare `0` is not a unit slip — it is the flattest a corner gets, and
@@ -652,7 +710,7 @@ describe('The Archive viewport laws', () => {
   it('defines --measure once, in tokens.css', () => {
     // A second definition is how a screen quietly acquires its own idea of a
     // comfortable line length.
-    for (const f of cssFiles.filter((name) => label(name) !== 'tokens.css')) {
+    for (const f of notTokens) {
       expect(code(f), `${label(f)} redefines --measure`).not.toMatch(/--measure:\s*[^;]+;/);
     }
   });
@@ -1023,10 +1081,10 @@ describe('The Archive legibility laws', () => {
    * layering. Missing markup is a hard failure rather than a skip.
    */
   it('never puts the display face on a class that markup combines with .btn', () => {
-    const roots = [
-      join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'src'),
-      join(import.meta.dirname, 'components'),
-    ].filter(existsSync);
+    // Same roots as every other component walk. A `className="btn …"` written in a
+    // file beside `components/` was not collected, so the rule styling that class
+    // was judged as though markup never paired it with a button.
+    const roots = COMPONENT_ROOTS;
     expect(roots.length, 'no component source found — this check would pass vacuously').toBe(2);
 
     /** Every class that markup ever puts alongside `btn`. */
