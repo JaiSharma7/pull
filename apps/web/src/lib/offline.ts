@@ -1,9 +1,16 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import {
+  openDB,
+  type DBSchema,
+  type IDBPDatabase,
+  type IDBPTransaction,
+  type StoreNames,
+} from 'idb';
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
 import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
+import { mutationId as newMutationId } from './submission.js';
 import type { SavePatch } from './stash-api.js';
-import type { FeedRow } from './types.js';
+import type { DueReview, FeedRow } from './types.js';
 
 /**
  * Offline reading, free forever (CLAUDE.md law 3).
@@ -12,6 +19,15 @@ import type { FeedRow } from './types.js';
  * runs entirely in the browser: the service worker caches the bundle, and
  * IndexedDB holds the reader's own content plus a queue of writes made while
  * disconnected.
+ *
+ * Everything in IndexedDB is keyed by account. The queue always was; the page
+ * cache was not, and for a while that was a documented gap rather than a
+ * design: on a shared computer an offline load could show whoever sat down
+ * next the previous reader's feed. Schema version 2 closed it — the cache is
+ * keyed `userId:pullId` and read through a `by-user` index, and the rows the
+ * old schema held were dropped at upgrade because nothing recorded whose they
+ * were. A downloaded review pack, added in the same version, is keyed the same
+ * way from the start.
  *
  * Built on the web before any native wrapper, so Capacitor later becomes an
  * enhancement rather than a rescue operation.
@@ -75,11 +91,30 @@ export type PendingWrite =
        * Minted once per attempt, so a replay whose first response was lost is
        * recognised by the server as the same grade rather than applied twice.
        *
-       * OPTIONAL, and it has to stay optional: an entry queued by a build before
-       * this one carries none, and refusing to replay it would lose exactly the
-       * grade this whole mechanism exists to keep. Without an id `grade_recall`
-       * applies the write, which is the old behaviour and the right one for a
-       * write that was queued under the old rules.
+       * OPTIONAL, and it has to stay optional, though for a narrower reason than either
+       * branch of this merge claimed on its own.
+       *
+       * 4a's schema upgrade stamps an id onto every `recall` entry already on disk
+       * (`stampQueuedGrades`), taking `submittedAt` from the entry's own `at` so a grade
+       * given three days offline is not backdated to the upgrade. 1b then mints one for
+       * everything queued from here on. Between them there is no ordinary path that
+       * leaves an entry without one — so 1b's "an entry queued by an older build carries
+       * none" is no longer true of the merged file, and neither is 4a's "nothing sends
+       * it to the RPC yet", which 1b is precisely the change that does.
+       *
+       * The field stays optional because the type allows it and a store can be older
+       * than any code reasoning about it. An entry that still lacks one replays without
+       * it and `grade_recall` applies the write, which is the pre-20260905100000
+       * behaviour and the right one for a write queued under the old rules.
+       *
+       * WHAT STAMPING DOES NOT BUY, said plainly because it looks like it should: it
+       * cannot make a lost-response replay idempotent. If the original write reached
+       * Postgres and only the response was lost, the id minted at upgrade is a NEW id,
+       * so the server cannot match it to the row already written and the grade applies a
+       * second time — exactly as it would have with no id at all. What it buys is that
+       * the entry's own retries, within a drain and across later ones, are recognised as
+       * one attempt. The double-apply on a lost response is closed by 1b minting the id
+       * BEFORE the send, not by this.
        */
       mutationId?: string;
       /** When the reader answered — not when the queue gave up on the request. */
@@ -203,8 +238,34 @@ export function writeScope(write: PendingWrite): string {
   return `unknown:${String((unknown as { kind?: unknown }).kind)}`;
 }
 
+/** A feed row as the cache holds it: the row, whose it is, and when it arrived. */
+interface CachedPull extends FeedRow {
+  /** `userId:pullId` — one row per reader per pull, so two accounts never share one. */
+  key: string;
+  userId: string;
+  cachedAt: number;
+}
+
+/**
+ * One due card, downloaded for practising without a connection.
+ *
+ * `item` is whatever `get_due_reviews` returned, stored whole rather than
+ * projected, so the pack follows the engine: when the RPC starts carrying a
+ * question with a kind and a rationale, the pack carries it too without a
+ * schema bump here.
+ */
+interface PackEntry {
+  key: string;
+  userId: string;
+  pullId: string;
+  item: DueReview;
+  /** When this pack was fetched — the number a screen turns into "synced 2 h ago". */
+  syncedAt: number;
+}
+
 interface WapDB extends DBSchema {
-  pulls: { key: string; value: FeedRow & { cachedAt: number } };
+  pulls: { key: string; value: CachedPull; indexes: { 'by-user': string } };
+  reviewPack: { key: string; value: PackEntry; indexes: { 'by-user': string } };
   /**
    * Writes made offline, drained in order once the connection returns.
    *
@@ -223,42 +284,451 @@ interface WapDB extends DBSchema {
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<WapDB>> | null = null;
+/**
+ * Schema versions:
+ *
+ *   1  `pulls` keyed by pull id, unscoped; `pending` keyed by an autoincrement.
+ *   2  `pulls` keyed `userId:pullId` with a `by-user` index; `reviewPack`, keyed
+ *      the same way; every `recall` queued BEFORE the upgrade is given a mutation
+ *      id it was queued without.
+ *
+ * The narrower wording is the true one. Version 2 backfills the entries already
+ * on disk; it does not make the field an invariant of the store, because the two
+ * screens that queue a grade — `Review.tsx` and `KnowledgeCensus.tsx` — still
+ * queue `{kind, pullId, grade}` and are 1b's to change. Nothing sends the id to
+ * the server yet either: `replayWrite` calls `gradeRecall(pullId, grade)` and
+ * `api.gradeRecall` posts two arguments. `grade_recall` HAS taken `p_mutation_id`
+ * since 20260905100000, so the de-duplication exists server-side and is simply
+ * not reached until 1b threads it through. Stamping now means the entries already
+ * queued are ready for that, rather than being the one class of write that can
+ * never be recognised.
+ */
+const SCHEMA_VERSION = 2;
 
-function db() {
-  dbPromise ??= openDB<WapDB>('what-a-pull', 1, {
-    upgrade(database) {
-      if (!database.objectStoreNames.contains('pulls')) {
-        database.createObjectStore('pulls', { keyPath: 'id' });
-      }
-      if (!database.objectStoreNames.contains('pending')) {
-        database.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
-      }
-    },
+/**
+ * The connection, or `null` for "there is no store right now".
+ *
+ * `null` is a real answer rather than a failure, and every caller treats it as
+ * "cache unavailable" — the same way it treats a rejection. It exists for the
+ * one case a rejection does not cover: another tab holding the database open at
+ * an older version (see `blocked` below), where the open would otherwise stay
+ * pending forever and so would everything awaiting it.
+ */
+type Handle = IDBPDatabase<WapDB> | null;
+
+let dbPromise: Promise<Handle> | null = null;
+/** The open connection behind `dbPromise`, so it can be closed synchronously when asked to yield. */
+let live: IDBPDatabase<WapDB> | null = null;
+
+function db(): Promise<Handle> {
+  dbPromise ??= open().catch((error: unknown) => {
+    // A FAILED OPEN IS NOT REMEMBERED. Every reason one fails is transient — an
+    // upgrade that aborted, a version another tab raised past this build,
+    // storage pressure, a private window running out of quota — and a memoised
+    // rejection means this tab answers "no store" for the rest of its life and
+    // never tries again. `terminated`, `blocking` and the blocked-then-failed
+    // branch in `open` all clear the memo for the same reason; this is the
+    // remaining path that did not.
+    dbPromise = null;
+    throw error;
   });
   return dbPromise;
 }
 
-/** Best-effort throughout: storage can be unavailable (private windows, blocked
- *  site data), and reading must never fail because caching did. */
-export async function cachePulls(rows: FeedRow[]): Promise<void> {
+/**
+ * Open the store, and never leave a caller waiting on another tab.
+ *
+ * The PWA updates itself, and an updated page opens the database at a version
+ * the page in the next tab — still running the previous release — has not
+ * heard of. IndexedDB then asks that older connection to close, and if it does
+ * not, the new open stays `blocked` until it does. The first release had no
+ * answer to that request, so with a memoised promise the whole module would
+ * wait on a tab the reader may never revisit: Review would wedge after its
+ * first grade and the offline feed would render nothing at all. Three
+ * callbacks close that off:
+ *
+ *   blocked    an older tab will not yield. Answer `null` now — no store — and
+ *              if the tab does go away later, the open completes and the
+ *              connection is taken up for whoever calls next, without a reload.
+ *   blocking   a newer tab wants in. Close this connection, synchronously,
+ *              inside the `versionchange` event, so the newer open never even
+ *              sees `blocked`; and drop the memo so the next call reopens. If
+ *              this tab's code is too old to open what the newer one made, that
+ *              reopen rejects, and a rejection is what a missing store already
+ *              looks like to every caller — the page is one the PWA is already
+ *              replacing.
+ *   terminated the browser closed the connection on its own. Drop the memo so
+ *              the next call reopens rather than using a dead handle.
+ */
+/**
+ * Which open is current.
+ *
+ * `open()` writes `live` and `dbPromise` from callbacks that land whenever the
+ * browser gets round to them, and `blocking`/`terminated` can drop the memo in
+ * between — so an open that was superseded could still come back and overwrite a
+ * healthy connection with its own. Review drove both halves: a late FAILURE
+ * cleared a memo belonging to a newer, live connection, so the next call opened a
+ * third while the second was still open and unclosed; a late SUCCESS overwrote
+ * `live`, so the next `blocking` closed the wrong connection and left the one the
+ * callback exists to close open forever — blocking the next release's version
+ * bump on a connection nobody will ever close.
+ *
+ * A generation counter settles it: each open takes a number, and only touches the
+ * shared state if it is still the current one.
+ */
+let openGeneration = 0;
+
+function open(): Promise<Handle> {
+  const generation = ++openGeneration;
+  const current = () => generation === openGeneration;
+  return new Promise<Handle>((resolve, reject) => {
+    let yielded = false;
+    openDB<WapDB>('what-a-pull', SCHEMA_VERSION, {
+      async upgrade(database, oldVersion, _newVersion, transaction) {
+        if (oldVersion < 2) {
+          /*
+           * Dropped, not migrated. A v1 row is a feed row and a timestamp; nothing
+           * in it says which account fetched it, and guessing "the current one"
+           * would attribute a previous reader's feed to whoever upgraded. Losing a
+           * page of cache costs one refetch; keeping it wrong costs the property
+           * this version exists to establish.
+           */
+          if (database.objectStoreNames.contains('pulls')) database.deleteObjectStore('pulls');
+          database.createObjectStore('pulls', { keyPath: 'key' }).createIndex('by-user', 'userId');
+          database
+            .createObjectStore('reviewPack', { keyPath: 'key' })
+            .createIndex('by-user', 'userId');
+        }
+        if (!database.objectStoreNames.contains('pending')) {
+          database.createObjectStore('pending', { keyPath: 'id', autoIncrement: true });
+        } else if (oldVersion < 2) {
+          // Aborted by hand on failure, because `idb` does not await this
+          // callback -- it calls `upgrade(...)` and discards the promise
+          // (`idb@8` build/index.js:171-173). So an `async upgrade` that
+          // rejects never touches the versionchange transaction: it commits,
+          // `openDB` resolves, and the rejection escapes to `window` as an
+          // unhandled rejection while the store sits permanently half-stamped
+          // and every caller is told the upgrade succeeded. Reachable without
+          // a bug in here: `crypto.randomUUID` is undefined in a non-secure
+          // context, and a versionchange transaction that commits before the
+          // cursor walk finishes raises `TransactionInactiveError`.
+          //
+          // Aborting instead means the version bump does not land, `openDB`
+          // rejects, and the next open tries the whole thing again from v1 --
+          // which is what "commits with the schema or not at all" was always
+          // supposed to mean.
+          try {
+            await stampQueuedGrades(transaction);
+          } catch (error) {
+            // Aborted rather than rethrown, and both halves matter.
+            //
+            // `transaction.done` rejects with `AbortError` the moment the abort
+            // lands and nothing in `idb`'s upgrade path awaits it, so it is
+            // claimed here rather than left to surface on `window`. And the
+            // original error is NOT rethrown, for the same reason this block
+            // exists at all: `idb` discards whatever this callback returns, so a
+            // throw becomes a second unhandled rejection and changes nothing.
+            // The abort is the mechanism — it fails the version bump, `openDB`
+            // rejects with `AbortError`, `db()` drops the memo, and the next
+            // open tries the whole upgrade again from v1.
+            transaction.done.catch(() => undefined);
+            try {
+              transaction.abort();
+            } catch {
+              // `abort()` throws when the transaction is already finished, which is
+              // the very case the comment above names as reachable: a versionchange
+              // transaction that commits before the cursor walk completes. In that
+              // state there is nothing left to abort — the version bump has landed —
+              // and letting this escape would be the second unhandled rejection the
+              // block exists to avoid.
+            }
+            // Said out loud, once. This is the only signal that anything went wrong:
+            // nothing is rethrown, `openDB` rejects with an AbortError that every
+            // caller treats as "no store", and with a deterministic cause — the
+            // `crypto.randomUUID` case above — the whole offline queue is
+            // permanently unavailable with nothing recorded anywhere.
+            console.warn('Offline store upgrade could not complete; retrying next open', error);
+          }
+        }
+      },
+      blocked() {
+        yielded = true;
+        resolve(null);
+      },
+      blocking() {
+        if (!current()) return;
+        /*
+         * CLOSE IMMEDIATELY. A version change is another tab asking to upgrade, and
+         * every open on this database queues behind the connection that has not let
+         * go — so holding it does not merely delay that tab, it hangs every
+         * subsequent `open()` in THIS one.
+         *
+         * A round-3 fix deferred the close while a drain was in flight, to stop
+         * `runDrain`'s post-apply delete throwing on a handle closed underneath it.
+         * That was the wrong mechanism and measurably worse than the fault: a
+         * `readCachedPulls()` issued during the deferral never settled, and a drain
+         * whose own work reopens the database -- `forget`'s fallback does exactly
+         * that -- deadlocked outright. `inFlight.delete` then never ran, so every
+         * later `drainPending` returned the same hung promise and the queue was
+         * wedged for the life of the tab. Offline reading is one of the five law 3
+         * calls free forever; making it hang is not a smaller bug than replaying a
+         * grade.
+         *
+         * The delete is made resilient instead, which is where the fix belonged:
+         * `forget` reopens and retries, and a mutation test showed that alone is
+         * sufficient. This handler goes back to doing the one thing it is for.
+         */
+        live?.close();
+        live = null;
+        dbPromise = null;
+      },
+      terminated() {
+        if (!current()) return;
+        live = null;
+        dbPromise = null;
+      },
+    }).then(
+      (database) => {
+        // A superseded open still has to close what it opened, or the connection
+        // leaks and blocks the next version bump — it just must not become `live`.
+        if (!current()) {
+          database.close();
+          return;
+        }
+        live = database;
+        if (yielded) dbPromise = Promise.resolve(database);
+        else resolve(database);
+      },
+      (error: unknown) => {
+        if (!current()) return;
+        if (yielded) {
+          // The `blocked` path already answered `null`, so there is nobody left
+          // to reject to -- but the memo is a promise resolved to `null`, and
+          // the success path above is the only thing that ever replaced it. A
+          // tab whose open both blocked AND then failed (an older tab holding a
+          // connection, then a newer one raising the version past this build)
+          // would answer "no store" for the rest of its life, never retrying
+          // even after the blocker closed. Clearing it makes the next call
+          // reopen, which is what `terminated` and `blocking` already do.
+          dbPromise = null;
+          return;
+        }
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
+ * Give every queued grade from before version 2 the mutation id it was queued
+ * without.
+ *
+ * A `recall` entry replays whenever its response was lost, and `grade_recall`
+ * applies each replay it receives. The id is what will let the server tell a
+ * replay from a new grade; minting it here, once, at upgrade, means an entry
+ * queued by the old code replays under one stable id from now on rather than
+ * being the one write in the store that still cannot be recognised. Done inside
+ * the upgrade transaction so it commits with the schema or not at all.
+ *
+ * `submittedAt` is taken from the entry's own `at` — the moment the write was
+ * queued, which is the moment the reader answered — and not from the clock at
+ * upgrade. The server orders a late replay against the reader's current state
+ * by this value, so stamping it with the upgrade time would tell it a grade
+ * from three days offline had just been given.
+ *
+ * It backfills what is already on disk and nothing more. Everything queued from
+ * here on already carries an id — `Review.tsx`, `Feed.tsx` and `KnowledgeCensus`
+ * mint one per submission and `drainPending` passes it to `grade_recall` — so the
+ * only entries this can find are the ones queued by a build that predates that,
+ * and stamping them is what lets the server recognise their replays too.
+ */
+async function stampQueuedGrades(
+  transaction: IDBPTransaction<WapDB, StoreNames<WapDB>[], 'versionchange'>,
+): Promise<void> {
+  let cursor = await transaction.objectStore('pending').openCursor();
+  while (cursor) {
+    const entry = cursor.value;
+    if (entry.kind === 'recall' && !entry.mutationId) {
+      await cursor.update({
+        ...entry,
+        // `mutationId()` RATHER THAN `crypto.randomUUID()`, which is
+        // secure-context-gated. Over plain http this threw INSIDE the v1->v2 upgrade,
+        // so the upgrade aborted on EVERY open: `hasPending` returned false (killing
+        // Feed's retry timer) and `drainPending` returned 0 forever — the whole offline
+        // queue unreachable, which is one of the five things law 3 calls free. #86
+        // ships the helper with exactly the fallback that fixes it, so this is the
+        // first thing the merge is for.
+        mutationId: newMutationId(),
+        submittedAt: entry.submittedAt ?? entry.at ?? Date.now(),
+      });
+    }
+    cursor = await cursor.continue();
+  }
+}
+
+/** One key per reader per row, for both stores. Ids are uuids, so the colon is unambiguous. */
+function scopedKey(userId: string, id: string): string {
+  return `${userId}:${id}`;
+}
+
+/**
+ * Best-effort throughout: storage can be unavailable (private windows, blocked
+ * site data, a tab that will not yield), and reading must never fail because
+ * caching did.
+ *
+ * `userId` is the account the rows were fetched for, and `null` means there is
+ * none — a signed-out visitor has no feed and nothing to scope a copy to, so
+ * nothing is written rather than something written to nobody.
+ */
+export async function cachePulls(userId: string | null, rows: FeedRow[]): Promise<void> {
+  if (!userId) return;
   try {
     const database = await db();
+    if (!database) return;
     const tx = database.transaction('pulls', 'readwrite');
-    await Promise.all(rows.map((r) => tx.store.put({ ...r, cachedAt: Date.now() })));
+    const cachedAt = Date.now();
+    await Promise.all(
+      rows.map((r) => tx.store.put({ ...r, key: scopedKey(userId, r.id), userId, cachedAt })),
+    );
     await tx.done;
   } catch {
     /* offline caching is an enhancement, never a requirement */
   }
 }
 
-export async function readCachedPulls(limit = 20): Promise<FeedRow[]> {
+/** This account's cached rows, newest first — and only this account's. */
+export async function readCachedPulls(userId: string | null, limit = 20): Promise<FeedRow[]> {
+  if (!userId) return [];
   try {
     const database = await db();
-    const all = await database.getAll('pulls');
-    return all.sort((a, b) => b.cachedAt - a.cachedAt).slice(0, limit);
+    if (!database) return [];
+    const mine = await database.getAllFromIndex('pulls', 'by-user', userId);
+    return mine
+      .sort((a, b) => b.cachedAt - a.cachedAt)
+      .slice(0, limit)
+      .map(({ key: _key, userId: _userId, cachedAt: _cachedAt, ...row }) => row);
   } catch {
     return [];
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * The review pack
+ * -------------------------------------------------------------------------- */
+
+/** What is on the device to practise from, and when it was fetched. */
+export interface ReviewPack {
+  items: DueReview[];
+  syncedAt: number;
+}
+
+/**
+ * Replace this account's pack with what the server just returned.
+ *
+ * Replace, not merge: the pack is a copy of "what is due", and a card the
+ * server no longer lists — graded elsewhere, or no longer due — must leave the
+ * device too, or offline practice would keep asking questions the model has
+ * already moved on from. Answers whether the copy is actually on disk, for the
+ * screen that tells the reader "N ideas ready offline".
+ */
+export async function storeReviewPack(
+  userId: string,
+  items: readonly DueReview[],
+  syncedAt = Date.now(),
+): Promise<boolean> {
+  try {
+    const database = await db();
+    if (!database) return false;
+    const tx = database.transaction('reviewPack', 'readwrite');
+    const stale = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(stale.map((key) => tx.store.delete(key)));
+    await Promise.all(
+      items.map((item) =>
+        tx.store.put({
+          key: scopedKey(userId, item.pullId),
+          userId,
+          pullId: item.pullId,
+          item,
+          syncedAt,
+        }),
+      ),
+    );
+    await tx.done;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * This account's pack, in the order the server would have asked — weakest
+ * memory first, which is how `get_due_reviews` orders it. The index returns
+ * rows by key, so the order is restored here rather than trusted. `null` when
+ * nothing is downloaded, which includes a pack the reader has worked through
+ * to the end: that is the state a screen offers a fresh download from.
+ */
+/**
+ * Enough of a `DueReview` to render and to order by.
+ *
+ * The entry is stored whole precisely so its shape can drift, which makes a pack
+ * written by an older build the expected case rather than a corruption. An entry
+ * missing `retrievability` makes the comparator below `NaN` and the promised
+ * "weakest memory first" order arbitrary; one missing `headline` reaches the
+ * screen as `undefined`. Dropping it costs the reader one card they can fetch
+ * again; keeping it costs them a wrong order and a blank.
+ */
+function isDueReview(item: unknown): item is DueReview {
+  if (typeof item !== 'object' || item === null) return false;
+  const row = item as Partial<DueReview>;
+  return (
+    typeof row.pullId === 'string' &&
+    typeof row.headline === 'string' &&
+    typeof row.retrievability === 'number' &&
+    Number.isFinite(row.retrievability)
+  );
+}
+
+export async function readReviewPack(userId: string): Promise<ReviewPack | null> {
+  try {
+    const database = await db();
+    if (!database) return null;
+    const entries = (await database.getAllFromIndex('reviewPack', 'by-user', userId)).filter(
+      (entry) => isDueReview(entry.item),
+    );
+    if (entries.length === 0) return null;
+    const items = entries
+      .sort(
+        (a, b) => a.item.retrievability - b.item.retrievability || a.pullId.localeCompare(b.pullId),
+      )
+      .map((e) => e.item);
+    return { items, syncedAt: Math.max(...entries.map((e) => e.syncedAt)) };
+  } catch {
+    return null;
+  }
+}
+
+/** A card answered offline leaves the pack, so it is not asked twice before the next sync. */
+export async function removeFromPack(userId: string, pullId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    await database.delete('reviewPack', scopedKey(userId, pullId));
+  } catch {
+    /* best effort, as above */
+  }
+}
+
+/** Everything this account downloaded — and nothing another account did. */
+export async function clearReviewPack(userId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    const tx = database.transaction('reviewPack', 'readwrite');
+    const keys = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(keys.map((key) => tx.store.delete(key)));
+    await tx.done;
+  } catch {
+    /* best effort, as above */
   }
 }
 
@@ -310,6 +780,7 @@ export async function queueMutation(
   if (refusal !== undefined && refusedForGood(refusal, write, null)) return false;
   try {
     const database = await db();
+    if (!database) return false;
     await database.add('pending', { ...write, userId, at: Date.now() });
   } catch {
     /* Lost, which is the honest outcome — and now the honest return value too. */
@@ -359,8 +830,22 @@ export async function pendingRecallPullIds(userId: string): Promise<Set<string> 
 export async function hasPending(userId: string): Promise<boolean> {
   try {
     const database = await db();
+    // A BLOCKED STORE IS NOT AN EMPTY ONE, and this is the one place the
+    // difference decides a policy. `Feed.tsx` uses this to decide whether to keep
+    // the drain timer alive; answering `false` while an older tab holds the
+    // previous version open -- which THIS release makes reachable for the first
+    // time, being the store's first version bump -- resets the backoff and
+    // schedules no retry, so a queue that really is on disk sits undrained until a
+    // reload. `null` is exactly that case, and it is temporary: the other tab will
+    // close. Answering `true` costs one more scheduled attempt.
+    if (!database) return true;
     return (await database.getAll('pending')).some((item) => item.userId === userId);
   } catch {
+    // A REJECTION IS NOT, and the first draft of this fix conflated them. `db()`
+    // rejects when the store is unusable rather than busy -- site data blocked, an
+    // upgrade that keeps failing -- and that does not resolve itself, so `true`
+    // here is not "one more attempt" but a retry every five minutes for the life
+    // of the tab, each one a fresh `openDB` that fails again.
     return false;
   }
 }
@@ -433,6 +918,7 @@ async function runDrain(
   const blocked = new Set<string>();
   try {
     const database = await db();
+    if (!database) return drained;
     const items = (await database.getAll('pending'))
       // Only this account's writes. Another user's stay queued for them.
       .filter((item) => item.userId === userId)
@@ -480,13 +966,46 @@ async function runDrain(
         blocked.add(scope);
         continue;
       }
-      if (item.id !== undefined) await database.delete('pending', item.id);
+      if (item.id !== undefined) await forget(database, item.id);
       drained += 1;
     }
   } catch {
     /* IndexedDB itself is unavailable — nothing to drain */
   }
   return drained;
+}
+
+/**
+ * Remove a queued write that has already applied, even if the handle died first.
+ *
+ * `terminated()` fires when the browser evicts the database, and no amount of
+ * deferring covers it — so this is the second half of the same guarantee. An entry
+ * left here is a write the server has ALREADY taken and that the next drain would
+ * send again; reopening to delete it costs one connection and closes the window.
+ * If even that fails there is nothing further to try, and it is logged rather than
+ * swallowed, because the next drain will double-apply and somebody should be able
+ * to find out why.
+ */
+async function forget(database: Handle, id: number): Promise<void> {
+  try {
+    // Non-null on the caller's path — `runDrain` bails before its loop when `db()`
+    // yields nothing — but `Handle` carries the null and the fresh open below is
+    // the whole point, so it is asked rather than asserted.
+    if (!database) throw new Error('no handle');
+    await database.delete('pending', id);
+    return;
+  } catch {
+    /* the handle went away under us; try a fresh one */
+  }
+  try {
+    const fresh = await db();
+    // `db()` yields null when the store is blocked or broken; there is nothing
+    // further to try, and the log below is the whole remaining recourse.
+    if (fresh) await fresh.delete('pending', id);
+    else throw new Error('the offline store is unavailable');
+  } catch (error) {
+    console.error('[offline] a write applied but could not be removed from the queue', error);
+  }
 }
 
 /**

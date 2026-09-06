@@ -259,14 +259,24 @@ work.
 Built on the web **before** any native wrapper, so Capacitor becomes an enhancement
 rather than a rescue operation. Service worker for the bundle, the
 stylesheet and the three self-hosted typefaces; IndexedDB for a pending-mutation queue
-that drains on reconnect, and for the last page of feed rows.
+that drains on reconnect, for the pages of feed rows the reader has loaded, and for a
+downloaded review pack. The cache and the pack are keyed `userId:pullId` and read only
+through a `by-user` index; the queue keys by an autoincrement and carries its owner on
+every entry, filtered on read. Two mechanisms, one property — a shared browser never
+shows one reader another's copy — and it is worth naming both, because "every store is
+keyed by account" reads as a guarantee the queue does not implement. Schema version 2 of
+`lib/offline.ts` established the keying and dropped the unscoped rows version 1 had kept,
+since nothing in them said whose they were.
 
 Two limits, stated because "offline" is one of the five things law 3 promises and a
 vaguer sentence would be doing work it has not earned. **Nothing caches audio** — it is
 synthesised on the device by `speechSynthesis`, so there is nothing to cache and it works
-offline for free. And **only the feed writes to the cache** (`cachePulls`, called from
-`Feed.tsx`): the Library, Source, Search, Daily and History screens read through to the
-network and fail without it. Widening that is the obvious next piece of offline work.
+offline for free. And **one screen writes to it**: the feed caches the pages it loads
+(`cachePulls`, called from `Feed.tsx`). The pack store (`storeReviewPack`) exists with no
+caller yet — Review fills it in the next PR of the same package, so that the cards due
+today can be answered without a connection and drained as grades on reconnect. The
+Library, Source, Search, Daily and History screens read through to the network and fail
+without it. Widening that is the obvious next piece of offline work.
 
 ## Why Vite and not a server framework
 

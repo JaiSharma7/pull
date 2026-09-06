@@ -224,7 +224,7 @@ export function Feed({
         // event, which never fires when the failure happened with `onLine` true —
         // so a transport failure would raise it and nothing would lower it again.
         setOffline(false);
-        void cachePulls(f.rows);
+        void cachePulls(userId, f.rows);
       })
       .catch(async (e: unknown) => {
         if (cancelled) return;
@@ -242,7 +242,7 @@ export function Feed({
          * is worse than none: it hides the failures most worth seeing early, and
          * tells the reader to go check their wifi instead.
          */
-        const cached = isOfflineFailure(e) ? await readCachedPulls() : [];
+        const cached = isOfflineFailure(e) ? await readCachedPulls(userId) : [];
 
         // Re-checked after the await, not only before it. Opening IndexedDB and
         // reading it is a real gap, and this branch is now reachable twice over:
@@ -267,18 +267,42 @@ export function Feed({
           });
           setOffline(true);
         } else {
+          /*
+           * Offline with nothing cached is still offline.
+           *
+           * `isOfflineFailure(e)` was computed above to decide whether to read the
+           * cache and then thrown away, so an empty cache fell through to the generic
+           * "Could not load your feed just now." with a Try again button that can only
+           * fail. `Review.tsx` already distinguishes the two.
+           *
+           * This branch is newly common because of this very PR: the v2 upgrade drops
+           * every v1 cache row, and a second account on a shared device — the case the
+           * change exists for — starts with nothing cached at all. So the first reader
+           * to go into a tunnel after it lands is the one told the wrong thing.
+           */
+          setOffline(isOfflineFailure(e));
           setError(e instanceof Error ? e.message : String(e));
         }
       });
     return () => {
       cancelled = true;
     };
-    // Deliberately keyed on the seed alone. Including the interrupt budget
-    // would refetch page 0 every time a question is answered, replacing the
-    // list while the reader is partway down it — and cards already seen are by
-    // then recorded as impressions, so they would not even come back.
+    // Deliberately keyed on the seed and the account. Including the interrupt
+    // budget would refetch page 0 every time a question is answered, replacing
+    // the list while the reader is partway down it — and cards already seen are
+    // by then recorded as impressions, so they would not even come back.
+    //
+    // `userId` IS in the list, and the disable above it is only about the budget.
+    // This effect reads it (the cache write, and the cache read in the `catch`),
+    // and `loadMore` already depends on it. Today `App.tsx` unmounts this
+    // component on a session change so the id cannot move under a stable seed —
+    // but nothing in this file enforces that, and the failure if it ever stops
+    // being true is the offline path rendering the previous account's cached rows
+    // to the next reader, which is the property this whole PR exists to
+    // establish. It never changes on a stable session, so listing it costs
+    // nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.seed, reloads, refreshKey]);
+  }, [session.seed, reloads, refreshKey, userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -392,7 +416,7 @@ export function Feed({
         lastPlaced: feed.lastPlaced,
       })
       .then((next) => {
-        void cachePulls(next.rows);
+        void cachePulls(userId, next.rows);
         setFeed((prev) => (prev ? appendPage(prev, next, cardsBefore) : prev));
       })
       .catch((e: unknown) => {
@@ -404,7 +428,7 @@ export function Feed({
         );
       })
       .finally(() => setLoadingMore(false));
-  }, [feed, loadingMore, session.seed, session.cardsSeen, session.interruptsShown]);
+  }, [feed, loadingMore, session.seed, session.cardsSeen, session.interruptsShown, userId]);
 
   const items = useMemo(() => (feed ? weave(feed.rows, feed.slots) : []), [feed]);
 
@@ -714,7 +738,19 @@ export function Feed({
   if (error) {
     return (
       <div className="stack measure" role="alert">
-        <p>Could not load your feed just now.</p>
+        {/*
+          Two sentences, because they ask for two different things. A reader in a
+          tunnel with an empty cache needs to know it is the connection and that
+          nothing is wrong with their account; a reader whose request was refused
+          needs the retry. `Review.tsx` already drew this distinction and this
+          screen did not, so the offline reader got the generic sentence and a
+          button that could only fail.
+        */}
+        <p>
+          {offline
+            ? 'You appear to be offline, and there is nothing downloaded on this device yet.'
+            : 'Could not load your feed just now.'}
+        </p>
         <button
           type="button"
           className="btn btn--primary"
