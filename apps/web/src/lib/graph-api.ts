@@ -1,8 +1,8 @@
-import { hasReader, narrowGraph, SAMPLE_GRAPH } from './graph.js';
+import { GRAPH_LIMIT, hasReader, narrowGraph, SAMPLE_GRAPH } from './graph.js';
 import { supabase } from './supabase.js';
 import type { KnowledgeGraphData } from './types.js';
 
-export { SAMPLE_GRAPH };
+export { GRAPH_LIMIT, SAMPLE_GRAPH };
 
 /**
  * Fetch the reader's personal knowledge graph.
@@ -30,9 +30,10 @@ export { SAMPLE_GRAPH };
  * A graph is a derived view one RPC rebuilds; until that RPC answers, the honest thing to
  * show is that we do not know, which `graphAbsence` reports as `unreachable`.
  */
+
 export async function fetchKnowledgeGraph(
   userId: string | null,
-  limit = 150,
+  limit = GRAPH_LIMIT,
 ): Promise<KnowledgeGraphData> {
   // Still asked, and still meaning what it meant: whether there is a reader who could
   // have a personal graph at all. It no longer gates a cache, because there is none.

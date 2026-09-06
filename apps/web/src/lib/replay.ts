@@ -54,7 +54,25 @@ export async function replayWrite(
       return;
     // Queued by the Review screen, which has no drain of its own.
     case 'recall':
-      await port.gradeRecall(write.pullId, write.grade);
+      // The provenance travels with the replay or the id is pointless: it is
+      // what lets the server tell this attempt from a new one. An entry queued
+      // before the field existed carries none and is applied, which is the old
+      // behaviour and the right one for a write queued under the old rules.
+      await port.gradeRecall(
+        write.pullId,
+        write.grade,
+        write.mutationId && typeof write.submittedAt === 'number'
+          ? {
+              mutationId: write.mutationId,
+              submittedAt: write.submittedAt,
+              ...(write.confidence ? { confidence: write.confidence } : {}),
+              ...(write.questionId ? { questionId: write.questionId } : {}),
+              ...(write.recallKind ? { kind: write.recallKind } : {}),
+              ...(typeof write.latencyMs === 'number' ? { latencyMs: write.latencyMs } : {}),
+              ...(write.answer ? { answer: write.answer } : {}),
+            }
+          : undefined,
+      );
       return;
     case 'explain':
       await port.saveExplanation(userId, write.pullId, write.text, write.mutationId);

@@ -44,7 +44,12 @@ Every `works` row carries one:
 
 - `public_domain` — the easiest place to build a rich launch corpus, and where our seed lives
 - `licensed`
-- `user_owned` — a user's own document, private by default
+- `user_owned` — a user's own document, private by default. This is what an imported
+  highlight becomes: `commit_import` writes the source with this status and the reader's
+  summary of it at `visibility = 'private'`, so it can never be pooled into the feed, never
+  reaches canonical generation, and is invisible to every reader but the one who imported
+  it. Verbatim text is defensible here and nowhere else in the product, because it is one
+  reader's own copy of their own reading rather than something we publish
 - `public_reference` — publicly accessible material referenced with attribution
 - `community` — contributed, subject to the UGC workflow below
 - `review_required` — the default for anything unresolved; not publishable

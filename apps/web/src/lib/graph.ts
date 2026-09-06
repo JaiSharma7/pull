@@ -1,6 +1,32 @@
 import type { GraphEdge, GraphNode, GraphSource, KnowledgeGraphData } from './types.js';
 
 /**
+ * How many ideas a personal graph is built from, and the number the screen SAYS.
+ *
+ * Exported because `PROGRESS_COPY.provenance` tells the reader "your 150 most
+ * recently seen ideas", and a literal in the copy beside a literal in the fetch's
+ * default is two numbers that agree until somebody tunes one. That is the class of
+ * claim this whole PR exists to stop, so the sentence interpolates this and a test
+ * pins the two together. `fetchKnowledgeGraph` re-exports it, so the RPC's caller
+ * and the copy still read the same name.
+ *
+ * The RPC takes the most recent by `last_seen_at desc`, so past this many read
+ * ideas a new one evicts the least recently seen.
+ *
+ * IT LIVES HERE, NOT BESIDE THE FETCH, and that is the fix rather than the tidying.
+ * `progress.ts` is a copy module -- a value precisely so a claim can be tested
+ * without rendering a screen that needs a live session -- and importing the number
+ * from `graph-api.ts` pulled in `supabase.ts`, which builds a client at module
+ * scope and THROWS when `VITE_SUPABASE_URL` is unset. Vitest runs in mode `test`,
+ * which loads neither `.env.development` nor `.env.production`, so every suite
+ * importing the copy failed to collect: `MetacognitiveDashboard.test.ts` reported
+ * zero tests while the run still said 484 passed, which is how it reached CI. This
+ * module imports one type and nothing else, so the number is reachable from copy
+ * without dragging a network client behind it.
+ */
+export const GRAPH_LIMIT = 150;
+
+/**
  * The graph shown when the RPC cannot be reached at all.
  *
  * Every node is a real seeded Pull from a public-domain work, and every edge a real
@@ -184,8 +210,13 @@ export function filterConnectedEdges(edges: GraphEdge[], activeNodeIds: Set<stri
  * is inserted as `descendant` and again as `ancestor`, the Mill/Thoreau tension as
  * `opposes` twice (`20260829131109_seed_relations_and_daily.sql`). Counting rows therefore
  * reported one debate as "2 dialectical tensions" and one lineage link as two connections,
- * under a header promising that nothing is estimated. It also made the canvas stroke the
+ * under a header promising counts taken from the reader's own history. It also made the canvas stroke the
  * same segment twice, so those edges rendered darker than the alpha intends.
+ *
+ * (The header no longer says "nothing is estimated" — it never was true of
+ * retrievability, which is read off a decay curve. What it says now is that the
+ * COUNTS come from the reader's own history, which is the promise this function
+ * exists to keep.)
  */
 export function undirectedEdges(edges: readonly GraphEdge[]): GraphEdge[] {
   const seen = new Set<string>();
