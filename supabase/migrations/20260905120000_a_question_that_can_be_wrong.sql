@@ -118,6 +118,19 @@ alter table public.quiz_questions
 -- list rather than the wrong ones. Adding a column no writer fills would be a column the
 -- next reader of this schema has to work out the emptiness of.
 --
+-- `options` MEANS THE WRONG ONES, and this is the file that says so. 20260905110000 added
+-- the column with a size bound and no definition, and nothing writes it yet --
+-- `remember_pull` takes a prompt, an answer and a kind. So the meaning was still open,
+-- and `get_due_reviews` is what closes it: it surfaces `options` under the canonical name
+-- `distractors`, so one renderer serves both tables, and `mcqOptions` in `activities.ts`
+-- builds what the reader sees from `answer` plus that list. Read the other way -- as every
+-- choice including the right one -- the same renderer would show the answer twice.
+--
+-- No `mcq needs two options` rule on this table to match the canonical one, deliberately:
+-- `remember_pull` has no way to write `options` at all, so the constraint would forbid a
+-- kind that the only writer cannot satisfy. It belongs with 2d/2e, which is where the
+-- screen that writes choices lands, and where a reader can actually meet it.
+--
 -- THE KIND SET STAYS AT FOUR here, and that is deliberate rather than an oversight of the
 -- six above. `ordering` and `scenario` are generated forms: an ordering question needs its
 -- steps in a canonical sequence and a scenario needs a situation composed around the idea,
@@ -275,8 +288,17 @@ begin
                    'kind', uq.kind,
                    'prompt', uq.prompt,
                    'answer', uq.answer,
-                   'options', uq.options,
-                   'distractors', '[]'::jsonb,
+                   -- SURFACED AS `distractors`, WHICH IS THE POINT OF THE KEY.
+                   --
+                   -- `user_questions.options` and `quiz_questions.distractors` are the
+                   -- same list named for the side that writes it: the wrong choices,
+                   -- not including the answer. `mcqOptions` in `activities.ts` builds
+                   -- the rendered options from `answer` PLUS `distractors`, so a screen
+                   -- reading this array must not have to know which table a question
+                   -- came from -- and returning `'[]'` here, as the first draft of this
+                   -- function did, silently dropped every choice a reader had written
+                   -- and turned their own MCQ into a one-option question.
+                   'distractors', uq.options,
                    'cloze', uq.cloze,
                    'explanation', uq.explanation,
                    'rationale', '[]'::jsonb
@@ -291,7 +313,6 @@ begin
                    'kind', qq.kind,
                    'prompt', qq.prompt,
                    'answer', qq.answer,
-                   'options', '[]'::jsonb,
                    'distractors', qq.distractors,
                    'cloze', qq.cloze,
                    'explanation', qq.explanation,

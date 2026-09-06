@@ -21,7 +21,10 @@
 --   * a retired question falls out, and the next one takes its place
 --   * `p_limit` is clamped to 1..100 -- 2,000,000,000 does not ask Postgres for
 --     every due row a reader has, and 0 does not report "nothing is due"
---   * the `kind` check refuses a kind no renderer knows
+--   * the `kind` check accepts all SIX kinds and refuses a seventh -- both halves,
+--     because a check narrowed to one value would pass the refusal test alone
+--   * a reader's own `options` reach the array as `distractors`, so one renderer
+--     serves both tables and a reader's MCQ does not arrive with no choices
 --   * an MCQ with fewer than two distractors is refused, because it cannot be got
 --     wrong, and a cloze with no blank is refused, because there is nothing to fill
 --   * `distractors` and `rationale` refuse a non-array and refuse an enormous one
@@ -152,6 +155,22 @@ begin
   if mcq_id is null or cloze_id is null then
     raise exception 'the mcq and cloze rows did not land';
   end if;
+
+  -- ALL SIX KINDS ARE ACCEPTED. The refusal below is only half the check: narrowed
+  -- to `kind in ('recall')` it would still pass, and every generated MCQ would then
+  -- be rejected at the end of a generation somebody had already paid for.
+  insert into public.quiz_questions (pull_id, prompt, answer, kind, distractors, cloze)
+  select pull_2, 'Prompt for ' || k, 'Answer', k,
+         case when k = 'mcq' then '["one","two"]'::jsonb else '[]'::jsonb end,
+         case when k = 'cloze' then 'A sentence with a ____ in it.' else null end
+    from unnest(array['recall','mcq','cloze','short_answer','ordering','scenario']) k;
+
+  select count(*) into n from public.quiz_questions q where q.pull_id = pull_2;
+  if n <> 6 then
+    raise exception 'expected all six kinds to be accepted, stored %', n;
+  end if;
+
+  delete from public.quiz_questions q where q.pull_id = pull_2;
 
   -- A kind no renderer knows.
   begin
@@ -431,6 +450,38 @@ begin
   if jsonb_array_length(public.get_due_reviews(null)) <> 20 then
     raise exception 'a null p_limit did not fall back to the default of 20';
   end if;
+
+  ---------------------------------------------------------------------------
+  -- 6b. A READER'S OWN CHOICES REACH THE ARRAY.
+  --
+  -- `user_questions.options` and `quiz_questions.distractors` are the same list under
+  -- two names, and `get_due_reviews` surfaces both as `distractors` so one renderer
+  -- serves both tables. Returning `'[]'` for the reader's side instead -- which an
+  -- earlier draft of the function did -- drops every choice they wrote and turns
+  -- their own MCQ into a question with one option.
+  ---------------------------------------------------------------------------
+  perform pg_temp.as_owner();
+  update public.user_questions
+     set kind = 'mcq', options = '["a wrong one","another wrong one"]'::jsonb
+   where id = own_1;
+  perform pg_temp.become(reader_a);
+
+  select e -> 'questions' into qs
+    from jsonb_array_elements(public.get_due_reviews(50)) e
+   where e ->> 'pullId' = pull_1::text;
+
+  if qs -> 0 ->> 'source' <> 'user' then
+    raise exception 'the reader''s own question is no longer first';
+  end if;
+  if jsonb_array_length(qs -> 0 -> 'distractors') <> 2 then
+    raise exception
+      'the reader''s own options did not reach the array as distractors (got %). '
+      'Their MCQ would render with one option.', qs -> 0 -> 'distractors';
+  end if;
+
+  perform pg_temp.as_owner();
+  update public.user_questions set kind = 'recall', options = '[]'::jsonb where id = own_1;
+  perform pg_temp.become(reader_a);
 
   ---------------------------------------------------------------------------
   -- 7. A QUESTION IS THE READER'S OWN.
