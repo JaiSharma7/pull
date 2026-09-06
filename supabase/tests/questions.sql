@@ -37,16 +37,20 @@
 --     from, which is not where the function's own text suggests
 --   * a due card whose pull the reader cannot READ does not consume a slot in the
 --     page: the visibility joins run before the limit, not after it
---   * a reader's own questions are bounded per BRANCH, so however many they write
---     about one idea, `get_due_reviews` builds three
+--   * a reader's own questions are bounded per BRANCH: however many they write about
+--     one idea, three come back. That the WORK is bounded too -- three payloads BUILT
+--     rather than five thousand -- is a timing property this file cannot assert, and
+--     section 6d says so and says what does assert it
 --   * a question graded by comparison -- `mcq`, `cloze` -- cannot be stored with no
 --     answer to compare against, and BOTH self-graded kinds keep the optional one
---   * "blank" means any whitespace, not just spaces: a tab is not an answer
+--   * "blank" means any whitespace, not just spaces: a tab is not an answer, and it is
+--     not a prompt either
 --   * `remember_pull` can still write every kind `user_questions_kind_known` permits --
 --     a constraint the only writer cannot satisfy is an unusable RPC, not a guard
---   * every lookup of a card under test goes through `pg_temp.questions_for`, which
---     raises rather than returning NULL: an assertion against NULL takes no branch and
---     passes without testing anything
+--   * no lookup of a card under test can pass by comparing against NULL -- an
+--     assertion against NULL takes no branch and asserts nothing. Every questions
+--     array is fetched through `pg_temp.questions_for`, which raises when the card is
+--     not in the page; section 3's one whole-card lookup raises on NULL itself
 --
 -- WHAT THIS FILE CANNOT PROVE, said plainly because a mutation run measured it. The
 -- `id` at the end of the questions ordering makes it TOTAL, and removing it does not
@@ -100,12 +104,15 @@ end $fn$;
  * A plain `select ... into qs where pullId = ...` leaves `qs` NULL when the card is not
  * in the page, and every `if qs -> 0 ->> 'source' <> 'user'` against NULL is NULL --
  * so no branch is taken and the section passes having asserted nothing. That is
- * reachable here rather than theoretical: by section 6 reader A holds 161 due cards,
- * `knowledge_states` defaults to `stability 1.0` and `last_seen_at now()`, `now()` is
- * the transaction timestamp, and `retrievability` is therefore exactly 1.0 for every
- * one of them -- so `order by retrievability asc limit 50` picks fifty under an
- * unspecified tiebreak. Today's plan happens to keep the first-inserted row; that is a
- * property of the plan, not of the fixture.
+ * reachable here rather than theoretical, and all three numbers below were measured
+ * rather than reasoned: by section 6d reader A holds 161 due `knowledge_states` rows,
+ * 40 of which sit behind a withdrawn summary and are dropped by the visibility joins
+ * before the limit -- leaving 121 readable ones competing for the 100 this helper asks
+ * for. Most carry the `stability 1.0` and `last_seen_at now()` defaults, `now()` is the
+ * transaction timestamp, and `retrievability` is therefore exactly 1.0 for each -- so
+ * `order by retrievability asc limit 100` drops twenty-one of them under an unspecified
+ * tiebreak. Today's plan happens to keep the first-inserted row; that is a property of
+ * the plan, not of the fixture.
  */
 create or replace function pg_temp.questions_for(p_pull uuid, p_where text)
 returns jsonb
@@ -139,7 +146,7 @@ declare
   own_2    uuid;
 
   due      jsonb;
-  due2     jsonb;
+  qs2      jsonb;
   card     jsonb;
   qs       jsonb;
   n        int;
@@ -462,12 +469,16 @@ begin
   end if;
   perform pg_temp.become(reader_a);
 
-  due2 := public.get_due_reviews(50);
-  select e -> 'questions' into qs
-    from jsonb_array_elements(due2) e where e ->> 'pullId' = pull_1::text;
+  -- BOTH SIDES THROUGH `pg_temp.questions_for`. A bare `select ... into` on either
+  -- leaves it NULL when the card is not in the page, `NULL <> NULL` is NULL, no branch
+  -- is taken, and the section passes having compared nothing -- which is the whole
+  -- reason the helper exists. Section 4 was the last place still doing the lookup by
+  -- hand, which made this file's own claim that every lookup goes through the helper
+  -- false of the file.
+  qs  := pg_temp.questions_for(pull_1, 'section 4 (the order is stable, first call)');
+  qs2 := pg_temp.questions_for(pull_1, 'section 4 (the order is stable, second call)');
 
-  if qs <> (select e -> 'questions' from jsonb_array_elements(due) e
-             where e ->> 'pullId' = pull_1::text) then
+  if qs <> qs2 then
     raise exception
       'the questions array is not stable across two calls, and the mcq and the cloze '
       'share a created_at -- so the reader''s "1 of 3" renames itself between two '
@@ -645,9 +656,22 @@ begin
   --
   -- Review finding. `user_questions_insert_own` lets a signed-in caller write as many
   -- questions about one pull as they like, and aggregating them all before keeping
-  -- three made `p_limit` no bound on the work: `jsonb_build_object` is in the target
-  -- list, so every payload was built and then thrown away. Each branch is bounded
-  -- now. Measured at 5,000 questions on one pull: 129.72 ms before, 24.26 ms after.
+  -- three made `p_limit` no bound on the work at all -- `get_due_reviews(1)` would
+  -- build every one of them. Each branch is bounded now. Measured at 5,000 questions
+  -- on one pull: 129.72 ms before, 24.26 ms after, against 6.56 and 5.50 ms at five.
+  --
+  -- AND THE LIMIT WAS ONLY HALF OF IT. An earlier revision of this comment said
+  -- "`jsonb_build_object` is in the target list, so every payload was built and then
+  -- thrown away", and stopped there, as though the per-branch limit had ended it. It
+  -- had not: a `LIMIT` bounds the AGGREGATE and does nothing to stop a projection
+  -- being evaluated for every row the sort consumes. The 24.26 ms run above built all
+  -- 5,000 payloads too -- it is 18.76 ms above its own five-question baseline of
+  -- 5.50 ms, in the same fixture, which is not what stopping at three costs.
+  --
+  -- `user_questions_due_idx`, added by the same migration, is the other half: it
+  -- returns the rows already in `(user_id, pull_id, created_at desc, id)` order, so
+  -- the limit terminates the SCAN. Measured after it: the `Result (rows=5000)` node
+  -- inside a 16.394 ms branch becomes three rows off the index in 0.121 ms.
   --
   -- WHAT THIS SECTION CAN AND CANNOT SHOW, measured by mutation rather than assumed.
   -- Deleting the `limit 3` on the reader's own branch does NOT fail this file: the
@@ -794,6 +818,38 @@ begin
     insert into public.user_questions (user_id, pull_id, kind, prompt, answer)
     values (reader_b, pull_1, 'mcq', 'p', E'\n  \r');
     raise exception 'an mcq answered with newlines was accepted';
+  exception when check_violation then null;
+  end;
+
+  -- AND THE OTHER HALF OF THE SAME CLAIM: an `mcq` WITH an answer is still writable
+  -- through the granted RPC. This file says `remember_pull` can write every kind
+  -- `user_questions_kind_known` permits, and until now asserted only the refusals --
+  -- so `check (kind <> 'mcq' or jsonb_array_length(options) >= 2)`, which no writer can
+  -- satisfy because `remember_pull` has no `options` parameter, would have passed the
+  -- whole file while making the RPC answer 400 for `mcq` permanently. That is the hole
+  -- the cloze assertion above closes, and it was left open on the other half.
+  if (public.remember_pull(pull_1, 'An mcq with an answer?', 'the answer', 'mcq',
+                           extensions.gen_random_uuid()) ->> 'questionId') is null then
+    raise exception 'remember_pull could not write an mcq with an answer';
+  end if;
+
+  -- A PROMPT OF ONLY WHITESPACE IS NOT A PROMPT, and `prompt` is what the Review card
+  -- renders. `user_questions_prompt_length` bounds length only, and the `btrim` in
+  -- `remember_pull` strips spaces only, so a tab was a valid question. A direct insert
+  -- did not even have the `btrim` in the way. A reader's own question outranks the
+  -- canonical one, so one such row empties the card AND displaces the question that
+  -- would otherwise have been asked.
+  begin
+    perform public.remember_pull(pull_1, E'\t', 'the answer', 'mcq',
+                                 extensions.gen_random_uuid());
+    raise exception 'remember_pull stored a question whose prompt is a tab';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.user_questions (user_id, pull_id, kind, prompt)
+    values (reader_b, pull_1, 'recall', '   ');
+    raise exception 'a question with a blank prompt was accepted';
   exception when check_violation then null;
   end;
 

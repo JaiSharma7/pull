@@ -175,6 +175,30 @@ alter table public.user_questions
       kind in ('recall', 'short_answer')
       or (answer is not null and answer !~ '^\s*$')
     ),
+  /*
+   * AND A PROMPT OF ONLY WHITESPACE IS NOT A PROMPT.
+   *
+   * Review finding, and the same mistake as the rule above rather than a new one.
+   * `user_questions_prompt_length` (20260905110000:169) bounds LENGTH only, and
+   * `remember_pull` writes `btrim(p_prompt)` -- the one-argument `btrim` whose
+   * spaces-only behaviour the paragraph above exists because of. So
+   * `remember_pull(pull, E'\t', 'the answer', 'mcq', id)` was accepted, and a direct
+   * insert under `user_questions_insert_own` did not even have the `btrim` in the way:
+   * a prompt of three spaces was a valid row for any signed-in reader through PostgREST.
+   *
+   * `prompt` is the column the Review card renders, and a reader's own question always
+   * outranks the canonical one -- so one such row both empties the card AND displaces
+   * the question that would have been asked, until the reader thinks to retire it.
+   * Pre-existing on `main`; closed here because it is the same table, the same `alter
+   * table` and the same reasoning as the answer rule two constraints up.
+   *
+   * `quiz_questions.prompt` has the same length-only shape and deliberately does NOT
+   * get this rule: readers have no insert or update policy on that table, and
+   * `questionsToWrite` in `pipeline.ts` trims and drops a question whose prompt is
+   * empty before the pipeline ever writes one.
+   */
+  add constraint user_questions_prompt_not_blank
+    check (prompt !~ '^\s*$'),
   add constraint user_questions_explanation_length
     check (explanation is null or length(explanation) <= 2000),
   add constraint user_questions_cloze_length
@@ -190,10 +214,17 @@ alter table public.user_questions
  * desc)` orders without filtering by pull. So the planner filtered, built a jsonb
  * payload for EVERY matching row, and only then sorted and took three.
  *
- * Measured, 5,000 of one reader's own questions on one due pull: `Result (rows=5000)`
- * ahead of the `top-N heapsort`, 15.7 ms of a 16.4 ms branch spent building documents
- * that are immediately discarded. The same query with the payload replaced by bare
- * columns runs in 2.2 ms.
+ * Measured, 5,000 of one reader's own questions on one due pull: `Result (actual
+ * time=0.039..15.681 rows=5000)` feeding the `top-N heapsort`, inside a branch that
+ * totalled 16.394 ms. An `actual time` is inclusive of the node's input, so that is
+ * not "15.681 ms of jsonb construction" -- what it says is that all but 0.7 ms of the
+ * branch happens at or below the node that builds one document per row, five thousand
+ * times, to keep three.
+ *
+ * An earlier revision of this paragraph also quoted "the same query with the payload
+ * replaced by bare columns runs in 2.2 ms". That came from a different fixture and does
+ * not belong beside these two -- 15.681 + 2.2 exceeds the 16.394 they would both have
+ * to be parts of. Only the numbers off the one plan are kept.
  *
  * That is not what the per-branch limit was claimed to do, and this migration said so
  * in as many words -- "only a limit on each branch stops the payloads being built". A
