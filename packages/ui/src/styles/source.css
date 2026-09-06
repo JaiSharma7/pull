@@ -208,3 +208,62 @@
 .source__attribution {
   margin-top: calc(var(--space-2) * -1);
 }
+
+/*
+ * "Remember this" — the form for a question the reader writes about one idea, and
+ * the questions they have already written for it.
+ *
+ * No new controls. The label and the box are `.field__label` and `.field__textarea`,
+ * which is what every other form in the app uses, so this looks like the rest of the
+ * product rather than like a feature bolted to a source page. What is left here is
+ * rhythm: the vertical gap between a label and its box, and the hairline that separates
+ * a form from the idea it belongs to.
+ *
+ * The hairline is `--rule`, one pixel, on the top only. Boxing the form would be a
+ * second container inside a page that is already a column of ideas separated by rules,
+ * and law 1 spends its structure on hairlines rather than on cards inside cards.
+ */
+.source__ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The sentence under "The answer".
+ *
+ * `.meta` would have been the obvious class and is the wrong one: it uppercases, which
+ * is legible for two or three words and shouting for a sentence. Muted and small, in
+ * the body face, sentence case.
+ */
+.source__ask-hint {
+  margin: calc(var(--space-1) * -1) 0 0;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+/*
+ * What the reader has already asked of this idea.
+ *
+ * A list rather than a paragraph because it is a list, and unbulleted because a bullet
+ * beside a question the reader wrote themselves is the page telling them how to read
+ * their own words. Each row is prompt then Retire, wrapping on a narrow screen instead
+ * of squeezing the question.
+ */
+.source__ask-list {
+  margin: var(--space-3) 0 0;
+}
+
+.source__ask-list ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.source__ask-list li {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--rule);
+}

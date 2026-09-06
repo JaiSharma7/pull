@@ -744,22 +744,31 @@ export function Source({
 
                 {userId && asking === p.id && (
                   <div className="source__ask">
-                    <label className="meta" htmlFor={`ask-prompt-${p.id}`}>
+                    <label className="field__label" htmlFor={`ask-prompt-${p.id}`}>
                       What should this idea ask you?
                     </label>
                     <textarea
                       id={`ask-prompt-${p.id}`}
+                      className="field__textarea"
                       rows={2}
                       value={askPrompt}
                       onChange={(e) => setAskPrompt(e.target.value)}
                       placeholder="What does an obstacle become?"
                     />
-                    <label className="meta" htmlFor={`ask-answer-${p.id}`}>
-                      The answer, if you want one to check against. Leave it empty to recall it from
-                      memory and mark yourself.
+                    <label className="field__label" htmlFor={`ask-answer-${p.id}`}>
+                      The answer
                     </label>
+                    {/* Sentence case and not `.meta`, which is mono and UPPERCASED. A
+                        label is two or three words and reads fine shouted; this is a
+                        sentence, and law 1 leaves typography to do the work rather than
+                        raising the app's voice at the reader mid-explanation. */}
+                    <p className="source__ask-hint" id={`ask-answer-hint-${p.id}`}>
+                      Optional. Leave it empty to recall the answer from memory and mark yourself.
+                    </p>
                     <textarea
                       id={`ask-answer-${p.id}`}
+                      className="field__textarea"
+                      aria-describedby={`ask-answer-hint-${p.id}`}
                       rows={2}
                       value={askAnswer}
                       onChange={(e) => setAskAnswer(e.target.value)}
