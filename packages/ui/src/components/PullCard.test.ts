@@ -238,7 +238,7 @@ describe('the queue control', () => {
   it('offers Queue when a handler is given', () => {
     const html = renderToStaticMarkup(createElement(PullCard, { ...base, onQueue: () => {} }));
     expect(html).toContain('>Queue<');
-    expect(html).toContain(`aria-label="Queue: ${base.headline}"`);
+    expect(html).toContain(`aria-label="Add to queue: ${base.headline}"`);
     expect(html).toContain('aria-pressed="false"');
   });
 
@@ -252,7 +252,10 @@ describe('the queue control', () => {
       createElement(PullCard, { ...base, onQueue: () => {}, queued: true }),
     );
     expect(html).toContain('>Queued<');
-    expect(html).toContain(`aria-label="Queued: ${base.headline}"`);
+    // The NAME says what pressing it does, in both states; `aria-pressed` says which
+    // state it is in. A name that flips to a status leaves a screen reader announcing a
+    // control it has not met before and no way to tell what activating it would do.
+    expect(html).toContain(`aria-label="Remove from queue: ${base.headline}"`);
     expect(html).toContain('aria-pressed="true"');
   });
 

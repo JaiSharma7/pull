@@ -426,7 +426,20 @@ export function PullCard({
             className="btn"
             onClick={onQueue}
             aria-pressed={queued}
-            aria-label={queued ? `Queued: ${headline}` : `Queue: ${headline}`}
+            /*
+             * NAMED FOR WHAT PRESSING IT DOES, like the two buttons above it.
+             *
+             * This said `Queued: …` when pressed, which is a STATUS rather than an
+             * action — so a screen reader announced a control whose name had changed
+             * out from under it and still did not say that activating it takes the Pull
+             * back out. `Save` and `Listen` both name the action in both states
+             * (`Unsave`/`Save`, `Stop reading`/`Listen to`) and let `aria-pressed`
+             * carry the state; this is the one that did not, and now does.
+             *
+             * The visible label stays `Queued`, which is the right word for a chip you
+             * are reading rather than one you are being asked to press.
+             */
+            aria-label={queued ? `Remove from queue: ${headline}` : `Add to queue: ${headline}`}
           >
             {queued ? 'Queued' : 'Queue'}
           </button>
