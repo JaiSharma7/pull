@@ -665,22 +665,97 @@ describe('the spelling fold is the rule it claims to be', () => {
   });
 });
 
-describe('a refused spelling is not a diagnosed misconception', () => {
+describe('a spelling is not a misconception, and a confusion is', () => {
   /*
-   * The length floor is right to withhold credit — two short words one character
-   * apart are usually two words. It is not evidence the reader believes something
-   * false, and `confidentlyWrong` routes them into the misconception loop. The
-   * `-re`/`-er` family fell wholesale on a 7-character cliff: `theatre`/`theater`
-   * passed for being one letter longer than `centre`/`center`.
+   * The `-re`/`-er` family fell wholesale on the transposition floor: `theatre` was
+   * accepted for being one letter longer than `centre`. The first fix withheld
+   * `confidentlyWrong` from anything with the SHAPE of a typo, which is not
+   * evidence — the confusions below have exactly that shape — so the axis is folded
+   * in `normaliseAnswer` instead and the answer is simply right.
    */
   it.each([
     ['centre', 'center'],
     ['metre', 'meter'],
     ['litre', 'liter'],
     ['fibre', 'fiber'],
-  ])('refuses %s answered as %s without calling it a misconception', (answer, typed) => {
-    const r = gradeCloze(typed, answer, 'sure');
-    expect(r.confidentlyWrong).toBe(false);
+    ['theatre', 'theater'],
+    ['centres', 'centers'],
+    ['colour', 'color'],
+    ['favourite', 'favorite'],
+    ['neighbours', 'neighbors'],
+  ])('marks %s answered as %s right, not merely unaccused', (answer, typed) => {
+    for (const [a, b] of [
+      [typed, answer],
+      [answer, typed],
+    ] as const) {
+      const r = gradeCloze(a, b, 'sure');
+      expect(r.correct, `${a} for ${b}`).toBe(true);
+      expect(r.confidentlyWrong).toBe(false);
+    }
+  });
+
+  /*
+   * AND THE ELEVEN THE FLOOR EXISTS FOR REACH THE FLAG AGAIN.
+   *
+   * Each is a reader holding one word to be another, answered `sure`, which is what
+   * `confidentlyWrong` is for. Every one of them has the shape of a typo —
+   * `casual`/`causal` and `trail`/`trial` are transpositions, the rest single
+   * indels — so the shape-based suppression silenced all eleven. That is the
+   * measurement that sent this rule back.
+   */
+  it.each([
+    ['casual', 'causal'],
+    ['trail', 'trial'],
+    ['ion', 'iron'],
+    ['aid', 'acid'],
+    ['cost', 'coast'],
+    ['sale', 'scale'],
+    ['form', 'from'],
+    ['untied', 'united'],
+    ['hat', 'heat'],
+    ['at', 'art'],
+    ['rat', 'rate'],
+  ])('refuses %s answered as %s AND says the reader was confidently wrong', (answer, typed) => {
+    const r = gradeCloze(typed, answer, 'sure', 1000);
+    expect(r.correct, `${typed} for ${answer}`).toBe(false);
+    expect(r.confidentlyWrong, `${typed} for ${answer}`).toBe(true);
+    // Unsure is never an accusation, whatever the shape of the difference.
+    expect(gradeCloze(typed, answer, 'unsure', 1000).confidentlyWrong).toBe(false);
+  });
+
+  it('grades a spelling variant as well as the reader who spells it the other way', () => {
+    /*
+     * This is what folding an axis BUYS, over merely not accusing anybody, and it is
+     * the only observable difference for `-our`: every foldable `-our` word clears
+     * the slip rule's floor on its own, so without the fold `colour` for `color` is
+     * an accepted slip -- and an accepted slip is capped at `good`, because the rule
+     * cannot promise it was the reader's word. A fold can promise exactly that, so
+     * the answer is exact and a fast, sure reader gets the `easy` an American
+     * speller gets for the same knowledge. `organisation`/`organization` has worked
+     * this way since the `-ize` fold; this is the same fairness one axis along.
+     */
+    expect(gradeCloze('colour', 'color', 'sure', 100).grade).toBe('easy');
+    expect(gradeCloze('color', 'colour', 'sure', 100).grade).toBe('easy');
+    expect(gradeCloze('favourite', 'favorite', 'sure', 100).grade).toBe('easy');
+    expect(gradeCloze('organisation', 'organization', 'sure', 100).grade).toBe('easy');
+    // An ordinary typo is still capped, because nothing promises it was the word.
+    expect(gradeCloze('mitochondia', 'mitochondria', 'sure', 100).grade).toBe('good');
+  });
+
+  it('keeps the two pairs a wider fold would merge', () => {
+    // `four` -> `for` is why `-our` needs three stem letters, and `shoe` -> `she` is
+    // why `ae`/`oe` is not folded at all. Both are two common words that a wider rule
+    // would make one, which is the failure the whole-alphabet `z` fold was reverted
+    // for. The `-our` guard costs `odour`/`odor`, a five-letter pair that stays
+    // refused; that is the named residual.
+    expect(gradeCloze('four', 'for').correct).toBe(false);
+    expect(gradeCloze('shoe', 'she').correct).toBe(false);
+    expect(gradeCloze('odor', 'odour').correct).toBe(false);
+
+    // And the `ae`/`oe` family mostly does not need the fold: it clears the slip
+    // rule's own floor.
+    expect(gradeCloze('foetus', 'fetus').correct).toBe(true);
+    expect(gradeCloze('anaemia', 'anemia').correct).toBe(true);
   });
 
   it('still flags a confident answer that is simply a different idea', () => {

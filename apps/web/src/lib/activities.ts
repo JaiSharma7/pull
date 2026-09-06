@@ -345,6 +345,45 @@ export function normaliseAnswer(text: string): string {
       // `organise`, `realise`, `criticise` and `analyse` all have stems and still fold.
       .replace(/(?<=[a-z]{3})iz(?=e|ing|ed|er|ation|abl)/gu, 'is')
       .replace(/(?<=[a-z]{3})yz(?=e|ing|ed|er)/gu, 'ys')
+      // AND THE OTHER TWO AXES, for the reason the paragraph above gives and the
+      // paragraph above did not act on: `-re`/`-er` and `-our`/`-or` are the same
+      // word spelled two ways, and a reader spelling the way they were taught was
+      // graded `forgot` for it.
+      //
+      // `-re` is the one that matters. It is a TRANSPOSITION, so the slip rule wants
+      // seven letters, and the family sits either side of that: `theatre`/`theater`
+      // was accepted and `centre`/`center`, `metre`/`meter`, `litre`/`liter` and
+      // `fibre`/`fiber` were refused, on nothing but a letter of length.
+      //
+      // `-our` changes no verdict at all: it is a deletion, and every word the stem
+      // guard below admits is long enough that the slip rule already accepts it. What
+      // it changes is the GRADE. An accepted slip is capped at `good` because the rule
+      // cannot promise it was the reader's word rather than a different one; a fold
+      // can promise exactly that, so `colour` for `color` is exact and a fast, sure
+      // reader gets the `easy` the other speller gets for the same knowledge. That is
+      // what folding an axis buys over merely not accusing anybody, and it is why the
+      // axis belongs here rather than in a suppression.
+      //
+      // The cost, named as the `-ize` fold names `prize`/`prise`: `metre` and `meter`
+      // become one word, so a cloze that turns on the length against the instrument
+      // cannot tell them apart. Rarer than a British reader.
+      //
+      // THREE STEM LETTERS BEFORE `-our`, and that guard is load-bearing rather than
+      // cautious: at two, `four` folds to `for`. Two common words becoming one is the
+      // failure the `/z/g` version of the fold above was reverted for. It costs
+      // `odour`/`odor`, which has a two-letter stem and stays refused at five letters
+      // -- a named residual, not an oversight.
+      //
+      // `ae`/`oe` -> `e` is the third axis and is NOT folded, for the same reason one
+      // step further: `shoe` normalises to `she`. The family barely needs it, because
+      // it is mostly long enough for the slip rule already -- `foetus`/`fetus` and
+      // `anaemia`/`anemia` are both accepted -- and `shoe`/`she` is exactly the pair
+      // the length floor is there to keep apart.
+      //
+      // Plurals and the common inflections fold with the stem, or `centres` and
+      // `favourite` would be the same defect one suffix along.
+      .replace(/(?<=[a-z]{3})re(s?)(?![a-z])/gu, 'er$1')
+      .replace(/(?<=[a-z]{3})our(?=s?(?![a-z])|it|ab|ing|ed)/gu, 'or')
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -579,27 +618,6 @@ function slipShape(a: string, b: string): boolean {
 }
 
 /**
- * Is every difference here the shape of a typo, refused only for being short?
- *
- * The first attempt at this was `similarity >= 0.8`, which is the wrong question and
- * re-opened the defect an existing test guards: `increase marginal utility` against
- * `decrease marginal utility` scores high precisely because two of the three words
- * agree, so the opposite answer would have stopped being flagged. A proportional
- * threshold spread over a phrase is what let the meaning-bearing word hide in the
- * first place.
- *
- * The right question is about the shape of the difference. `centre`/`center` is a
- * transposition the floor refused; `increase`/`decrease` is a substitution in the one
- * word that carries the meaning, and no length would make it a typo.
- */
-function differsOnlyByAShortSlip(typed: string, answer: string): boolean {
-  const a = normaliseAnswer(typed).split(' ').filter(Boolean);
-  const b = normaliseAnswer(answer).split(' ').filter(Boolean);
-  if (a.length === 0 || a.length !== b.length) return false;
-  return a.every((word, i) => slipShape(word, b[i] as string));
-}
-
-/**
  * Every word close to its own counterpart, and the same number of words.
  *
  * A missing or extra word is a different answer to a cloze, which is one to
@@ -644,24 +662,30 @@ export function gradeCloze(
   const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);
   const result = gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.cloze);
   /*
-   * REFUSING AN ANSWER AND DIAGNOSING A MISCONCEPTION ARE TWO DIFFERENT CLAIMS.
+   * REFUSING AN ANSWER AND DIAGNOSING A MISCONCEPTION ARE TWO DIFFERENT CLAIMS, and
+   * the first answer to that was worse than the problem.
    *
-   * `isTypingSlip`'s length floors exist because a one-character difference between
-   * two short words is usually two words rather than one typo. That is a good reason
-   * to withhold credit and no reason at all to assert the reader believes something
-   * false — and `confidentlyWrong` routes them into the misconception loop.
+   * The `-re`/`-er` family fell wholesale on the transposition floor, so a reader
+   * spelling the way they were taught was graded `forgot` AND told they held a
+   * misconception. The fix was to withhold the flag whenever the difference had the
+   * SHAPE of a typo — and shape is not evidence. Eleven confusions the floor exists
+   * to catch have exactly that shape: `casual`/`causal` and `trail`/`trial` are
+   * transpositions, `ion`/`iron`, `aid`/`acid`, `cost`/`coast`, `sale`/`scale`,
+   * `form`/`from`, `untied`/`united`, `hat`/`heat`, `at`/`art` and `rat`/`rate` are
+   * single indels. Those are the reader believing one word is another, answered
+   * `sure` — the exact case `confidentlyWrong` exists for — and every one of them
+   * went silent.
    *
-   * Measured on the `-re`/`-er` family, which the floor catches wholesale:
-   * `centre`/`center`, `metre`/`meter`, `litre`/`liter` and `fibre`/`fiber` were all
-   * graded `forgot` AND flagged, while `theatre`/`theater` passed for being one letter
-   * longer. A reader spelling the way they were taught was told they held a
-   * misconception, on a 7-character cliff.
+   * So the accusation is withheld on KNOWLEDGE rather than on shape: the spelling
+   * axes are folded in `normaliseAnswer`, where the `-ize` family already is, which
+   * makes them exact and CORRECT rather than merely unaccused. A reader who spells
+   * `centre` is now marked right, which is the outcome that was wanted.
    *
-   * So a near miss stays wrong and stops being an accusation. The threshold is the
-   * same one `wordsAreClose` uses to accept, which keeps the two rules describing one
-   * idea rather than two.
+   * What that costs, stated: a short typo that lands on a non-word — `hte` for `the`
+   * — answered `sure` is now flagged. It is the same shape as `trail`/`trial` and no
+   * rule here can tell them apart without a dictionary. Showing a reader an idea
+   * again is a smaller harm than silencing eleven real confusions.
    */
-  const nearMiss = !result.correct && differsOnlyByAShortSlip(typed, answer);
   // AN ACCEPTED SLIP IS NEVER `easy`. That grade multiplies stability by more
   // than three and takes the idea out of review for a fortnight, and this rule
   // cannot promise an accepted one-character difference is the reader's word
@@ -672,7 +696,6 @@ export function gradeCloze(
   return {
     ...result,
     grade: result.correct && !exact && result.grade === 'easy' ? 'good' : result.grade,
-    confidentlyWrong: nearMiss ? false : result.confidentlyWrong,
     similarity,
   };
 }
