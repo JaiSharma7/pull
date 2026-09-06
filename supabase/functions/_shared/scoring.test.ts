@@ -286,6 +286,42 @@ describe('questionsToWrite', () => {
     expect(questionsToWrite([qs({ ...cloze, cloze: undefined })], written)).toEqual([]);
   });
 
+  it('bounds the distractors by BYTES as well as by count', () => {
+    // The count bound and the byte bound are separate constraints
+    // (`quiz_questions_distractors_shape`: at most eight entries AND
+    // `length(distractors::text) <= 20000`), and only the count was enforced. Four
+    // entries of 6,000 characters is well under eight and 24,000 characters of jsonb --
+    // a 23514 that `insertQuizQuestions` turns into the loss of every question on a
+    // summary `synthesize` has already been paid for.
+    const huge = Array.from({ length: 4 }, (_, i) => 'x'.repeat(6_000) + i);
+    const out = questionsToWrite([qs({ ...mcq, distractors: huge })], written);
+    expect(out).toHaveLength(1);
+    expect(JSON.stringify(out[0]?.distractors).length).toBeLessThanOrEqual(20_000);
+    // Trimmed from the END, so the model's best distractors are the ones kept.
+    expect(out[0]?.distractors[0]).toBe(huge[0]);
+  });
+
+  it('drops an mcq that the byte bound leaves with one option', () => {
+    // Trimming for size can take a question below the floor at which it can be got
+    // wrong, and then it must go the same way as one that arrived that way -- rather
+    // than being stored as a multiple choice with a single button on it.
+    const two = Array.from({ length: 2 }, (_, i) => 'x'.repeat(15_000) + i);
+    expect(questionsToWrite([qs({ ...mcq, distractors: two })], written)).toEqual([]);
+  });
+
+  it('bounds the rationale by bytes too, and only after the distractors are final', () => {
+    // Same pair of constraints on `rationale`. The ordering matters as much as the
+    // bound: the rationale is filtered against the distractors that survived, so
+    // trimming the distractors afterwards would leave entries naming options the
+    // question no longer offers.
+    const ds = ['wrong a', 'wrong b'];
+    const fat = ds.map((d) => ({ distractor: d, why: 'y'.repeat(12_000) }));
+    const out = questionsToWrite([qs({ ...mcq, distractors: ds, rationale: fat })], written);
+    expect(out).toHaveLength(1);
+    expect(JSON.stringify(out[0]?.rationale).length).toBeLessThanOrEqual(20_000);
+    for (const r of out[0]?.rationale ?? []) expect(ds).toContain(r.distractor);
+  });
+
   it('never lets the answer sit among its own distractors', () => {
     // A model that lists every option rather than the wrong ones would otherwise
     // make `mcqOptions` render the right answer twice, one of them marked wrong.
