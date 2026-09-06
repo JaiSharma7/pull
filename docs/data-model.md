@@ -1,6 +1,6 @@
 # Data model
 
-40 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+46 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -18,8 +18,11 @@ User
  ├── stashes ─── saved_items · notes · highlights
  ├── history_events · progress
  ├── knowledge_states · user_knowledge_vectors    ← the Delta & Half-Life
+ │    └── recall_events                          ← one row per attempt; append-only
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
+ ├── imports ─── import_items                     ← highlights you kept
+ ├── user_questions                               ← questions you wrote yourself
  └── feed_recipes · feed_impressions
 
 Work                                              ← the thing itself
@@ -51,6 +54,43 @@ Dial free — the 30-second, 3-minute and 15-minute views are different subsets 
 the same record, not separate generations. `sections` is JSONB because the shape
 belongs to the medium: a paper has Method/Findings/Limitations where a film has
 Themes/Craft/Context.
+
+**Every grade is an event before it is a number.** `recall_events` keeps one row per
+attempt — grade, stated confidence, what was typed, stability before and after, and
+the `client_mutation_id` the client minted for it. `grade_recall` inserts that row
+before it touches `knowledge_states`, so a retry of a lost response finds its own row
+and returns the state untouched. The log is append-only through the API and is the
+evidence a scheduler change is judged against.
+
+**An imported highlight is an ordinary pull.** `commit_import` writes the same
+works/summaries/pulls triple the pipeline does: a `works` row marked `user_owned`, a
+summary the reader authors at `visibility = 'private'`, and one pull per highlight. There
+is no second content path — Review schedules them and the Library holds them — and there
+is no second privacy story either, because `get_feed` pools on
+`published AND public` and `works_read_readable` hides a work whose only summary is
+somebody else's. The `works` row is the reader's own — `imported_work_slug` hashes the
+owner in alongside the title and author, so two readers importing one book get a row each.
+It used to be one shared row, and that made it an oracle: the second importer read back
+the first one's exact title casing and import timestamp through their own summary, which
+is the one thing `works_read_readable` cannot hide, because the second reader can
+legitimately see the row. `contributors` is namespaced the same way and for the same
+reason. Nothing an import creates is shared with another reader. `import_items` carries the sha256 that makes a re-import a
+no-op, and it deliberately outlives the pull it created, so Undo does not hand back
+everything the reader just removed. Two mechanics do not reach them yet.
+Search does not: `search_catalogue` filters `visibility = 'public'` in all three of its
+branches, so a reader cannot find their own imported highlight through it. Nor does the
+Delta: nothing writes `pulls.embedding` outside the generation pipeline, which imports
+never enter, and `refresh_knowledge_vector` skips a null embedding. Neither is a leak —
+nothing is exposed, something is absent — and each is a change of its own size. The
+Delta's would need `docs/privacy.md`'s promise revisited first, since embedding a
+reader's verbatim highlight is a model call over their own text.
+
+**A reader's own question lives in its own table.** `user_questions` rather than a row in
+`quiz_questions`, because the pipeline upserts canonical questions with
+`on conflict (pull_id, kind)` and a partial unique index added to make room for reader
+rows would change what that upsert resolves against. `get_due_reviews` prefers the
+reader's own unretired question and says which one it gave, so `recall_events` can file
+the grade against `user_question_id` rather than the canonical foreign key.
 
 **Retrievability is computed, never stored.** `knowledge_states` holds
 `stability` and `last_seen_at`; `public.retrievability()` derives the current
@@ -112,7 +152,9 @@ not that it grants anything.
   Wrapping `auth.uid()` in a scalar subquery lets Postgres evaluate it once per
   query instead of once per row.
 - **Canonical content** — world-readable once `status = 'published'`; written
-  only by the service role, which bypasses RLS.
+  only by the service role, which bypasses RLS. A `works` row is visible only when
+  one of its summaries is readable by the caller (published and public, or their
+  own), so a source with nothing readable behind it is not enumerable.
 - **Write policies are split** into INSERT/UPDATE/DELETE rather than `for all`
   wherever a separate read policy exists, so no read pays for two overlapping
   permissive policies. Enforced by invariant 5 in `supabase/tests/lint.sql`.

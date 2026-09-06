@@ -19,7 +19,7 @@ import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
-import { nextSubmissionStamp } from '../lib/submission.js';
+import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
 
@@ -593,14 +593,70 @@ export function Feed({
       // Settled independently, not chained. `record_interrupt` is telemetry;
       // the stance and the explanation are the reader's own data. Awaiting them
       // behind it meant one failed telemetry write silently discarded both.
+      /*
+       * One id for the interrupt and the grade it carries.
+       *
+       * `record_interrupt` inserts its own row keyed by this id and only then
+       * calls `grade_recall`, so a replay stops at the interrupt row and never
+       * reaches the arithmetic — one interrupt, one event, one grade, one session
+       * bump, however many times the request is retried. Two ids would have made
+       * the interrupt idempotent and left the grade able to apply twice.
+       */
+      /*
+       * `mutationId()` rather than `crypto.randomUUID()` directly, and this is the same
+       * premise `Review.tsx` acts on: it is undefined in a non-secure context, which
+       * `lib/offline.ts` names as live. A throw HERE is worse than there, because
+       * `setHandledSlots` above has already marked the slot handled — so the reader's
+       * stance and explanation would be discarded with no banner and no retry, by an
+       * exception nothing catches.
+       */
+      const interruptMutationId = mutationId();
+      const interruptSubmittedAt = nextSubmissionStamp();
+      const interruptGrade = answer?.grade;
       const writes: Promise<unknown>[] = [
-        api.recordInterrupt({
-          pullId: item.row.id,
-          kind: item.slot.kind,
-          slot: item.slot.slotIndex,
-          response: responded ? 'answered' : 'dismissed',
-          ...(answer?.grade ? { grade: answer.grade } : {}),
-        }),
+        api
+          .recordInterrupt({
+            pullId: item.row.id,
+            kind: item.slot.kind,
+            slot: item.slot.slotIndex,
+            response: responded ? 'answered' : 'dismissed',
+            mutationId: interruptMutationId,
+            submittedAt: interruptSubmittedAt,
+            ...(interruptGrade ? { grade: interruptGrade } : {}),
+          })
+          .catch((e: unknown) => {
+            /*
+             * The grade rides on telemetry, and only the telemetry was allowed to fail.
+             *
+             * This promise went straight into `allSettled` with no catch, so a lost
+             * response took the recall answer with it — the one thing in the interrupt
+             * that is a measurement of the reader rather than of the session. The
+             * stance and the explanation below were queued from the first version of
+             * this change; the grade in the middle was not.
+             *
+             * Queued as the grade alone, under the interrupt's OWN mutation id. That
+             * is what makes the replay safe in both directions: if the interrupt did
+             * land and only the response was lost, `grade_recall` finds the
+             * `recall_events` row already keyed by this id and returns the state
+             * untouched; if it never landed, the grade applies once. The interrupt row
+             * itself is not reconstructed, and should not be — an impression
+             * regenerates the moment the reader scrolls past the card again, which is
+             * the distinction the comment above already draws.
+             */
+            if (!userId || !interruptGrade) return;
+            return queueMutation(
+              userId,
+              {
+                kind: 'recall',
+                pullId: item.row.id,
+                grade: interruptGrade,
+                mutationId: interruptMutationId,
+                submittedAt: interruptSubmittedAt,
+                recallKind: item.slot.kind,
+              },
+              e,
+            );
+          }),
       ];
       // Both of the reader's own answers are queued on failure. Each exists
       // nowhere else — a stance is a considered judgement and an explanation is
@@ -611,7 +667,7 @@ export function Feed({
       // replaying rather than duplicate it.
       if (answer?.stance) {
         const stance = answer.stance;
-        const mutationId = crypto.randomUUID();
+        const stanceId = mutationId();
         const submittedAt = nextSubmissionStamp();
         writes.push(
           // Nothing to clean up on success. Ordering is the server's: it
@@ -619,28 +675,36 @@ export function Feed({
           // arrives after a newer decision is a no-op wherever it comes from.
           // Deciding that here meant scanning a queue that cannot yet contain
           // a request still in flight.
-          api.setConviction(item.row.id, stance, mutationId, submittedAt).catch(() => {
+          api.setConviction(item.row.id, stance, stanceId, submittedAt).catch((e: unknown) => {
             // Only queueable for a signed-in reader: a pending write has to
             // belong to someone, or the drain cannot tell whose it is.
             if (userId)
-              return queueMutation(userId, {
-                kind: 'conviction',
-                pullId: item.row.id,
-                stance,
-                mutationId,
-                submittedAt,
-              });
+              return queueMutation(
+                userId,
+                {
+                  kind: 'conviction',
+                  pullId: item.row.id,
+                  stance,
+                  mutationId: stanceId,
+                  submittedAt,
+                },
+                e,
+              );
           }),
         );
       }
       if (answer?.explanation && userId) {
         const text = answer.explanation;
-        const mutationId = crypto.randomUUID();
+        const explanationId = mutationId();
         writes.push(
           api
-            .saveExplanation(userId, item.row.id, text, mutationId)
-            .catch(() =>
-              queueMutation(userId, { kind: 'explain', pullId: item.row.id, text, mutationId }),
+            .saveExplanation(userId, item.row.id, text, explanationId)
+            .catch((e: unknown) =>
+              queueMutation(
+                userId,
+                { kind: 'explain', pullId: item.row.id, text, mutationId: explanationId },
+                e,
+              ),
             ),
         );
       }

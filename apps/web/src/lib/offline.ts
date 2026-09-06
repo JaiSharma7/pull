@@ -8,6 +8,7 @@ import {
 import type { Stance } from '@wap/schemas';
 import type { RecallGrade } from './grades.js';
 import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
+import { mutationId as newMutationId } from './submission.js';
 import type { SavePatch } from './stash-api.js';
 import type { DueReview, FeedRow } from './types.js';
 
@@ -87,20 +88,44 @@ export type PendingWrite =
       pullId: string;
       grade: RecallGrade;
       /**
-       * Minted once per submission, so a replay whose first response was lost
-       * can be recognised by the server as the same grade rather than applied
-       * twice.
+       * Minted once per attempt, so a replay whose first response was lost is
+       * recognised by the server as the same grade rather than applied twice.
        *
-       * Optional, and genuinely so: entries queued before this field existed are
-       * given one at the schema upgrade (`stampQueuedGrades`), but the screens
-       * that queue a grade are 1b's to change and still write none, and nothing
-       * sends it to the RPC yet. So an entry in the store may or may not carry
-       * one, and any consumer must treat it as absent-by-default until 1b makes
-       * both fields required and threads them through.
+       * OPTIONAL, and it has to stay optional, though for a narrower reason than either
+       * branch of this merge claimed on its own.
+       *
+       * 4a's schema upgrade stamps an id onto every `recall` entry already on disk
+       * (`stampQueuedGrades`), taking `submittedAt` from the entry's own `at` so a grade
+       * given three days offline is not backdated to the upgrade. 1b then mints one for
+       * everything queued from here on. Between them there is no ordinary path that
+       * leaves an entry without one — so 1b's "an entry queued by an older build carries
+       * none" is no longer true of the merged file, and neither is 4a's "nothing sends
+       * it to the RPC yet", which 1b is precisely the change that does.
+       *
+       * The field stays optional because the type allows it and a store can be older
+       * than any code reasoning about it. An entry that still lacks one replays without
+       * it and `grade_recall` applies the write, which is the pre-20260905100000
+       * behaviour and the right one for a write queued under the old rules.
+       *
+       * WHAT STAMPING DOES NOT BUY, said plainly because it looks like it should: it
+       * cannot make a lost-response replay idempotent. If the original write reached
+       * Postgres and only the response was lost, the id minted at upgrade is a NEW id,
+       * so the server cannot match it to the row already written and the grade applies a
+       * second time — exactly as it would have with no id at all. What it buys is that
+       * the entry's own retries, within a drain and across later ones, are recognised as
+       * one attempt. The double-apply on a lost response is closed by 1b minting the id
+       * BEFORE the send, not by this.
        */
       mutationId?: string;
-      /** When the reader answered, for the same server-side record. */
+      /** When the reader answered — not when the queue gave up on the request. */
       submittedAt?: number;
+      /** The reader's own confidence before the answer was shown. */
+      confidence?: 'sure' | 'unsure';
+      questionId?: string;
+      /** Which screen asked: `review`, an interrupt kind, or `calibration`. */
+      recallKind?: string;
+      latencyMs?: number;
+      answer?: string;
     }
   | { kind: 'explain'; pullId: string; text: string; mutationId: string }
   | {
@@ -511,11 +536,11 @@ function open(): Promise<Handle> {
  * by this value, so stamping it with the upgrade time would tell it a grade
  * from three days offline had just been given.
  *
- * It backfills what is already on disk and nothing more. Grades queued after
- * this upgrade arrive without an id until 1b changes the screens that queue
- * them, and nothing carries the id to the RPC until 1b does that either — so
- * this does not yet close the double-apply hazard, it makes the entries that
- * predate the fix ready for it.
+ * It backfills what is already on disk and nothing more. Everything queued from
+ * here on already carries an id — `Review.tsx`, `Feed.tsx` and `KnowledgeCensus`
+ * mint one per submission and `drainPending` passes it to `grade_recall` — so the
+ * only entries this can find are the ones queued by a build that predates that,
+ * and stamping them is what lets the server recognise their replays too.
  */
 async function stampQueuedGrades(
   transaction: IDBPTransaction<WapDB, StoreNames<WapDB>[], 'versionchange'>,
@@ -526,7 +551,14 @@ async function stampQueuedGrades(
     if (entry.kind === 'recall' && !entry.mutationId) {
       await cursor.update({
         ...entry,
-        mutationId: globalThis.crypto.randomUUID(),
+        // `mutationId()` RATHER THAN `crypto.randomUUID()`, which is
+        // secure-context-gated. Over plain http this threw INSIDE the v1->v2 upgrade,
+        // so the upgrade aborted on EVERY open: `hasPending` returned false (killing
+        // Feed's retry timer) and `drainPending` returned 0 forever — the whole offline
+        // queue unreachable, which is one of the five things law 3 calls free. #86
+        // ships the helper with exactly the fallback that fixes it, so this is the
+        // first thing the merge is for.
+        mutationId: newMutationId(),
         submittedAt: entry.submittedAt ?? entry.at ?? Date.now(),
       });
     }
@@ -726,8 +758,26 @@ export function onPendingQueued(handler: () => void): () => void {
  * the answer, which is right for them; the one that tells the reader their answer was
  * recorded needs to know the difference, because in a browser with site data blocked the
  * write reached neither Postgres nor IndexedDB and 'recorded' was untrue.
+ *
+ * `refusal` is the error that sent the caller here, when there was one, and passing it
+ * closes the second way this could report success it did not achieve. A write the server
+ * has already refused for a reason no retry can change is one `runDrain` deletes the
+ * moment it replays it — so accepting it here persisted something with no future, told
+ * the caller it was safe, and let the census advance onboarding over a calibration that
+ * was about to be thrown away. Refusing it instead makes every caller's existing
+ * "could not record" path the one that fires, which is what each of them already does
+ * correctly with the answer.
+ *
+ * Omitting it keeps the old behaviour, which is right for a caller that has no error to
+ * offer — a write queued because the reader is known to be offline, rather than because
+ * the server said no.
  */
-export async function queueMutation(userId: string, write: PendingWrite): Promise<boolean> {
+export async function queueMutation(
+  userId: string,
+  write: PendingWrite,
+  refusal?: unknown,
+): Promise<boolean> {
+  if (refusal !== undefined && refusedForGood(refusal, write, null)) return false;
   try {
     const database = await db();
     if (!database) return false;
@@ -741,6 +791,41 @@ export async function queueMutation(userId: string, write: PendingWrite): Promis
 }
 
 /**
+ * The pulls this account has a queued grade for, which is the durable answer to
+ * "did the reader already judge this card".
+ *
+ * `Review.tsx` filtered its refetch through a `useRef` set, which is right for as
+ * long as the component is mounted and Review is a TAB — switching to Library and
+ * back destroys it. The card whose grade is still sitting in this queue then comes
+ * back due, is shown again, and grading it mints a SECOND mutation id: two ids are
+ * two grades, and this file's own header says what a doubled grade does to an
+ * interval. A reload has the same shape and the queue survives that too, which the
+ * ref never could.
+ *
+ * A pending grade is exactly the condition — the write has not applied, so the
+ * server still calls the card due, and the reader has still answered it.
+ *
+ * NULL IS "COULD NOT READ", not "nothing queued", and the distinction is the same one
+ * `hasPending` pays a retry for. An empty set is a claim about the queue; a store that
+ * will not open supports no claim at all, and a caller that cannot tell them apart
+ * treats a blocked database as a clean bill of health. The caller decides what to do
+ * about it — see `Review.tsx`.
+ */
+export async function pendingRecallPullIds(userId: string): Promise<Set<string> | null> {
+  try {
+    const database = await db();
+    if (!database) return null;
+    const all = await database.getAll('pending');
+    return new Set(
+      all
+        .filter((item) => item.userId === userId && item.kind === 'recall')
+        .map((item) => (item as { pullId: string }).pullId),
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** Whether this account still has queued writes — the signal to keep retrying. */
 export async function hasPending(userId: string): Promise<boolean> {
   try {
@@ -946,14 +1031,27 @@ async function forget(database: Handle, id: number): Promise<void> {
  * whole classification exists to end. The honest fix is not to let the text get
  * that long: the inputs are bounded to the columns' limits in the components.
  */
-function refusedForGood(error: unknown, write: PendingWrite, queuedStashes: Set<string>): boolean {
+function refusedForGood(
+  error: unknown,
+  write: PendingWrite,
+  queuedStashes: Set<string> | null,
+): boolean {
   if (!isPermanentFailure(error)) return false;
   const code = sqlState(error);
   if (code === '23503') {
+    /*
+     * Judged against the queue, which only a drain has in hand. `null` is the
+     * caller saying it cannot see the queue — `queueMutation` is deciding whether
+     * to enqueue at all, and the collection this write points at may be sitting
+     * one entry behind it — so the answer there is the conservative one: keep the
+     * write, and let a pass that can tell make the call.
+     */
     if (write.kind === 'stash-create') {
+      if (queuedStashes === null) return false;
       return write.parentId === null || !queuedStashes.has(write.parentId);
     }
     if (write.kind === 'organise') {
+      if (queuedStashes === null) return false;
       const target = write.patch.stashId;
       return typeof target !== 'string' || !queuedStashes.has(target);
     }

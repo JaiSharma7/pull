@@ -34,8 +34,8 @@ function recorder(): { calls: Call[]; port: ReplayPort } {
     recordRead: async (pullId, dwellMs, position) => {
       calls.push(['recordRead', pullId, dwellMs, position]);
     },
-    gradeRecall: async (pullId, grade) => {
-      calls.push(['gradeRecall', pullId, grade]);
+    gradeRecall: async (pullId, grade, provenance) => {
+      calls.push(['gradeRecall', pullId, grade, provenance]);
     },
     saveExplanation: async (userId, pullId, text, mutationId) => {
       calls.push(['saveExplanation', userId, pullId, text, mutationId]);
@@ -55,6 +55,60 @@ function recorder(): { calls: Call[]; port: ReplayPort } {
   };
   return { calls, port };
 }
+
+describe('a queued grade carries its own identity', () => {
+  it('replays with the mutation id and everything recorded beside it', async () => {
+    // The id is the whole point: `grade_recall` inserts the event keyed by it and
+    // a replay of one already on record returns the state untouched. Dropping it
+    // on the way out of the queue would leave the retry indistinguishable from a
+    // new grade — which is the double-apply this mechanism exists to prevent.
+    const { calls, port } = recorder();
+    await replayWrite(
+      USER,
+      {
+        kind: 'recall',
+        pullId: 'p9',
+        grade: 'hard',
+        mutationId: 'm-grade',
+        submittedAt: 1_700_000_000_123,
+        confidence: 'sure',
+        recallKind: 'calibration',
+        latencyMs: 4_200,
+      },
+      port,
+    );
+    expect(calls).toEqual([
+      [
+        'gradeRecall',
+        'p9',
+        'hard',
+        {
+          mutationId: 'm-grade',
+          submittedAt: 1_700_000_000_123,
+          confidence: 'sure',
+          kind: 'calibration',
+          latencyMs: 4_200,
+        },
+      ],
+    ]);
+  });
+
+  it('applies an entry queued before the field existed, rather than refusing it', async () => {
+    // Half a provenance is not a provenance: without both halves the server
+    // cannot order it or recognise it, so it is sent bare and applied.
+    const { calls, port } = recorder();
+    await replayWrite(USER, { kind: 'recall', pullId: 'p8', grade: 'good' }, port);
+    await replayWrite(
+      USER,
+      { kind: 'recall', pullId: 'p7', grade: 'good', mutationId: 'm-no-stamp' },
+      port,
+    );
+    expect(calls).toEqual([
+      ['gradeRecall', 'p8', 'good', undefined],
+      ['gradeRecall', 'p7', 'good', undefined],
+    ]);
+  });
+});
 
 describe('replayWrite', () => {
   it('turns every queued kind into the call that applies it', async () => {
@@ -85,7 +139,10 @@ describe('replayWrite', () => {
       // Zero dwell and zero position because nothing measured them offline.
       // Inventing a plausible number would put fiction into the knowledge model.
       ['recordRead', 'p2', 0, 0],
-      ['gradeRecall', 'p3', 'good'],
+      // No provenance: an entry queued before the field existed replays as it
+      // did, which is what makes it applicable at all — without an id the
+      // server has nothing to recognise, so it must apply the write.
+      ['gradeRecall', 'p3', 'good', undefined],
       ['saveExplanation', USER, 'p4', 'Because it compounds.', 'm1'],
       ['setConviction', 'p5', 'disagree', 'm2', 1_700_000_000_000],
       ['updateSavedItem', 'sv1', { stashId: 'st1' }],
