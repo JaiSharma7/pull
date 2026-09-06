@@ -216,29 +216,66 @@ const blocksOf = (css: string): [string, string][] => {
     let i = 0;
     let start = 0;
     while (i < text.length) {
-      if (text[i] !== '{') {
+      // A BRACE INSIDE A STRING IS NOT A BRACE. `content: "{"` desynchronised the depth
+      // count and fabricated selectors out of the remainder of the file. No stylesheet
+      // here carries one today, which is why it took a review to find rather than a
+      // failure.
+      const ch = text[i];
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        i += 1;
+        while (i < text.length && text[i] !== quote) i += text[i] === '\\' ? 2 : 1;
         i += 1;
         continue;
       }
-      const prelude = text.slice(start, i).trim();
+      if (ch !== '{') {
+        i += 1;
+        continue;
+      }
+      /*
+       * THE PRELUDE IS WHAT FOLLOWS THE LAST `;`, not everything since the last `}`.
+       *
+       * A `;`-terminated at-STATEMENT before a real selector — `@import './tokens.css';`
+       * at the top of `base.css` — put an `@` at the front of the next rule's prelude,
+       * and the branch below then treated that rule as a wrapper and emitted none of its
+       * declarations. Measured: `border-radius: 50%` and `max-width: 90rem` on
+       * `*, *::before, *::after` passed all 41 design-law tests here and FAILED on main,
+       * where the old regex read the `@import` line as part of the selector. A parser
+       * written to widen these laws had narrowed one, and every rule a contributor
+       * writes after that import would have inherited the exemption.
+       */
+      const raw = text.slice(start, i);
+      const prelude = raw.slice(raw.lastIndexOf(';') + 1).trim();
       let depth = 0;
       let j = i;
+      let q = '';
       for (; j < text.length; j += 1) {
-        if (text[j] === '{') depth += 1;
-        else if (text[j] === '}') {
+        const c = text[j];
+        if (q) {
+          if (c === '\\') j += 1;
+          else if (c === q) q = '';
+          continue;
+        }
+        if (c === '"' || c === "'") q = c;
+        else if (c === '{') depth += 1;
+        else if (c === '}') {
           depth -= 1;
           if (depth === 0) break;
         }
       }
       const body = text.slice(i + 1, j);
-      // An at-rule is a wrapper, not a selector: recurse through it keeping the prefix.
-      if (prelude.startsWith('@')) {
-        walk(body, prefix);
-      } else {
-        const selector = prefix ? `${prefix} ${prelude}` : prelude;
-        out.push([selector, body.replace(/[^{}]*\{[^{}]*(\{[^{}]*\}[^{}]*)*\}/g, '')]);
-        walk(body, selector.replace(/&/g, '').trim());
-      }
+      const own = body.replace(/[^{}]*\{[^{}]*(\{[^{}]*\}[^{}]*)*\}/g, '');
+      /*
+       * EVERY BLOCK EMITS ITS OWN DECLARATIONS, at-rules included. Skipping them lost
+       * every `@font-face` body in `fonts.css` and `design-preview.css` — declaration
+       * lists that the old regex did read. An at-rule is still not a SELECTOR, so it
+       * does not become the prefix its children inherit: `@media { .a { … } }` yields
+       * `.a`, not `@media .a`.
+       */
+      const isAtRule = prelude.startsWith('@');
+      const selector = !isAtRule && prefix ? `${prefix} ${prelude}` : prelude;
+      out.push([selector, own]);
+      walk(body, isAtRule ? prefix : selector.replace(/&/g, '').trim());
       i = j + 1;
       start = i;
     }
@@ -738,14 +775,26 @@ describe('The Archive design laws', () => {
    * `docs/design.md`'s palette is hexes, so the realistic spelling is still covered.
    * Catching an English word in a word list is not worth a law contributors switch off.
    */
+  /*
+   * `--[\w-]+` is in the list because a custom property is a value position too:
+   * `style={{ ['--brand']: 'hotpink' }}` names no painting property and is read by
+   * whatever `var(--brand)` reaches. The quote-lookbehind arm this narrowing replaced
+   * caught it by accident; this catches it on purpose.
+   */
   const PAINTS =
-    /(?:color|background|border|outline|fill|stroke|shadow|caret|accent|decoration)[A-Za-z-]*/;
+    /(?:--[\w-]+|color|background|border|outline|fill|stroke|shadow|caret|accent|decoration)[A-Za-z-]*/;
   const NAMED_IN_VALUE = new RegExp(
-    `${PAINTS.source}['"\`]?\\s*(?::|=(?!=))\\s*['"\`]?(?:${NAMED_COLOURS})\\b`,
+    // A COMPUTED KEY CLOSES ITS BRACKET BEFORE THE COLON, so the gap between the
+    // property name and the assignment is not always a single optional quote:
+    // `style={{ ['--brand']: 'hotpink' }}` puts `']` there. Allowing the quote alone
+    // let that one through — measured — while `color: 'hotpink'` was caught.
+    `${PAINTS.source}['"\`\\]]*\\s*(?::|=(?!=))\\s*['"\`]?(?:${NAMED_COLOURS})\\b`,
     'gi',
   );
   const NOT_NAMED = new RegExp(
-    `#[0-9a-fA-F]{3,8}\\b|\\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color-mix)\\(`,
+    // `color(` as well as `color-mix(` — dropping the bare one was a slip in the
+    // round-7 narrowing, and `color(display-p3 1 0 0)` is a colour like any other.
+    `#[0-9a-fA-F]{3,8}\\b|\\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\\(`,
     'gi',
   );
 
