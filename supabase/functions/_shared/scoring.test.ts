@@ -183,18 +183,46 @@ describe('questionsToWrite', () => {
     question: { prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'], ...over },
   });
 
-  /** What the singular shape now becomes: a `recall` row with the new columns empty. */
+  /**
+   * The same, declared an `mcq`, for the rules that are ABOUT the options.
+   *
+   * A `recall` no longer stores any, so a test probing the distractor clamps on the
+   * default shape would be probing an empty array and passing for the wrong reason.
+   */
+  const mcqQ = (over: Record<string, unknown> = {}) => ({
+    question: {
+      prompt: 'Why?',
+      answer: 'Because.',
+      kind: 'mcq',
+      distractors: ['a', 'b', 'c'],
+      ...over,
+    },
+  });
+
+  /**
+   * What the singular shape now becomes: a `recall` row with the new columns empty.
+   *
+   * `distractors: []` AND NOT `['a','b','c']`, which is what it used to be. Wrong options
+   * belong to an `mcq` and to nothing else -- `activities.ts` says so and the database
+   * says nothing, so the writer is the only thing that can make it true. Review finding:
+   * a 400-pull fuzz produced 263 `recall` rows carrying options no screen would ever
+   * render.
+   */
   const asRow = (over: Record<string, unknown> = {}) => ({
     pullId: 'p0',
     kind: 'recall',
     prompt: 'Why?',
     answer: 'Because.',
-    distractors: ['a', 'b', 'c'],
+    distractors: [],
     cloze: null,
     explanation: null,
     rationale: [],
     ...over,
   });
+
+  /** The `mcq` counterpart, which is the row that does keep its options. */
+  const asMcqRow = (over: Record<string, unknown> = {}) =>
+    asRow({ kind: 'mcq', distractors: ['a', 'b', 'c'], ...over });
 
   it('pairs a question to the Pull that was actually written', () => {
     expect(questionsToWrite([q(), q()], written)).toEqual([asRow(), asRow({ pullId: 'p1' })]);
@@ -230,10 +258,20 @@ describe('questionsToWrite', () => {
   });
 
   it('keeps only string distractors, and tolerates a missing list', () => {
-    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual(
-      asRow({ distractors: ['a', 'b'] }),
+    expect(questionsToWrite([mcqQ({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual(
+      asMcqRow({ distractors: ['a', 'b'] }),
     );
-    expect(questionsToWrite([q({ distractors: undefined })], written)[0]?.distractors).toEqual([]);
+    // An mcq left with no options at all does not become a one-button question.
+    expect(questionsToWrite([mcqQ({ distractors: undefined })], written)).toEqual([]);
+  });
+
+  it('gives the options to the mcq and to nothing else', () => {
+    // The invariant `activities.ts` documents and the schema does not state. A `recall`
+    // and a `cloze` are asked without options, so options on them are rows of data no
+    // screen reads -- and a renderer that trusted the doc comment would be trusting
+    // something only this line makes true.
+    expect(questionsToWrite([q()], written)[0]?.distractors).toEqual([]);
+    expect(questionsToWrite([mcqQ()], written)[0]?.distractors).toEqual(['a', 'b', 'c']);
   });
 
   // ----------------------------------------------------------------- the array
@@ -352,12 +390,45 @@ describe('questionsToWrite', () => {
     expect(out[0]?.rationale).toEqual([{ distractor: 'wrong a', why: 'kept' }]);
   });
 
-  it('files an unknown kind as recall rather than dropping the question', () => {
-    // `quiz_questions_kind_known` would refuse the row and take the batch with it.
-    // The prompt and answer are usable; only the claim about the form is lost.
-    const out = questionsToWrite([qs({ ...recall, kind: 'interpretive_dance' })], written);
+  it('drops a kind this generator does not produce, rather than relabelling it', () => {
+    /*
+     * THIS TEST ASSERTED THE OPPOSITE, and the reason it gave was false: "`quiz_questions_
+     * kind_known` would refuse the row and take the batch with it". The deployed check
+     * accepts six kinds, so `short_answer`, `ordering` and `scenario` all insert cleanly
+     * -- relabelling rescued nothing and instead wrote a row that lies about its own
+     * form, under a unique key where the lie IS the row.
+     */
+    expect(questionsToWrite([qs({ ...recall, kind: 'interpretive_dance' })], written)).toEqual([]);
+
+    // The three the database knows and this generator does not are the ones that matter:
+    // they are the kinds the schema is waiting for, and mislabelling one as `recall` puts
+    // an ordering question in front of a reader as free recall.
+    for (const kind of ['ordering', 'scenario', 'short_answer']) {
+      expect(questionsToWrite([qs({ ...recall, kind })], written)).toEqual([]);
+    }
+  });
+
+  it('does not let an unknown kind eat the recall slot', () => {
+    // Two reviewers found this independently. The fallback ran BEFORE the `seen` check,
+    // so an unrecognised kind arriving first was stored as the pull's `recall` and the
+    // genuine recall behind it was dropped as a duplicate.
+    const out = questionsToWrite(
+      [
+        qs(
+          { ...recall, kind: 'ordering', prompt: 'Put these in order' },
+          { ...recall, prompt: 'The real one' },
+        ),
+      ],
+      written,
+    );
     expect(out).toHaveLength(1);
-    expect(out[0]?.kind).toBe('recall');
+    expect(out[0]?.prompt).toBe('The real one');
+  });
+
+  it('still calls a question with no kind at all a recall', () => {
+    // The legacy singular shape: one question, no `kind`, and it is a `recall`. Dropping
+    // unknown kinds must not drop the absent one.
+    expect(questionsToWrite([q()], written)[0]?.kind).toBe('recall');
   });
 
   it('clears a cloze sentence off a kind that is not a cloze', () => {
@@ -369,7 +440,7 @@ describe('questionsToWrite', () => {
     // `insertQuizQuestions` writes the batch in one statement, so a row that violates a
     // CHECK takes every good question on the summary with it -- at `cards`, after
     // synthesis has been paid for, and again on every `resume` from the persisted step
-    // output. Each rule below is one `20260905120000` enforces.
+    // output. Each rule below is one `20260905120001` enforces -- 20260905120000 is the `user_questions` half and carries no `quiz_questions` rule at all.
     const wide = questionsToWrite(
       [
         qs({
@@ -432,7 +503,16 @@ describe('questionsToWrite', () => {
      *
      * `jsonbTextLength` walks the value rather than adjusting for a shape, and was
      * checked against `length(x::jsonb::text)` on seven shapes -- arrays, objects,
-     * embedded quotes and newlines -- rather than derived a third time.
+     * embedded quotes and newlines -- rather than derived a third time. Two later
+     * reviewers re-ran that comparison independently, on 19 and on 1,100 values against
+     * a live Postgres; the only divergence either found is astral text, where this
+     * over-counts, which is the conservative direction.
+     *
+     * THE THRESHOLD IS PROBED FROM BOTH SIDES, and it has to be. Compact-20,000 and
+     * compact-19,997 alone leave a two-character gap: mutating the `": "` separator from
+     * +2 to +1 shifts the true threshold by exactly two and slips between those probes,
+     * so the object half of this function was measured by nothing. Review finding. The
+     * real boundary is between 19,997 (kept) and 19,998 (dropped), and both are asserted.
      */
     const shell = JSON.stringify([{ distractor: 'a', why: '' }]).length;
     const why = 'w'.repeat(20_000 - shell);
@@ -457,6 +537,28 @@ describe('questionsToWrite', () => {
     );
     // Dropped: it fits `JSON.stringify` and does not fit the column.
     expect(kept[0]?.rationale).toEqual([]);
+
+    // The first size that is too big, one character over the last that fits. Without
+    // this the object separator is unpinned.
+    const justOver = [{ distractor: 'a', why: 'w'.repeat(19_998 - shell) }];
+    expect(JSON.stringify(justOver)).toHaveLength(19_998);
+    const over = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'this',
+              distractors: ['a', 'b'],
+              rationale: justOver,
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(over[0]?.rationale).toEqual([]);
     // Three characters smaller and it fits both, so the bound is a bound and not a ban.
     const ok = questionsToWrite(
       [
@@ -588,7 +690,8 @@ describe('questionsToWrite', () => {
       pullId: 'p1',
       prompt: 'Why?',
       answer: 'Because.',
-      distractors: ['a', 'b', 'c'],
+      // Empty because the surviving question is a `recall`; wrong options are the mcq's.
+      distractors: [],
     });
   });
 
@@ -616,7 +719,7 @@ describe('questionsToWrite', () => {
     ];
     expect(new Set(exact).size).toBe(8);
     expect(JSON.stringify(exact)).toHaveLength(20000);
-    const kept = questionsToWrite([q({ distractors: exact })], written)[0]?.distractors ?? [];
+    const kept = questionsToWrite([mcqQ({ distractors: exact })], written)[0]?.distractors ?? [];
     expect(kept).toHaveLength(7);
     // What Postgres will actually measure, spaces included, is now under the bound.
     expect(JSON.stringify(kept).length + kept.length - 1).toBeLessThanOrEqual(20000);
@@ -627,10 +730,21 @@ describe('questionsToWrite', () => {
     // the size half missing -- `quiz_questions_distractors_shape` checks
     // `jsonb_array_length(...) <= 8` and `length(distractors::text) <= 20000`.
     const nine = Array.from({ length: 9 }, (_, i) => `d${i}`);
-    expect(questionsToWrite([q({ distractors: nine })], written)[0]?.distractors).toHaveLength(8);
+    expect(questionsToWrite([mcqQ({ distractors: nine })], written)[0]?.distractors).toHaveLength(
+      8,
+    );
 
-    const huge = Array.from({ length: 8 }, () => 'z'.repeat(5000));
-    const kept = questionsToWrite([q({ distractors: huge })], written)[0]?.distractors ?? [];
+    // DISTINCT, for the reason the test above spells out at length: the options are
+    // deduped before they are counted, so eight identical strings are one option, and an
+    // mcq with one option is dropped by the floor rather than clamped by the budget.
+    // This fixture was eight identical ones and passed only because the row it was
+    // attached to was a `recall`, which has no floor.
+    const huge = Array.from(
+      { length: 8 },
+      (_, i) => 'z'.repeat(4999) + String.fromCharCode(97 + i),
+    );
+    expect(new Set(huge).size).toBe(8);
+    const kept = questionsToWrite([mcqQ({ distractors: huge })], written)[0]?.distractors ?? [];
     expect(JSON.stringify(kept).length).toBeLessThanOrEqual(20000);
     // Some survive: the size clamp drops from the end rather than emptying the list.
     expect(kept.length).toBeGreaterThan(0);

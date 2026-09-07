@@ -88,10 +88,15 @@ export interface CanonicalSummary {
     /**
      * The questions about this idea, produced by the same call.
      *
-     * `quiz_questions` has been read by `get_due_reviews` since round 1 and
-     * written by nothing: six rows, all seeded, against 156 pulls. `recall` is
-     * 45% of the interrupt distribution, so Interleaved Recall — the mechanic
-     * this product is built on — had nothing to ask about 96% of the library.
+     * `quiz_questions` was read by `get_due_reviews` from round 1 and written by
+     * nothing for a long time. That is no longer the shape of the problem: the hosted
+     * project now holds 222 rows against 384 pulls, written by this pipeline, so 162
+     * ideas still carry no question at all. `recall` is 45% of the interrupt
+     * distribution, so Interleaved Recall — the mechanic this product is built on — has
+     * nothing to ask about 42% of the library, and only ever one way to ask about the
+     * rest. An earlier version of this paragraph said six seeded rows against 156
+     * pulls, which was true when it was written and is what this PR's own measurements
+     * replaced four lines below.
      *
      * AN ARRAY NOW, and `question` stays beside it. A provider that predates this
      * field is still a valid provider — the singular is read when the plural is

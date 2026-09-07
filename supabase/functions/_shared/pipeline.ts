@@ -449,7 +449,7 @@ export function qualityFromDraft(summary: {
 /** The kinds generation may produce, and the only ones `quiz_questions.kind` will take
  *  from it. The database accepts six (`20260905120001`); `ordering` and `scenario` are
  *  not generated yet and `short_answer` is what a reader writes. */
-const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
+export const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
 
 /** What `quiz_questions_mcq_has_distractors` requires of an `mcq`. */
 const MIN_MCQ_DISTRACTORS = 2;
@@ -581,8 +581,26 @@ interface RawQuestion {
   rationale?: unknown;
 }
 
+/*
+ * A string, trimmed, with the control characters Postgres cannot hold removed.
+ *
+ * `\u0000` is the one that matters and it is not a CHECK the migration could have
+ * written: `text` cannot carry it at all, so a prompt containing one is refused at the
+ * jsonb cast -- `unsupported Unicode escape sequence`, 22P05 -- before any constraint is
+ * consulted. Confirmed against the hosted database. That is the whole batch, on a
+ * summary already paid for, which is the failure every rule in `questionsToWrite` exists
+ * to avoid, arriving by the one door none of them watches.
+ *
+ * The rest of the C0 range goes with it. None of it is prose, Postgres stores it
+ * happily, and a prompt carrying a stray `\u0007` renders as nothing while counting
+ * against the reader's 2,000. Tab, newline and carriage return are kept: a cloze
+ * sentence and an explanation are allowed to have lines in them.
+ */
 function cleanString(v: unknown): string {
-  return typeof v === 'string' ? v.trim() : '';
+  // eslint-disable-next-line no-control-regex -- the point of the function
+  return typeof v === 'string'
+    ? v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim()
+    : '';
 }
 
 function cleanStringArray(v: unknown): string[] {
@@ -612,8 +630,11 @@ function cleanStringArray(v: unknown): string[] {
  * `insertQuizQuestions` upserts on that pair, so two `recall` questions for one idea
  * are not two rows -- Postgres refuses the whole statement with "ON CONFLICT DO UPDATE
  * command cannot affect row a second time", which is a failure of the entire step
- * rather than of the duplicate. The first of each kind wins, in the order the model
- * returned them, because the prompt asks for the most useful first.
+ * rather than of the duplicate. The first VALID one of each kind wins, in the order the
+ * model returned them, because the prompt asks for the most useful first -- `seen` is
+ * marked after every check below, not before, so a malformed mcq does not consume the
+ * mcq slot and a later good one still lands. An earlier revision of this sentence said
+ * "the first of each kind", which describes worse behaviour than the code has.
  *
  * Paired by ORDINAL, never by array position. `insertPulls` returns ordinals for
  * exactly this reason -- a question attached to the wrong idea is invisible and
@@ -642,6 +663,24 @@ export function questionsToWrite(
     const seen = new Set<string>();
 
     for (const q of offered) {
+      /*
+       * NOT AN OBJECT, NOT A QUESTION -- and this line is the difference between losing
+       * one and losing the summary.
+       *
+       * Found by all three reviewers of this PR. `offered` is `job_steps.output` replayed
+       * verbatim on a resume, and a `null` in that array survives the jsonb round trip;
+       * `RawQuestion` declares every field `unknown` precisely because this function does
+       * not trust the provider. Dereferencing `q.prompt` on a null throws out of
+       * `questionsToWrite`, out of `cards`, and -- because `synthesize`'s output is
+       * persisted and replayed -- throws again on all three attempts, ending a job whose
+       * synthesis was already paid for. The step that can never converge, which the
+       * header above says this function exists to prevent.
+       *
+       * The guard existed before the singular became an array and was dropped in the
+       * change. The rationale filter forty lines down still has it.
+       */
+      if (!q || typeof q !== 'object') continue;
+
       const prompt = cleanString(q.prompt);
       const answer = cleanString(q.answer);
       if (!prompt || !answer) continue;
@@ -651,12 +690,26 @@ export function questionsToWrite(
       // because a ninth distractor is surplus rather than a mutilation.
       if (prompt.length > MAX_PROMPT || answer.length > MAX_PROMPT) continue;
 
-      // An unrecognised kind is written as `recall` rather than dropped: the prompt
-      // and answer are usable, and `quiz_questions_kind_known` would refuse the row
-      // and take the batch with it. Defaulting keeps the question and loses only the
-      // claim about its form.
+      /*
+       * A KIND THIS GENERATOR DOES NOT PRODUCE IS DROPPED, and it used to be relabelled
+       * `recall`. The justification for relabelling was that "`quiz_questions_kind_known`
+       * would refuse the row and take the batch with it", and that is false for three of
+       * the six values the deployed check accepts: `short_answer`, `ordering` and
+       * `scenario` all insert cleanly. Verified against the hosted catalog.
+       *
+       * So relabelling did not rescue a row Postgres would refuse. It wrote a row that
+       * LIES about its own form, permanently -- the unique key is `(pull_id, kind)`, so
+       * the mislabel is the row -- and, because the fallback ran before the `seen` check,
+       * it also ate the recall slot and dropped the pull's genuine recall question.
+       * Reproduced by two reviewers: an `ordering` arriving first left the reader being
+       * asked "put these in order" as a free-recall card with the real question gone.
+       *
+       * An EMPTY kind still defaults, which is the legacy singular shape: a provider
+       * predating this change sends one question and no kind, and it is a `recall`.
+       */
       const rawKind = cleanString(q.kind);
-      const kind = GENERATED_KINDS.has(rawKind) ? rawKind : 'recall';
+      const kind = rawKind === '' ? 'recall' : rawKind;
+      if (!GENERATED_KINDS.has(kind)) continue;
       if (seen.has(kind)) continue;
 
       // Trimmed to the byte budget BEFORE the rationale is built, so a rationale can
@@ -705,6 +758,18 @@ export function questionsToWrite(
        * sentence shows the reader the answer they are being asked for.
        */
       if (kind === 'cloze' && (!cloze || !cloze.includes(CLOZE_BLANK))) continue;
+      /*
+       * AND THE BLANK HAS TO HAVE REPLACED SOMETHING. The check above catches a sentence
+       * with no marker; it does not catch one carrying BOTH the marker and the answer,
+       * which is the case the paragraph above actually condemns -- "an unredacted
+       * sentence shows the reader the answer they are being asked for". Review finding,
+       * demonstrated: `answer: 'the way'` with `cloze: 'The obstacle is the way. ____'`
+       * passed every rule here and every CHECK in the database, and `gradeCloze` marks a
+       * reader correct for copying the sentence back.
+       *
+       * Case-insensitive because the model redacts prose, not identifiers.
+       */
+      if (kind === 'cloze' && cloze!.toLowerCase().includes(answer.toLowerCase())) continue;
 
       const rationaleEntries = Array.isArray(q.rationale)
         ? q.rationale
@@ -718,6 +783,12 @@ export function questionsToWrite(
               return Boolean(d) && Boolean(why) && distractors.includes(d);
             })
             .map((r) => ({ distractor: cleanString(r.distractor), why: cleanString(r.why) }))
+            // ONE ENTRY PER OPTION. `whyWrong` matches on `distractor` and takes the
+            // first, so eight entries naming the same option are one explanation and
+            // seven rows of dead weight inside a jsonb column with a 20,000 bound.
+            // Nothing refuses them -- `quiz_questions_rationale_shape` counts and sizes,
+            // it does not look for duplicates. Review finding.
+            .filter((r, i, all) => all.findIndex((o) => o.distractor === r.distractor) === i)
             .slice(0, MAX_LIST)
         : [];
       const rationale = withinJsonBudget(rationaleEntries, MAX_JSON_TEXT);
@@ -728,14 +799,22 @@ export function questionsToWrite(
         kind,
         prompt,
         answer,
-        distractors,
+        // CLEARED FOR EVERY KIND BUT `mcq`, exactly as `cloze` is cleared one line down.
+        // `activities.ts` documents the invariant -- "wrong options, for `mcq`; empty for
+        // every other kind" -- the database states it nowhere, and the writer broke it:
+        // in a 400-pull fuzz, 263 of 387 rows were a `recall` carrying distractors.
+        // Inert while nothing renders them, and a renderer trusting that doc comment at
+        // 3d would be trusting something only this line makes true.
+        distractors: kind === 'mcq' ? distractors : [],
         cloze: kind === 'cloze' ? cloze : null,
         // Dropped, not the question: an over-long explanation is supplementary, and a
         // question without one still asks and still grades.
         explanation: ((e) => (e && e.length <= MAX_EXPLANATION ? e : null))(
           cleanString(q.explanation),
         ),
-        rationale,
+        // Same rule, same reason: a rationale explains a wrong OPTION, and a kind with no
+        // options has nothing for it to explain.
+        rationale: kind === 'mcq' ? rationale : [],
       });
     }
   });

@@ -222,7 +222,7 @@ export enum TopicSlug {
  * The kinds a generated question may take.
  * 
  * Three of the six `quiz_questions.kind` accepts
- * (`20260905120000_a_question_that_can_be_wrong.sql`). `ordering` and `scenario`
+ * (`20260905120001_and_the_question_it_asks.sql`). `ordering` and `scenario`
  * are in the database because the column should not have to change when they
  * arrive; `short_answer` is what a reader writes rather than what is generated.
  * Asking for a kind nothing renders would spend tokens on a row `Review` cannot

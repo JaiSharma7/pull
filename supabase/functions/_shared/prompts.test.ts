@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PROMPTS, promptFor, renderPrompt, toGeminiSchema } from './prompts.ts';
 import { buildSummaryPrompt, TOPIC_SLUGS } from './providers.ts';
+import { GENERATED_KINDS } from './pipeline.ts';
 
 /**
  * The export is the contract now. These pin what the providers rely on, so a
@@ -90,7 +91,7 @@ describe('the exported schema', () => {
     // MCQ-shaped; a `recall` question has none and a `cloze` has none, and this
     // schema is enforced by the provider, so a floor would fail the whole synthesis
     // rather than the one question. The per-kind floor is
-    // `quiz_questions_mcq_has_distractors` in 20260905120000, and
+    // `quiz_questions_mcq_has_distractors` in 20260905120001, and
     // `questionsToWrite` drops a question that would meet it.
     expect(questions.items.properties.distractors?.maxItems).toBe(8);
     expect(questions.items.properties.distractors?.minItems).toBeUndefined();
@@ -111,6 +112,30 @@ describe('the exported schema', () => {
     expect(qs?.type).toBe('ARRAY');
     expect(qs?.items?.type).toBe('OBJECT');
     expect(qs?.items?.properties?.kind?.enum).toEqual(['recall', 'mcq', 'cloze']);
+  });
+
+  /*
+   * THE THIRD LINK IN THE CHAIN, and it was the unguarded one.
+   *
+   * `schema.test.ts` pins the BAML source against the export, and the case above pins
+   * the export's `kind` enum. Nothing tied either to `GENERATED_KINDS`, which is what
+   * `questionsToWrite` actually filters on -- so adding `ordering` to the BAML enum
+   * without adding it here would have every ordering question silently DROPPED by the
+   * writer, with a green suite. Review finding, and the repo already has this pattern:
+   * `packages/prompts/src/topics.test.ts` asserts `TopicSlug` against `TOPIC_SLUGS` in
+   * both directions for exactly this reason.
+   *
+   * Both directions, because each catches a different mistake. A kind in the schema and
+   * not in the set is a question the provider is asked for and the writer throws away;
+   * a kind in the set and not in the schema is a filter that can never fire.
+   */
+  it('generates exactly the kinds the writer will store', () => {
+    // No cast: `PROMPTS` is `as const`, so the enum is already a readonly tuple of
+    // literals and spreading it is enough. A cast here would be the thing that hides a
+    // shape change from the assertion meant to catch one.
+    const inSchema =
+      summary.schema.properties.pulls.items.properties.questions.items.properties.kind.enum;
+    expect([...inSchema].sort()).toEqual([...GENERATED_KINDS].sort());
   });
 
   it('refuses a construct it cannot express', () => {

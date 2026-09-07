@@ -7,7 +7,7 @@
     },
     {
       "relative_path": "_inlinedbaml.ts",
-      "sha256": "a38c411fe5c5800dca8b95cac97ef8e8f7d26f910ec5a3cf765e3576eb4eb309"
+      "sha256": "865036a53e4c19ea239ea5c6bf03c996936d075c3430017bb12190badcdb838c"
     },
     {
       "relative_path": "_typemap.ts",
@@ -207,7 +207,7 @@
     },
     {
       "relative_path": "index.ts",
-      "sha256": "7de0dfae35b3eb505e6398ea5a6dde3537a7eaab1ed53ffda2ed1150f73a5b80"
+      "sha256": "e76c0a869048ff43a4de150c13af229a66452bb607182129a96314d102cc390f"
     },
     {
       "relative_path": "vendor/anthropic/index.ts",

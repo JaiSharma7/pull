@@ -774,7 +774,10 @@ describe('reuse skips the paid work', () => {
         kind: 'recall',
         prompt: 'q0?',
         answer: 'a0',
-        distractors: ['x', 'y', 'z'],
+        // Empty, though the provider offered three. The singular shape is a `recall`
+        // and a recall is asked without options, so the writer drops them rather than
+        // storing a list `activities.ts` says is only ever an mcq's.
+        distractors: [],
         cloze: null,
         explanation: null,
         rationale: [],

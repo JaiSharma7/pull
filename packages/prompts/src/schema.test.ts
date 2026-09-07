@@ -159,7 +159,7 @@ describe('exported schema shape', () => {
     // distractors and neither has a `cloze`, and this schema is enforced by the
     // provider, so a floor of three would fail the whole synthesis rather than the
     // one question. The per-kind floor is `quiz_questions_mcq_has_distractors` in
-    // `20260905120000`, where a rule about one kind can be expressed.
+    // `20260905120001`, where a rule about one kind can be expressed.
     const distractors = recallQuestion(schema).properties?.distractors;
     expect(distractors).toMatchObject({ maxItems: 8 });
     expect(distractors?.minItems).toBeUndefined();

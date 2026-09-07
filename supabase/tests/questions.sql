@@ -189,6 +189,7 @@ declare
   qs2      jsonb;
   card     jsonb;
   qs       jsonb;
+  txt      text;
   n        int;
 
   bulk_work    uuid := extensions.gen_random_uuid();
@@ -283,6 +284,91 @@ begin
     raise exception 'expected all six kinds to be accepted, stored %', n;
   end if;
 
+  -- The six above go first: `(pull_id, kind)` is unique, so the three below would
+  -- collide with three of them.
+  delete from public.quiz_questions q where q.pull_id = pull_2;
+
+  /*
+   * AND THE RECALL IS THE ONE THE READER IS ASKED, while `recall` is the only kind the
+   * deployed Review screen can render.
+   *
+   * 3g writes three kinds in ONE statement, so all three share `now()` to the
+   * microsecond and the old ordering (`created_at desc, id`) broke the tie on
+   * `gen_random_uuid()`. Which question a reader got was a lottery, and two of the three
+   * tickets are unanswerable: `Review.tsx` renders `question` with a Reveal button and
+   * no kind awareness, so an mcq shows with nothing to choose and a cloze with no blank.
+   * Measured over 300 pulls before the fix: recall came first 87 times.
+   *
+   * `pull_2` is used because the six above have just been deleted, so these three are
+   * the whole of its canonical set and the caps are not what is being tested here.
+   */
+  insert into public.quiz_questions (pull_id, prompt, answer, kind, distractors, cloze)
+  select pull_2, 'Prompt for ' || k, 'Answer', k,
+         case when k = 'mcq' then '["one","two"]'::jsonb else '[]'::jsonb end,
+         case when k = 'cloze' then 'A sentence with a ____ in it.' else null end
+    from unnest(array['recall','mcq','cloze']) k;
+
+  -- A scheduler row so the pull is DUE, removed again below: section 6d counts reader
+  -- A's due rows exactly, and a stray one here would move that number.
+  insert into public.knowledge_states (user_id, pull_id, acquired_via, next_due_at)
+  values (reader_a, pull_2, 'saved', now() - interval '1 hour');
+
+  -- Written in one statement, so this is the tie the ordering has to break.
+  select count(distinct q.created_at) into n
+    from public.quiz_questions q where q.pull_id = pull_2;
+  if n <> 1 then
+    raise exception
+      'the three kinds do not share created_at, so this case is not exercising the tie '
+      'the ordering exists to break (% distinct timestamps)', n;
+  end if;
+
+  perform pg_temp.become(reader_a);
+  select (e -> 'questions') into qs
+    from jsonb_array_elements(public.get_due_reviews(100)) e
+   where e ->> 'pullId' = pull_2::text;
+  perform pg_temp.as_owner();
+
+  if qs is null or jsonb_array_length(qs) <> 3 then
+    raise exception 'expected the three canonical kinds back, got %', qs;
+  end if;
+  if qs -> 0 ->> 'kind' is distinct from 'recall' then
+    raise exception
+      'the first canonical question is a % rather than a recall -- the Review screen '
+      'cannot render it, and which kind won was decided by a uuid', qs -> 0 ->> 'kind';
+  end if;
+
+  /*
+   * AND THE DETERMINISTIC VARIANT, which is worse than the lottery. `insertQuizQuestions`
+   * upserts on `(pull_id, kind)`, and `on conflict do update` KEEPS the existing
+   * `created_at` -- so a pull whose recall row predates a re-generation has a recall
+   * that is OLDER than the mcq and cloze beside it, and under `created_at desc` it sorted
+   * last every single time rather than one time in three.
+   */
+  update public.quiz_questions q set created_at = now() - interval '30 days'
+   where q.pull_id = pull_2 and q.kind = 'recall';
+
+  perform pg_temp.become(reader_a);
+  select (e -> 'questions'), e ->> 'question' into qs, txt
+    from jsonb_array_elements(public.get_due_reviews(100)) e
+   where e ->> 'pullId' = pull_2::text;
+  perform pg_temp.as_owner();
+
+  if qs -> 0 ->> 'kind' is distinct from 'recall' then
+    raise exception
+      'an older recall sorted behind the newer kinds (got %), which is the re-generation '
+      'case: the upsert keeps the original created_at', qs -> 0 ->> 'kind';
+  end if;
+  -- And the singular field the deployed screen actually reads follows it. Read in the
+  -- same query, as the reader: `get_due_reviews` is `security invoker` and returns an
+  -- empty array to the owner role, so a second call outside `become` compares against
+  -- null and passes for the wrong reason -- which is how the first draft of this
+  -- assertion failed.
+  if txt is distinct from 'Prompt for recall' then
+    raise exception 'the singular `question` is % rather than the recall prompt', txt;
+  end if;
+
+  delete from public.knowledge_states ks
+   where ks.user_id = reader_a and ks.pull_id = pull_2;
   delete from public.quiz_questions q where q.pull_id = pull_2;
 
   -- A kind no renderer knows.
