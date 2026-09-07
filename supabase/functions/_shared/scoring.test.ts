@@ -178,15 +178,26 @@ describe('questionsToWrite', () => {
     { ordinal: 1, id: 'p1' },
   ];
 
+  /** A pull carrying ONE question in the singular shape a provider used to return. */
   const q = (over: Record<string, unknown> = {}) => ({
     question: { prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'], ...over },
   });
 
+  /** What the singular shape now becomes: a `recall` row with the new columns empty. */
+  const asRow = (over: Record<string, unknown> = {}) => ({
+    pullId: 'p0',
+    kind: 'recall',
+    prompt: 'Why?',
+    answer: 'Because.',
+    distractors: ['a', 'b', 'c'],
+    cloze: null,
+    explanation: null,
+    rationale: [],
+    ...over,
+  });
+
   it('pairs a question to the Pull that was actually written', () => {
-    expect(questionsToWrite([q(), q()], written)).toEqual([
-      { pullId: 'p0', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    expect(questionsToWrite([q(), q()], written)).toEqual([asRow(), asRow({ pullId: 'p1' })]);
   });
 
   it('pairs by ordinal, not by array position', () => {
@@ -197,15 +208,13 @@ describe('questionsToWrite', () => {
       { ordinal: 0, id: 'first' },
     ];
     expect(questionsToWrite([q({ prompt: 'A' }), q({ prompt: 'B' })], shuffled)).toEqual([
-      { pullId: 'first', prompt: 'A', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-      { pullId: 'second', prompt: 'B', answer: 'Because.', distractors: ['a', 'b', 'c'] },
+      asRow({ pullId: 'first', prompt: 'A' }),
+      asRow({ pullId: 'second', prompt: 'B' }),
     ]);
   });
 
   it('skips a Pull with no question rather than writing an empty one', () => {
-    expect(questionsToWrite([{}, q()], written)).toEqual([
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    expect(questionsToWrite([{}, q()], written)).toEqual([asRow({ pullId: 'p1' })]);
   });
 
   it('drops a question missing either half', () => {
@@ -221,17 +230,332 @@ describe('questionsToWrite', () => {
   });
 
   it('keeps only string distractors, and tolerates a missing list', () => {
-    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual({
-      pullId: 'p0',
-      prompt: 'Why?',
-      answer: 'Because.',
-      distractors: ['a', 'b'],
-    });
+    expect(questionsToWrite([q({ distractors: ['a', 7, '', null, 'b'] })], written)[0]).toEqual(
+      asRow({ distractors: ['a', 'b'] }),
+    );
     expect(questionsToWrite([q({ distractors: undefined })], written)[0]?.distractors).toEqual([]);
+  });
+
+  // ----------------------------------------------------------------- the array
+
+  /** A pull carrying the plural shape. */
+  const qs = (...questions: Record<string, unknown>[]) => ({ questions });
+
+  const recall = { kind: 'recall', prompt: 'Why?', answer: 'Because.' };
+  const mcq = {
+    kind: 'mcq',
+    prompt: 'Which?',
+    answer: 'This one.',
+    distractors: ['wrong a', 'wrong b'],
+    rationale: [{ distractor: 'wrong a', why: 'it reverses the direction' }],
+  };
+  const cloze = {
+    kind: 'cloze',
+    prompt: 'Fill the blank.',
+    answer: 'material',
+    cloze: 'The obstacle is the ____.',
+  };
+
+  it('writes every kind a Pull offers', () => {
+    const out = questionsToWrite([qs(recall, mcq, cloze)], written);
+    expect(out.map((r) => r.kind)).toEqual(['recall', 'mcq', 'cloze']);
+    expect(out.every((r) => r.pullId === 'p0')).toBe(true);
+  });
+
+  it('keeps only the first question of each kind', () => {
+    // `quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and the insert
+    // upserts on that pair. Postgres refuses a statement whose conflict target is
+    // hit twice -- "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    // -- which fails the whole batch, not the duplicate. So the duplicate must not
+    // reach the insert at all.
+    const out = questionsToWrite([qs(recall, { ...recall, prompt: 'Second try?' })], written);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.prompt).toBe('Why?');
+  });
+
+  it('refuses an mcq that cannot be got wrong', () => {
+    // `quiz_questions_mcq_has_distractors` wants two. Dropping it here rather than
+    // letting the database refuse it is the difference between losing one question
+    // and losing every question on a summary already paid for.
+    expect(questionsToWrite([qs({ ...mcq, distractors: ['only one'] })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...mcq, distractors: [] })], written)).toEqual([]);
+  });
+
+  it('refuses a cloze with no blank to fill', () => {
+    expect(questionsToWrite([qs({ ...cloze, cloze: '   ' })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...cloze, cloze: undefined })], written)).toEqual([]);
+  });
+
+  it('bounds the distractors by BYTES as well as by count', () => {
+    // The count bound and the byte bound are separate constraints
+    // (`quiz_questions_distractors_shape`: at most eight entries AND
+    // `length(distractors::text) <= 20000`), and only the count was enforced. Four
+    // entries of 6,000 characters is well under eight and 24,000 characters of jsonb --
+    // a 23514 that `insertQuizQuestions` turns into the loss of every question on a
+    // summary `synthesize` has already been paid for.
+    const huge = Array.from({ length: 4 }, (_, i) => 'x'.repeat(6_000) + i);
+    const out = questionsToWrite([qs({ ...mcq, distractors: huge })], written);
+    expect(out).toHaveLength(1);
+    expect(JSON.stringify(out[0]?.distractors).length).toBeLessThanOrEqual(20_000);
+    // Trimmed from the END, so the model's best distractors are the ones kept.
+    expect(out[0]?.distractors[0]).toBe(huge[0]);
+  });
+
+  it('drops an mcq that the byte bound leaves with one option', () => {
+    // Trimming for size can take a question below the floor at which it can be got
+    // wrong, and then it must go the same way as one that arrived that way -- rather
+    // than being stored as a multiple choice with a single button on it.
+    const two = Array.from({ length: 2 }, (_, i) => 'x'.repeat(15_000) + i);
+    expect(questionsToWrite([qs({ ...mcq, distractors: two })], written)).toEqual([]);
+  });
+
+  it('bounds the rationale by bytes too, and only after the distractors are final', () => {
+    // Same pair of constraints on `rationale`. The ordering matters as much as the
+    // bound: the rationale is filtered against the distractors that survived, so
+    // trimming the distractors afterwards would leave entries naming options the
+    // question no longer offers.
+    const ds = ['wrong a', 'wrong b'];
+    const fat = ds.map((d) => ({ distractor: d, why: 'y'.repeat(12_000) }));
+    const out = questionsToWrite([qs({ ...mcq, distractors: ds, rationale: fat })], written);
+    expect(out).toHaveLength(1);
+    expect(JSON.stringify(out[0]?.rationale).length).toBeLessThanOrEqual(20_000);
+    for (const r of out[0]?.rationale ?? []) expect(ds).toContain(r.distractor);
+  });
+
+  it('never lets the answer sit among its own distractors', () => {
+    // A model that lists every option rather than the wrong ones would otherwise
+    // make `mcqOptions` render the right answer twice, one of them marked wrong.
+    const out = questionsToWrite(
+      [qs({ ...mcq, distractors: ['This one.', 'wrong a', 'wrong b'] })],
+      written,
+    );
+    expect(out[0]?.distractors).toEqual(['wrong a', 'wrong b']);
+  });
+
+  it('drops a rationale for an option the question does not offer', () => {
+    // `whyWrong` matches on `distractor`, so one naming an absent option could
+    // never fire. Keeping it would be a row that promises an explanation the
+    // screen cannot show.
+    const out = questionsToWrite(
+      [
+        qs({
+          ...mcq,
+          rationale: [
+            { distractor: 'wrong a', why: 'kept' },
+            { distractor: 'not an option', why: 'dropped' },
+            { distractor: 'wrong b', why: '' },
+          ],
+        }),
+      ],
+      written,
+    );
+    expect(out[0]?.rationale).toEqual([{ distractor: 'wrong a', why: 'kept' }]);
+  });
+
+  it('files an unknown kind as recall rather than dropping the question', () => {
+    // `quiz_questions_kind_known` would refuse the row and take the batch with it.
+    // The prompt and answer are usable; only the claim about the form is lost.
+    const out = questionsToWrite([qs({ ...recall, kind: 'interpretive_dance' })], written);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe('recall');
+  });
+
+  it('clears a cloze sentence off a kind that is not a cloze', () => {
+    const out = questionsToWrite([qs({ ...recall, cloze: 'The obstacle is the ____.' })], written);
+    expect(out[0]?.cloze).toBeNull();
+  });
+
+  it('keeps a question the database bounds would refuse from killing the batch', () => {
+    // `insertQuizQuestions` writes the batch in one statement, so a row that violates a
+    // CHECK takes every good question on the summary with it -- at `cards`, after
+    // synthesis has been paid for, and again on every `resume` from the persisted step
+    // output. Each rule below is one `20260905120000` enforces.
+    const wide = questionsToWrite(
+      [
+        qs({
+          ...mcq,
+          distractors: Array.from({ length: 12 }, (_, i) => `wrong ${i}`),
+          rationale: Array.from({ length: 12 }, (_, i) => ({
+            distractor: `wrong ${i}`,
+            why: 'because',
+          })),
+          explanation: 'x'.repeat(2001),
+        }),
+      ],
+      written,
+    );
+    expect(wide[0]?.distractors).toHaveLength(8);
+    expect(wide[0]?.rationale).toHaveLength(8);
+    // Supplementary, so the question survives without it.
+    expect(wide[0]?.explanation).toBeNull();
+
+    // A prompt or an answer past the bound is the question, not a decoration, so the
+    // question goes rather than being asked in half.
+    expect(questionsToWrite([qs({ ...recall, prompt: 'x'.repeat(2001) })], written)).toEqual([]);
+    expect(questionsToWrite([qs({ ...recall, answer: 'x'.repeat(2001) })], written)).toEqual([]);
+
+    // A cloze longer than the column takes cannot be cut safely -- the blank may be in
+    // the part removed.
+    expect(
+      questionsToWrite([qs({ ...cloze, cloze: `${'x'.repeat(1001)} ____` })], written),
+    ).toEqual([]);
+  });
+
+  it('reads the singular field only when the array is absent', () => {
+    // A step output PERSISTED BY AN EARLIER BUILD comes back with `question` and no
+    // `questions`; `resume` replays exactly that. When both are present the array
+    // wins, because it is the shape the current provider returns.
+    const both = { ...qs(mcq), question: { prompt: 'Old', answer: 'Older' } };
+    expect(questionsToWrite([both], written).map((r) => r.kind)).toEqual(['mcq']);
+    expect(
+      questionsToWrite([{ questions: [], question: { prompt: 'Old', answer: 'Older' } }], written),
+    ).toEqual([]);
   });
 
   it('drops a question whose Pull was never written', () => {
     expect(questionsToWrite([q(), q(), q()], [{ ordinal: 0, id: 'p0' }])).toHaveLength(1);
+  });
+
+  /*
+   * THE THREE CODEX FOUND, each of which ends the same way: `insertQuizQuestions` upserts
+   * the batch in ONE statement, so a single row Postgres refuses loses every question on
+   * a summary `synthesize` has already been paid for, and `resume` replays from the
+   * persisted step output so it fails identically on every retry.
+   */
+  it('measures a jsonb bound the way Postgres renders it, objects included', () => {
+    /*
+     * Third statement of this bound. `JSON.stringify` was short by the space after every
+     * ARRAY separator; adding one per element was short by the spaces jsonb puts after
+     * every colon and every member comma inside an OBJECT, which is what `rationale`
+     * holds. Codex's example verbatim: a rationale whose compact JSON is exactly 20,000
+     * renders as 20,003 and violates `quiz_questions_rationale_shape`.
+     *
+     * `jsonbTextLength` walks the value rather than adjusting for a shape, and was
+     * checked against `length(x::jsonb::text)` on seven shapes -- arrays, objects,
+     * embedded quotes and newlines -- rather than derived a third time.
+     */
+    const shell = JSON.stringify([{ distractor: 'a', why: '' }]).length;
+    const why = 'w'.repeat(20_000 - shell);
+    const atTheCompactBound = [{ distractor: 'a', why }];
+    expect(JSON.stringify(atTheCompactBound)).toHaveLength(20_000);
+
+    const kept = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'this',
+              distractors: ['a', 'b'],
+              rationale: atTheCompactBound,
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    // Dropped: it fits `JSON.stringify` and does not fit the column.
+    expect(kept[0]?.rationale).toEqual([]);
+    // Three characters smaller and it fits both, so the bound is a bound and not a ban.
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'this',
+              distractors: ['a', 'b'],
+              rationale: [{ distractor: 'a', why: why.slice(0, -3) }],
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.rationale).toHaveLength(1);
+  });
+
+  it('trims and dedupes the options before it counts them', () => {
+    // Round three of 3a at a different layer: `[1, 2]` satisfied an element count while
+    // the client filter dropped both. Here it is whitespace and repeats -- two entries by
+    // count, one option after `mcqOptions` trims and dedupes against the answer, and a
+    // multiple choice stored that cannot render.
+    expect(
+      questionsToWrite(
+        [
+          {
+            questions: [
+              {
+                kind: 'mcq',
+                prompt: 'Which?',
+                answer: 'right',
+                distractors: [' right ', 'right '],
+              },
+            ],
+          },
+        ],
+        written,
+      ),
+    ).toEqual([]);
+    // Genuinely distinct options survive, trimmed.
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'right',
+              distractors: [' wrong ', 'other', 'other'],
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.distractors).toEqual(['wrong', 'other']);
+  });
+
+  it('refuses a cloze that never had its blank taken out', () => {
+    // `quiz_questions_cloze_has_text` can only check the string is non-blank; the marker
+    // is a prose instruction in the prompt and a response schema cannot enforce it. An
+    // intact sentence renders as a fill-the-blank with nothing to fill -- and since the
+    // answer is the removed text, it shows the reader the answer.
+    expect(
+      questionsToWrite(
+        [
+          {
+            questions: [
+              {
+                kind: 'cloze',
+                prompt: 'Fill it',
+                answer: 'material',
+                cloze: 'The obstacle is the material.',
+              },
+            ],
+          },
+        ],
+        written,
+      ),
+    ).toEqual([]);
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'cloze',
+              prompt: 'Fill it',
+              answer: 'material',
+              cloze: 'The obstacle is the ____.',
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.cloze).toBe('The obstacle is the ____.');
   });
 
   /*
@@ -253,9 +577,19 @@ describe('questionsToWrite', () => {
     expect(questionsToWrite([q({ answer: 'y'.repeat(2000) })], written)).toHaveLength(1);
     // The pull keeps its place either way -- dropping the question is not dropping the
     // idea, and a pull with no question is an outcome the schema already allows.
-    expect(questionsToWrite([q({ prompt: 'x'.repeat(2001) }), q()], written)).toEqual([
-      { pullId: 'p1', prompt: 'Why?', answer: 'Because.', distractors: ['a', 'b', 'c'] },
-    ]);
+    //
+    // `toMatchObject` rather than `toEqual`: 3g widened the row with `kind`, `cloze`,
+    // `explanation` and `rationale`, and what this case is about is WHICH pull survives,
+    // not the shape of the row. Pinning the shape here would make this test fail again
+    // the next time a column is added, for a reason it is not testing.
+    const kept = questionsToWrite([q({ prompt: 'x'.repeat(2001) }), q()], written);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({
+      pullId: 'p1',
+      prompt: 'Why?',
+      answer: 'Because.',
+      distractors: ['a', 'b', 'c'],
+    });
   });
 
   it('measures the size the way Postgres will, spaces and all', () => {
@@ -269,8 +603,18 @@ describe('questionsToWrite', () => {
      *
      * Eight strings whose `JSON.stringify` length is exactly the bound: 25 characters of
      * punctuation plus 19,975 of content.
+     *
+     * DISTINCT strings, and they have to be. This fixture used seven identical ones when
+     * it came from 3a, where nothing deduped -- and 3g dedupes the options before it
+     * counts them, so the seven collapsed to one and the case stopped being about the
+     * byte bound at all. A fixture that is accidentally degenerate under a rule added
+     * later still passes its assertion for the wrong reason, or fails it for one.
      */
-    const exact = [...Array.from({ length: 7 }, () => 'z'.repeat(2497)), 'z'.repeat(2496)];
+    const exact = [
+      ...Array.from({ length: 7 }, (_, i) => 'z'.repeat(2496) + String.fromCharCode(97 + i)),
+      'z'.repeat(2496),
+    ];
+    expect(new Set(exact).size).toBe(8);
     expect(JSON.stringify(exact)).toHaveLength(20000);
     const kept = questionsToWrite([q({ distractors: exact })], written)[0]?.distractors ?? [];
     expect(kept).toHaveLength(7);

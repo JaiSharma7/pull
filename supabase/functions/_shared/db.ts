@@ -452,7 +452,15 @@ export function createPipelineDb(supabase: Db): PipelineDb {
               prompt: r.prompt,
               answer: r.answer,
               distractors: r.distractors,
-              kind: 'recall',
+              // The row's own kind, not a hard-coded 'recall'. It was constant when
+              // generation produced one question per idea; with several it is what
+              // decides which row the upsert below resolves against, so writing
+              // 'recall' for all of them would make three questions collide on one
+              // row and Postgres refuse the statement.
+              kind: r.kind,
+              cloze: r.cloze,
+              explanation: r.explanation,
+              rationale: r.rationale,
             })),
             // `(pull_id, kind)`, which is what `quiz_questions_pull_kind_key`
             // actually is. `pull_id` alone raises 42P10 — there was no unique

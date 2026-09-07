@@ -1,9 +1,13 @@
 // The canonical summary: one generation, read by thousands (law 2).
 //
-// This is the same contract `_shared/providers.ts` declares as `CanonicalSummary`
-// and `_shared/gemini.ts` hand-writes as `SUMMARY_SCHEMA`, expressed once. It is
-// not yet wired into the Edge Function pipeline — see docs/baml.md for why that
-// crossing is HTTP-shaped and what it is waiting on.
+// This is the same contract `_shared/providers.ts` declares as `CanonicalSummary`,
+// expressed once and exported. `_shared/gemini.ts` no longer hand-writes it:
+// `SUMMARY_SCHEMA` is `toGeminiSchema(PROMPTS.WriteCanonicalSummary.schema)`, and
+// `_shared/anthropic.ts` passes the same schema as a tool. This comment said the
+// opposite -- that gemini.ts hand-wrote a copy and that none of it was wired into
+// the pipeline -- which was true when it was written and stopped being true when
+// the export landed. See docs/baml.md for the Deno boundary, which is still real:
+// what crosses is text and a schema, at build time.
 
 /// Every `topics.slug` a generated work may be filed under.
 ///
@@ -52,16 +56,61 @@ enum TopicSlug {
     Ecology @alias("ecology"),
 }
 
-/// One recall question, produced by the same call that produced the idea.
+/// The kinds a generated question may take.
 ///
-/// `distractors` are what turn the recall interrupt from a self-graded reveal
-/// into something that can be wrong — and grading three wrong answers against
-/// one right one is a comparison the client does, so no model goes near the
-/// read path.
+/// Three of the six `quiz_questions.kind` accepts
+/// (`20260905120000_a_question_that_can_be_wrong.sql`). `ordering` and `scenario`
+/// are in the database because the column should not have to change when they
+/// arrive; `short_answer` is what a reader writes rather than what is generated.
+/// Asking for a kind nothing renders would spend tokens on a row `Review` cannot
+/// use.
+///
+/// Aliased to the database's own values. `QuestionKind.Mcq` is `"mcq"` at the
+/// boundary and `"Mcq"` in generated TypeScript -- never use the generated
+/// identifier as a database value.
+enum QuestionKind {
+    Recall @alias("recall"),
+    Mcq @alias("mcq"),
+    Cloze @alias("cloze"),
+}
+
+/// Why one particular wrong option is wrong.
+///
+/// An array of pairs rather than a map from distractor to reason, because Gemini's
+/// schema dialect has no map type. `whyWrong` in `apps/web/src/lib/activities.ts`
+/// reads exactly this shape and matches on `distractor`.
+class DistractorRationale {
+    /// The wrong option this explains. Must be one of the question's `distractors`
+    /// verbatim, or the client cannot match it to what the reader picked.
+    distractor: string,
+    /// One sentence on the mistake it represents -- not a restatement of the answer.
+    why: string,
+}
+
+/// One question, produced by the same call that produced the idea.
+///
+/// Law 2 is why this rides the synthesis call rather than being its own function:
+/// questions are generated once per canonical summary and read by thousands, and a
+/// second request per summary would be a second bill for something the model has
+/// already read the source for. Grading is a comparison the client does, so no
+/// model goes near the read path.
 class RecallQuestion {
+    kind: QuestionKind,
     prompt: string,
+    /// The right answer. For `mcq` it is the option that is correct; for `cloze` it
+    /// is what fills the blank.
     answer: string,
+    /// The WRONG options, never including the answer. Empty for `recall` and
+    /// `cloze`; `mcq` needs at least two, or the question cannot be got wrong and
+    /// the database refuses it.
     distractors: string[],
+    /// The sentence with the answer removed, marked with four underscores. Required
+    /// for `cloze` and omitted otherwise.
+    cloze: string?,
+    /// Why the answer is the answer, shown after grading whatever the reader picked.
+    explanation: string?,
+    /// One entry per distractor, for `mcq`. Empty for the kinds that have none.
+    rationale: DistractorRationale[],
 }
 
 /// One atomic idea that stands on its own out of context, structured for progressive depth.
@@ -76,9 +125,16 @@ class Pull {
     example: string?,
     /// Long stop (in full): the deep-dive analytical breakdown, mechanism, counterarguments, or derivation.
     explanation: string?,
-    /// Omitted rather than invented when the source is too thin to support a fair
-    /// question. `get_due_reviews` already copes with a pull that has none.
-    question: RecallQuestion?,
+    /// Up to three, of different kinds, most useful first. EMPTY rather than
+    /// invented when the source is too thin to support a fair question --
+    /// `get_due_reviews` copes with a pull that has none, and a question with a
+    /// made-up answer is worse than no question at all.
+    ///
+    /// AT MOST ONE OF EACH KIND. `quiz_questions_pull_kind_key` is unique on
+    /// `(pull_id, kind)`, so two questions of the same kind for one idea are not two
+    /// rows -- `questionsToWrite` keeps the first and drops the rest, because an
+    /// upsert cannot touch the same row twice in one statement.
+    questions: RecallQuestion[],
 }
 
 class CanonicalSummary {
@@ -137,6 +193,25 @@ function WriteCanonicalSummary(
         and an "explanation" unpacking the full depth, underlying causal mechanism, or nuance for readers
         who choose the deep dive stop.
 
+        For each pull write up to three questions, and AT MOST ONE OF EACH KIND. Three
+        recall questions about one idea are one question asked three ways, and only the
+        first is kept.
+
+        A "recall" question asks the reader to produce the idea from memory; it has no
+        distractors. An "mcq" needs at least two wrong options, each a mistake somebody
+        could genuinely make about this idea -- a near-miss, a reversed direction, a
+        plausible confusion with a neighbouring idea -- and never a filler option nobody
+        would pick. Give each wrong option a "rationale" entry naming the mistake it
+        represents, in one sentence, without restating the answer. A "cloze" is one
+        sentence of your own analysis with the single word or phrase that carries the
+        idea removed and marked "____"; its "answer" is exactly the removed text, and it
+        has no distractors.
+
+        Every question carries an "explanation" saying why the answer is the answer.
+        Write no question at all for a pull the source is too thin to support one for: a
+        question with an invented answer teaches the reader something the work does not
+        say.
+
         File this work under one to four topics, most central first. Choose the narrowest
         that genuinely fit. A parent topic is the right answer only when no child of it
         does — filing a work under a topic it merely touches is worse than filing it under
@@ -163,4 +238,8 @@ test "meditations" {
     );
     assert.is_true(res.topics.includes(TopicSlug.Stoicism));
     assert.is_true(res.pulls.length() >= 1);
+    // At most one question of each kind per pull: `quiz_questions_pull_kind_key` is
+    // unique on `(pull_id, kind)`, so a second of the same kind is a row that cannot
+    // be written. `questionsToWrite` drops it, and this is where the model is told.
+    assert.is_true(res.pulls[0].questions.length() <= 3);
 }

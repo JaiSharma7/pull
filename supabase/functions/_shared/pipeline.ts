@@ -333,15 +333,18 @@ export interface PipelineDb {
   ): Promise<{ ordinal: number; id: string }[]>;
   setPullEmbeddings(rows: { id: string; embedding: number[] }[]): Promise<void>;
   /**
-   * Recall questions, one per Pull that has one.
+   * The questions, up to one of each kind per Pull that has any.
    *
    * Keyed by the written Pull's id rather than by array position, for the reason
    * `insertPulls` returns ordinals at all: a question attached to the wrong idea
    * is invisible and permanent.
+   *
+   * `(pullId, kind)` must be unique across `rows`. The implementation upserts on
+   * that pair, and Postgres refuses a statement whose conflict target is hit twice
+   * -- so a duplicate here fails the write for every question in the batch, not
+   * just for itself. `questionsToWrite` is what guarantees it.
    */
-  insertQuizQuestions(
-    rows: { pullId: string; prompt: string; answer: string; distractors: string[] }[],
-  ): Promise<void>;
+  insertQuizQuestions(rows: QuizQuestionRow[]): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
   /**
@@ -443,95 +446,298 @@ export function qualityFromDraft(summary: {
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 
-/** `quiz_questions_prompt_length` and `_answer_length`, as the writer sees them. */
-const MAX_QUESTION_TEXT = 2000;
-/** The two halves of `quiz_questions_distractors_shape`. */
-const MAX_DISTRACTORS = 8;
-const MAX_DISTRACTORS_TEXT = 20000;
+/** The kinds generation may produce, and the only ones `quiz_questions.kind` will take
+ *  from it. The database accepts six (`20260905120001`); `ordering` and `scenario` are
+ *  not generated yet and `short_answer` is what a reader writes. */
+const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
+
+/** What `quiz_questions_mcq_has_distractors` requires of an `mcq`. */
+const MIN_MCQ_DISTRACTORS = 2;
+
+/**
+ * The rest of what `20260905120001_and_the_question_it_asks.sql` requires, mirrored
+ * so a model that overshoots costs one question rather than a whole generation.
+ *
+ * `insertQuizQuestions` writes the batch in ONE statement, so a row that violates a
+ * CHECK takes every good question on the summary down with it -- at `cards`, the last
+ * step, after synthesis has been paid for. Worse, `resume` replays from the persisted
+ * step output, so the same malformed question fails again on every retry: the job is
+ * stuck rather than slow.
+ *
+ * Latent rather than live, and worth saying which: measured against the hosted project,
+ * the widest row across 222 `quiz_questions` is 3 distractors, a 158-character prompt
+ * and a 150-character answer. The headroom is real. It is mirrored anyway because the
+ * writer is a model and the failure mode is a wedged job rather than a bad row.
+ */
+const MAX_LIST = 8;
+/*
+ * `length(distractors::text) <= 20000` and the same on `rationale`, from
+ * 20260905120001. THE COUNT BOUND AND THE BYTE BOUND ARE SEPARATE and only one was
+ * enforced here: eight distractors of 5,000 characters each is eight entries -- under
+ * `MAX_LIST` -- and 40,000 characters of jsonb, which is a 23514 on a column bound this
+ * file already knows about.
+ *
+ * That is precisely the failure the rest of this function exists to prevent.
+ * `insertQuizQuestions` upserts every question in ONE statement, so one row Postgres
+ * refuses loses every question on a summary `synthesize` has already been paid for.
+ *
+ * Found by reading rather than by a run: review of the sibling migration caught the same
+ * count-versus-byte split in its TESTS -- the "enormous" cases were one huge element
+ * each, so they tripped the byte bound and never the count bound -- and the lesson was
+ * fixed there and not carried here.
+ *
+ * Compared in JS `.length`, which counts UTF-16 code units where Postgres `length()`
+ * counts characters. They agree below U+10000 and JS counts two where Postgres counts
+ * one above it, so THAT half is conservative in the safe direction: it can drop an entry
+ * Postgres would have accepted, never keep one it would refuse.
+ *
+ * THE SEPARATORS ARE NOT, and this paragraph used to stop above and claim safety it did
+ * not have. `JSON.stringify` renders `["a","b"]` and jsonb renders `["a", "b"]` -- one
+ * space after every comma -- so the stored text is n-1 characters LONGER than what is
+ * measured here. At eight entries that is seven characters of a 20,000 budget, and an
+ * array whose compact form is exactly 20,000 stores as 20,007 and is refused. Round six
+ * of 3a found this in its own copy of this clamp, with both a security and a typescript
+ * reviewer reproducing the 23514 independently; it is corrected here in the same shape.
+ */
+const MAX_JSON_TEXT = 20000;
+
+/**
+ * Drop entries from the end until the array's JSON text fits the column.
+ *
+ * From the end because the lists are ordered by usefulness -- the model offers its best
+ * distractor first -- so the last one is the cheapest to lose. Truncating the STRINGS
+ * instead would leave a half-sentence on screen as an option a reader is asked to
+ * choose between.
+ */
+function withinJsonBudget<T>(items: readonly T[], max: number): T[] {
+  const kept = [...items];
+  while (kept.length > 0 && jsonbTextLength(kept) > max) kept.pop();
+  return kept;
+}
+
+/**
+ * How long `x::text` will be when Postgres renders this value as jsonb.
+ *
+ * THE THIRD STATEMENT OF THIS BOUND, and the first two were both short in the same
+ * direction. `JSON.stringify` was the first: it renders `["a","b"]` where jsonb renders
+ * `["a", "b"]`. Adding one character per array element was the second, and Codex caught
+ * that it only covers ARRAYS -- `rationale` holds objects, and jsonb puts a space after
+ * every colon and after every member comma too, so `{"distractor": "a", "why": "b"}` is
+ * three characters longer than its compact form. A single boundary-sized rationale then
+ * violates `quiz_questions_rationale_shape`, and because `insertQuizQuestions` upserts
+ * the batch in one statement, that one row aborts every question on a summary already
+ * paid for.
+ *
+ * Counted rather than patched this time, because the arithmetic has now been wrong twice
+ * for the same reason: an adjustment that has to be re-derived whenever a shape changes
+ * is a bound that will be wrong again. This walks the value and adds what the renderer
+ * adds -- `", "` between members, `": "` after a key -- so a new shape costs nothing.
+ *
+ * Exact for the shapes this file writes: strings, arrays of strings, and arrays of flat
+ * string objects. It is conservative for astral text, where JS counts two UTF-16 units
+ * against Postgres's one character, so it can drop an entry Postgres would have taken
+ * and never keep one it would refuse.
+ */
+function jsonbTextLength(value: unknown): number {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 2;
+    return 2 + (value.length - 1) * 2 + value.reduce((n: number, v) => n + jsonbTextLength(v), 0);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return 2;
+    return (
+      2 +
+      (entries.length - 1) * 2 +
+      entries.reduce((n, [k, v]) => n + JSON.stringify(k).length + 2 + jsonbTextLength(v), 0)
+    );
+  }
+  return JSON.stringify(value).length;
+}
+const MAX_PROMPT = 2000;
+const MAX_EXPLANATION = 2000;
+const MAX_CLOZE = 1000;
+/** The blank `canonical_summary.baml` asks the model to leave, and the tests assert. */
+const CLOZE_BLANK = '____';
+
+export interface QuizQuestionRow {
+  pullId: string;
+  kind: string;
+  prompt: string;
+  answer: string;
+  distractors: string[];
+  cloze: string | null;
+  explanation: string | null;
+  rationale: { distractor: string; why: string }[];
+}
+
+interface RawQuestion {
+  kind?: unknown;
+  prompt?: unknown;
+  answer?: unknown;
+  distractors?: unknown;
+  cloze?: unknown;
+  explanation?: unknown;
+  rationale?: unknown;
+}
+
+function cleanString(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+function cleanStringArray(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
+    : [];
+}
 
 /**
  * The quiz questions that are safe to write, paired to the Pulls that were.
  *
- * Narrowed rather than trusted. The provider's schema requires all three fields,
- * but a stub or a future provider does not go through Gemini at all — and this
- * repo has already lost a run to four values TypeScript accepted and Postgres
- * refused, discovered only after the expensive call had been paid for.
+ * Narrowed rather than trusted. The provider's schema requires the fields, but a stub
+ * or a future provider does not go through Gemini at all -- and this repo has already
+ * lost a run to four values TypeScript accepted and Postgres refused, discovered only
+ * after the expensive call had been paid for. Every rule below is one a CHECK in
+ * `20260905120001_and_the_question_it_asks.sql` also enforces, and the point of
+ * repeating it here is WHERE the refusal lands: `insertQuizQuestions` writes the whole
+ * batch in one statement, so one malformed question would abort the write for every
+ * good one on a summary that has already been generated and paid for.
  *
  * A question missing either half is dropped rather than written half-formed:
  * `get_due_reviews` copes with a Pull that has no question, and cannot cope with
  * one whose answer is the string "undefined".
  *
+ * AT MOST ONE OF EACH KIND PER PULL, and this is the rule the array made necessary.
+ * `quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and
+ * `insertQuizQuestions` upserts on that pair, so two `recall` questions for one idea
+ * are not two rows -- Postgres refuses the whole statement with "ON CONFLICT DO UPDATE
+ * command cannot affect row a second time", which is a failure of the entire step
+ * rather than of the duplicate. The first of each kind wins, in the order the model
+ * returned them, because the prompt asks for the most useful first.
+ *
  * Paired by ORDINAL, never by array position. `insertPulls` returns ordinals for
- * exactly this reason — a question attached to the wrong idea is invisible and
+ * exactly this reason -- a question attached to the wrong idea is invisible and
  * permanent.
  */
 export function questionsToWrite(
-  pulls: readonly { question?: { prompt?: unknown; answer?: unknown; distractors?: unknown } }[],
+  pulls: readonly { questions?: readonly RawQuestion[]; question?: RawQuestion }[],
   written: readonly { ordinal: number; id: string }[],
-): { pullId: string; prompt: string; answer: string; distractors: string[] }[] {
+): QuizQuestionRow[] {
   const byOrdinal = new Map(written.map((w) => [w.ordinal, w.id]));
-  const out: { pullId: string; prompt: string; answer: string; distractors: string[] }[] = [];
+  const out: QuizQuestionRow[] = [];
 
   pulls.forEach((p, ordinal) => {
     const pullId = byOrdinal.get(ordinal);
-    const q = p.question;
-    if (!pullId || !q) return;
-    const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
-    const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
-    if (!prompt || !answer) return;
-    /*
-     * THE BOUNDS THE TABLE NOW CARRIES, MET BY THE WRITER RATHER THAN HIT BY IT.
-     *
-     * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
-     * `_distractors_shape`, and this function is the table's only RUNTIME writer -- the
-     * seeds in 20260829131109 and 20260902180000 also insert, and their fourteen rows
-     * satisfy every new bound (max prompt 113, max answer 150). It trims and
-     * filters and never truncates, so a model returning a 2,100-character prompt made the
-     * `cards` step raise 23514 -- AFTER `insertPulls` had committed and after the
-     * synthesis had been paid for. `synthesize`'s output replays from `job_step_outputs`,
-     * so the model is not billed again and the step then fails identically on every
-     * retry: a generation that can never converge, which is the failure 20260901040000
-     * exists to prevent. Nothing upstream clamps it either -- `BOUNDS` in
-     * `packages/prompts/scripts/export.mjs` bounds the distractor COUNT and no length.
-     *
-     * A constraint its only writer cannot satisfy is not a guard. That argument is made
-     * at length for `user_questions` in the sibling migration and was not applied here.
-     *
-     * The question is dropped rather than truncated: a truncated prompt is a question
-     * that reads as though it were finished, and a pull with no question is an outcome
-     * the schema already allows.
-     */
-    if (prompt.length > MAX_QUESTION_TEXT || answer.length > MAX_QUESTION_TEXT) return;
+    if (!pullId) return;
 
-    // Count AND size. `quiz_questions_distractors_shape` bounds both, and this stack has
-    // twice shipped the count half of a bound with the other half missing.
-    let distractors = Array.isArray(q.distractors)
-      ? q.distractors
-          .filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
-          .slice(0, MAX_DISTRACTORS)
-      : [];
-    /*
-     * `+ length - 1` BECAUSE POSTGRES AND `JSON.stringify` DO NOT RENDER THE SAME STRING.
-     *
-     * Round six, found by two reviewers, and it is this clamp making the mistake the
-     * clamp exists to stop. The constraint measures `length(distractors::text)`, and
-     * jsonb renders an array as `["a", "b", "c"]` -- a space after every separator --
-     * while `JSON.stringify` gives `["a","b","c"]`. For n elements the stored text is
-     * n-1 characters longer than what was measured, so at the count cap of eight this
-     * passed an array whose stored form is 20,007 against a bound of 20,000. Both
-     * reviewers reproduced the 23514, in the step that can never converge.
-     *
-     * Conservative everywhere else: JS `.length` counts UTF-16 units and Postgres
-     * `length()` counts characters, so astral text is over-counted here, never under.
-     */
-    while (
-      distractors.length > 0 &&
-      JSON.stringify(distractors).length + distractors.length - 1 > MAX_DISTRACTORS_TEXT
-    ) {
-      distractors = distractors.slice(0, -1);
+    // The singular is the older shape, read only when the plural is absent, so a
+    // provider written before this change keeps working and its one question is
+    // still a `recall`.
+    const offered: readonly RawQuestion[] = Array.isArray(p.questions)
+      ? p.questions
+      : p.question
+        ? [p.question]
+        : [];
+
+    const seen = new Set<string>();
+
+    for (const q of offered) {
+      const prompt = cleanString(q.prompt);
+      const answer = cleanString(q.answer);
+      if (!prompt || !answer) continue;
+      // DROPPED rather than truncated. A prompt cut at 2000 characters is a question
+      // asking half of something, and an answer cut there may no longer be the answer;
+      // one missing question is the smaller loss. The lists below are truncated instead,
+      // because a ninth distractor is surplus rather than a mutilation.
+      if (prompt.length > MAX_PROMPT || answer.length > MAX_PROMPT) continue;
+
+      // An unrecognised kind is written as `recall` rather than dropped: the prompt
+      // and answer are usable, and `quiz_questions_kind_known` would refuse the row
+      // and take the batch with it. Defaulting keeps the question and loses only the
+      // claim about its form.
+      const rawKind = cleanString(q.kind);
+      const kind = GENERATED_KINDS.has(rawKind) ? rawKind : 'recall';
+      if (seen.has(kind)) continue;
+
+      // Trimmed to the byte budget BEFORE the rationale is built, so a rationale can
+      // never name a distractor that was dropped for size -- and before the MCQ floor
+      // is checked below, so a question left with one option goes rather than being
+      // stored as a multiple choice that cannot be got wrong.
+      /*
+       * TRIMMED AND DEDUPED BEFORE THE FLOOR IS COUNTED, which is the order that makes
+       * the floor mean anything.
+       *
+       * Codex finding, and the same shape as round three of 3a: `distractors: [1, 2]`
+       * satisfied an element count while the client filter dropped both. Here it is
+       * whitespace and repeats -- `answer: "right"` with `[" right ", "right "]` is two
+       * entries by count, passes `MIN_MCQ_DISTRACTORS`, and is stored as a multiple
+       * choice. `mcqOptions` then trims and dedupes against the answer, finds one option
+       * left, and returns `[]`: a card that cannot render, on a summary that was paid
+       * for.
+       *
+       * Trimming also stops the rationale filter below discarding good entries. It
+       * matches on `cleanString(r.distractor)`, so an untrimmed distractor could never be
+       * named by a rationale that was itself trimmed.
+       */
+      const distractors = withinJsonBudget(
+        [...new Set(cleanStringArray(q.distractors).map((d) => d.trim()))]
+          .filter((d) => d && d !== answer)
+          .slice(0, MAX_LIST),
+        MAX_JSON_TEXT,
+      );
+      const cloze = cleanString(q.cloze) || null;
+      // A cloze longer than the column takes is a cloze the row cannot carry, and the
+      // kind needs it -- so the question goes rather than the sentence being cut in a
+      // place that may remove the blank itself.
+      if (kind === 'cloze' && cloze && cloze.length > MAX_CLOZE) continue;
+
+      // The two per-kind rules the database states, applied here so a question that
+      // cannot be stored does not cost the ones that can.
+      if (kind === 'mcq' && distractors.length < MIN_MCQ_DISTRACTORS) continue;
+      /*
+       * AND A CLOZE NEEDS ITS BLANK, not merely a non-empty sentence.
+       *
+       * Codex finding. `quiz_questions_cloze_has_text` checks the string is non-blank and
+       * can check no more; the marker is a PROSE instruction in the prompt
+       * (`canonical_summary.baml`, "the idea removed and marked ____") and a response
+       * schema cannot enforce it. A sentence returned intact renders as a fill-the-blank
+       * with nothing to fill -- and since the answer is the removed text, an unredacted
+       * sentence shows the reader the answer they are being asked for.
+       */
+      if (kind === 'cloze' && (!cloze || !cloze.includes(CLOZE_BLANK))) continue;
+
+      const rationaleEntries = Array.isArray(q.rationale)
+        ? q.rationale
+            .filter((r): r is { distractor: string; why: string } => {
+              if (!r || typeof r !== 'object') return false;
+              const d = cleanString((r as { distractor?: unknown }).distractor);
+              const why = cleanString((r as { why?: unknown }).why);
+              // A rationale naming an option that is not on the question explains a
+              // choice the reader cannot make. `whyWrong` matches on `distractor`,
+              // so it would simply never fire; dropping it keeps the array honest.
+              return Boolean(d) && Boolean(why) && distractors.includes(d);
+            })
+            .map((r) => ({ distractor: cleanString(r.distractor), why: cleanString(r.why) }))
+            .slice(0, MAX_LIST)
+        : [];
+      const rationale = withinJsonBudget(rationaleEntries, MAX_JSON_TEXT);
+
+      seen.add(kind);
+      out.push({
+        pullId,
+        kind,
+        prompt,
+        answer,
+        distractors,
+        cloze: kind === 'cloze' ? cloze : null,
+        // Dropped, not the question: an over-long explanation is supplementary, and a
+        // question without one still asks and still grades.
+        explanation: ((e) => (e && e.length <= MAX_EXPLANATION ? e : null))(
+          cleanString(q.explanation),
+        ),
+        rationale,
+      });
     }
-
-    out.push({ pullId, prompt, answer, distractors });
   });
 
   return out;
@@ -999,6 +1205,20 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
               whyItMatters: string;
               example?: string;
               explanation?: string;
+              // Both shapes, because this reads a step output that may have been
+              // PERSISTED BY AN EARLIER BUILD. `resume` replays a job from
+              // `job_steps.output`, so a summary written before this change comes
+              // back with the singular field and no array; `questionsToWrite`
+              // normalises the two.
+              questions?: {
+                kind?: unknown;
+                prompt?: unknown;
+                answer?: unknown;
+                distractors?: unknown;
+                cloze?: unknown;
+                explanation?: unknown;
+                rationale?: unknown;
+              }[];
               question?: { prompt?: unknown; answer?: unknown; distractors?: unknown };
             }[];
           }

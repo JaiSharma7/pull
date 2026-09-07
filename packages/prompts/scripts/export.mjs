@@ -181,7 +181,23 @@ const BOUNDS = {
   WriteCanonicalSummary: {
     pulls: { minItems: 1 },
     topics: { minItems: 1, maxItems: 4 },
-    'pulls[].question.distractors': { minItems: 3, maxItems: 3 },
+    // Three questions is one of each kind the generator knows, and the unique
+    // `(pull_id, kind)` index means a fourth could not be a fourth row anyway.
+    'pulls[].questions': { maxItems: 3 },
+    // NO `minItems` HERE, and that is the change rather than an omission. It used to
+    // be `{ minItems: 3, maxItems: 3 }` on `pulls[].question.distractors`, which was
+    // right when every question was an MCQ-shaped recall question and is wrong now:
+    // a `recall` question has no distractors and a `cloze` has none either, so a
+    // floor of three would force the model to invent wrong options for a question
+    // that does not offer any -- and the schema is enforced by the API, so it would
+    // fail the whole synthesis rather than the one question.
+    //
+    // The floor that matters is per-kind and lives where a per-kind rule can be
+    // expressed: `quiz_questions_mcq_has_distractors` refuses an MCQ with fewer than
+    // two, and `questionsToWrite` drops such a question before the insert so one bad
+    // question does not abort a step that has already been paid for.
+    'pulls[].questions[].distractors': { maxItems: 8 },
+    'pulls[].questions[].rationale': { maxItems: 8 },
   },
 };
 

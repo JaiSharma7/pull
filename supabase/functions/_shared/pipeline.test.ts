@@ -7,6 +7,7 @@ import {
   narrowTopics,
   SourceHeldError,
   NO_USAGE,
+  type QuizQuestionRow,
   RIGHTS_STATUSES,
   runPipelineStep,
   WORK_KINDS,
@@ -414,12 +415,7 @@ describe('reuse skips the paid work', () => {
         trustScore: number | null;
       };
       createSummary?: { authorId: string | null; visibility: string };
-      insertQuizQuestions?: readonly {
-        pullId: string;
-        prompt: string;
-        answer: string;
-        distractors: string[];
-      }[];
+      insertQuizQuestions?: readonly QuizQuestionRow[];
     } = {};
 
     const deps = {
@@ -500,14 +496,7 @@ describe('reuse skips the paid work', () => {
           calls.insertPulls++;
           return pulls.map((_, ordinal) => ({ ordinal, id: `p${ordinal}` }));
         },
-        insertQuizQuestions: async (
-          rows: readonly {
-            pullId: string;
-            prompt: string;
-            answer: string;
-            distractors: string[];
-          }[],
-        ) => {
+        insertQuizQuestions: async (rows: readonly QuizQuestionRow[]) => {
           calls.insertQuizQuestions++;
           received.insertQuizQuestions = rows;
           return undefined;
@@ -780,9 +769,80 @@ describe('reuse skips the paid work', () => {
 
     expect(calls.insertQuizQuestions).toBe(1);
     expect(received.insertQuizQuestions).toEqual([
-      { pullId: 'p0', prompt: 'q0?', answer: 'a0', distractors: ['x', 'y', 'z'] },
+      {
+        pullId: 'p0',
+        kind: 'recall',
+        prompt: 'q0?',
+        answer: 'a0',
+        distractors: ['x', 'y', 'z'],
+        cloze: null,
+        explanation: null,
+        rationale: [],
+      },
     ]);
     expect(cards.output).toMatchObject({ questions: 1 });
+  });
+
+  /**
+   * THE KINDS THAT REACH THE DATABASE, asserted here rather than inferred from
+   * `questionsToWrite` alone.
+   *
+   * `docs/roadmap.md` records the round-2 failure this guards: four values
+   * TypeScript accepted and Postgres refused, found only after the expensive call
+   * was paid for. A unit test of the mapper proves the mapper; this proves what the
+   * STEP hands to `insertQuizQuestions`, which is the thing that meets a CHECK
+   * constraint. Every kind below is one `quiz_questions_kind_known` accepts, every
+   * mcq here satisfies `quiz_questions_mcq_has_distractors`, and every cloze
+   * satisfies `quiz_questions_cloze_has_text`.
+   */
+  it('hands the database one row per kind, and never two of a kind', async () => {
+    const { deps, calls, received } = harness(null);
+
+    const cards = await runPipelineStep('cards', {
+      ...deps,
+      priorOutputs: {
+        template: { summaryId: 's1' },
+        synthesize: {
+          pulls: [
+            {
+              headline: 'h0',
+              body: 'b0',
+              whyItMatters: 'w0',
+              questions: [
+                { kind: 'recall', prompt: 'r?', answer: 'ra' },
+                {
+                  kind: 'mcq',
+                  prompt: 'm?',
+                  answer: 'ma',
+                  distractors: ['wrong a', 'wrong b'],
+                  rationale: [{ distractor: 'wrong a', why: 'reversed' }],
+                },
+                {
+                  kind: 'cloze',
+                  prompt: 'c?',
+                  answer: 'material',
+                  cloze: 'The obstacle is the ____.',
+                },
+                // A second recall for the same pull. The upsert conflicts on
+                // `(pull_id, kind)`, and Postgres refuses a statement that hits one
+                // row twice -- so this must be dropped before the insert, or every
+                // question above it is lost with it.
+                { kind: 'recall', prompt: 'r again?', answer: 'ra' },
+                // A kind the database does not know, filed as recall -- and then
+                // dropped, because a recall already exists for this pull.
+                { kind: 'interpretive_dance', prompt: 'd?', answer: 'da' },
+              ],
+            },
+          ],
+        },
+      },
+    } as never);
+
+    const rows = received.insertQuizQuestions ?? [];
+    expect(rows.map((r) => r.kind)).toEqual(['recall', 'mcq', 'cloze']);
+    expect(new Set(rows.map((r) => `${r.pullId}:${r.kind}`)).size).toBe(rows.length);
+    expect(calls.insertQuizQuestions).toBe(1);
+    expect(cards.output).toMatchObject({ questions: 3 });
   });
 
   it('writes no questions at all rather than calling with an empty list', async () => {

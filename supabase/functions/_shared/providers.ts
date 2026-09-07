@@ -86,21 +86,37 @@ export interface CanonicalSummary {
     /** The deep-dive breakdown for readers choosing the full/long depth stop. */
     explanation?: string;
     /**
-     * A recall question about this idea, produced by the same call.
+     * The questions about this idea, produced by the same call.
      *
      * `quiz_questions` has been read by `get_due_reviews` since round 1 and
      * written by nothing: six rows, all seeded, against 156 pulls. `recall` is
      * 45% of the interrupt distribution, so Interleaved Recall — the mechanic
      * this product is built on — had nothing to ask about 96% of the library.
      *
-     * Optional for the same reason `topics` is: a provider that predates the
-     * field is still a valid provider, and an absent question means the
-     * interrupt falls back to the self-graded reveal rather than failing.
+     * AN ARRAY NOW, and `question` stays beside it. A provider that predates this
+     * field is still a valid provider — the singular is read when the plural is
+     * absent, and `questionsToWrite` normalises the two into one list — so the
+     * widening costs no provider anything. An idea with nothing worth asking has
+     * an empty array, and the interrupt falls back to the self-graded reveal
+     * rather than failing.
      *
-     * It rides on the synthesis call rather than becoming a step of its own, so
-     * it costs no extra request and only a few output tokens — the same trade
+     * At most one of each kind reaches Postgres: `quiz_questions_pull_kind_key` is
+     * unique on `(pull_id, kind)`. See `questionsToWrite`.
+     *
+     * They ride on the synthesis call rather than becoming a step of their own, so
+     * they cost no extra request and only a few output tokens — the same trade
      * `topics` already made, and the reason both are affordable at all.
      */
+    questions?: {
+      kind?: string;
+      prompt: string;
+      answer: string;
+      distractors?: string[];
+      cloze?: string | null;
+      explanation?: string | null;
+      rationale?: { distractor: string; why: string }[];
+    }[];
+    /** @deprecated The one-question shape. Read only when `questions` is absent. */
     question?: { prompt: string; answer: string; distractors?: string[] };
   }[];
   /**
@@ -205,13 +221,41 @@ export const stubSummaryProvider: SummaryProvider = {
                 : `Placeholder body for ${input.workTitle}, produced without a model.`,
             whyItMatters:
               'The stub provider produces one Pull so the pipeline can be exercised end to end without an API key.',
-            // A real question, so the no-key path exercises the write rather
-            // than the skip. Same reasoning as the real topic slug below.
-            question: {
-              prompt: `What does ${input.workTitle} claim?`,
-              answer: 'That the stub provider produced this idea.',
-              distractors: ['Nothing at all.', 'Something a model wrote.', 'A different work.'],
-            },
+            // One question of each generated kind, so the no-key path exercises
+            // the write rather than the skip — and exercises it for every kind,
+            // since a kind that only appears in a real generation is a kind whose
+            // insert is first tried in production. Same reasoning as the real
+            // topic slug below.
+            questions: [
+              {
+                kind: 'recall',
+                prompt: `What does ${input.workTitle} claim?`,
+                answer: 'That the stub provider produced this idea.',
+                distractors: [],
+                explanation: 'The stub says so in its own body.',
+                rationale: [],
+              },
+              {
+                kind: 'mcq',
+                prompt: `Which of these does ${input.workTitle} claim?`,
+                answer: 'That the stub provider produced this idea.',
+                distractors: ['Nothing at all.', 'Something a model wrote.'],
+                explanation: 'Only the first is what the stub body says.',
+                rationale: [
+                  { distractor: 'Nothing at all.', why: 'The stub does produce one idea.' },
+                  { distractor: 'Something a model wrote.', why: 'No model ran on this path.' },
+                ],
+              },
+              {
+                kind: 'cloze',
+                prompt: 'Fill the blank.',
+                answer: 'stub provider',
+                distractors: [],
+                cloze: 'This idea was produced by the ____ , without a model.',
+                explanation: 'The no-key path is the stub provider.',
+                rationale: [],
+              },
+            ],
           },
         ],
         // A real slug, not a placeholder: `upsertWork` looks these up against
