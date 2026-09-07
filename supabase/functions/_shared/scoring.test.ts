@@ -415,4 +415,72 @@ describe('questionsToWrite', () => {
   it('drops a question whose Pull was never written', () => {
     expect(questionsToWrite([q(), q(), q()], [{ ordinal: 0, id: 'p0' }])).toHaveLength(1);
   });
+
+  /*
+   * THE BOUNDS THE TABLE CARRIES, MET HERE RATHER THAN HIT.
+   *
+   * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
+   * `_distractors_shape`, and this function is the only writer at runtime. Before the clamp, a model
+   * returning a 2,100-character prompt raised 23514 in the `cards` step -- after
+   * `insertPulls` had committed and after the synthesis had been paid for -- and, because
+   * `synthesize` replays from `job_step_outputs`, failed identically on every retry.
+   * Nothing upstream clamps it: `BOUNDS` in `packages/prompts/scripts/export.mjs` bounds
+   * the distractor count and no length at all.
+   */
+  it('drops a question whose prompt or answer is over the column bound', () => {
+    expect(questionsToWrite([q({ prompt: 'x'.repeat(2001) })], written)).toEqual([]);
+    expect(questionsToWrite([q({ answer: 'y'.repeat(2001) })], written)).toEqual([]);
+    // Exactly at the bound is a question, not a casualty.
+    expect(questionsToWrite([q({ prompt: 'x'.repeat(2000) })], written)).toHaveLength(1);
+    expect(questionsToWrite([q({ answer: 'y'.repeat(2000) })], written)).toHaveLength(1);
+    // The pull keeps its place either way -- dropping the question is not dropping the
+    // idea, and a pull with no question is an outcome the schema already allows.
+    //
+    // `toMatchObject` rather than `toEqual`: 3g widened the row with `kind`, `cloze`,
+    // `explanation` and `rationale`, and what this case is about is WHICH pull survives,
+    // not the shape of the row. Pinning the shape here would make this test fail again
+    // the next time a column is added, for a reason it is not testing.
+    const kept = questionsToWrite([q({ prompt: 'x'.repeat(2001) }), q()], written);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({
+      pullId: 'p1',
+      prompt: 'Why?',
+      answer: 'Because.',
+      distractors: ['a', 'b', 'c'],
+    });
+  });
+
+  it('measures the size the way Postgres will, spaces and all', () => {
+    /*
+     * Round six, found by two reviewers. `length(distractors::text)` is measured on the
+     * JSONB rendering, which puts a space after every separator -- `["a", "b"]` -- while
+     * `JSON.stringify` gives `["a","b"]`. For n elements the stored text is n-1 longer
+     * than the clamp believed, so at the count cap of eight an array whose compact form
+     * is exactly 20,000 stores as 20,007 and is refused with 23514, in the step that can
+     * never converge.
+     *
+     * Eight strings whose `JSON.stringify` length is exactly the bound: 25 characters of
+     * punctuation plus 19,975 of content.
+     */
+    const exact = [...Array.from({ length: 7 }, () => 'z'.repeat(2497)), 'z'.repeat(2496)];
+    expect(JSON.stringify(exact)).toHaveLength(20000);
+    const kept = questionsToWrite([q({ distractors: exact })], written)[0]?.distractors ?? [];
+    expect(kept).toHaveLength(7);
+    // What Postgres will actually measure, spaces included, is now under the bound.
+    expect(JSON.stringify(kept).length + kept.length - 1).toBeLessThanOrEqual(20000);
+  });
+
+  it('clamps distractors by count AND by size', () => {
+    // Both halves, because this stack has twice shipped the count half of a bound with
+    // the size half missing -- `quiz_questions_distractors_shape` checks
+    // `jsonb_array_length(...) <= 8` and `length(distractors::text) <= 20000`.
+    const nine = Array.from({ length: 9 }, (_, i) => `d${i}`);
+    expect(questionsToWrite([q({ distractors: nine })], written)[0]?.distractors).toHaveLength(8);
+
+    const huge = Array.from({ length: 8 }, () => 'z'.repeat(5000));
+    const kept = questionsToWrite([q({ distractors: huge })], written)[0]?.distractors ?? [];
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(20000);
+    // Some survive: the size clamp drops from the end rather than emptying the list.
+    expect(kept.length).toBeGreaterThan(0);
+  });
 });

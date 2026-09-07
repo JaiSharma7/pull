@@ -447,7 +447,7 @@ export function qualityFromDraft(summary: {
 }
 
 /** The kinds generation may produce, and the only ones `quiz_questions.kind` will take
- *  from it. The database accepts six (`20260905120000`); `ordering` and `scenario` are
+ *  from it. The database accepts six (`20260905120001`); `ordering` and `scenario` are
  *  not generated yet and `short_answer` is what a reader writes. */
 const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
 
@@ -455,7 +455,7 @@ const GENERATED_KINDS = new Set(['recall', 'mcq', 'cloze']);
 const MIN_MCQ_DISTRACTORS = 2;
 
 /**
- * The rest of what `20260905120000_a_question_that_can_be_wrong.sql` requires, mirrored
+ * The rest of what `20260905120001_and_the_question_it_asks.sql` requires, mirrored
  * so a model that overshoots costs one question rather than a whole generation.
  *
  * `insertQuizQuestions` writes the batch in ONE statement, so a row that violates a
@@ -472,7 +472,7 @@ const MIN_MCQ_DISTRACTORS = 2;
 const MAX_LIST = 8;
 /*
  * `length(distractors::text) <= 20000` and the same on `rationale`, from
- * 20260905120000. THE COUNT BOUND AND THE BYTE BOUND ARE SEPARATE and only one was
+ * 20260905120001. THE COUNT BOUND AND THE BYTE BOUND ARE SEPARATE and only one was
  * enforced here: eight distractors of 5,000 characters each is eight entries -- under
  * `MAX_LIST` -- and 40,000 characters of jsonb, which is a 23514 on a column bound this
  * file already knows about.
@@ -488,8 +488,16 @@ const MAX_LIST = 8;
  *
  * Compared in JS `.length`, which counts UTF-16 code units where Postgres `length()`
  * counts characters. They agree below U+10000 and JS counts two where Postgres counts
- * one above it, so this is conservative in the safe direction: it can drop an entry
+ * one above it, so THAT half is conservative in the safe direction: it can drop an entry
  * Postgres would have accepted, never keep one it would refuse.
+ *
+ * THE SEPARATORS ARE NOT, and this paragraph used to stop above and claim safety it did
+ * not have. `JSON.stringify` renders `["a","b"]` and jsonb renders `["a", "b"]` -- one
+ * space after every comma -- so the stored text is n-1 characters LONGER than what is
+ * measured here. At eight entries that is seven characters of a 20,000 budget, and an
+ * array whose compact form is exactly 20,000 stores as 20,007 and is refused. Round six
+ * of 3a found this in its own copy of this clamp, with both a security and a typescript
+ * reviewer reproducing the 23514 independently; it is corrected here in the same shape.
  */
 const MAX_JSON_TEXT = 20000;
 
@@ -503,7 +511,8 @@ const MAX_JSON_TEXT = 20000;
  */
 function withinJsonBudget<T>(items: readonly T[], max: number): T[] {
   const kept = [...items];
-  while (kept.length > 0 && JSON.stringify(kept).length > max) kept.pop();
+  // `+ length - 1` is the space jsonb puts after each separator. See above.
+  while (kept.length > 0 && JSON.stringify(kept).length + kept.length - 1 > max) kept.pop();
   return kept;
 }
 const MAX_PROMPT = 2000;
@@ -548,7 +557,7 @@ function cleanStringArray(v: unknown): string[] {
  * or a future provider does not go through Gemini at all -- and this repo has already
  * lost a run to four values TypeScript accepted and Postgres refused, discovered only
  * after the expensive call had been paid for. Every rule below is one a CHECK in
- * `20260905120000_a_question_that_can_be_wrong.sql` also enforces, and the point of
+ * `20260905120001_and_the_question_it_asks.sql` also enforces, and the point of
  * repeating it here is WHERE the refusal lands: `insertQuizQuestions` writes the whole
  * batch in one statement, so one malformed question would abort the write for every
  * good one on a summary that has already been generated and paid for.

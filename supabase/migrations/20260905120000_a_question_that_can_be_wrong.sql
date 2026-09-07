@@ -30,7 +30,12 @@
 --      and the summary's `version` as `contentVersion`. The top level stays an ARRAY,
 --      which `scripts/smoke-read-path.sql:65` asserts with `jsonb_array_length(due)`.
 --
--- WHAT THIS FILE DOES NOT DO. It writes no questions: the round-one corpus gets MCQ and
+-- THE LAST TWO ARE IN `20260905120001`, which is a second file rather than a second
+-- section, because a transaction holding ACCESS EXCLUSIVE on both question tables
+-- deadlocks with a referential cascade whichever order it takes them in. The paragraph
+-- below is the whole account. This file is the `user_questions` half.
+--
+-- WHAT NEITHER FILE DOES. They write no questions: the round-one corpus gets MCQ and
 -- cloze in 3b, and generation learns to produce several kinds in 3g. So after this
 -- migration every `questions` array holds at most the one `recall` row the seed already
 -- wrote, and `kind` is checked rather than varied. That is the intended order -- the
@@ -39,77 +44,53 @@
 -- Law 2 is untouched: nothing here calls a model. Law 5: no new table, and the two tables
 -- altered keep the policies they have.
 
--- --------------------------------------------------------------- quiz_questions
---
--- Canonical questions. Written only by the pipeline (`insertQuizQuestions`), and readable
--- by anyone who can read the pull -- `quiz_questions_read` from 20260829124730 asks
--- exactly that. There is no insert, update or delete policy, so none of the bounds below
--- are defending against a reader; they are defending against a MODEL, which is the other
--- source of unbounded text in this schema and the one that costs money by the token.
-alter table public.quiz_questions
-  add column explanation text,
-  add column cloze       text,
-  add column rationale   jsonb not null default '[]'::jsonb;
-
-comment on column public.quiz_questions.explanation is
-  'Why the answer is the answer. Shown after grading, whatever the reader picked.';
-comment on column public.quiz_questions.cloze is
-  'The sentence with a blank in it. Null for every kind but cloze.';
-comment on column public.quiz_questions.rationale is
-  'Array of {distractor, why}: why each wrong option is wrong. Gemini has no map type, so it is an array rather than an object.';
-
--- ------------------------------------------------------------------------ bounds
---
--- Every one of these is a number this schema already uses somewhere: 2,000 for a prompt or
--- an answer (`user_questions_prompt_length`), 20,000 for a body of prose (`notes.body`,
--- `highlights.text`, `recall_events.answer`), and a small integer for how many of a thing
--- a screen will render.
---
--- `distractors` HAS NEVER HAD ONE, and it is the older half of this. It has been `jsonb
--- not null default '[]'` with no shape check and no size check since 20260829124507 --
--- so a `cards` step that came back with a malformed or enormous array stored it, and the
--- failure surfaced later, in a renderer, on a row somebody had already paid to generate.
--- Checking it here is not defensive tidiness: `gradeMcq` in `activities.ts` indexes into
--- this array, and `mcqOptions` shuffles it, so a non-array is a client crash on a screen
--- the reader cannot get past.
---
--- The MCQ rule is the one with real content. An MCQ with fewer than two wrong options is
--- not a multiple-choice question -- with one distractor it is a coin flip, and with none
--- the answer is the only thing on screen. Two is the floor at which picking wrong is
--- possible, which is the whole point of the kind. It is expressed as a table check rather
--- than left to the generator because the generator is a model.
-alter table public.quiz_questions
-  add constraint quiz_questions_kind_known
-    check (kind in ('recall', 'mcq', 'cloze', 'short_answer', 'ordering', 'scenario')),
-  add constraint quiz_questions_prompt_length
-    check (length(prompt) between 1 and 2000),
-  add constraint quiz_questions_answer_length
-    check (length(answer) between 1 and 2000),
-  add constraint quiz_questions_explanation_length
-    check (explanation is null or length(explanation) <= 2000),
-  add constraint quiz_questions_cloze_length
-    check (cloze is null or length(cloze) <= 1000),
-  add constraint quiz_questions_distractors_shape
-    check (
-      jsonb_typeof(distractors) = 'array'
-      and jsonb_array_length(distractors) <= 8
-      and length(distractors::text) <= 20000
-    ),
-  add constraint quiz_questions_rationale_shape
-    check (
-      jsonb_typeof(rationale) = 'array'
-      and jsonb_array_length(rationale) <= 8
-      and length(rationale::text) <= 20000
-    ),
-  -- Two distractors is the floor at which an MCQ can be got wrong. Below it the kind is a
-  -- lie about what the screen is asking.
-  add constraint quiz_questions_mcq_has_distractors
-    check (kind <> 'mcq' or jsonb_array_length(distractors) >= 2),
-  -- And a cloze needs its blank. Without one `gradeCloze` has nothing to render and the
-  -- reader is shown a prompt with no gap to fill.
-  add constraint quiz_questions_cloze_has_text
-    check (kind <> 'cloze' or (cloze is not null and length(btrim(cloze)) > 0));
-
+/*
+ * THIS FILE TOUCHES ONE QUESTION TABLE. ITS SIBLING TOUCHES THE OTHER.
+ *
+ * Third statement of this paragraph, because the first two were wrong, and the second
+ * was wrong in the direction that reads as "this is safe".
+ *
+ * WHAT IS SETTLED. A migration FILE is one transaction: a probe of
+ * `create table zz; select 1/0;` leaves no table behind. A migration RUN is not: two
+ * probe files, the first creating a table and the second dividing by zero, leaves the
+ * first table committed with only its own version recorded. Locks are held across a
+ * file and released between files. Both halves were run here rather than assumed.
+ *
+ * WHAT ROUND THREE CLAIMED -- that the runner does not wrap a file, so the two ACCESS
+ * EXCLUSIVE locks were never held at once. False: `pg_locks` polled through a running
+ * migration shows both.
+ *
+ * WHAT ROUND FOUR CLAIMED -- that taking `user_questions` before `quiz_questions`, the
+ * order every READER takes them, was therefore the whole fix. Also false, and this is
+ * the one that mattered, because it surveyed readers and no writers. A CASCADE DELETE
+ * takes the pair the other way: `delete from public.pulls` fires its referential
+ * triggers in trigger-name order, and those names embed the trigger's own oid as decimal
+ * text -- `RI_ConstraintTrigger_a_18579` for `quiz_questions_pull_id_fkey`
+ * (20260829124507) against `RI_ConstraintTrigger_a_19771` for its `user_questions` twin
+ * (20260905110000), so the canonical table goes first. It is a LEXICOGRAPHIC comparison
+ * rather than a numeric one, and "older constraint fires first" holds only while both
+ * oids have the same digit count. They do, here and on hosted after ninety-one
+ * migrations, and the cascade order was observed directly rather than inferred. Review reproduced the deadlock three times -- including on a pull
+ * with no rows in either question table, because the cascade issues the delete anyway
+ * and the statement still locks the table. The reachable callers are `undo_import` and
+ * `delete_my_account`, both granted to `authenticated`: a reader deleting their account
+ * takes the 40P01 and gets a 500 halfway through it.
+ *
+ * So there is no order to pick. Readers go user then quiz, cascades go quiz then user,
+ * and a transaction taking ACCESS EXCLUSIVE on both deadlocks with one of them whichever
+ * way it goes. Reordering chooses the victim; it does not remove the deadlock.
+ *
+ * THE FIX IS THAT NO TRANSACTION TAKES BOTH. This file alters `user_questions`.
+ * `20260905120001` alters `quiz_questions` and re-states `get_due_reviews`, which reads
+ * both tables and takes an exclusive lock on neither. Every counterparty now queues on
+ * one table rather than deadlocking across two, and the ordering question stops existing
+ * instead of being traded between victims.
+ *
+ * One correction for the record, since round four's paragraph asserted the opposite:
+ * `lock table a, b in access exclusive mode` IS reachable here. Inside a `do $$ ... $$`
+ * block `CheckTransactionBlock` returns early when `!isTopLevel`, and it succeeds. It
+ * simply does not help -- it acquires sequentially and inherits the same inversion.
+ */
 -- ------------------------------------------------------------- user_questions
 --
 -- The reader's own. Two columns, not three: `rationale` is an account of why each
@@ -128,8 +109,11 @@ alter table public.quiz_questions
 --
 -- No `mcq needs two options` rule on this table to match the canonical one, deliberately:
 -- `remember_pull` has no way to write `options` at all, so the constraint would forbid a
--- kind that the only writer cannot satisfy. It belongs with 2d/2e, which is where the
--- screen that writes choices lands, and where a reader can actually meet it.
+-- kind THROUGH THE RPC the product writes these rows with. Not through every path -- a
+-- reader can POST the column directly under `user_questions_insert_own`, which is why
+-- the blank-prompt rule below exists -- but the RPC is what the screens call, so the
+-- constraint would make the kind unreachable in practice. It belongs with 2d/2e, which
+-- is where the screen that writes choices lands, and where a reader can actually meet it.
 --
 -- THE KIND SET STAYS AT FOUR here, and that is deliberate rather than an oversight of the
 -- six above. `ordering` and `scenario` are generated forms: an ordering question needs its
@@ -146,197 +130,154 @@ comment on column public.user_questions.cloze is
   'The sentence with a blank in it, when the reader wrote a cloze.';
 
 alter table public.user_questions
+  /*
+   * A DETERMINISTICALLY GRADED KIND NEEDS AN ANSWER, and `answer` is nullable.
+   *
+   * Review finding. `remember_pull(p_pull_id, p_prompt, p_answer default null, p_kind
+   * default 'recall', ...)` takes the answer as optional, and nothing refused
+   * `remember_pull(pull, 'An mcq?', null, 'mcq', id)` -- measured, accepted. That row
+   * is then returned in the same shape as a canonical question, and `mcqOptions` in
+   * `activities.ts` calls `answer.trim()` on it: a valid row the reader wrote, which
+   * throws in the renderer rather than displaying.
+   *
+   * `recall` and `short_answer` are self-graded -- the reader reveals and marks
+   * themselves, so a question with no stored answer is a perfectly good prompt. `mcq`
+   * and `cloze` are graded by comparison against the answer, so for those it is not
+   * optional at all. `quiz_questions.answer` has been `not null` since
+   * 20260829124507 for the same reason.
+   */
+  /*
+   * `!~ '^\s*$'` rather than `length(btrim(answer)) > 0`. One-argument `btrim` strips
+   * SPACES ONLY, so an answer of a single tab or newline satisfied "non-blank" and the
+   * reader got an option-less question rather than a graded one. `\s` covers space,
+   * tab, newline, carriage return, form feed and vertical tab.
+   */
+  add constraint user_questions_graded_kinds_need_an_answer
+    check (
+      kind in ('recall', 'short_answer')
+      or (answer is not null and answer !~ '^\s*$')
+    ),
+  /*
+   * AND A PROMPT OF ONLY WHITESPACE IS NOT A PROMPT.
+   *
+   * Review finding, and the same mistake as the rule above rather than a new one.
+   * `user_questions_prompt_length` (20260905110000:169) bounds LENGTH only, and
+   * `remember_pull` writes `btrim(p_prompt)` -- the one-argument `btrim` whose
+   * spaces-only behaviour the paragraph above exists because of. So
+   * `remember_pull(pull, E'\t', 'the answer', 'mcq', id)` was accepted, and a direct
+   * insert under `user_questions_insert_own` did not even have the `btrim` in the way:
+   * a prompt of three spaces was a valid row for any signed-in reader through PostgREST.
+   *
+   * `prompt` is the column the Review card renders, and a reader's own question always
+   * outranks the canonical one -- so one such row both empties the card AND displaces
+   * the question that would have been asked, until the reader thinks to retire it.
+   * Pre-existing on `main`; closed here because it is the same table, the same `alter
+   * table` and the same reasoning as the answer rule two constraints up.
+   *
+   * `quiz_questions.prompt` has the same length-only shape and deliberately does NOT
+   * get this rule: readers have no insert or update policy on that table, and
+   * `questionsToWrite` in `pipeline.ts` trims and drops a question whose prompt is
+   * empty before the pipeline ever writes one.
+   */
+  add constraint user_questions_prompt_not_blank
+    check (prompt !~ '^\s*$'),
   add constraint user_questions_explanation_length
     check (explanation is null or length(explanation) <= 2000),
   add constraint user_questions_cloze_length
     check (cloze is null or length(cloze) <= 1000),
-  add constraint user_questions_cloze_has_text
-    check (kind <> 'cloze' or (cloze is not null and length(btrim(cloze)) > 0));
+  /*
+   * AND THE WRONG ANSWERS DO NOT GET TEN TIMES THE BUDGET OF THE RIGHT ONE.
+   *
+   * Review finding. `user_questions_options_size` (20260905110000:190) allows 20,000
+   * characters of `options` beside a 2,000-character `answer`. That was harmless while
+   * nothing read the column, and stops being harmless in `20260905120001`, which is the
+   * first thing to put reader-written content into the review payload -- five
+   * reader-writable fields, three questions a card, up to a hundred cards, with nothing
+   * bounding the product.
+   *
+   * Measured on 34 due pulls carrying three maximal questions each: `get_due_reviews(20)`
+   * returned 19,637 bytes before those rows existed and 1,682,524 after, and this bound
+   * takes the second number to 602,524. The writes that arm it are free -- guests may
+   * write their own questions, deliberately -- so the amplification is the problem rather
+   * than the storage.
+   *
+   * IT DOES NOT CLOSE THE CEILING and is not claimed to. The residual is FIVE fields --
+   * prompt, answer, explanation, cloze, and the 2,000 characters of `options` this bound
+   * still admits, which is the one an earlier draft of this paragraph forgot. Measured at
+   * 9.8 KB a question: 30,513 bytes a card, so about 3.05 MB at `p_limit := 100`, which
+   * is the figure worth quoting because 100 is what the function permits.
+   *
+   * Shippable, and reviewed as such rather than assumed: a reader can only inflate their
+   * OWN response -- cross-reader isolation was reproduced under RLS -- arming it costs
+   * them 2.7 MB of uploads first, and the armed call still returns in 18.6 ms, so it is
+   * bytes rather than time. Bounding it properly is a shape change, carrying the long
+   * fields only on `questions -> 0` since the screen asks one question at a time, and
+   * that belongs with 3d.
+   */
+  add constraint user_questions_options_budget
+    check (length(options::text) <= 2000);
 
--- --------------------------------------------------------------- get_due_reviews
---
--- Restated, same signature, so `create or replace` is enough and every caller keeps
--- working: the client calls it by name and `scripts/smoke-read-path.sql` calls it with
--- `p_limit := 5` by named argument.
---
--- `questions` IS THE ARRAY, and the three singular fields are derived from its first
--- element rather than computed beside it. That ordering is the whole lesson of the version
--- this replaces: 20260905110000 had `question`, `questionId` and `questionSource` computed
--- separately until a review mutant made them describe different questions, and the fix was
--- to make one decision and read all three off it. The same reasoning applies one level up
--- -- an array and a scalar computed independently can disagree in exactly the same way --
--- so `chosen` is now `questions -> 0` and nothing else.
---
--- The three stay for one release. `lib/types.ts` `DueReview` declares `question` and the
--- deployed Review screen reads it; 3d is the PR that renders `questions` by kind and drops
--- them, and 12a is where they leave this function. Removing them here would break the
--- screen between this merge and that one, and `main` deploys on every merge.
---
--- `p_limit` IS BOUNDED, which it was not. It is passed straight to `limit`, so
--- `get_due_reviews(2000000000)` asked Postgres for every due row a reader has and built
--- one JSON document out of it -- under an 8 s `statement_timeout`, on a function any
--- signed-in caller can invoke through PostgREST. 100 is five times the default page and
--- more than any screen renders; the floor of 1 turns a zero or a negative into the
--- smallest useful answer rather than an empty array that looks like "nothing is due".
-create or replace function public.get_due_reviews(p_limit int default 20)
-returns jsonb
-language plpgsql
-stable
-security invoker
-set search_path = ''
-as $$
-declare
-  uid   uuid := (select auth.uid());
-  lim   int  := greatest(1, least(100, coalesce(p_limit, 20)));
-  res   jsonb;
-begin
-  if uid is null then
-    return '[]'::jsonb;
-  end if;
+/*
+ * THE INDEX THAT MAKES THE PER-BRANCH LIMIT MEAN WHAT IT SAYS.
+ *
+ * `get_due_reviews` asks each pull for `where user_id = ? and pull_id = ? and
+ * retired_at is null order by created_at desc, id limit 3`. Neither existing index
+ * serves both halves: `user_questions_live_idx (user_id, pull_id) where retired_at is
+ * null` filters without ordering, and `user_questions_user_idx (user_id, created_at
+ * desc)` orders without filtering by pull. So the planner filtered, built a jsonb
+ * payload for EVERY matching row, and only then sorted and took three.
+ *
+ * Measured, 5,000 of one reader's own questions on one due pull: `Result (actual
+ * time=0.039..15.681 rows=5000)` feeding the `top-N heapsort`, inside a branch that
+ * totalled 16.394 ms. An `actual time` is inclusive of the node's input, so that is
+ * not "15.681 ms of jsonb construction" -- what it says is that all but 0.7 ms of the
+ * branch happens at or below the node that builds one document per row, five thousand
+ * times, to keep three.
+ *
+ * An earlier revision of this paragraph also quoted "the same query with the payload
+ * replaced by bare columns runs in 2.2 ms". That came from a different fixture and does
+ * not belong beside these two -- 15.681 + 2.2 exceeds the 16.394 they would both have
+ * to be parts of. Only the numbers off the one plan are kept.
+ *
+ * That is not what the per-branch limit was claimed to do, and this migration said so
+ * in as many words -- "only a limit on each branch stops the payloads being built". A
+ * `LIMIT` bounds the aggregate; it does not stop a projection in the target list being
+ * evaluated for every row the sort consumes. Only an index that returns the rows
+ * already in order lets the limit terminate the scan, and then only three payloads are
+ * ever built.
+ *
+ * It replaces `user_questions_live_idx` rather than joining it: same leading columns,
+ * same partial predicate, two more ordering columns. Keeping both would cost every
+ * write an index for no read. The two non-partial indexes lint invariant 3 wants for
+ * the foreign keys -- `user_questions_user_idx` and `user_questions_pull_idx` -- are
+ * untouched.
+ */
+drop index public.user_questions_live_idx;
 
-  select coalesce(jsonb_agg(t order by t ->> 'retrievability'), '[]'::jsonb) into res
-  from (
-    select jsonb_build_object(
-      'pullId', p.id,
-      'headline', p.headline,
-      'body', p.body,
-      -- The three the card already had, plus the two it did not. `example` and
-      -- `explanation` are the pull's own -- a worked instance and the reasoning behind
-      -- the idea -- and Review has been re-deriving neither and showing the body alone.
-      'whyItMatters', p.why_it_matters,
-      'example', p.example,
-      'explanation', p.explanation,
-      'workTitle', w.title,
-      'workSlug', w.slug,
-      -- Which revision of the summary the reader was asked about. A pull's body can be
-      -- rewritten by a later generation, and a grade against the old wording is evidence
-      -- about the old wording; without this nothing downstream can tell.
-      'contentVersion', s.version,
-      'retrievability', round(public.retrievability(ks.stability, ks.last_seen_at)::numeric, 3),
-      'stability', round(ks.stability::numeric, 2),
-      -- Both off `knowledge_states`, both already stored, neither previously returned.
-      -- `lapses` is how many times this idea has been forgotten, which is what makes a
-      -- "you keep losing this one" line possible without a second query per card.
-      'difficulty', round(ks.difficulty::numeric, 2),
-      'lapses', ks.lapses,
-      'reps', ks.reps,
-      'dueAt', ks.next_due_at,
-      'questions', asked.questions,
-      -- Derived from the array, never computed beside it. See the header.
-      'question', asked.questions -> 0 ->> 'prompt',
-      'questionId', (asked.questions -> 0 ->> 'id')::uuid,
-      'questionSource', asked.questions -> 0 ->> 'source'
-    ) as t
-    -- THE DUE SET IS CHOSEN AND TRIMMED FIRST, on its own, and everything below runs
-    -- against at most `lim` rows.
-    --
-    -- With the `limit` in the OUTER query -- which is where it was when this function
-    -- was first written this way -- the lateral below is an inner-row expression, so
-    -- it is evaluated for every due idea the reader has and only then sorted and cut to
-    -- a hundred. Each evaluation is two index lookups and two aggregations building a
-    -- document that is then thrown away.
-    --
-    -- Measured, one canonical question per pull, `get_due_reviews(100)`: 588.9 ms
-    -- against 47.6 ms at 5,000 due ideas, and 1,898.8 ms against 127.3 ms at 20,000 --
-    -- which is exactly the import ceiling `commit_import` allows, so it is a backlog a
-    -- reader can actually have. The cost of the outer form grows with the reader's
-    -- backlog and the cost of this one does not; `authenticated` carries an 8 s
-    -- `statement_timeout`, and more than one question per pull closes that gap fast.
-    --
-    -- The same shape as the sequential scan 20260905110000 had to fix in
-    -- `commit_import`: correct, and linear in the one direction the product grows.
-    from (
-      select ks.pull_id, ks.stability, ks.difficulty, ks.reps, ks.lapses,
-             ks.last_seen_at, ks.next_due_at
-        from public.knowledge_states ks
-       where ks.user_id = uid and ks.next_due_at <= now()
-       order by public.retrievability(ks.stability, ks.last_seen_at) asc
-       limit lim
-    ) ks
-    join public.pulls p on p.id = ks.pull_id
-    join public.summaries s on s.id = p.summary_id
-    join public.works w on w.id = s.work_id
-    -- The reader's own first, then the canonical ones. `union all` rather than two
-    -- lateral joins and a coalesce: the screen asks one question at a time and takes the
-    -- first, so "whose question wins" is expressed once, as an ORDER BY, instead of as a
-    -- precedence rule three fields have to agree about.
-    --
-    -- Bounded at three. A pull can carry one canonical question of each of six kinds
-    -- (`quiz_questions_pull_kind_key`) and any number the reader has written, and this
-    -- document already carries the whole body of every due card. Three is what 3d renders
-    -- as "1 of N".
-    left join lateral (
-      -- `id` is the last term, which makes the ordering TOTAL. The seed writes a pull's
-      -- canonical questions in one statement, so they share `created_at` to the
-      -- microsecond, and without it the order among them is unspecified -- SQL is free
-      -- to return them either way round, and the reader's "1 of 3" could rename itself
-      -- between two loads of the same card.
-      --
-      -- Said as "could" rather than "would", because removing it does not currently
-      -- change anything observable and `supabase/tests/questions.sql` says so: within
-      -- one session Postgres picks one plan and returns tied rows consistently, so the
-      -- mutation that deletes this term passes the whole suite. It is here because
-      -- unspecified is not the same as stable -- a plan change, a version upgrade or a
-      -- parallel scan is free to reorder them -- not because a test caught it.
-      select coalesce(jsonb_agg(q.j order by q.own desc, q.written_at desc, q.qid), '[]'::jsonb)
-             as questions
-        from (
-          select 0 as own, uq.created_at as written_at, uq.id as qid,
-                 jsonb_build_object(
-                   'id', uq.id,
-                   'source', 'user',
-                   'kind', uq.kind,
-                   'prompt', uq.prompt,
-                   'answer', uq.answer,
-                   -- SURFACED AS `distractors`, WHICH IS THE POINT OF THE KEY.
-                   --
-                   -- `user_questions.options` and `quiz_questions.distractors` are the
-                   -- same list named for the side that writes it: the wrong choices,
-                   -- not including the answer. `mcqOptions` in `activities.ts` builds
-                   -- the rendered options from `answer` PLUS `distractors`, so a screen
-                   -- reading this array must not have to know which table a question
-                   -- came from -- and returning `'[]'` here, as the first draft of this
-                   -- function did, silently dropped every choice a reader had written
-                   -- and turned their own MCQ into a one-option question.
-                   'distractors', uq.options,
-                   'cloze', uq.cloze,
-                   'explanation', uq.explanation,
-                   'rationale', '[]'::jsonb
-                 ) as j
-            from public.user_questions uq
-           where uq.user_id = uid and uq.pull_id = p.id and uq.retired_at is null
-          union all
-          select -1, qq.created_at, qq.id,
-                 jsonb_build_object(
-                   'id', qq.id,
-                   'source', 'canonical',
-                   'kind', qq.kind,
-                   'prompt', qq.prompt,
-                   'answer', qq.answer,
-                   'distractors', qq.distractors,
-                   'cloze', qq.cloze,
-                   'explanation', qq.explanation,
-                   'rationale', qq.rationale
-                 )
-            from public.quiz_questions qq
-           where qq.pull_id = p.id
-        ) q
-    ) all_q on true
-    -- Trimmed to three AFTER the ordering, so the three kept are the three that would
-    -- have been asked first rather than three arbitrary rows.
-    left join lateral (
-      select coalesce(
-               jsonb_agg(e.value order by e.ordinality),
-               '[]'::jsonb
-             ) as questions
-        from jsonb_array_elements(all_q.questions) with ordinality as e(value, ordinality)
-       where e.ordinality <= 3
-    ) asked on true
-  ) x;
+create index user_questions_due_idx
+  on public.user_questions (user_id, pull_id, created_at desc, id)
+  where retired_at is null;
 
-  return res;
-end;
-$$;
+comment on index public.user_questions_due_idx is
+  'Serves get_due_reviews'' per-pull lookup in its own order, so the limit stops the scan rather than the sort.';
 
-comment on function public.get_due_reviews is
-  'The reader''s due ideas, each with up to three questions -- their own first, then the canonical ones -- and the pull''s own example and explanation.';
+/*
+ * AND NO "a reader's cloze needs its blank" RULE, for exactly the reason this file gives
+ * for declining the matching MCQ rule -- which it gave, and then contradicted two
+ * constraints later.
+ *
+ * `remember_pull` writes `(user_id, pull_id, kind, prompt, answer, client_mutation_id)`
+ * and has no way to write `cloze`. `user_questions_kind_known` has permitted `cloze`
+ * since 20260905110000, so `remember_pull(pull, 'The obstacle is the ___', 'way',
+ * 'cloze', id)` succeeded before this migration; with a `cloze is not null` rule it
+ * raises 23514 and PostgREST answers 400, for every input, permanently -- a granted RPC
+ * made unusable for one of the four kinds it accepts.
+ *
+ * The `quiz_questions` twin stays, because there the rule is satisfiable: the pipeline
+ * writes `cloze` in the same insert as `kind`.
+ *
+ * So this waits for 2d/2e, alongside a writer that can satisfy it. Review caught it and
+ * the suite did not, because the suite asserts the refusal through a direct
+ * `insert into public.user_questions`, which can supply the column, and never through
+ * `remember_pull`, which cannot. There is now a test for the call that was broken.
+ */

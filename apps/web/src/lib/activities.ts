@@ -30,7 +30,7 @@ import type { RecallGrade } from './grades.js';
  * `quiz_questions.kind` was plain `text not null default 'recall'` with nothing but
  * the unique `(pull_id, kind)` index on it, and this comment said so — the set was
  * *intended* and unenforced, so a row could arrive carrying a kind that is not here.
- * `20260905120000_a_question_that_can_be_wrong.sql` closes that: the check on
+ * `20260905120001_and_the_question_it_asks.sql` closes that: the check on
  * `quiz_questions.kind` is these six values, in this order, and
  * `supabase/tests/questions.sql` refuses an unknown one.
  *
@@ -92,10 +92,28 @@ export interface Question {
    * The right answer. For `mcq` it is one option among `distractors`; for `cloze`
    * it is what fills the blank; for `ordering` it is the steps in their correct
    * order, one per line (see `orderingSteps`).
+   *
+   * NULLABLE, because the payload really carries nulls. `quiz_questions.answer` is
+   * `not null`, but a reader's own question is not: `user_questions_graded_kinds_need_an_answer`
+   * deliberately exempts `recall` and `short_answer`, which are self-graded and have
+   * nothing to store, and `get_due_reviews` passes `uq.answer` straight through. This
+   * said `string` while the RPC returned `{"kind":"recall","answer":null}` -- measured
+   * against the local stack -- so every entry point below threw on it: `.trim()` in
+   * `mcqOptions`, `gradeMcq` and `whyWrong`, `.split()` in `orderingSteps`. They are
+   * narrowed rather than the type being widened alone, because each already refuses an
+   * empty answer just below -- three by an explicit guard, `orderingSteps` by filtering
+   * out the blank lines that are all an empty string can produce -- and `?? ''` feeds
+   * that existing refusal rather than adding a second one.
    */
-  answer: string;
+  answer: string | null;
   /** Wrong options, for `mcq`. Empty for every other kind. */
   distractors: string[];
+  /**
+   * Which table it came from. `get_due_reviews` sets it, and the card's `questionSource`
+   * is this field of `questions[0]`. Optional because the graders never read it and the
+   * fixtures in this file's tests do not carry one.
+   */
+  source?: 'user' | 'canonical';
   /** The sentence with a blank in it, for `cloze`. */
   cloze?: string | null;
   /** Why the answer is the answer — shown after grading, whatever was picked. */
@@ -164,9 +182,14 @@ function generator(seed: string | number): () => number {
  *
  * The order of a question's options must not change between a render and a
  * re-render, or the reader's click lands on a different option than the one they
- * read. Seeding on the question id (see `mcqOptions`) also means the same reader
- * sees the same order across sessions, so the answer never becomes "the one that
- * moved".
+ * read. Seed on the question id and the same reader also sees the same order across
+ * sessions, so the answer never becomes "the one that moved".
+ *
+ * THE SEED IS THE CALLER'S, and this paragraph used to say `mcqOptions` made it the
+ * question id. It does not and structurally cannot -- `mcqOptions` takes the seed as a
+ * parameter and its `q` does not carry an `id` -- so stability across sessions was
+ * asserted here and established nowhere. The requirement is stated at `mcqOptions`,
+ * which is where a caller reads it.
  */
 export function seededShuffle<T>(items: readonly T[], seed: string | number): T[] {
   const out = [...items];
@@ -187,9 +210,17 @@ export function seededShuffle<T>(items: readonly T[], seed: string | number): T[
  * dropped rather than shown twice, and so is a duplicate distractor — an authored
  * question should never contain either, but a question that does must not present
  * two right answers or two identical wrong ones.
+ *
+ * PASS THE QUESTION ID AS THE SEED. Nothing here can enforce it -- the seed is whatever
+ * the caller hands over -- and the two obvious substitutes fail differently. A
+ * `Date.now()` reshuffles between a render and a re-render, so the click lands on an
+ * option the reader did not read. An INDEX is stable across a re-render and wrong in
+ * another way: every card on the page then shares one permutation, and it moves the
+ * moment the due list re-orders.
+ * `seededShuffle` is deterministic; the id is what makes the determinism worth having.
  */
 export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: string | number) {
-  const answer = q.answer.trim();
+  const answer = (q.answer ?? '').trim();
   // A blank answer is a malformed row, and it used to be pushed anyway — so the
   // reader was shown an empty option, and picking it graded `forgot` with
   // `confidentlyWrong: true` while `whyWrong` returned null for the same reason.
@@ -199,12 +230,52 @@ export function mcqOptions(q: Pick<Question, 'answer' | 'distractors'>, seed: st
   if (!answer) return [];
   const seen = new Set<string>([answer]);
   const options = [answer];
-  for (const raw of q.distractors) {
+  // NARROWED LIKE `whyWrong` NARROWS ITS OWN `rationale`, at the bottom of this file,
+  // and for the reason the next paragraph gives: `distractors` is `string[]` in
+  // TypeScript and jsonb in Postgres, and
+  // it arrives through `supabase.rpc('get_due_reviews')` under an unchecked cast. The
+  // constraints on both sides check the CONTAINER -- an array, at most eight, under a
+  // size cap -- and say nothing about the members. `user_questions.options` is the one
+  // a reader writes directly through PostgREST, so `[1, null]` is a storable 201, and
+  // `get_due_reviews` surfaces it here as `distractors`. Calling `.trim()` on that
+  // throws, and will do it inside the render once 3d is the thing calling this --
+  // stated as what it would do rather than what it did, because nothing imports this
+  // module yet except its own test, so no reader has seen it.
+  //
+  // Filtered rather than coerced: a number where an option should be is a malformed
+  // question, and `String(1)` would render "1" as a choice.
+  for (const raw of Array.isArray(q.distractors) ? q.distractors : []) {
+    if (typeof raw !== 'string') continue;
     const d = raw.trim();
     if (!d || seen.has(d)) continue;
     seen.add(d);
     options.push(d);
   }
+  /*
+   * FEWER THAN TWO OPTIONS IS NOT A MULTIPLE CHOICE, and returning one is worse than
+   * returning none.
+   *
+   * `quiz_questions_mcq_has_distractors` counts array ELEMENTS -- so `distractors:
+   * [1, 2]` satisfies it, the filter above drops both as non-strings, and one option
+   * is left. `user_questions.options` has no such rule at all, deliberately: the
+   * migration declines it because `remember_pull` cannot write the column, so a reader
+   * can store `kind = 'mcq'` with `options = '[]'`. Both are storable; both were
+   * measured.
+   *
+   * What the reader would then get is a card headed as multiple choice with a single
+   * button on it -- the right answer -- and tapping the only thing on screen is scored
+   * `correct` with `confidentlyWrong: false`: `good`, or `easy` if they were quick and
+   * sure, since `gradeFrom` requires both. Either way the memory model records a PASS
+   * for a question that could not be got wrong, which is the exact failure this whole
+   * schema exists to make representable.
+   *
+   * Empty is the honest answer, and the caller already has to handle it: the
+   * `if (!answer) return []` at the top of this function returns the same thing for the
+   * same reason. A question with no options is one 3d will have to degrade to free
+   * recall -- stated as what it will need to do, since 3d does not exist yet and nothing
+   * imports this module but its own test.
+   */
+  if (options.length < 2) return [];
   return seededShuffle(options, seed);
 }
 
@@ -272,8 +343,8 @@ function gradeFrom(
  */
 export function selfReportedHard<T extends GradeResult>(result: T): T {
   if (!result.correct) return result;
-  // Generic, so the caller keeps whatever the grader added — `similarity` and
-  // `similarity` from a cloze, `positionsWrong` and `inSequence` from an ordering.
+  // Generic, so the caller keeps whatever the grader added — `similarity` from a
+  // cloze, `positionsWrong` and `inSequence` from an ordering.
   // Typed as `GradeResult` it erased fields the runtime was still carrying, and
   // a screen asking for them after this call would not compile.
   return { ...result, grade: 'hard' };
@@ -295,9 +366,24 @@ export function gradeMcq(
 ): GradeResult {
   // An empty answer matched by an empty pick is not a right answer, it is two
   // absences agreeing. A question with no answer is malformed and nothing the
-  // reader did should be graded `easy` on the strength of it.
-  const answer = q.answer.trim();
-  const correct = answer.length > 0 && picked.trim() === answer;
+  // reader did should be graded `easy` on the strength of it. Null included: a
+  // self-graded kind stores none, and `get_due_reviews` returns it as it is.
+  const answer = (q.answer ?? '').trim();
+  /*
+   * AND IT CANNOT MAKE THEM CONFIDENTLY WRONG EITHER, which widening `answer` to
+   * `string | null` is what made reachable. `confidentlyWrong` is the one signal this
+   * whole schema exists to record -- a reader who was sure and mistaken -- and it feeds
+   * the repair list on the progress screen. Reporting it for a question that had nothing
+   * to be wrong ABOUT would put a false belief in front of a reader who never held one,
+   * with no reason shown beside it, because `whyWrong` correctly returns null for the
+   * same input.
+   *
+   * A reader's own `recall` or `short_answer` stores no answer -- the constraint exempts
+   * both, deliberately, because they are self-graded -- so this is a valid row reaching
+   * a grader that cannot score it, not a malformed one. Wrong, but not damning.
+   */
+  if (!answer) return { grade: 'forgot', correct: false, confidentlyWrong: false };
+  const correct = picked.trim() === answer;
   return gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.mcq);
 }
 
@@ -800,6 +886,12 @@ export function gradeCloze(
   confidence: Confidence = 'unsure',
   latencyMs: number | null | undefined = null,
 ): GradeResult & { similarity: number } {
+  // Nothing to compare against is not a misconception. See `gradeMcq`: a reader's own
+  // self-graded question stores no answer, and scoring them `confidentlyWrong` for one
+  // would put a false belief on the repair list that they never held.
+  if (!answer.trim()) {
+    return { grade: 'forgot', correct: false, confidentlyWrong: false, similarity: 0 };
+  }
   const similarity = answerSimilarity(typed, answer);
   const exact = normaliseAnswer(typed) === normaliseAnswer(answer);
   const correct = semanticMarks(typed) === semanticMarks(answer) && wordsAreClose(typed, answer);
@@ -855,10 +947,31 @@ export function gradeCloze(
  * phantom step.
  */
 export function orderingSteps(q: Pick<Question, 'answer'>): string[] {
-  return q.answer
+  const steps = (q.answer ?? '')
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+
+  /*
+   * FEWER THAN TWO DISTINCT STEPS IS NOT RENDERABLE, and round six found both halves of
+   * that wrong.
+   *
+   * Round five put the floor in `gradeOrdering` only, so a malformed ordering still went
+   * on screen: the reader dragged the one step into the one slot -- the sole arrangement
+   * there is -- and was told they forgot it. That increments `lapses`, which the sibling
+   * migration newly surfaces so a card can say "you keep losing this one". A false `easy`
+   * had become a false lapse, which is better and still wrong. `mcqOptions` has refused
+   * at THIS boundary since round three, and a screen already checks its length before
+   * rendering; the same signal here means one branch serves both kinds.
+   *
+   * And DISTINCT, because counting steps let the case straight back in:
+   * `"Boil the water\nBoil the water"` is two steps with one possible arrangement, so
+   * every arrangement graded `easy` -- verbatim what the guard below condemns.
+   * `mcqOptions` dedupes through its `seen` set BEFORE applying its floor, and this had
+   * copied the floor without the dedupe. `['a','a','b']` still has three arrangements
+   * and stays gradeable.
+   */
+  return new Set(steps).size < 2 ? [] : steps;
 }
 
 /**
@@ -907,13 +1020,61 @@ export function gradeOrdering(
   latencyMs: number | null | undefined = null,
 ): GradeResult & { positionsWrong: number; inSequence: number } {
   const steps = orderingSteps(q);
+
+  /*
+   * FEWER THAN TWO STEPS IS NOT AN ORDERING, and this is the guard `gradeMcq` and
+   * `gradeCloze` got in the last round and this function did not.
+   *
+   * Round five, found independently by two reviewers, and it is a defect the round
+   * before it introduced: widening `Question.answer` to `string | null` narrowed three
+   * of the four entry points that read it and left the fourth with only its `?? ''`.
+   * Both halves of the miss put something false in front of a reader.
+   *
+   * NO STEPS. A question with no answer scored `confidentlyWrong` whenever the reader
+   * said they were sure -- measured, including the case where `positionsWrong` is 0 and
+   * nothing was placed wrong at all. That flag is not a grade; it is the false-belief
+   * signal that routes an idea into the repair list, and there is no `whyWrong` for an
+   * ordering, so the reader is told they hold a misconception with no reason beside it.
+   * `gradeMcq` says exactly this six hundred lines up.
+   *
+   * ONE STEP. There is one arrangement, the reader makes it, and a sure and quick answer
+   * graded `easy` -- stability multiplied by more than three, for a question that could
+   * not be got wrong. That is the round-three MCQ finding at the kind round three did
+   * not reach, and `mcqOptions` carries the same floor for the same reason.
+   *
+   * The floor is here because the SCHEMA has none. `quiz_questions` gets
+   * `_mcq_has_distractors` and `_cloze_has_text` in the sibling migration and no matching
+   * rule for `ordering`; `quiz_questions_answer_length` bounds length only and, unlike
+   * its `user_questions` twin, carries no blank check. So `answer = ' '` is a storable
+   * canonical row giving ZERO steps, and a single-line answer is a storable one-step
+   * ordering. The client is the only place either can be caught.
+   *
+   * An earlier version of this paragraph said instead that a reader's own question
+   * reaches here without passing through Postgres. Both halves were false, and two
+   * reviewers said so: `user_questions_kind_known` does not permit `ordering` at all, so
+   * a by-kind dispatch never routes one here -- and the rows that CAN reach this come
+   * from `quiz_questions`, which is to say through Postgres. It named the one path that
+   * cannot happen and missed the two that can.
+   */
+  if (steps.length < 2) {
+    return {
+      grade: 'forgot',
+      correct: false,
+      confidentlyWrong: false,
+      positionsWrong: 0,
+      inSequence: 0,
+    };
+  }
+
   const given = order.map((s) => s.trim());
   let positionsWrong = 0;
   const length = Math.max(steps.length, given.length);
   for (let i = 0; i < length; i += 1) {
     if (steps[i] !== given[i]) positionsWrong += 1;
   }
-  const correct = steps.length > 0 && positionsWrong === 0;
+  // No `steps.length > 0` here any more: the guard above makes it unreachable, and a
+  // condition that cannot be false reads as though it were carrying the empty case.
+  const correct = positionsWrong === 0;
   return {
     ...gradeFrom(correct, confidence, latencyMs, FAST_ANSWER_MS.ordering),
     positionsWrong,
@@ -932,22 +1093,32 @@ export function gradeOrdering(
  * worth more than a right one: the reader learns which specific confusion they
  * hold. Without one for this distractor, the general explanation stands in.
  * Picking the answer is not wrong, so there is nothing to say and this is null.
+ *
+ * "THE ANSWER" HERE MEANS EXACTLY THE ANSWER, and for a cloze that is stricter than the
+ * grader. `gradeCloze` accepts a typing slip and a spelling variant -- `colour` for
+ * `color` grades `correct: true` -- while this compares trimmed strings, so it does not
+ * treat that reader as right. What it returns is then whatever the question carries: the
+ * matching rationale, or the general explanation, or null when it has neither. That is right for the MCQ case the function was written
+ * for, where picking an option either is or is not the answer, and it means a screen
+ * must NOT decide whether to show a reason by asking whether this is null. Show one when
+ * the GRADER said the reader was wrong; ask this only for the words to put in it.
  */
 export function whyWrong(
   q: Pick<Question, 'answer' | 'explanation' | 'rationale'>,
   picked: string,
 ): WhyWrong | null {
   const chosen = picked.trim();
-  // Both empty is not agreement. See `mcqOptions`.
-  const expected = q.answer.trim();
+  // Both empty is not agreement, and a null answer is the same absence. See `mcqOptions`.
+  const expected = (q.answer ?? '').trim();
   if (!expected || chosen === expected) return null;
 
-  // `rationale` is not a column on `quiz_questions` yet -- 3a adds it -- so a row
-  // read today arrives without it, and when it does arrive it is jsonb: the
-  // elements are as unvalidated as the array. Guarding only the array left
-  // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing inside the
-  // feedback path after a reader answered, taking the render with them. Both
-  // halves are narrowed here so nothing below can.
+  // `rationale` is jsonb, and `quiz_questions_rationale_shape` checks that it is an
+  // array of at most eight entries and nothing about what is IN it -- so the
+  // elements are as unvalidated as the array was. Guarding only the array left
+  // `[null]`, `[{why}]`, `[{distractor}]` and `['B']` all throwing in the feedback
+  // path after a reader answered -- which will be inside the render once 3d calls
+  // this, and is today a throw with no caller, since nothing imports this module but
+  // its own test. Both halves are narrowed here so nothing below can.
   const rationale = (Array.isArray(q.rationale) ? q.rationale : []).filter(
     (r): r is DistractorRationale =>
       typeof (r as DistractorRationale | null)?.distractor === 'string' &&
