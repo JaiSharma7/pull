@@ -12,6 +12,7 @@ import {
   unusedRecoveryCodeCount,
   type AccountSession,
 } from '../lib/account-api.js';
+import { ChooseUsername } from '../components/ChooseUsername.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -43,6 +44,10 @@ export function Account({ userId, email }: { userId: string; email: string | nul
       <p className="lede">
         Where you are signed in, what is stored, and how to take it with you or remove it.
       </p>
+
+      {/* Identity before devices: the one thing on this screen other people ever see. */}
+      <hr className="rule" />
+      <ChooseUsername userId={userId} mode="account" />
 
       <hr className="rule" />
       <Sessions />

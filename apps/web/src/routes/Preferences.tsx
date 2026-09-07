@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { WORK_KINDS, type WorkKind } from '@wap/schemas';
+import { ChooseUsername } from '../components/ChooseUsername.js';
 import { KnowledgeCensus } from '../components/KnowledgeCensus.js';
 import { OnboardingDemo } from '../components/OnboardingDemo.js';
 import {
@@ -334,7 +335,15 @@ export function Preferences({
  * reader behind a settings screen because a query failed is a far worse outcome than
  * asking them again next session, and it is the failure mode a gate invites.
  */
-type OnboardingStage = 'preferences' | 'census' | 'demo';
+/*
+ * `username` first, and it is the only stage that is not about reading.
+ *
+ * A name is the one thing here that other people ever see, and it is asked for while
+ * the reader is already answering questions about themselves rather than three screens
+ * later when they are trying to read. It is skippable for the reason the screen itself
+ * gives: the generated handle keeps working, and /account can change it.
+ */
+type OnboardingStage = 'username' | 'preferences' | 'census' | 'demo';
 
 /*
  * Where the reader got to, so a reload does not skip the rest of the gate.
@@ -364,7 +373,11 @@ const STAGE_KEY_PREFIX = 'wap_onboarding_stage_';
 function readStage(userId: string): OnboardingStage | null {
   try {
     const raw = sessionStorage.getItem(`${STAGE_KEY_PREFIX}${userId}`);
-    return raw === 'census' || raw === 'demo' ? raw : null;
+    // `preferences` is resumable now that it is no longer the first stage. Without it,
+    // a reader who named themselves and reloaded during the topic picker came back to
+    // the name screen -- `onboarded_at` is still null there, so the branch below that
+    // resumes cannot help, and the default is the first stage.
+    return raw === 'preferences' || raw === 'census' || raw === 'demo' ? raw : null;
   } catch {
     return null;
   }
@@ -384,13 +397,24 @@ function writeStage(userId: string, stage: OnboardingStage | null): void {
 
 export function OnboardingGate({
   userId,
+  guest = false,
   children,
 }: {
   userId: string;
+  /**
+   * A guest is not asked to name themselves.
+   *
+   * `claim_handle` refuses a guest session outright (20260906090000): the handle
+   * namespace is global and a session that costs nothing to mint could sit on every
+   * good name. Showing the screen anyway would be offering something the database is
+   * going to refuse -- and to the one reader for whom a name can never be seen twice,
+   * since a guest session cannot be reopened.
+   */
+  guest?: boolean;
   children: React.ReactNode;
 }) {
   const [needed, setNeeded] = useState<boolean | null>(null);
-  const [stage, setStage] = useState<OnboardingStage>('preferences');
+  const [stage, setStage] = useState<OnboardingStage>(guest ? 'preferences' : 'username');
 
   useEffect(() => {
     let live = true;
@@ -399,6 +423,9 @@ export function OnboardingGate({
         if (!live) return;
         const resumed = readStage(userId);
         if (p !== null && p.onboardedAt === null) {
+          // A first run that was interrupted resumes where it got to, rather than
+          // starting over at the name screen somebody has already answered.
+          if (resumed !== null) setStage(resumed);
           setNeeded(true);
           return;
         }
@@ -434,6 +461,9 @@ export function OnboardingGate({
 
   return (
     <main className="gate">
+      {stage === 'username' && (
+        <ChooseUsername userId={userId} mode="onboarding" onDone={() => goTo('preferences')} />
+      )}
       {stage === 'preferences' && (
         <Preferences userId={userId} mode="onboarding" onDone={() => goTo('census')} />
       )}

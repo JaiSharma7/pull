@@ -16,7 +16,13 @@ import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
-import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
+import {
+  liveShareCapability,
+  shareLabel,
+  shareNote,
+  shareOrCopy,
+  shareTarget,
+} from '../lib/share.js';
 import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
@@ -37,7 +43,7 @@ const RETRY_MAX_MS = 5 * 60_000;
  * feel broken (law 3).
  */
 const CAN_SPEAK = speechSupported();
-const SHARE_LABEL = shareLabel(shareCapability(navigator));
+const SHARE_LABEL = shareLabel(liveShareCapability());
 
 /**
  * The calls a queued write replays into.

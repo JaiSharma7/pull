@@ -6,7 +6,13 @@ import { isSchemaMismatch } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
-import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
+import {
+  liveShareCapability,
+  shareLabel,
+  shareNote,
+  shareOrCopy,
+  shareTarget,
+} from '../lib/share.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
 
@@ -567,7 +573,7 @@ export function Source({
                     className="btn btn--plain"
                     onClick={() => void share(p.id, p.headline)}
                   >
-                    {shareLabel(shareCapability(navigator))}
+                    {shareLabel(liveShareCapability())}
                   </button>
                   {shareStatus?.pullId === p.id ? (
                     <>

@@ -1189,6 +1189,7 @@ export type Database = {
           created_at: string
           display_name: string | null
           handle: string
+          handle_set_at: string | null
           id: string
           updated_at: string
         }
@@ -1198,6 +1199,7 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           handle: string
+          handle_set_at?: string | null
           id: string
           updated_at?: string
         }
@@ -1207,6 +1209,7 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           handle?: string
+          handle_set_at?: string | null
           id?: string
           updated_at?: string
         }
@@ -2063,6 +2066,7 @@ export type Database = {
           read_ct: number
         }[]
       }
+      claim_handle: { Args: { new_handle: string }; Returns: string }
       claim_source_hash: {
         Args: { p_hash: string; p_job_id: string; p_lease?: string }
         Returns: string

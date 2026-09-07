@@ -4,8 +4,10 @@ import {
   isAnonymousSignInDisabled,
   isCaptchaRequired,
   isEmailRateLimited,
+  isProviderDisabled,
 } from '../lib/auth-errors.js';
 import { isDisposableEmail } from '../lib/email-domain.js';
+import { OAUTH_ROUTES, type OAuthRoute, signInRedirectTo } from '../lib/oauth.js';
 import { parseSignInLink } from '../lib/sign-in-link.js';
 import { rememberDestination } from '../lib/pending-destination.js';
 import { supabase } from '../lib/supabase.js';
@@ -42,23 +44,56 @@ import { supabase } from '../lib/supabase.js';
  * reader's first ever click can return `otp_expired` on a link thirty seconds old.
  */
 function readRedirectError(): string | null {
-  // The hash, not the query string: implicit flow puts everything after the `#`.
-  const params = new URLSearchParams(window.location.hash.slice(1));
+  /*
+   * Both halves, because two different failures land in two different places.
+   *
+   * A rejected magic link comes back on the fragment: implicit flow puts everything
+   * after the `#`. A provider that refuses — a reader who pressed Cancel on Google's
+   * consent screen, an app registration whose redirect URI does not match — comes back
+   * on the query string, because that half is the OAuth 2 error response and has
+   * nothing to do with which flow the client is on. Reading only the fragment left a
+   * cancelled provider sign-in as a silent no-op: the reader lands back on the sign-in
+   * screen with `?error=access_denied` in the address bar and no explanation on it.
+   */
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  const query = new URLSearchParams(window.location.search);
+  const inHash = hash.get('error') !== null || hash.get('error_code') !== null;
+  const params = inHash ? hash : query;
   const code = params.get('error_code');
   const description = params.get('error_description');
-  if (!code && !description && !params.get('error')) return null;
+  const kind = params.get('error');
+  if (!code && !description && !kind) return null;
 
-  // Cleared so a reload does not resurrect an error the reader has already read,
-  // and so the parameters do not sit in the address bar looking like a crash.
-  history.replaceState(null, '', window.location.pathname + window.location.search);
+  /*
+   * Cleared so a reload does not resurrect an error the reader has already read, and
+   * so the parameters do not sit in the address bar looking like a crash. The query
+   * string keeps everything that is not part of the failure — `?next=` rides on it,
+   * and a reader who was sent here to keep an idea must still land on that idea.
+   */
+  for (const key of ['error', 'error_code', 'error_description', 'error_uri']) {
+    query.delete(key);
+  }
+  const rest = query.toString();
+  history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : ''));
 
   if (code === 'otp_expired') {
     return 'That sign-in link has expired or was already used. Enter your email and we will send a fresh one.';
   }
+  /*
+   * A cancelled provider sign-in is not a failure and must not be reported as one.
+   * `access_denied` is what comes back when somebody presses Cancel on a consent
+   * screen, which is a decision rather than a fault — and GoTrue's own
+   * `error_description` for it ("The user has denied your application access") is
+   * written to the developer rather than to the person who made the decision.
+   */
+  if (kind === 'access_denied' && !inHash) {
+    return 'That sign-in was cancelled. Nothing was shared, and you can pick a different way in.';
+  }
   // `error_description` arrives URL-encoded with `+` for spaces.
-  return (
-    description?.replace(/\+/g, ' ') ?? 'That sign-in link did not work. Send yourself a new one.'
-  );
+  if (description) return description.replace(/\+/g, ' ');
+  return inHash
+    ? 'That sign-in link did not work. Send yourself a new one.'
+    : 'That sign-in did not complete. Try again, or pick a different way in.';
 }
 
 /**
@@ -84,7 +119,24 @@ function readPrefill(): { code: string; email: string } | null {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code')?.trim();
   const email = params.get('email')?.trim();
-  if (!code) return null;
+  /*
+   * Digits only, and the reason is a collision rather than tidiness.
+   *
+   * `?code=` is also what an OAuth redirect comes back with under the PKCE flow, where
+   * it is an opaque authorisation code that supabase-js exchanges for a session. This
+   * runs during the first render and CLEARS THE QUERY STRING as it reads, so a loose
+   * match here would take that code away from `detectSessionInUrl`, prefill it into the
+   * six-digit boxes, and leave a reader who signed in successfully looking at a form
+   * asking for a code that was never emailed to them.
+   *
+   * The client is on the implicit flow today (`createBrowserClient` sets no `flowType`,
+   * and auth-js defaults to implicit), so the tokens come back in the fragment and the
+   * collision does not happen. That is a default in a dependency, not a decision this
+   * repository has written down anywhere — which makes it exactly the kind of thing a
+   * future upgrade changes underneath us. `{{ .Token }}` is six digits; nothing that is
+   * not digits was ever this app's own link.
+   */
+  if (!code || !/^\d{4,10}$/.test(code)) return null;
 
   history.replaceState(null, '', window.location.pathname);
   return { code, email: email ?? '' };
@@ -141,6 +193,15 @@ const CAPTCHA_OPERATOR_WARNING =
   'both signInWithOtp and signInAnonymously. Enabling anonymous sign-ins is what usually ' +
   'brings this on: the dashboard recommends CAPTCHA in the same breath.';
 
+/**
+ * Which way in is currently working.
+ *
+ * `verify` covers both routes into `verifyOtp` — a typed code and a link that carried
+ * one — because they are the same act and want the same label. The two provider values
+ * are the provider's own name, so a screen with five ways in needs no fifth boolean.
+ */
+type Pending = 'email' | 'verify' | 'guest' | 'paste' | OAuthRoute['provider'];
+
 const CAPTCHA_READER_MESSAGE =
   'Sign-in is misconfigured for this deployment, so neither the email route nor the ' +
   'guest button can complete. That is on us rather than on you, and trying again will ' +
@@ -178,15 +239,16 @@ export function Auth({
    * first frame is already working on it rather than showing an empty form that is
    * about to be replaced.
    */
-  const [busy, setBusy] = useState(urlToken !== null);
+  const [pending, setPending] = useState<Pending | null>(urlToken !== null ? 'verify' : null);
   /*
-   * Which action `busy` is currently for.
-   *
-   * `busy` disables every control on the screen, which is right — one of these at a
-   * time — but it cannot say which one is working, and "Sending…" on the email button
-   * while a guest session is being minted describes something that is not happening.
+   * Every control on the screen is disabled while any one of them is working — one at
+   * a time is right — but only the one that is working may say so. This started as a
+   * boolean and a second boolean beside it naming the guest button, which held for two
+   * routes and stopped at four: `busy && !openingGuest && !openingProvider` is a
+   * label condition nobody can read, and it gets one term longer every time a way in
+   * is added.
    */
-  const [openingGuest, setOpeningGuest] = useState(false);
+  const busy = pending !== null;
   /*
    * The guest failure, kept out of `error`.
    *
@@ -198,14 +260,36 @@ export function Auth({
    * first draft.
    */
   const [guestError, setGuestError] = useState<string | null>(null);
+  /*
+   * A provider's refusal, kept out of `error` for the reason `guestError` is.
+   *
+   * `error` renders inside whichever form is on screen. A provider failure shown there
+   * would sit under the email field — a control the reader never touched — and read as
+   * "the email send failed", which is the exact misreading that gave the guest button
+   * its own slot. This one has a second reason besides: the email form is closed by
+   * default now, so `error` frequently has nowhere on screen to render at all.
+   */
+  const [providerError, setProviderError] = useState<string | null>(null);
+  /**
+   * Whether the email route is on screen.
+   *
+   * Closed by default, and that is the whole point of this round: the email code is a
+   * fallback rather than the front door, because the sender behind it is rate-limited
+   * per hour and counts requests rather than deliveries. Opened by a reader who wants
+   * it, and opened for them when a provider turns out not to be configured — a shut
+   * door and a hidden alternative is not a route, it is a dead end.
+   */
+  const [emailOpen, setEmailOpen] = useState(false);
   /** Whatever the reader pasted, before it has been worked out. See `usePastedLink`. */
   const [pasted, setPasted] = useState('');
   const [showPaste, setShowPaste] = useState(false);
   /** So a complete code can submit the form without the reader reaching for the button. */
   const formRef = useRef<HTMLFormElement>(null);
+  /** So opening the email panel puts the caret in it. See the effect below. */
+  const emailRef = useRef<HTMLInputElement>(null);
 
   /*
-   * Where the email should land, which is not always the front page.
+   * Where a completed sign-in should land, which is not always the front page.
    *
    * `window.location.origin` on its own discarded the destination: a reader who
    * followed a shared link, pressed "Sign in to keep these" and completed the
@@ -216,13 +300,15 @@ export function Auth({
    * `#access_token=…`, which would overwrite the `#p-<pullId>` anchor naming the
    * idea. `App` spends it once the session exists.
    *
-   * Only used if the email carries a link rather than a code, and if the hosted
-   * redirect allow-list accepts it. Where it does not, GoTrue falls back to the
-   * Site URL — which is where this used to land every reader anyway.
+   * One address for all three routes rather than one per route, because the hosted
+   * redirect allow-list is a list somebody maintains by hand: every shape added here
+   * is another line that has to be added there before sign-in works, and a missing
+   * one fails by landing the reader on the Site URL with a session and no explanation.
+   *
+   * For the email route it is only used if the email carries a link rather than a
+   * code. For a provider it is where the reader comes back to, and it is not optional.
    */
-  const emailRedirectTo = next
-    ? `${window.location.origin}/?next=${encodeURIComponent(next)}`
-    : window.location.origin;
+  const redirectTo = signInRedirectTo(window.location.origin, next);
 
   async function requestCode(e: React.FormEvent) {
     e.preventDefault();
@@ -249,9 +335,10 @@ export function Auth({
       return;
     }
 
-    setBusy(true);
+    setPending('email');
     setError(null);
     setGuestError(null);
+    setProviderError(null);
     // try/finally, not try/catch-then-reset: supabase-js converts its own AuthErrors
     // into `{ error }` but rethrows anything else — a DNS failure, an offline device,
     // a wedged Web Lock. Resetting `busy` after a bare await therefore left the button
@@ -264,7 +351,7 @@ export function Auth({
       const { error } = await supabase.auth.signInWithOtp({
         email,
         // Only used if the email carries a link rather than a code. Harmless otherwise.
-        options: { emailRedirectTo },
+        options: { emailRedirectTo: redirectTo },
       });
       if (error) {
         /*
@@ -299,15 +386,16 @@ export function Auth({
         e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
       );
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
+    setPending('verify');
     setError(null);
     setGuestError(null);
+    setProviderError(null);
     // `type: 'email'` covers both a new and a returning reader; Supabase resolves which
     // it is. On success the client stores the session and App.tsx's auth listener swaps
     // this screen out, so there is nothing to do with the result here.
@@ -323,9 +411,22 @@ export function Auth({
         e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
       );
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
+
+  /*
+   * Opening the email panel puts the caret in it.
+   *
+   * Opening it IS the decision to use it: a disclosure that reveals a field and then
+   * asks for a second click into it has spent the reader's press on nothing. Done here
+   * rather than with `autoFocus` because that prop moves focus on first paint too, which
+   * is the thing `jsx-a11y/no-autofocus` is right about — this fires only when a reader
+   * has just pressed the control that reveals the field.
+   */
+  useEffect(() => {
+    if (emailOpen) emailRef.current?.focus();
+  }, [emailOpen]);
 
   /*
    * A link that carried both halves signs in with no further click.
@@ -362,7 +463,7 @@ export function Auth({
         setError(e instanceof Error ? e.message : 'Could not reach the server.');
       })
       .finally(() => {
-        if (!cancelled) setBusy(false);
+        if (!cancelled) setPending(null);
       });
     return () => {
       cancelled = true;
@@ -408,9 +509,10 @@ export function Auth({
       return;
     }
 
-    setBusy(true);
+    setPending('paste');
     setError(null);
     setGuestError(null);
+    setProviderError(null);
     try {
       // Each branch reports its own `error`; supabase-js only throws for transport.
       const { error } =
@@ -443,7 +545,72 @@ export function Auth({
         e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
       );
     } finally {
-      setBusy(false);
+      setPending(null);
+    }
+  }
+
+  /*
+   * The way in that needs no mailbox, and the one this screen now leads with.
+   *
+   * An email code is only as good as the sender behind it: Supabase's built-in SMTP is
+   * rate-limited per hour and counts requests rather than deliveries, so a handful of
+   * sign-ups — or one script — spends the budget and the next real reader is told to
+   * wait. A provider has none of that shape. The credential is one the reader already
+   * holds, delivery is somebody else's problem, and a bot has to get past Google or
+   * Microsoft before it reaches us.
+   *
+   * Nothing to await on the success path: `signInWithOAuth` navigates this tab to the
+   * provider, so the next thing that happens is a page load somewhere else. `pending`
+   * is therefore left standing rather than cleared — the buttons must not flash back
+   * to life during a redirect that is already under way.
+   */
+  async function continueWith(route: OAuthRoute) {
+    setPending(route.provider);
+    setError(null);
+    setGuestError(null);
+    setProviderError(null);
+    try {
+      // Before the request, for the same reason as the email route: if it fails the
+      // reader stays put, and the stored value is spent or replaced either way.
+      rememberDestination(next);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: route.provider,
+        options: { redirectTo, scopes: route.scopes },
+      });
+      if (!error) return;
+
+      setPending(null);
+      if (isCaptchaRequired(error)) {
+        console.warn(CAPTCHA_OPERATOR_WARNING);
+        setProviderError(CAPTCHA_READER_MESSAGE);
+      } else if (isProviderDisabled(error)) {
+        /*
+         * Two audiences again, the same split as the guest button. A client id and
+         * secret are server-side configuration by definition (law 7), so this
+         * repository cannot push them and `supabase/config.toml` reaches only the
+         * local stack. Whoever runs the deployment needs the name of the screen; the
+         * reader needs to know which door is still open.
+         */
+        console.warn(
+          `${route.dashboardName} sign-in is not configured for this Supabase project. ` +
+            'Add the client id and secret under Authentication → Sign In / Providers, ' +
+            'and add this origin to the redirect allow-list; supabase/config.toml only ' +
+            'configures the local stack. See docs/auth.md.',
+        );
+        // Opened rather than merely mentioned: the route this sends them to is the
+        // one collapsed behind a disclosure, and telling somebody to use a control
+        // that is not on screen is telling them to go and find it.
+        setEmailOpen(true);
+        setProviderError(
+          `${route.dashboardName.replace(/ \(.*\)$/, '')} sign-in is not switched on for ` +
+            'this deployment yet. Use an email code instead, or look around as a guest.',
+        );
+      } else setProviderError(error.message);
+    } catch (e) {
+      setPending(null);
+      setProviderError(
+        e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
+      );
     }
   }
 
@@ -468,8 +635,7 @@ export function Auth({
    * component would be a bound on the button, not on the session.
    */
   async function continueAsGuest() {
-    setBusy(true);
-    setOpeningGuest(true);
+    setPending('guest');
     /*
      * Both slots, in both directions.
      *
@@ -481,6 +647,7 @@ export function Auth({
      */
     setGuestError(null);
     setError(null);
+    setProviderError(null);
     try {
       // Same try/finally reasoning as `requestCode`: supabase-js rethrows anything that
       // is not an AuthError, and a bare await would leave the button disabled for ever.
@@ -519,8 +686,7 @@ export function Auth({
         e instanceof Error ? e.message : 'Could not reach the server. Check your connection.',
       );
     } finally {
-      setBusy(false);
-      setOpeningGuest(false);
+      setPending(null);
     }
   }
 
@@ -529,6 +695,7 @@ export function Auth({
     setCode('');
     setError(null);
     setGuestError(null);
+    setProviderError(null);
   }
 
   /**
@@ -541,9 +708,10 @@ export function Auth({
    * after 51 seconds") is otherwise a dead end.
    */
   async function resend() {
-    setBusy(true);
+    setPending('email');
     setError(null);
     setGuestError(null);
+    setProviderError(null);
     setCode('');
     try {
       // Before the request, not after: if it fails the reader stays put and the
@@ -551,7 +719,7 @@ export function Auth({
       rememberDestination(next);
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo },
+        options: { emailRedirectTo: redirectTo },
       });
       if (error && isEmailRateLimited(error)) {
         // Same reasoning as `requestCode`: this is the button that caused the problem.
@@ -566,7 +734,7 @@ export function Auth({
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reach the server.');
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -627,7 +795,7 @@ export function Auth({
               </p>
             )}
             <button type="submit" className="btn btn--primary" disabled={busy}>
-              {busy && !openingGuest ? 'Checking…' : 'Sign in'}
+              {pending === 'verify' ? 'Checking…' : 'Sign in'}
             </button>
             <p className="titlepage__alts">
               <button type="button" className="btn btn--plain" onClick={resend} disabled={busy}>
@@ -640,27 +808,76 @@ export function Auth({
             </p>
           </form>
         ) : (
-          <form onSubmit={requestCode} className="stack">
-            <label className="field">
-              <span className="field__label">Email</span>
-              <input
-                className="field__input"
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </label>
-            {error && (
-              <p role="alert" className="titlepage__error">
-                {error}
+          <>
+            {/*
+              The two ways in that need no mailbox, and the front door as of this round.
+              Both plain, both the same width, in the order they are declared: this is
+              two equivalent offers rather than a recommendation and an alternative.
+            */}
+            <div
+              className="stack"
+              style={{ '--stack-gap': 'var(--space-2)' } as React.CSSProperties}
+            >
+              {OAUTH_ROUTES.map((route) => (
+                <button
+                  key={route.provider}
+                  type="button"
+                  className="btn titlepage__provider"
+                  onClick={() => void continueWith(route)}
+                  disabled={busy}
+                >
+                  {pending === route.provider ? 'Opening…' : route.label}
+                </button>
+              ))}
+              {providerError && (
+                <p role="alert" className="titlepage__error">
+                  {providerError}
+                </p>
+              )}
+            </div>
+
+            {emailOpen ? (
+              <form onSubmit={requestCode} className="stack">
+                <label className="field">
+                  <span className="field__label">Email</span>
+                  <input
+                    className="field__input"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    ref={emailRef}
+                  />
+                </label>
+                {error && (
+                  <p role="alert" className="titlepage__error">
+                    {error}
+                  </p>
+                )}
+                <button type="submit" className="btn btn--primary" disabled={busy}>
+                  {pending === 'email' ? 'Sending…' : 'Send a sign-in code'}
+                </button>
+              </form>
+            ) : (
+              <p className="titlepage__alts">
+                {/*
+                  No `aria-expanded`, deliberately, and the paste hatch below does carry
+                  one. That control persists and toggles; this one is replaced by the
+                  field it reveals, so it would announce "collapsed" for its whole life
+                  and never once say otherwise.
+                */}
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => setEmailOpen(true)}
+                  disabled={busy}
+                >
+                  Or sign in with an email code
+                </button>
               </p>
             )}
-            <button type="submit" className="btn btn--primary" disabled={busy}>
-              {busy && !openingGuest ? 'Sending…' : 'Send a sign-in code'}
-            </button>
-          </form>
+          </>
         )}
 
         {/*
@@ -697,7 +914,7 @@ export function Auth({
             onClick={() => void continueAsGuest()}
             disabled={busy}
           >
-            {openingGuest ? 'Opening…' : 'Look around as a guest'}
+            {pending === 'guest' ? 'Opening…' : 'Look around as a guest'}
           </button>
           {guestError && (
             <p role="alert" className="titlepage__error">
@@ -769,7 +986,7 @@ export function Auth({
               inside it. Or the six-digit code on its own.
             </p>
             <button type="submit" className="btn btn--primary" disabled={busy || !pasted.trim()}>
-              {busy && !openingGuest ? 'Checking…' : 'Sign in with that'}
+              {pending === 'paste' ? 'Checking…' : 'Sign in with that'}
             </button>
           </form>
         )}
@@ -790,7 +1007,9 @@ export function Auth({
           <a href="/privacy" onClick={go('/privacy')}>
             Privacy Policy
           </a>
-          . We ask for an email address and nothing else; as a guest, nothing at all.
+          . We ask for an email address and nothing else. Google and Microsoft also hand us the
+          profile they hold for you — your name, and usually a link to your picture; the name is
+          offered back as a suggested username and nothing else is used. As a guest, nothing at all.
         </p>
 
         {/* Last, because it is the strongest sentence on the screen and it answers the

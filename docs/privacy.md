@@ -17,7 +17,9 @@ the operator of your own service, and this document says nothing about what you 
 ## The short version
 
 - We ask for **an email address**. Not a password, not a phone number, not your real name —
-  and you can look around as a guest without giving us even that.
+  and you can look around as a guest without giving us even that. If you sign in with Google
+  or Microsoft, they also pass on the profile they hold for you; what we keep of it is
+  below.
 - The product keeps a model of **what you have read and what you appear to know**, because
   refusing to re-teach you things is the entire point of it.
 - **No advertising trackers, no third-party analytics, no data sold or shared for anyone
@@ -33,14 +35,36 @@ the operator of your own service, and this document says nothing about what you 
 
 ### What you give us
 
-| Data                              | Where it lives        | Why                                                                                                                     |
-| --------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Email address                     | Supabase Auth         | The only way to sign in and the only way to reach you                                                                   |
-| Handle, display name, bio, avatar | `profiles`            | Optional; needed only if you choose to be visible to others                                                             |
-| Topic and reading preferences     | `preference_profiles` | Weights, excluded topics, media kinds, daily minutes, technical level, spoiler tolerance, how often questions interrupt |
+| Data                                | Where it lives        | Why                                                                                                                     |
+| ----------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Email address                       | Supabase Auth         | The only way to sign in and the only way to reach you                                                                   |
+| Provider profile, if you use one    | Supabase Auth         | What Google or Microsoft sends back about the account you signed in with — see below                                    |
+| Username, display name, bio, avatar | `profiles`            | The username is yours to choose and is how a Pull you share says who sent it; the rest is optional                      |
+| Topic and reading preferences       | `preference_profiles` | Weights, excluded topics, media kinds, daily minutes, technical level, spoiler tolerance, how often questions interrupt |
 
-Sign-in is a one-time code or link sent to your email. **We never hold a password**, because
-we never set one.
+Sign-in is a one-time code or link sent to your email, **or** Google or Microsoft. **We never
+hold a password**, because we never set one.
+
+### Signing in with Google or Microsoft
+
+They tell us the profile they hold for that account — your email address, the name on it,
+and usually a link to your picture. Supabase Auth stores that alongside your account, the
+way it stores the address.
+
+Two things we do with it, and nothing else. The address identifies the account, exactly as it
+would if you had typed it. The name is **offered** as a suggested username on the screen that
+asks you to pick one — offered, not applied: you can change it, clear it, or walk past the
+screen entirely.
+
+We do not ask either provider for anything beyond that. No contacts, no calendar, no files,
+no access to anything in your account there; the only scope we request from Microsoft is the
+one that returns your email address, and from Google, the default one. Nothing about your
+reading is ever sent back to them.
+
+Your **username is never derived from your email address** — not from the local part, not
+from anything either provider sends that looks like an address. That is a rule the database
+enforces rather than a convention we follow, and it is there because a handle built from an
+address publishes the address.
 
 ### Looking around as a guest
 
@@ -238,6 +262,13 @@ Three, and only three:
 
 Sign-in emails are delivered through Supabase Auth's email provider, which necessarily
 sees your address and the code.
+
+**Google and Microsoft, if you choose one of them to sign in with**, are not on that list
+and are deliberately described separately: they do not process anything on our behalf. They
+tell us who you are, at the moment you ask them to, and what happens on their side is
+governed by their own terms — including the fact that they can see you have an account here.
+Signing in with an email code instead avoids that entirely, which is why the route is still
+there. Nothing about your reading is ever sent to either of them.
 
 That is the complete list. There is no analytics vendor, no session-replay tool, no crash
 reporter, no tag manager, and no advertising SDK in the app today.

@@ -58,14 +58,61 @@ export interface ShareCapability {
   canCopy: boolean;
 }
 
-export function shareCapability(nav: {
-  share?: unknown;
-  clipboard?: { writeText?: unknown };
-}): ShareCapability {
+/**
+ * Whether the operating system's share sheet is the right thing to open here.
+ *
+ * `navigator.share` exists on the desktop and should almost never be used there.
+ * On Windows it hands the page to the system Share flyout, which takes focus,
+ * enumerates the machine's contact list and installed apps, and — reported on
+ * this app on 2026-09-06 — can wedge the whole desktop rather than only the tab.
+ * The page cannot close it, cannot time it out, and cannot tell that it opened:
+ * `share()` simply never settles. Nothing in this repository can make that sheet
+ * behave, so the only fix available is not to ask for it.
+ *
+ * A pointer query rather than a user-agent string, because the question is not
+ * which operating system this is — it is whether a share sheet is how this
+ * device hands things to people. `(pointer: coarse)` describes the *primary*
+ * pointer, so a phone and a tablet answer yes, and a laptop with a touchscreen
+ * and a trackpad answers no, which is the answer that was wanted.
+ *
+ * Where the query cannot be asked at all, the answer is no. That is the safe
+ * direction: the worst a copied link does is ask the reader to paste it.
+ */
+export function sheetIsNative(view: {
+  matchMedia?: (query: string) => { matches: boolean };
+}): boolean {
+  if (typeof view.matchMedia !== 'function') return false;
+  return view.matchMedia('(pointer: coarse)').matches === true;
+}
+
+export function shareCapability(
+  nav: {
+    share?: unknown;
+    clipboard?: { writeText?: unknown };
+  },
+  /**
+   * Passed in rather than sniffed, so this stays pure and the decision above is
+   * stated by the caller — including in `environment: 'node'`, where neither
+   * `matchMedia` nor a share sheet exists.
+   */
+  env: { sheetIsNative: boolean },
+): ShareCapability {
   return {
-    canShare: typeof nav.share === 'function',
+    canShare: env.sheetIsNative && typeof nav.share === 'function',
     canCopy: typeof nav.clipboard?.writeText === 'function',
   };
+}
+
+/**
+ * What this browser will actually do, read from the live globals.
+ *
+ * One reader for both the label and the act, because a control that says
+ * "Share" and copies — or says "Copy link" and opens a sheet — is the same
+ * small lie `shareLabel` exists to avoid, and two separate sniffs are how the
+ * two answers drift apart.
+ */
+export function liveShareCapability(): ShareCapability {
+  return shareCapability(navigator, { sheetIsNative: sheetIsNative(globalThis) });
 }
 
 /**
@@ -93,9 +140,15 @@ export function shareLabel(capability: ShareCapability): string {
  * An abort is not a failure. `navigator.share` rejects with an `AbortError` when
  * the reader closes the sheet, and reporting "could not share" to somebody who
  * simply changed their mind is a worse outcome than saying nothing.
+ *
+ * There is deliberately no fall back to the sheet when the clipboard is missing.
+ * Both APIs need a secure context, so a browser that has one and not the other is
+ * a rounding error — and the one case where the clipboard is refused on a desktop
+ * is exactly the case where opening the sheet is the thing `sheetIsNative`
+ * exists to prevent.
  */
 export async function shareOrCopy(target: ShareTarget): Promise<ShareOutcome> {
-  const capability = shareCapability(navigator);
+  const capability = liveShareCapability();
 
   if (capability.canShare) {
     try {

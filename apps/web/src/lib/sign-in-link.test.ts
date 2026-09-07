@@ -126,3 +126,28 @@ describe('parseSignInLink', () => {
     }
   });
 });
+
+describe('an OAuth redirect is not an email code', () => {
+  it('does not read a PKCE authorisation code as a six-digit token', () => {
+    // `verifyOtp` would answer "Token has expired or is invalid", which blames the
+    // reader for pasting the wrong thing when what they pasted was a real sign-in.
+    expect(
+      parseSignInLink('https://whatapull.com/?code=8d1f0a4e-1b2c-4d3e-9f10-abcdef123456'),
+    ).toEqual({ kind: 'unrecognised' });
+  });
+
+  it("still reads the app's own one-click link", () => {
+    expect(parseSignInLink('https://whatapull.com/?code=123456&email=ada@example.test')).toEqual({
+      kind: 'code',
+      code: '123456',
+      email: 'ada@example.test',
+    });
+  });
+
+  it('reads a provider refusal from the query string', () => {
+    const link = parseSignInLink(
+      'https://whatapull.com/?error=access_denied&error_description=The+user+cancelled',
+    );
+    expect(link.kind).toBe('error');
+  });
+});

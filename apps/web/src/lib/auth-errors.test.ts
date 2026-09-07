@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isAnonymousSignInDisabled, isCaptchaRequired, isEmailRateLimited } from './auth-errors.js';
+import {
+  isAnonymousSignInDisabled,
+  isCaptchaRequired,
+  isEmailRateLimited,
+  isProviderDisabled,
+} from './auth-errors.js';
 
 describe('isEmailRateLimited', () => {
   it('recognises the error code, which is the stable contract', () => {
@@ -106,5 +111,29 @@ describe('isCaptchaRequired', () => {
     };
     expect(isEmailRateLimited(captcha)).toBe(false);
     expect(isAnonymousSignInDisabled(captcha)).toBe(false);
+  });
+});
+
+describe('isProviderDisabled', () => {
+  it('recognises a provider nobody has pasted credentials for', () => {
+    // The exact string GoTrue returns for a provider that is off.
+    expect(
+      isProviderDisabled({
+        code: 'validation_failed',
+        message: 'Unsupported provider: provider is not enabled',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not claim a misconfiguration for every validation failure', () => {
+    // `validation_failed` is also what a malformed address gets, which is the reader's
+    // to fix and must not be reported as a switch somebody forgot to turn on.
+    expect(
+      isProviderDisabled({
+        code: 'validation_failed',
+        message: 'Unable to validate email address',
+      }),
+    ).toBe(false);
+    expect(isProviderDisabled({ message: 'Invalid login credentials' })).toBe(false);
   });
 });

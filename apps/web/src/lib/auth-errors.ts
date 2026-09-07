@@ -76,3 +76,27 @@ export function isCaptchaRequired(error: AuthErrorLike): boolean {
   if (error.code === 'captcha_failed') return true;
   return /captcha/i.test(error.message);
 }
+
+/**
+ * Whether this project has simply never been given the provider's credentials.
+ *
+ * The same class of problem as `isAnonymousSignInDisabled`, one door along.
+ * `supabase/config.toml` configures the local stack; the hosted project needs the
+ * client id and secret pasted in under Authentication → Sign In / Providers, and this
+ * repository cannot push them — a client secret is server-side configuration by
+ * definition (law 7), so there is nowhere in this tree it could live.
+ *
+ * Until that is done GoTrue answers every attempt with
+ * `Unsupported provider: provider is not enabled`, which reads to a reader as though
+ * they picked something that does not exist. So it is named rather than reported: the
+ * console gets the switch, and the reader is told the route is shut and which one is
+ * open.
+ *
+ * Matched on the message rather than on `code`, deliberately. GoTrue sends
+ * `validation_failed` here, and it sends the same code for a malformed email address
+ * and for half a dozen other refusals — a code that broad would claim a
+ * misconfiguration for failures that have nothing to do with one.
+ */
+export function isProviderDisabled(error: AuthErrorLike): boolean {
+  return /provider is not enabled|unsupported provider/i.test(error.message);
+}

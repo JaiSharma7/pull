@@ -133,8 +133,17 @@ export function parseSignInLink(raw: string): SignInLink {
     return { kind: 'token-hash', tokenHash, type: query.get('type') ?? 'magiclink' };
   }
 
+  /*
+   * Digits only, for the same reason `readPrefill` checks: `?code=` is also what an
+   * OAuth redirect carries under the PKCE flow, and an opaque authorisation code fed to
+   * `verifyOtp` comes back as "Token has expired or is invalid" — which blames the
+   * reader for pasting the wrong thing when what they pasted was a real sign-in this
+   * parser did not recognise. Unrecognised says that; a wrong answer does not.
+   */
   const code = query.get('code')?.trim();
-  if (code) return { kind: 'code', code, email: query.get('email')?.trim() || null };
+  if (code && /^\d{4,10}$/.test(code)) {
+    return { kind: 'code', code, email: query.get('email')?.trim() || null };
+  }
 
   return { kind: 'unrecognised' };
 }

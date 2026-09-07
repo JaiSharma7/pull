@@ -254,6 +254,14 @@ Providers. `supabase/config.toml` configures the local stack and nothing else, s
 deploy without that switch shows every visitor a guest button that reports it cannot
 work.
 
+**The same is true of Google and Microsoft**, which are now the two routes the sign-in
+screen leads with. A client id and secret are server-side configuration by definition
+(law 7), so they exist only in that dashboard; both providers are `enabled = false` in
+`config.toml` so a fresh clone still runs. Until they are configured the app says so —
+in the console with the name of the screen, and to the reader with the route that is
+still open. [`docs/auth.md`](./auth.md) is the checklist for both sides, and for what a
+provider sign-in hands us.
+
 ## Offline
 
 Built on the web **before** any native wrapper, so Capacitor becomes an enhancement

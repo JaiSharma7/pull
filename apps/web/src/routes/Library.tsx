@@ -8,7 +8,13 @@ import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
 import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
-import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
+import {
+  liveShareCapability,
+  shareLabel,
+  shareNote,
+  shareOrCopy,
+  shareTarget,
+} from '../lib/share.js';
 import { speak } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import {
@@ -736,7 +742,7 @@ export function Library({ userId }: { userId: string }) {
                       onDepthChange={setDepth}
                       onListen={() => speak(textAtDepth(item, depth))}
                       onShare={() => void share(item, group.title)}
-                      shareLabel={shareLabel(shareCapability(navigator))}
+                      shareLabel={shareLabel(liveShareCapability())}
                     />
 
                     {shareStatus?.saveId === item.saveId ? (

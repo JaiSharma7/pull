@@ -112,6 +112,42 @@ max_enrolled_factors = 10
 enroll_enabled = true
 verify_enabled = true
 
+# The two ways in that need no mailbox.
+#
+# This block configures the LOCAL STACK ONLY, the same as everything else in this file.
+# The hosted project has the same two switches under Authentication → Sign In / Providers
+# and this repository cannot push them: a client secret is server-side configuration by
+# definition (law 7), so there is nowhere in this tree it could live. `docs/auth.md` is
+# the checklist for both sides.
+#
+# Off by default, and the reason is that a contributor should not have to register an
+# OAuth application to run this app. `pnpm dev` against a fresh clone still signs in with
+# an email code — the local stack's Inbucket catches it — and `enabled = true` here with
+# no credentials behind it would break that: GoTrue refuses to start when a provider is
+# enabled and its client id is empty.
+#
+# `env()` rather than a literal, always. `supabase start` reads a `.env` beside this file
+# (git-ignored); a client id pasted in here is a credential in a public repository, and
+# check 5 of CI would refuse the commit — correctly.
+[auth.external.google]
+enabled = false
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+# Left empty so GoTrue uses its own `/auth/v1/callback` on this stack. Setting it wrong is
+# the single most common way to make a provider fail with a message that names nothing.
+redirect_uri = ""
+
+# `azure` is Microsoft, and has never been renamed in GoTrue. The `url` is the tenant this
+# app trusts: `common` accepts both personal Microsoft accounts and any organisation's
+# Entra directory, which is what "sign in with Microsoft" means to a reader. A single
+# tenant id here would silently refuse everybody outside that one organisation.
+[auth.external.azure]
+enabled = false
+client_id = "env(SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_AZURE_SECRET)"
+url = "https://login.microsoftonline.com/common"
+redirect_uri = ""
+
 # The default template renders `{{ .ConfirmationURL }}` and nothing else, so the
 # email carries a link but no code — and `verifyOtp` has nothing to verify. The
 # sign-in screen accepts either, and the code is the more reliable half: a link

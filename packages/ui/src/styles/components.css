@@ -936,6 +936,18 @@
   width: 100%;
 }
 
+/* The two ways in, sized like the field they replace.
+ *
+ * Outlined rather than filled, and both the same, because they are the same offer:
+ * two providers, no house preference, nothing to recommend one over the other. A
+ * filled oxblood block on one of them would be a recommendation the product does not
+ * have, and two filled blocks would be law 1's single accent used as chrome — the
+ * accent marks the one action a screen is asking for, and this screen is asking a
+ * question rather than pressing for an answer. */
+.titlepage__provider {
+  width: 100%;
+}
+
 /* The secondary pair stays inline and small — they are escape hatches, not the
    action, and giving them the same weight would make the screen ask two questions. */
 .titlepage__alts .btn--plain {

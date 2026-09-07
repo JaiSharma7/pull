@@ -1317,5 +1317,11 @@ export function App() {
    * whether the picker has been seen, so it can only wrap a session. A visitor
    * gets the shell directly — there is no preference to have not set yet.
    */
-  return session ? <OnboardingGate userId={session.user.id}>{shell}</OnboardingGate> : shell;
+  return session ? (
+    <OnboardingGate userId={session.user.id} guest={guest}>
+      {shell}
+    </OnboardingGate>
+  ) : (
+    shell
+  );
 }
