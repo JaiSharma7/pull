@@ -33,6 +33,25 @@ export interface ImportResult {
    */
   ceilingReached: boolean;
   /**
+   * The server joined this attempt to a batch THIS attempt did not open.
+   *
+   * `commit_import` rejoins by a reuse window -- six hours, same `file_hash`, same
+   * `source_kind`, not undone -- so a reader who imports a file, leaves the route, and
+   * re-uploads the same file gets back the ORIGINAL `importId` with counters describing
+   * only the second attempt: `added: 0`, and every highlight a duplicate.
+   *
+   * Without this the panel read "Kept 0 highlights across 0 books" with Undo as the only
+   * control on screen, and that Undo takes back the FIRST import -- every pull, and every
+   * question, note, grade, explanation and conviction written on them since. Review
+   * demonstrated it. The counters are honest about the attempt and dishonest about the
+   * batch, and this is the flag that lets the screen say which it is talking about.
+   *
+   * In-session it never fires: `mergeAttempts` folds a retry into the earlier attempt, so
+   * `added` is the batch's. It is the remount -- a reload, the Library, a second tab --
+   * that strips the merge.
+   */
+  joinedExisting: boolean;
+  /**
    * Was the WHOLE file sent? Not "did it succeed" -- whether a rest remains.
    *
    * A CLIENT FACT, not one the RPC reports: `commit_import` answers for one chunk and
@@ -203,6 +222,11 @@ export function mergeAttempts(prev: ImportResult | null, next: ImportResult): Im
     // chunks sent the rest, so the batch is complete however the earlier attempt ended;
     // a retry that failed again did not, whatever the earlier one reported.
     complete: next.complete,
+    // ALWAYS FALSE HERE, and that is the point of merging. `joinedExisting` says the
+    // counters describe an attempt rather than the batch; a merge is precisely the
+    // operation that makes them describe the batch again, because `prev` is the earlier
+    // attempt on the same one. It can only be true when there is nothing to fold into.
+    joinedExisting: false,
     works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
   };
 }
@@ -244,6 +268,7 @@ export async function foldChunks(
     added: 0,
     duplicates: 0,
     ceilingReached: false,
+    joinedExisting: false,
     // Only the successful exit below sets this. Every early exit is a rest left unsent.
     complete: false,
     works: [],
@@ -252,6 +277,9 @@ export async function foldChunks(
   // Deduplicated by id: a book that appears in four chunks is one book, and the reader
   // is told how many books they kept rather than how many chunks mentioned one.
   const byWorkId = new Map<string, ImportedWork>();
+
+  // Whether the caller asked to resume. Read after the walk, against what came back.
+  const askedToResume = startImportId !== null;
 
   for (const chunk of chunkItems(items, MAX_ITEMS_PER_CALL)) {
     let result: Partial<ImportResult>;
@@ -301,5 +329,15 @@ export async function foldChunks(
   total.works = [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title));
   // Ran out of chunks rather than out of luck: there is no rest.
   total.complete = true;
+
+  /*
+   * The server handed back a batch this walk did not open. See `joinedExisting`.
+   *
+   * `added === 0` with duplicates is the observable half; `!askedToResume` is what makes
+   * it unambiguous, because a resumed attempt is SUPPOSED to come back on the earlier
+   * batch and its counters are folded by `mergeAttempts` rather than shown raw.
+   */
+  total.joinedExisting =
+    !askedToResume && total.importId !== null && total.added === 0 && total.duplicates > 0;
   return total;
 }

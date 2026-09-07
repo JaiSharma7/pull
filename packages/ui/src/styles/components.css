@@ -1197,3 +1197,32 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/*
+ * A sentence in a form, and a sentence that is an error.
+ *
+ * `.meta` is the label face — mono, uppercase, tracked — and it is right for a chip or a
+ * field label and wrong for prose. `.colophon__note` and `.titlepage__legal` already say
+ * so in their own comments; these are the same decision made reusable, because the import
+ * screen had nine sentences and its `role="alert"` all set as labels, and a timeout read
+ * THAT TOOK TOO LONG TO FINISH in 12px uppercase tracked mono.
+ */
+.form-note {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/*
+ * And the error carries a mark as well as the accent, because design law 5 says colour is
+ * never the only signal. The failure line and the line above it were the same face, size,
+ * case and tracking, differing only in hue — which is no difference at all to a reader who
+ * cannot see the hue. The rule is a hairline, which is the structure law 1 spends on.
+ */
+.form-error {
+  font-size: var(--step--1);
+  color: var(--accent);
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent);
+}

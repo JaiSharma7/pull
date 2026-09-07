@@ -20,14 +20,18 @@ import type { ImportItem } from './ingestion.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
-export type {
-  CommitChunk,
-  ImportedWork,
-  ImportResult,
-  ImportSourceKind,
-  UndoResult,
-} from './import-fold.js';
-export { foldChunks, hashFile, mergeAttempts, PartialImportError } from './import-fold.js';
+/*
+ * RE-EXPORTED ONLY WHERE A CALLER OF THIS MODULE ACTUALLY NEEDS IT.
+ *
+ * `foldChunks`, `CommitChunk` and `ImportedWork` used to be here too, and nothing took
+ * them from this file -- every consumer imports them from `./import-fold.js`. The first
+ * two are the ones that mattered: they exist precisely so the chunking is reachable
+ * WITHOUT `lib/supabase.ts`, and offering them through the module that imports it is an
+ * invitation to re-create the collect failure the split was made to prevent. Review
+ * found all three unused.
+ */
+export type { ImportResult, ImportSourceKind, UndoResult } from './import-fold.js';
+export { hashFile, mergeAttempts, PartialImportError } from './import-fold.js';
 
 /**
  * Keep a batch of highlights.

@@ -20,6 +20,8 @@ import {
   keepLabel,
   showsKeep,
   showsUndo,
+  resultHeadline,
+  undoLabel,
   undoFailed,
 } from '../lib/import-screen.js';
 import { collateral } from '../lib/undo-summary.js';
@@ -175,9 +177,9 @@ export function Ingestion() {
 
   /*
    * The three values every affordance below is decided from. Gathered once so the
-   * decisions are made in `import-screen.ts`, where they can be tested -- this route
-   * cannot be imported under vitest, and six mutants on the conditions that used to be
-   * written inline here all survived.
+   * decisions are made in `import-screen.ts`, where they can be tested -- nothing renders
+   * this route under a `node` suite with no jsdom, and six mutants on the conditions that
+   * used to be written inline here all survived because of it.
    */
   const panel = { result, undone: undone !== null, failure };
 
@@ -418,27 +420,33 @@ export function Ingestion() {
           </p>
 
           {/* THE ANNOUNCEMENT IS THE PERMANENT REGION BELOW, not these panels.
-              `App.tsx:1146` states the rule: "A live region that is always present and
+              `App.tsx:1149` states the rule: "A live region that is always present and
               changes its text is what gets announced; rendering the region itself
               conditionally is the version that stays silent." All three panels here were
               created at the same moment as their text, so a reader using a screen reader
               was told nothing when an import finished, failed, or was undone. */}
           {result && (
             <div style={{ marginBottom: 'var(--space-3)' }}>
-              <p style={{ fontWeight: 600 }}>
-                Kept {result.added} {result.added === 1 ? 'highlight' : 'highlights'} across{' '}
-                {result.works.length} {result.works.length === 1 ? 'book' : 'books'}.
-              </p>
+              <p style={{ fontWeight: 600 }}>{resultHeadline(result)}</p>
               {result.duplicates > 0 && (
-                <p className="meta">{result.duplicates} you already had, left alone.</p>
+                <p className="form-note">{result.duplicates} you already had, left alone.</p>
               )}
+              {/* NO REMEDY, because the one that used to be here is false at one of the
+                  two ceilings. `ceilingReached` cannot say which was hit -- the item
+                  ceiling ends the chunk, the book ceiling declines one title and carries
+                  on -- and at the BOOK ceiling undoing frees nothing: `v_books` counts
+                  distinct works over every `import_items` row with no `undone_at` filter,
+                  unlike `v_held` which excludes tombstones deliberately. A reader who
+                  followed the instruction destroyed an import and got the identical
+                  refusal. `failureLine` strips this same sentence from the batch-ceiling
+                  message with the same reasoning; it was left standing one panel over. */}
               {result.ceilingReached && (
-                <p className="meta">
-                  That is as many as this account can hold. Undo an import you no longer need to
-                  make room.
+                <p className="form-note">
+                  Some highlights were not kept — this account is at a limit (20,000 highlights
+                  held, or 2,000 books ever imported).
                 </p>
               )}
-              <p className="meta">They are in your Library, and due for review tomorrow.</p>
+              <p className="form-note">They are in your Library, and due for review tomorrow.</p>
             </div>
           )}
 
@@ -485,19 +493,25 @@ export function Ingestion() {
 
           {/* THE TWO PERMANENT REGIONS. Always mounted, empty until there is something
               to say, so a screen reader is actually told. `role="alert"` on the failure
-              rather than `status`, and the accent colour with it: every other error in
-              the app does both (`Auth.tsx`, `Review.tsx`, `Interrupt.tsx`), and this one
-              was `className="meta"` -- the same muted mono as the supporting copy, so a
-              statement timeout sat typographically indistinguishable from "They are in
-              your Library" one line above it. */}
-          <p role="status" className="meta" style={{ marginBottom: 'var(--space-3)' }}>
+              rather than `status`.
+
+              `.form-error` rather than `.meta` and an inline colour, which is what this
+              was and which review showed was only half a fix. `.meta` is the LABEL face
+              -- mono, uppercase, tracked -- so a statement timeout rendered as THAT TOOK
+              TOO LONG TO FINISH in 12px; and having moved it to the accent, it still
+              differed from "They are in your Library" one line above by nothing but hue,
+              which design law 5 says is never enough on its own. `.form-error` is body
+              face with a hairline rule beside it, so the difference survives without
+              colour.
+
+              An earlier version of this comment cited `Auth.tsx`, `Review.tsx` and
+              `Interrupt.tsx` as all doing accent-plus-role. `Review.tsx` does not: it has
+              three `role="alert"` nodes and no `var(--accent)` at all, two of them plain
+              `.meta`. Two of the three. */}
+          <p role="status" className="form-note" style={{ marginBottom: 'var(--space-3)' }}>
             {announcement}
           </p>
-          <p
-            role="alert"
-            className="meta"
-            style={{ marginBottom: 'var(--space-3)', color: failure ? 'var(--accent)' : undefined }}
-          >
+          <p role="alert" className="form-error" style={{ marginBottom: 'var(--space-3)' }}>
             {failure?.message ?? ''}
           </p>
 
@@ -529,7 +543,7 @@ export function Ingestion() {
                 onClick={handleUndo}
                 disabled={keeping}
               >
-                {busy === 'undo' ? 'Undoing…' : 'Undo'}
+                {undoLabel(result, busy)}
               </button>
             )}
             <span className="meta">{footerLine(panel)}</span>

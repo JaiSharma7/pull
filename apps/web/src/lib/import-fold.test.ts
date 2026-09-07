@@ -144,6 +144,7 @@ describe('foldChunks', () => {
       added: 0,
       duplicates: 0,
       ceilingReached: false,
+      joinedExisting: false,
       // Trivially complete: there were no chunks, so none was left unsent. The screen
       // never reaches this -- `handleKeep`'s backstop returns before the RPC -- but the
       // honest answer here is "nothing remains", not "a rest is outstanding".
@@ -260,6 +261,7 @@ describe('mergeAttempts', () => {
     added: 0,
     duplicates: 0,
     ceilingReached: false,
+    joinedExisting: false,
     complete: true,
     works: [],
     ...over,
@@ -378,5 +380,61 @@ describe('mergeAttempts', () => {
   it('keeps the earlier batch id when a retry answers without one', () => {
     const total = mergeAttempts(base({ importId: 'batch-1' }), base({ importId: null }));
     expect(total.importId).toBe('batch-1');
+  });
+});
+
+/*
+ * WHERE THE FLAG IS SET, not merely what the panel does with it.
+ *
+ * The first version of these tests asserted `resultHeadline` and `undoLabel` against a
+ * hand-built result, and a mutation that stopped `foldChunks` setting `joinedExisting`
+ * at all went straight through: the renderer was pinned and the producer was not, so the
+ * P1 would have come back with the suite green. That is the same shape as the six
+ * mutants this PR's own notes record surviving because nothing imported the route.
+ */
+describe('joinedExisting', () => {
+  it('is true when the server answers with a batch this walk did not open', async () => {
+    // The rejoin: no resume asked for, an importId comes back, nothing added, and every
+    // highlight already held. `commit_import`'s reuse window is what does this -- six
+    // hours, same file hash, same source kind, not undone.
+    const { call } = recorder([
+      { importId: 'batch-from-an-hour-ago', added: 0, duplicates: 3, works: [] },
+    ]);
+    await expect(foldChunks(many(3), call)).resolves.toMatchObject({ joinedExisting: true });
+  });
+
+  it('is false when the caller asked to resume, because then the counters get folded', async () => {
+    // A resumed attempt is SUPPOSED to come back on the earlier batch. `mergeAttempts`
+    // makes its counters describe the batch, so the panel has nothing to warn about.
+    const { call } = recorder([
+      { importId: 'batch-from-an-hour-ago', added: 0, duplicates: 3, works: [] },
+    ]);
+    await expect(foldChunks(many(3), call, 'batch-from-an-hour-ago')).resolves.toMatchObject({
+      joinedExisting: false,
+    });
+  });
+
+  it('is false for an ordinary import, and for one that found nothing at all', async () => {
+    const { call } = recorder([{ importId: 'fresh', added: 3, duplicates: 0, works: [] }]);
+    await expect(foldChunks(many(3), call)).resolves.toMatchObject({ joinedExisting: false });
+
+    // Nothing added AND nothing duplicated is an empty file, not a rejoin.
+    const empty = recorder([{ importId: 'fresh', added: 0, duplicates: 0, works: [] }]);
+    await expect(foldChunks(many(1), empty.call)).resolves.toMatchObject({
+      joinedExisting: false,
+    });
+  });
+
+  it('never survives a merge, whatever the second attempt reported', () => {
+    const rejoined = {
+      importId: 'b',
+      added: 0,
+      duplicates: 9,
+      ceilingReached: false,
+      joinedExisting: true,
+      complete: true,
+      works: [],
+    };
+    expect(mergeAttempts(rejoined, rejoined).joinedExisting).toBe(false);
   });
 });

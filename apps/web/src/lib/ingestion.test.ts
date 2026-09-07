@@ -175,6 +175,38 @@ describe('normaliseHighlight', () => {
     expect(normaliseHighlight('\t\n  \r\n')).toBe('');
   });
 
+  /*
+   * EVERY CODEPOINT POSTGRES CALLS WHITESPACE, not every codepoint JavaScript does.
+   *
+   * Review scanned the whole of Unicode against both rules and found exactly five where
+   * they disagree: Postgres's `\s` matches these and JavaScript's does not. A highlight
+   * made only of one of them was therefore non-empty to this client, sent, and refused
+   * by `commit_import` with `22023` -- which takes the whole 500-item chunk, and which
+   * `batchIsGone` then reads as "the batch is gone", clearing the Undo handle for rows
+   * that really did land.
+   *
+   * The previous test above passed throughout: it only ever exercised ASCII whitespace,
+   * and the comment beside it asserted the agreement rather than checking it. This is
+   * the check.
+   */
+  it.each([
+    ['\u001c', 'file separator'],
+    ['\u001d', 'group separator'],
+    ['\u001e', 'record separator'],
+    ['\u001f', 'unit separator'],
+    ['\u0085', 'next line'],
+  ])('calls %s empty, because Postgres does (%s)', (ch) => {
+    expect(normaliseHighlight(ch)).toBe('');
+    expect(normaliseHighlight(`before${ch}after`)).toBe('before after');
+  });
+
+  it('does not call empty anything the server would keep', () => {
+    // The rule has to be a SUPERSET of the server's and nothing more. U+180E is
+    // whitespace to neither Postgres nor modern JavaScript, and a client that dropped it
+    // would lose a highlight the reader wrote.
+    expect(normaliseHighlight('\u180e')).toBe('\u180e');
+  });
+
   it('strips NUL, which the server cannot even be asked about', () => {
     // Everything else in this module mirrors a bound `commit_import` checks. `U+0000` is
     // different in kind: Postgres cannot hold it in `text`, so `p_items` fails at the

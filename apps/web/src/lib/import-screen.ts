@@ -12,8 +12,18 @@
  * put six mutants on those decisions -- reverting the identical-file rule, deleting the
  * tombstone branch, reverting the generation guard on Undo, reverting the unconditional
  * `busy` reset, reverting parse-time shaping, reverting the merge -- and ALL SIX SURVIVED,
- * because nothing imports the route. Every fix the previous round made there was
- * unpinned, which is why this round found four more defects in the same forty lines.
+ * because nothing RENDERS the route. Every fix the previous round made there was
+ * unpinned, which is why that round found four more defects in the same forty lines.
+ *
+ * "Nothing renders it" rather than "nothing can import it", which is what an earlier
+ * version of this paragraph said three times over. Review disproved it in one file:
+ * `lib/account-api.test.ts` mocks `./supabase.js` and imports a module that builds its
+ * client at import scope, and the same three lines import this route fine. What is true
+ * is narrower -- the suite is `environment: 'node'` with no jsdom and no
+ * testing-library, so the route cannot be MOUNTED, and a mutant on a JSX condition still
+ * has nothing to fail. The distinction matters because the sentence as written told the
+ * next contributor not to try, and a route test is what would have caught the rejoined
+ * batch above.
  *
  * So the decisions live here, take plain values, import nothing networked, and are
  * tested. The route keeps the state and the effects; it no longer keeps the reasoning.
@@ -157,7 +167,8 @@ export function keepFailed(e: unknown): ImportFailure {
  *
  * A pair with `keepFailed` so that WHICH ACTION a failure is recorded under is decided
  * here rather than at the call site. It was two object literals in `routes/Ingestion.tsx`,
- * which no test can import -- and changing the one word `'undo'` to `'keep'` there
+ * which nothing renders under this suite -- and changing the one word `'undo'` to `'keep'`
+ * there
  * restored a defect the screen tests were written to prevent, without failing one of
  * them, because the value they check is supplied by the file they cannot reach.
  */
@@ -182,12 +193,20 @@ export function undoFailed(e: unknown): ImportFailure {
  * `22023` IS NOT ONLY THIS. The migration raises it from thirteen sites, and the other
  * twelve are per-item validation -- an empty title (`:833`), an over-long highlight
  * (`:839`), a non-string field (`:805`-`:817`). Clearing the batch id on one of those
- * would take Undo away from rows that really did land. It is safe here because none of
- * them is reachable for a chunk THIS CLIENT BUILDS: `toImportItems` drops empty titles and
- * empty text and anything over 20,000 characters, `chunkItems` guarantees the array and
- * the 500 bound, and the field types are TypeScript's. The durable answer is a distinct
- * errcode for `:754`, which needs a migration and is recorded with the other two in
- * `import-fold.ts`.
+ * would take Undo away from rows that really did land.
+ *
+ * IT IS SAFE ONLY BECAUSE THE CLIENT AND THE SERVER NOW AGREE ABOUT WHAT IS EMPTY, and
+ * an earlier version of this paragraph asserted that agreement instead of having it.
+ * `toImportItems` drops empty titles, empty text and anything over 20,000 characters;
+ * `chunkItems` guarantees the array and the 500 bound; the field types are TypeScript's.
+ * What was missing was the emptiness test itself: JavaScript's `\s` omits five
+ * codepoints Postgres's matches, so a highlight of only those was sent and refused the
+ * chunk. `normaliseHighlight` names them explicitly now. If that rule and the migration's
+ * ever diverge again, this comment is false and this function takes Undo away from real
+ * rows -- which is why the divergence is pinned by a test rather than argued here.
+ *
+ * The durable answer is still a distinct errcode for `:754`, which needs a migration and
+ * is recorded with the other two in `import-fold.ts`.
  */
 export function batchIsGone(e: unknown): boolean {
   return sqlState(classifiable(e)) === '22023';
@@ -218,6 +237,49 @@ export function showsKeep(state: PanelState): boolean {
 /** Is the Undo button on screen? Only while there is a batch to take back. */
 export function showsUndo(state: PanelState): boolean {
   return typeof state.result?.importId === 'string';
+}
+
+/**
+ * What the panel says it did, which is not always what the counters say.
+ *
+ * When `commit_import` rejoins an earlier batch by its reuse window, the counters
+ * describe THIS attempt -- nothing added, everything a duplicate -- and the `importId`
+ * describes the FIRST one. Reporting the counters then reads "Kept 0 highlights across 0
+ * books" over an Undo that removes an import the reader made earlier, along with
+ * everything they have written on it since. Review demonstrated exactly that.
+ *
+ * So the two cases get two sentences, and the Undo below gets a label that names what it
+ * would actually take back.
+ */
+export function resultHeadline(result: {
+  added: number;
+  works: readonly unknown[];
+  joinedExisting: boolean;
+}): string {
+  if (result.joinedExisting) return 'These were already kept — nothing new was added.';
+  const w = result.works.length;
+  return `Kept ${result.added} ${result.added === 1 ? 'highlight' : 'highlights'} across ${w} ${
+    w === 1 ? 'book' : 'books'
+  }.`;
+}
+
+/**
+ * What the Undo button says, which has to name its scope when the two disagree.
+ *
+ * On a rejoined batch the button is the only control on screen and the counters above it
+ * read zero, so an unlabelled "Undo" reads as "clear this no-op" and is not.
+ */
+export function undoLabel(
+  result: { duplicates: number; joinedExisting: boolean } | null,
+  busy: ImportAction | null,
+): string {
+  if (busy === 'undo') return 'Removing…';
+  if (result?.joinedExisting) {
+    return `Remove this import (${result.duplicates} ${
+      result.duplicates === 1 ? 'highlight' : 'highlights'
+    })`;
+  }
+  return 'Undo';
 }
 
 /**

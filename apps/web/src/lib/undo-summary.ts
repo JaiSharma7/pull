@@ -2,11 +2,15 @@
  * What an Undo took beyond the highlights, in a sentence.
  *
  * ITS OWN MODULE BECAUSE IT COULD NOT BE TESTED WHERE IT WAS. It lived inside
- * `routes/Ingestion.tsx`, which this PR made un-importable under vitest: the route now
- * imports `lib/import-api.ts`, which imports `lib/supabase.ts`, which builds its client
- * at module scope and throws without `VITE_*` env. A test that reached it failed to
- * COLLECT rather than failing an assertion — the same defect this PR's own comments hold
- * up as the reason `import-fold.ts` exists, reintroduced one file over.
+ * `routes/Ingestion.tsx`, which imports `lib/import-api.ts`, which imports
+ * `lib/supabase.ts`, which builds its client at module scope and throws without `VITE_*`
+ * env — so a test that reached it failed to COLLECT rather than failing an assertion.
+ *
+ * That is a reason to keep the sentence-building here, and it is NOT the same as "the
+ * route cannot be imported", which an earlier version of this said. Review showed it can:
+ * `lib/account-api.test.ts` mocks `./supabase.js` and imports exactly such a module. What
+ * the suite genuinely cannot do is RENDER the route — `environment: 'node'`, no jsdom —
+ * so a decision left in JSX has nothing to fail against either way.
  *
  * That was not academic. The function had a live crash in it, and no test could have
  * caught it.

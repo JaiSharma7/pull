@@ -281,8 +281,46 @@ const MAX_TEXT = 20000;
  * function, and the mutation that swaps them passes.
  */
 export function normaliseHighlight(text: string): string {
-  return stripNul(text).replace(/\s+/g, ' ').trim();
+  /*
+   * `\s` IS NOT THE SAME SET IN JAVASCRIPT AND IN POSTGRES, and the difference is five
+   * codepoints that cost a reader a whole chunk.
+   *
+   * Review finding, found by scanning every codepoint in Unicode against both rules
+   * rather than by reading either. Postgres's `\s` matches U+001C, U+001D, U+001E,
+   * U+001F and U+0085; JavaScript's does not. So a highlight made only of those is
+   * non-empty here and empty to `commit_import`, which raises `22023` for the whole
+   * 500-item chunk -- the exact failure `toImportItems` exists to prevent, since a
+   * reader whose 400th highlight is empty should lose that highlight and not the other
+   * 399.
+   *
+   * The second half was worse: `batchIsGone` reads any `22023` as the tombstone and the
+   * screen then clears `result`, so the reader loses the only handle this PR ships on
+   * rows that DID land. Reproduced end to end through the real parsers -- a
+   * `My Clippings.txt` whose second body line is U+0085 reaches the RPC, and a Readwise
+   * CSV with U+001E does too.
+   *
+   * Listed explicitly rather than widened to `\p{White_Space}`: that adds U+180E and the
+   * Mongolian vowel separator, which Postgres does NOT strip, and a client that calls
+   * something empty when the server would keep it drops a highlight the reader wrote.
+   * The rule here has to be a superset of the server's and nothing more.
+   */
+  let t = stripNul(text);
+  // `replaceAll` with strings rather than a character class, for the reason `stripNul`
+  // below gives: `no-control-regex` rejects a control character in a pattern, and these
+  // need no pattern. Mapped to a plain space first, so the existing collapse then folds a
+  // run of them into one exactly as it folds tabs and newlines.
+  for (const ch of POSTGRES_ONLY_WHITESPACE) t = t.replaceAll(ch, ' ');
+  return t.replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * The five codepoints Postgres calls whitespace and JavaScript does not.
+ *
+ * Found by scanning every codepoint in Unicode against both rules, not by reading either.
+ * Named as a constant because the set is the whole of the agreement with `commit_import`:
+ * if the migration's `\s` ever means something else, this is the line that has to move.
+ */
+const POSTGRES_ONLY_WHITESPACE = ['\u001c', '\u001d', '\u001e', '\u001f', '\u0085'];
 
 /**
  * Remove the one character Postgres cannot carry through the jsonb cast.

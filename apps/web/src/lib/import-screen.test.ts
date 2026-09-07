@@ -13,6 +13,8 @@ import {
   showsKeep,
   showsUndo,
   undoFailed,
+  resultHeadline,
+  undoLabel,
 } from './import-screen.js';
 import { rpcError } from './rpc-error.js';
 
@@ -22,6 +24,7 @@ const landed: ImportResult = {
   added: 1500,
   duplicates: 0,
   ceilingReached: false,
+  joinedExisting: false,
   complete: true,
   works: [],
 };
@@ -325,5 +328,56 @@ describe('forgetsOnParse', () => {
 
   it('forgets it when the text changes, so a stale id cannot join a new file', () => {
     expect(forgetsOnParse('new', 'old')).toBe(true);
+  });
+});
+
+/*
+ * THE PANEL THAT SAID "KEPT 0" OVER A BUTTON THAT DELETED 1,200.
+ *
+ * Review finding, P1, and the worst thing in this PR. `commit_import` rejoins an earlier
+ * batch by a six-hour reuse window, so a reader who imports a file, leaves the route --
+ * the Library, a reload, a second tab -- and re-uploads the same file gets the ORIGINAL
+ * `importId` back with counters describing only the second attempt: nothing added, every
+ * highlight a duplicate. The result reads as complete, so Keep is hidden and Undo is the
+ * only control on screen. A reader who reads "Kept 0 highlights across 0 books" and
+ * presses Undo to clear the no-op removes the first import: every pull, and every
+ * question, note, grade, explanation and conviction written on them since.
+ *
+ * In-session it never fires, because `mergeAttempts` folds the retry into the earlier
+ * attempt and the counters become the batch's. It is the remount that strips the merge.
+ */
+describe('a batch the server rejoined rather than opened', () => {
+  const rejoined = {
+    importId: 'batch-from-an-hour-ago',
+    added: 0,
+    duplicates: 1200,
+    ceilingReached: false,
+    joinedExisting: true,
+    complete: true,
+    works: [],
+  };
+
+  it('does not claim to have kept nothing', () => {
+    expect(resultHeadline(rejoined)).toBe('These were already kept — nothing new was added.');
+  });
+
+  it('names what Undo would actually take back', () => {
+    expect(undoLabel(rejoined, null)).toBe('Remove this import (1200 highlights)');
+    expect(undoLabel(rejoined, 'undo')).toBe('Removing…');
+  });
+
+  it('leaves an ordinary import reading exactly as it did', () => {
+    const ordinary = {
+      ...rejoined,
+      added: 12,
+      duplicates: 3,
+      joinedExisting: false,
+      works: [{}, {}],
+    };
+    expect(resultHeadline(ordinary)).toBe('Kept 12 highlights across 2 books.');
+    expect(undoLabel(ordinary, null)).toBe('Undo');
+    expect(resultHeadline({ added: 1, works: [{}], joinedExisting: false })).toBe(
+      'Kept 1 highlight across 1 book.',
+    );
   });
 });
