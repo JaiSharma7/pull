@@ -7,7 +7,7 @@
  * so the masthead and browser/PWA icons stay the same mark.
  *
  * The official mark is an upside-down magician's top hat: open brim at the top, crown
- * tapering downward, oxblood band, and three restrained champagne sparks. It is tuned
+ * tapering downward, oxblood band, and three restrained warm-grey sparks. It is tuned
  * for 16px first and remains flat: no gradients, shadows or texture.
  *
  * Run: node scripts/gen-icons.mjs
@@ -19,12 +19,14 @@ import { fileURLToPath } from 'node:url';
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'web', 'public');
 
-// Build-script colours are intentionally literal: design-laws.test.ts exempts generated
-// icon files because they cannot inherit the app's CSS tokens.
+// Build-script colours are intentionally literal: an icon is loaded without the app's
+// stylesheet, so it cannot inherit a token. The exemption in design-laws.test.ts is by
+// VALUE rather than by file, though — favicon.svg may spell a colour tokens.css already
+// defines and nothing else — so every constant below is a palette hex, not a free hue.
 const INK = [0x14, 0x12, 0x0e];
 const BONE = [0xf4, 0xf1, 0xea];
 const OXBLOOD = [0x8c, 0x2f, 0x26];
-const CHAMPAGNE = [0xd5, 0xb4, 0x5b];
+const WARM = [0x6b, 0x64, 0x59];
 
 const CRC_TABLE = Int32Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -173,11 +175,12 @@ function shade(h) {
   const inBand = bandPolygon(h);
   const inSparkles = h.sparkles.map((s) => polygon(sparklePoints(s)));
   return (px, py) => {
-    if (inSparkles.some((inside) => inside(px, py))) return CHAMPAGNE;
+    if (inSparkles.some((inside) => inside(px, py))) return WARM;
     if (
       inEllipse(px, py, h.c, h.brimCy, h.brimRx, h.brimRy) &&
       !inEllipse(px, py, h.c, h.brimCy, h.openRx, h.openRy)
-    ) return INK;
+    )
+      return INK;
     if (inBand(px, py)) return OXBLOOD;
     if (inBody(px, py)) return INK;
     if (inEllipse(px, py, h.c, h.bodyBottom, h.crownBottomW / 2, h.bottomCapRy)) return INK;
@@ -189,11 +192,15 @@ function mark(size, inset) {
   const at = shade(hat(size, inset));
   const STEPS = 4;
   return (x, y) => {
-    let r = 0, g = 0, b = 0;
+    let r = 0,
+      g = 0,
+      b = 0;
     for (let sy = 0; sy < STEPS; sy++) {
       for (let sx = 0; sx < STEPS; sx++) {
         const [pr, pg, pb] = at(x + (sx + 0.5) / STEPS, y + (sy + 0.5) / STEPS);
-        r += pr; g += pg; b += pb;
+        r += pr;
+        g += pg;
+        b += pb;
       }
     }
     const count = STEPS * STEPS;
@@ -204,7 +211,9 @@ function mark(size, inset) {
 const hex = ([r, g, b]) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 const n = (v) => Number(v.toFixed(2));
 
-function widthAtSvg(h, y) { return widthAt(h, y); }
+function widthAtSvg(h, y) {
+  return widthAt(h, y);
+}
 
 function bodyPath(h) {
   return `M ${n(h.c - h.crownTopW / 2)} ${n(h.bodyTop)} L ${n(h.c + h.crownTopW / 2)} ${n(h.bodyTop)} L ${n(h.c + h.crownBottomW / 2)} ${n(h.bodyBottom)} L ${n(h.c - h.crownBottomW / 2)} ${n(h.bodyBottom)} Z`;
@@ -225,7 +234,9 @@ function brimRingPath(h) {
 }
 
 function sparklePath(s) {
-  return `M ${sparklePoints(s).map(([x, y]) => `${n(x)} ${n(y)}`).join(' L ')} Z`;
+  return `M ${sparklePoints(s)
+    .map(([x, y]) => `${n(x)} ${n(y)}`)
+    .join(' L ')} Z`;
 }
 
 function svg(size = 512, inset = 1) {
@@ -236,7 +247,7 @@ function svg(size = 512, inset = 1) {
   <ellipse cx="${n(h.c)}" cy="${n(h.bodyBottom)}" rx="${n(h.crownBottomW / 2)}" ry="${n(h.bottomCapRy)}" fill="${hex(INK)}"/>
   <path d="${bandPath(h)}" fill="${hex(OXBLOOD)}"/>
   <path d="${brimRingPath(h)}" fill="${hex(INK)}" fill-rule="evenodd" clip-rule="evenodd"/>
-  ${h.sparkles.map((s) => `<path d="${sparklePath(s)}" fill="${hex(CHAMPAGNE)}"/>`).join('\n  ')}
+  ${h.sparkles.map((s) => `<path d="${sparklePath(s)}" fill="${hex(WARM)}"/>`).join('\n  ')}
 </svg>
 `;
 }

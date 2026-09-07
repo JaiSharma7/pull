@@ -1,6 +1,6 @@
 /**
  * The house mark: an upside-down magician's top hat, drawn in the reader's ink with
- * an oxblood band and three small champagne sparks. The open brim sits at the top and
+ * an oxblood band and three small sparks in the muted text tone. The open brim sits at the top and
  * the crown tapers downward, so the inversion survives at favicon scale instead of
  * reading like an ordinary upright hat.
  *
@@ -8,8 +8,8 @@
  * `Mark.test.ts` compares this renderer against the generated favicon, so the masthead
  * and the browser tab cannot quietly become two different marks.
  *
- * Flat fills, no gradient, no shadow. The sparks are decorative: their champagne tone
- * is mixed from existing paper-system tokens rather than becoming a second UI accent.
+ * Flat fills, no gradient, no shadow. The sparks are decorative, and they name an
+ * existing palette role rather than becoming a second UI accent.
  */
 
 const BRIM_RX = 0.46;
@@ -149,7 +149,13 @@ export interface MarkProps {
 }
 
 const UNITS = 32;
-const CHAMPAGNE = 'color-mix(in srgb, var(--warm) 62%, var(--bone))';
+/*
+ * The sparks are ornament, so they take the muted text role rather than a hue of
+ * their own. A champagne gold here would be a second accent the moment anything
+ * pointed at it, which design law 1 does not allow and `design-laws.test.ts` catches
+ * both in `tokens.css` and in this file.
+ */
+const SPARK = 'var(--text-muted)';
 
 export function Mark({ className, title }: MarkProps) {
   const h = hatGeometry(UNITS);
@@ -177,7 +183,7 @@ export function Mark({ className, title }: MarkProps) {
       <path d={bandPath(h)} fill="var(--accent)" />
       <path d={brimRingPath(h)} fill="currentColor" fillRule="evenodd" clipRule="evenodd" />
       {h.sparkles.map((sparkle, index) => (
-        <path key={index} d={sparklePath(sparkle)} fill={CHAMPAGNE} />
+        <path key={index} d={sparklePath(sparkle)} fill={SPARK} />
       ))}
     </svg>
   );

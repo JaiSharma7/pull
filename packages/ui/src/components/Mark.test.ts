@@ -3,14 +3,7 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import {
-  Mark,
-  bandPath,
-  bodyPath,
-  brimRingPath,
-  hatGeometry,
-  sparklePath,
-} from './Mark.js';
+import { Mark, bandPath, bodyPath, brimRingPath, hatGeometry, sparklePath } from './Mark.js';
 
 /**
  * One mark, two renderers.
@@ -67,7 +60,7 @@ describe('the house mark', () => {
   it('keeps all three sparks in step with the generated favicon', () => {
     h.sparkles.forEach((sparkle, index) => {
       expect(shape('path', index + 3).d).toBe(sparklePath(sparkle));
-      expect(shape('path', index + 3).fill).toBe('#d5b45b');
+      expect(shape('path', index + 3).fill).toBe('#6b6459');
     });
   });
 
@@ -85,9 +78,9 @@ describe('Mark', () => {
     expect(html).not.toMatch(/fill="#/);
   });
 
-  it('keeps oxblood on the band and champagne only on decorative sparks', () => {
+  it('keeps oxblood on the band and a palette role on the decorative sparks', () => {
     expect(html).toContain('fill="var(--accent)"');
-    expect(html.match(/color-mix\(in srgb, var\(--warm\) 62%, var\(--bone\)\)/g)).toHaveLength(3);
+    expect(html.match(/fill="var\(--text-muted\)"/g)).toHaveLength(3);
   });
 
   it('renders the shared paths rather than numbers of its own', () => {
