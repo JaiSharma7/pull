@@ -510,6 +510,7 @@ export function App() {
   function goToTab(next: Tab) {
     setTab(next);
     if (readLocation() !== '/') navigate('/');
+    else window.scrollTo(0, 0);
   }
 
   function navigate(to: string) {

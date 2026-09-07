@@ -8,7 +8,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   padding: var(--space-6) var(--space-5) var(--space-4);
-  max-width: 40rem;
+  max-width: none;
 }
 
 .pull-card__chip {
@@ -50,7 +50,7 @@
 .pull-card__body {
   color: var(--text-soft);
   margin: 0 0 var(--space-5);
-  max-width: var(--measure);
+  max-width: 65ch;
 }
 
 .pull-card__footer {
@@ -194,8 +194,24 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  align-self: start;
+  gap: var(--space-2);
+  align-self: stretch;
+}
+
+.depth-slider {
+  accent-color: var(--accent);
+  flex: 1 1 5rem;
+  min-width: 4rem;
+  width: 5rem;
+  min-height: 2.75rem;
+  margin: 0;
+  cursor: ew-resize;
+}
+
+.pull-card__dial-stops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
 }
 
 .pull-card__dial-label,
@@ -223,7 +239,7 @@
   font-variant-numeric: tabular-nums;
   /* In the row form the count takes its own line, so it cannot wrap into the
      middle of the stops and read as one of them. The column form ignores this. */
-  flex-basis: 100%;
+  white-space: nowrap;
 }
 
 /*
@@ -1131,47 +1147,9 @@
   padding-block: var(--space-7);
 }
 
-/* Reading friction ---------------------------------------------------------
- *
- * A slight resistance in the scroll, so the feed cannot be flicked past.
- *
- * This is the opposite of what it looks like. Reels and Shorts use snapping to make
- * moving on *effortless* — one flick, the next thing is already there, and the cost of
- * not stopping is zero. The same primitive pointed the other way makes stopping the
- * default: `scroll-snap-stop: always` means one gesture advances one idea, however
- * hard it is thrown. You can still leave whenever you like; you just cannot leave
- * without passing each thing on the way.
- *
- * `proximity`, not `mandatory`. Mandatory fights a reader who is part way down a card
- * taller than their window, and a card that cannot be read to the end is a worse
- * outcome than a card that can be skimmed past. Proximity settles the scroll when it
- * is already close and otherwise stays out of the way.
- *
- * Scoped by `data-reading` rather than applied to the document, because snapping the
- * Library or the Colophon would be friction with nothing behind it.
- */
+/* The viewport belongs to the reader, including while async cards load. */
 :root[data-reading='feed'] {
-  scroll-snap-type: y proximity;
-  /* Clear of the sticky masthead, so a snapped card is not tucked under it. */
-  scroll-padding-block-start: var(--space-7);
-}
-
-.feed__item {
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-}
-
-/*
- * Off entirely for a reader who has asked for less motion.
- *
- * Snapping moves the viewport somewhere the reader did not put it, which is exactly
- * what that preference is about — and the friction is a nudge, never a load-bearing
- * part of the product. A nudge is the first thing to drop.
- */
-@media (prefers-reduced-motion: reduce) {
-  :root[data-reading='feed'] {
-    scroll-snap-type: none;
-  }
+  scroll-snap-type: none;
 }
 
 /*

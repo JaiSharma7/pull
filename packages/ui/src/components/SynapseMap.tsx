@@ -132,7 +132,7 @@ function prefersReducedMotion(): boolean {
 export function SynapseMap({
   nodes,
   edges,
-  selectedNodeId = null,
+  selectedNodeId: controlledSelectedNodeId,
   onSelectNode,
   height = '540px',
   filter = 'all',
@@ -146,6 +146,13 @@ export function SynapseMap({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [ownSelectedNodeId, setOwnSelectedNodeId] = useState<string | null>(null);
+  const selectedNodeId =
+    controlledSelectedNodeId === undefined ? ownSelectedNodeId : controlledSelectedNodeId;
+  const selectNode = (node: SynapseNode | null) => {
+    setOwnSelectedNodeId(node?.pullId ?? null);
+    onSelectNode?.(node);
+  };
 
   // Dragging state refs (kept in refs to avoid re-triggering simulation loops)
   const isPanningRef = useRef(false);
@@ -443,8 +450,8 @@ export function SynapseMap({
         ctx.fill();
       }
 
-      // Label (rendered for selected, hovered, or prominent nodes)
-      if (isSelected || isHovered || zoom >= 1.25) {
+      // Zoom changes scale, never which ideas the reader asked to see.
+      if (isSelected || isHovered) {
         // Read from the tokens like everything else: this was `11px Fraunces, serif`, the one
         // piece of type in the app that ignored the large-text setting and named its own family.
         ctx.font = `500 ${tokens.labelSize} ${tokens.labelFamily}`;
@@ -579,15 +586,15 @@ export function SynapseMap({
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
       e.preventDefault();
       const next = filteredNodes[(current + 1 + filteredNodes.length) % filteredNodes.length];
-      if (next) onSelectNode?.(next);
+      if (next) selectNode(next);
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
       e.preventDefault();
       const prevIndex = current <= 0 ? filteredNodes.length - 1 : current - 1;
       const prev = filteredNodes[prevIndex];
-      if (prev) onSelectNode?.(prev);
+      if (prev) selectNode(prev);
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      onSelectNode?.(null);
+      selectNode(null);
     }
   };
 
@@ -625,9 +632,9 @@ export function SynapseMap({
       const hit = findNodeAt(e.clientX, e.clientY);
       if (hit) {
         const fullNode = filteredNodes.find((n) => n.pullId === hit.id) ?? null;
-        onSelectNode?.(fullNode);
+        selectNode(fullNode);
       } else {
-        onSelectNode?.(null);
+        selectNode(null);
       }
     }
   };
@@ -666,6 +673,9 @@ export function SynapseMap({
 
   const solidCount = useMemo(() => nodes.filter((n) => n.retrievability >= 0.8).length, [nodes]);
   const fadingCount = useMemo(() => nodes.filter((n) => n.retrievability < 0.6).length, [nodes]);
+  const previewNode =
+    filteredNodes.find((node) => node.pullId === selectedNodeId) ??
+    filteredNodes.find((node) => node.pullId === hoveredNodeId);
 
   return (
     <div ref={containerRef} className={`synapse-container ${className}`} style={{ height }}>
@@ -730,6 +740,7 @@ export function SynapseMap({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
+        onPointerLeave={() => setHoveredNodeId(null)}
       />
 
       <ul className="sr-only">
@@ -740,6 +751,24 @@ export function SynapseMap({
           </li>
         ))}
       </ul>
+
+      {previewNode && (
+        <aside
+          className="synapse-preview"
+          data-pinned={selectedNodeId === previewNode.pullId}
+          aria-label="Idea preview"
+          aria-live="polite"
+        >
+          <p className="meta">{previewNode.workTitle}</p>
+          <strong>{previewNode.headline}</strong>
+          <p>{previewNode.body}</p>
+          {selectedNodeId === previewNode.pullId && (
+            <button type="button" className="btn" onClick={() => selectNode(null)}>
+              Close idea
+            </button>
+          )}
+        </aside>
+      )}
 
       {/* Legend */}
       {/* Not aria-hidden. It is the only text explaining what solid, fading and a

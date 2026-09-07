@@ -343,34 +343,48 @@ export function PullCard({
           is furniture.
         */}
         {levels.length > 1 && (
-          <div className="pull-card__dial" role="radiogroup" aria-labelledby={dialId}>
+          <div className="pull-card__dial" role="group" aria-labelledby={dialId}>
             <p className="pull-card__dial-label" id={dialId}>
               Depth
             </p>
-            {levels.map((level, i) => (
-              <button
-                key={level.key}
-                type="button"
-                role="radio"
-                className="btn btn--plain pull-card__stop-btn"
-                aria-checked={i === depth}
-                aria-controls={panelId}
-                // The visible label is a duration, and "35 sec" announced on its
-                // own says nothing about which way the dial is being turned.
-                aria-label={level.aria}
-                // One tab stop for the group; the arrows move within it.
-                tabIndex={i === depth ? 0 : -1}
-                onClick={() => setDepth(i)}
-                onKeyDown={onStopKey}
-              >
-                <span
-                  className="pull-card__tick"
-                  style={{ width: level.tick }}
-                  aria-hidden="true"
-                />
-                <span className="pull-card__stop-label">{level.label}</span>
-              </button>
-            ))}
+            <input
+              className="depth-slider"
+              type="range"
+              min={0}
+              max={levels.length - 1}
+              step={1}
+              value={depth}
+              aria-label="Depth"
+              aria-valuetext={`${levels[depth]?.aria}: ${levels[depth]?.label}`}
+              aria-controls={panelId}
+              onChange={(event) => setDepth(Number(event.currentTarget.value))}
+            />
+            <div className="pull-card__dial-stops" role="radiogroup" aria-labelledby={dialId}>
+              {levels.map((level, i) => (
+                <button
+                  key={level.key}
+                  type="button"
+                  role="radio"
+                  className="btn btn--plain pull-card__stop-btn"
+                  aria-checked={i === depth}
+                  aria-controls={panelId}
+                  // The visible label is a duration, and "35 sec" announced on its
+                  // own says nothing about which way the dial is being turned.
+                  aria-label={level.aria}
+                  // One tab stop for the group; the arrows move within it.
+                  tabIndex={i === depth ? 0 : -1}
+                  onClick={() => setDepth(i)}
+                  onKeyDown={onStopKey}
+                >
+                  <span
+                    className="pull-card__tick"
+                    style={{ width: level.tick }}
+                    aria-hidden="true"
+                  />
+                  <span className="pull-card__stop-label">{level.label}</span>
+                </button>
+              ))}
+            </div>
             {/*
               The words behind the clock. A duration is a claim about the reader;
               a word count is a fact about the card, and showing both is what

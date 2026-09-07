@@ -74,7 +74,7 @@
   --radius: 3px;
   --radius-sm: 2px;
 
-  --measure: 34rem; /* ~66 characters: the comfortable reading column */
+  --measure: 64rem; /* Card and controls; prose carries its own readable measure. */
 
   /*
    * The Depth Dial's own step, and the reason it is not `--step--1`.
@@ -103,14 +103,10 @@
   --step-dial: max(var(--step--1), calc(var(--step-0) * 0.8));
 
   /*
-   * A second, wider column for reference documents — the policies and the terms.
-   * Not a relaxation of law 7: the reading column is pinned because a longer line
-   * makes a *card* worse, while a document of tables and cross-references is worse
-   * at 34rem than at 46. Fluid rather than a second fixed step, so it opens with
-   * the window instead of jumping at a breakpoint, and still capped so no page in
-   * this product ever runs full-bleed.
+   * Reference documents keep their own measure: widening reading cards must not
+   * also stretch policy paragraphs and tables across the laptop.
    */
-  --measure-wide: clamp(var(--measure), var(--measure) + 14vw, 46rem);
+  --measure-wide: clamp(34rem, 34rem + 14vw, 46rem);
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
   --transition: 160ms cubic-bezier(0.2, 0, 0.2, 1);
 }
@@ -189,14 +185,8 @@
 /*
  * Focus mode — the same reading, physically larger.
  *
- * The base scale tops out around 17px, so a 2560px display shows a phone's line
- * inside a 544px column and spends the rest of the screen on furniture and margin.
- * The words never get any of it.
- *
- * The answer is not a longer line: 66 characters is comfortable because of how eyes
- * track, not because of how many pixels are spare. So the type grows and `--measure`
- * grows with it in the same proportion — characters per line are unchanged, and
- * everything is simply bigger. That is what a laptop should buy over a phone.
+ * Type and card space grow together. The card has room for its controls while
+ * paragraphs retain their separate 65ch limit.
  *
  * Only the reading steps move. `--step--1` (metadata) is deliberately left alone so
  * the furniture does not grow with the prose and reclaim the room this just freed.
@@ -221,10 +211,9 @@
   --step-5: clamp(3.0518rem, 2.2rem + 4vw, 5.25rem);
   /*
    * Scaled from the body step, not restated as a bigger constant. A second literal
-   * would drift the moment either value was tuned, and the whole point is that the
-   * ratio between them — the character count — is the thing being held fixed.
+   * would drift when either value was tuned. Paragraphs set their own line length.
    */
-  --measure: calc(var(--step-0) * 32);
+  --measure: calc(var(--step-0) * 52);
 }
 
 :root[data-text='large'] {
