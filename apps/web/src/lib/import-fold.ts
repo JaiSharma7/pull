@@ -46,9 +46,13 @@ export interface ImportResult {
    * demonstrated it. The counters are honest about the attempt and dishonest about the
    * batch, and this is the flag that lets the screen say which it is talking about.
    *
-   * In-session it never fires: `mergeAttempts` folds a retry into the earlier attempt, so
-   * `added` is the batch's. It is the remount -- a reload, the Library, a second tab --
-   * that strips the merge.
+   * IN-SESSION IT FIRES TOO, and an earlier revision of this paragraph said it could not
+   * ("`mergeAttempts` folds a retry into the earlier attempt, so `added` is the
+   * batch's"). Four steps: keep file A, edit the textarea to anything else, which clears
+   * the result; paste A back; press Keep. There is no earlier attempt left to fold into,
+   * so `mergeAttempts` returns this one untouched while the server rejoins the batch
+   * regardless. The remount -- a reload, the Library, a second tab -- is the commoner
+   * route, not the only one.
    */
   joinedExisting: boolean;
   /**
@@ -222,11 +226,21 @@ export function mergeAttempts(prev: ImportResult | null, next: ImportResult): Im
     // chunks sent the rest, so the batch is complete however the earlier attempt ended;
     // a retry that failed again did not, whatever the earlier one reported.
     complete: next.complete,
-    // ALWAYS FALSE HERE, and that is the point of merging. `joinedExisting` says the
-    // counters describe an attempt rather than the batch; a merge is precisely the
-    // operation that makes them describe the batch again, because `prev` is the earlier
-    // attempt on the same one. It can only be true when there is nothing to fold into.
-    joinedExisting: false,
+    /*
+     * CARRIED, not cleared. This said "always false here, and that is the point of
+     * merging" -- that folding the earlier attempt in makes the counters describe the
+     * batch again, because `prev` is the earlier attempt on the same batch.
+     *
+     * False when `prev` is ITSELF a rejoin. Then neither attempt opened the batch, both
+     * added nothing, and 0 + 0 is still not what Undo would remove -- so clearing the
+     * flag here made the state permanent across the retry the reader is invited to make.
+     * Review finding.
+     *
+     * The `added` term is what lets it drop again: once either attempt has stored
+     * something, the counters are describing rows this walk put there and the plain
+     * headline is the true one.
+     */
+    joinedExisting: (prev.joinedExisting || next.joinedExisting) && prev.added + next.added === 0,
     works: [...byWorkId.values()].sort((a, b) => a.title.localeCompare(b.title)),
   };
 }
@@ -299,6 +313,20 @@ export async function foldChunks(
     for (const w of result.works ?? []) byWorkId.set(w.workId, w);
 
     /*
+     * AFTER EVERY CHUNK, because a chunk that fails throws the partial out of this loop
+     * and that partial is what the screen renders.
+     *
+     * Review finding, twice over -- two reviewers reached it independently. Assigned
+     * after the walk, this was never reached by the `PartialImportError` exit above, so
+     * a rejoined batch whose second chunk timed out came back `joinedExisting: false`
+     * and the panel read "Kept 0 highlights across 0 books." beside a bare "Undo" that
+     * removes the earlier import and everything written on it since. That is the exact
+     * defect the flag was added to remove, still reachable through the one failure the
+     * loop above has a dedicated branch for.
+     */
+    total.joinedExisting = rejoined(askedToResume, total);
+
+    /*
      * NO EARLY STOP, and the reason is that `ceilingReached` is two different facts
      * under one name.
      *
@@ -323,6 +351,12 @@ export async function foldChunks(
      *
      * The real fix is server-side -- report WHICH ceiling -- and it needs a migration,
      * so it belongs with the next schema change that touches imports rather than here.
+     *
+     * A SECOND ONE FOR THAT MIGRATION, from the same round: `commit_import` should say
+     * whether it OPENED the batch or reused one. It already knows -- it tests
+     * `v_import_id` for null before the insert -- and one key in the jsonb it returns
+     * would replace the proxy `rejoined` is reduced to below, which is wrong in both
+     * directions and cannot be made right from this side.
      */
   }
 
@@ -330,14 +364,37 @@ export async function foldChunks(
   // Ran out of chunks rather than out of luck: there is no rest.
   total.complete = true;
 
-  /*
-   * The server handed back a batch this walk did not open. See `joinedExisting`.
-   *
-   * `added === 0` with duplicates is the observable half; `!askedToResume` is what makes
-   * it unambiguous, because a resumed attempt is SUPPOSED to come back on the earlier
-   * batch and its counters are folded by `mergeAttempts` rather than shown raw.
-   */
-  total.joinedExisting =
-    !askedToResume && total.importId !== null && total.added === 0 && total.duplicates > 0;
   return total;
+}
+
+/**
+ * Did the server hand back a batch this walk did not open? See `joinedExisting`.
+ *
+ * `added === 0` with duplicates is the observable half; `!askedToResume` is what makes
+ * it unambiguous, because a resumed attempt is SUPPOSED to come back on the earlier
+ * batch and its counters are folded by `mergeAttempts` rather than shown raw.
+ *
+ * A PROXY, AND THE ONLY ONE AVAILABLE HERE. `commit_import` does not report whether it
+ * opened the batch or reused one, so this is inferred from counters that are consistent
+ * with both. It is wrong in two directions and neither can be fixed on this side:
+ *
+ *   FALSE NEGATIVE, and the likelier of the two. A partial rejoin -- 1,200 highlights,
+ *   700 landed before the connection dropped, the same file re-uploaded inside the
+ *   six-hour window -- comes back `added: 500, duplicates: 700`. `added > 0`, so this
+ *   returns false, and Undo still takes back all 1,200.
+ *
+ *   FALSE POSITIVE. A batch this walk DID open, every item of which the reader already
+ *   held: the same text pasted after being uploaded (a different `source_kind` matches
+ *   no reuse window), or the same file re-uploaded outside it. Nothing was added and
+ *   everything was a duplicate, and this says "rejoined" about a batch holding no rows.
+ *
+ * The panel is written to survive both -- see `undoLabel`, which no longer names a
+ * number it cannot know. The exact answer needs the server, and is recorded as the
+ * second deferred item in `foldChunks` above.
+ */
+function rejoined(
+  askedToResume: boolean,
+  total: Pick<ImportResult, 'importId' | 'added' | 'duplicates'>,
+): boolean {
+  return !askedToResume && total.importId !== null && total.added === 0 && total.duplicates > 0;
 }

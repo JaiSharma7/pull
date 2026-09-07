@@ -15,6 +15,7 @@ import {
   undoFailed,
   resultHeadline,
   undoLabel,
+  warnsUndoIsWiderThanItLooks,
 } from './import-screen.js';
 import { rpcError } from './rpc-error.js';
 
@@ -361,9 +362,35 @@ describe('a batch the server rejoined rather than opened', () => {
     expect(resultHeadline(rejoined)).toBe('These were already kept — nothing new was added.');
   });
 
-  it('names what Undo would actually take back', () => {
-    expect(undoLabel(rejoined, null)).toBe('Remove this import (1200 highlights)');
+  /*
+   * NAMES ITS SCOPE, AND NOT A NUMBER. This asserted "Remove this import (1200
+   * highlights)", and review showed the number is wrong in a case the label cannot tell
+   * apart: `commit_import` dedupes against everything the reader holds, not against this
+   * batch, so a batch this walk DID open whose every item was already held reports 1,200
+   * duplicates and holds no rows -- and `undo_import` on it removes none of them. The
+   * true sentence moved to `warnsUndoIsWiderThanItLooks`, which claims no figure.
+   */
+  it('names its scope without naming a count it cannot know', () => {
+    expect(undoLabel(rejoined, null)).toBe('Remove this import');
     expect(undoLabel(rejoined, 'undo')).toBe('Removing…');
+    expect(warnsUndoIsWiderThanItLooks(rejoined)).toBe(true);
+  });
+
+  it('says nothing extra about an ordinary import, or none at all', () => {
+    expect(warnsUndoIsWiderThanItLooks({ ...rejoined, joinedExisting: false })).toBe(false);
+    expect(warnsUndoIsWiderThanItLooks(null)).toBe(false);
+  });
+
+  /*
+   * The ceiling changes the sentence. `joinedExisting && ceilingReached` is reachable --
+   * chunk one all duplicates, chunk two carrying a new item, the item ceiling ending the
+   * chunk -- and "these were already kept" then stacks over the ceiling notice and
+   * claims the highlights the ceiling REFUSED were already held. Review finding.
+   */
+  it('does not claim the highlights a ceiling refused were already kept', () => {
+    expect(resultHeadline({ ...rejoined, ceilingReached: true })).toBe(
+      'Nothing new was added — these were already kept, or there was no room for them.',
+    );
   });
 
   it('leaves an ordinary import reading exactly as it did', () => {
@@ -376,8 +403,8 @@ describe('a batch the server rejoined rather than opened', () => {
     };
     expect(resultHeadline(ordinary)).toBe('Kept 12 highlights across 2 books.');
     expect(undoLabel(ordinary, null)).toBe('Undo');
-    expect(resultHeadline({ added: 1, works: [{}], joinedExisting: false })).toBe(
-      'Kept 1 highlight across 1 book.',
-    );
+    expect(
+      resultHeadline({ added: 1, works: [{}], joinedExisting: false, ceilingReached: false }),
+    ).toBe('Kept 1 highlight across 1 book.');
   });
 });

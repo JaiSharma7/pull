@@ -22,6 +22,7 @@ import {
   showsUndo,
   resultHeadline,
   undoLabel,
+  warnsUndoIsWiderThanItLooks,
   undoFailed,
 } from '../lib/import-screen.js';
 import { collateral } from '../lib/undo-summary.js';
@@ -171,8 +172,14 @@ export function Ingestion() {
    */
   const announcement = undone
     ? 'Import undone.'
-    : result
-      ? `Kept ${result.added} ${result.added === 1 ? 'highlight' : 'highlights'}.`
+    : // THE SAME SENTENCE THE PANEL SHOWS. This read `result.added` raw while the
+      // visible headline went through `resultHeadline`, so on a rejoined batch a sighted
+      // reader saw "These were already kept -- nothing new was added." and this region
+      // announced "Kept 0 highlights." -- the exact sentence the flag exists to remove,
+      // and the only thing a screen-reader reader was told. Review finding. The comment
+      // on the region itself says this, not the panels, is what that audience gets.
+      result
+      ? resultHeadline(result)
       : '';
 
   /*
@@ -446,7 +453,16 @@ export function Ingestion() {
                   held, or 2,000 books ever imported).
                 </p>
               )}
-              <p className="form-note">They are in your Library, and due for review tomorrow.</p>
+              {/* ONLY WHEN SOMETHING WAS STORED. The `knowledge_states` insert that makes
+                  a highlight due tomorrow is inside the per-item STORE branch of
+                  `commit_import`; a duplicate `continue`s before it and is scheduled by
+                  nothing. So on a rejoined batch -- and on a ceiling result that stored
+                  nothing -- this sentence was false about every highlight on screen:
+                  they were scheduled whenever they were first kept, which may be today,
+                  or a month out. Review finding. */}
+              {result.added > 0 && (
+                <p className="form-note">They are in your Library, and due for review tomorrow.</p>
+              )}
             </div>
           )}
 
@@ -547,6 +563,15 @@ export function Ingestion() {
               </button>
             )}
             <span className="meta">{footerLine(panel)}</span>
+            {/* THE SCOPE THE LABEL CAN NO LONGER PUT IN A NUMBER. `duplicates` counts
+                against everything the reader holds rather than against this batch, so
+                the count the button used to carry was wrong whenever those duplicates
+                came from somewhere else. This is true on every branch it renders on. */}
+            {warnsUndoIsWiderThanItLooks(result) && (
+              <p className="form-note">
+                This takes back everything kept from this file, including anything kept before now.
+              </p>
+            )}
           </div>
         </section>
       )}

@@ -425,16 +425,98 @@ describe('joinedExisting', () => {
     });
   });
 
-  it('never survives a merge, whatever the second attempt reported', () => {
-    const rejoined = {
+  /*
+   * THE SHAPE THE SUITE DID NOT DRIVE, and the commonest second import there is: a file
+   * re-exported after reading further, so some of it is new and most of it is not.
+   *
+   * Review finding. Relaxing `added === 0` to `added >= 0` passed all seventy-two tests
+   * while telling a reader who had just kept forty highlights that nothing was added.
+   * The renderer was pinned in both directions; the producer only at the extremes.
+   */
+  it('is false when a batch this walk opened both added and duplicated', async () => {
+    const { call } = recorder([{ importId: 'fresh', added: 40, duplicates: 460, works: [] }]);
+    await expect(foldChunks(many(500), call)).resolves.toMatchObject({ joinedExisting: false });
+  });
+
+  // No batch is no batch to warn about. The clause is defensive -- `commit_import`
+  // returns a null id only alongside zero duplicates -- but an unasserted clause is one
+  // a later edit can delete without anything noticing.
+  it('is false when no batch came back at all', async () => {
+    const { call } = recorder([{ added: 0, duplicates: 3, works: [] }]);
+    await expect(foldChunks(many(3), call)).resolves.toMatchObject({ joinedExisting: false });
+  });
+
+  /*
+   * IT SURVIVES THE FAILURE EXIT, which is the half that was missing.
+   *
+   * Review finding, reached independently by two reviewers. The flag was assigned after
+   * the loop, and a chunk that fails throws out of the loop -- so the partial the screen
+   * renders always carried `false`, and a rejoined batch whose second chunk timed out
+   * showed "Kept 0 highlights across 0 books." beside a bare Undo that removes the
+   * earlier import. The counters here are the ones a rejoin produces; the throw is the
+   * transport failure `foldChunks` already has a branch for.
+   */
+  it('is true on the partial a failed chunk throws', async () => {
+    let n = 0;
+    const call = async (): Promise<Partial<ImportResult>> => {
+      n += 1;
+      if (n === 2) throw new Error('Failed to fetch');
+      return { importId: 'batch-from-an-hour-ago', added: 0, duplicates: 500, works: [] };
+    };
+
+    let err: unknown;
+    try {
+      await foldChunks(many(1000), call);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(PartialImportError);
+    const partial = (err as PartialImportError).partial;
+    expect(partial.joinedExisting).toBe(true);
+    expect(partial.complete).toBe(false);
+  });
+
+  /*
+   * AND SURVIVES THE MERGE THAT FOLLOWS IT, which is what makes the fix hold.
+   *
+   * This assertion used to be "never survives a merge, whatever the second attempt
+   * reported", on the reasoning that folding the earlier attempt in makes the counters
+   * describe the batch again. That is true only when the earlier attempt OPENED the
+   * batch. When `prev` is itself a rejoin, neither attempt opened it, 0 + 0 is still not
+   * what Undo removes, and clearing the flag made the wrong panel permanent across the
+   * retry the reader is invited to make.
+   *
+   * Its old input was also unreachable: `joinedExisting: true` with `complete: true`
+   * hides Keep, so no second attempt exists to merge. The reachable input is a PARTIAL
+   * rejoin as `prev`, which is what this drives.
+   */
+  it('survives a merge while both attempts have added nothing', () => {
+    const partialRejoin = {
       importId: 'b',
       added: 0,
-      duplicates: 9,
+      duplicates: 500,
       ceilingReached: false,
       joinedExisting: true,
-      complete: true,
+      complete: false,
       works: [],
     };
-    expect(mergeAttempts(rejoined, rejoined).joinedExisting).toBe(false);
+    const rest = { ...partialRejoin, duplicates: 1000, complete: true };
+    expect(mergeAttempts(partialRejoin, rest).joinedExisting).toBe(true);
+  });
+
+  it('drops once either attempt has stored something', () => {
+    // Then the counters are describing rows this walk put there, and the plain headline
+    // is the true one.
+    const partialRejoin = {
+      importId: 'b',
+      added: 0,
+      duplicates: 500,
+      ceilingReached: false,
+      joinedExisting: true,
+      complete: false,
+      works: [],
+    };
+    const productive = { ...partialRejoin, added: 500, joinedExisting: false, complete: true };
+    expect(mergeAttempts(partialRejoin, productive).joinedExisting).toBe(false);
   });
 });

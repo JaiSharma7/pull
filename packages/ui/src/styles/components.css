@@ -1217,7 +1217,11 @@
  * And the error carries a mark as well as the accent, because design law 5 says colour is
  * never the only signal. The failure line and the line above it were the same face, size,
  * case and tracking, differing only in hue — which is no difference at all to a reader who
- * cannot see the hue. The rule is a hairline, which is the structure law 1 spends on.
+ * cannot see the hue. The mark is a rule rather than a shape, which is the structure
+ * design law 2 asks for -- "separate with hairline rules". An earlier revision of this
+ * sentence credited law 1, which is gradients. Two pixels and on the accent, matching
+ * the left-border `daily.css` already uses, so it reads as a rule at this size rather
+ * than as a border drawn round a box.
  */
 .form-error {
   font-size: var(--step--1);

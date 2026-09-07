@@ -255,8 +255,21 @@ export function resultHeadline(result: {
   added: number;
   works: readonly unknown[];
   joinedExisting: boolean;
+  ceilingReached: boolean;
 }): string {
-  if (result.joinedExisting) return 'These were already kept — nothing new was added.';
+  /*
+   * The ceiling changes the sentence, because the two facts are not the same fact.
+   * `joinedExisting && ceilingReached` is reachable -- the first chunk is all
+   * duplicates, the second carries a new item, the item ceiling ends the chunk, and
+   * `added` never leaves zero. Saying "these were already kept" then stacks over the
+   * ceiling notice one line down and claims the highlights the ceiling REFUSED were
+   * already held, which is the opposite of what happened to them. Review finding.
+   */
+  if (result.joinedExisting) {
+    return result.ceilingReached
+      ? 'Nothing new was added — these were already kept, or there was no room for them.'
+      : 'These were already kept — nothing new was added.';
+  }
   const w = result.works.length;
   return `Kept ${result.added} ${result.added === 1 ? 'highlight' : 'highlights'} across ${w} ${
     w === 1 ? 'book' : 'books'
@@ -268,18 +281,35 @@ export function resultHeadline(result: {
  *
  * On a rejoined batch the button is the only control on screen and the counters above it
  * read zero, so an unlabelled "Undo" reads as "clear this no-op" and is not.
+ *
+ * NO COUNT, and it used to carry one. `duplicates` is not a count of the batch:
+ * `commit_import` dedupes against every non-undone row the reader has, not against this
+ * import, so the number is right only when the duplicates happen to be the rejoined
+ * batch's own. On a batch this walk DID open whose every item the reader already held --
+ * the same passages pasted after being uploaded, or the same file outside the six-hour
+ * reuse window -- the button offered to remove 1,200 highlights and `undo_import` removed
+ * none. Review finding, demonstrated. A number the client cannot derive is a promise it
+ * cannot keep, and `warnsUndoIsWiderThanItLooks` carries the true sentence instead.
  */
 export function undoLabel(
-  result: { duplicates: number; joinedExisting: boolean } | null,
+  result: { joinedExisting: boolean } | null,
   busy: ImportAction | null,
 ): string {
   if (busy === 'undo') return 'Removing…';
-  if (result?.joinedExisting) {
-    return `Remove this import (${result.duplicates} ${
-      result.duplicates === 1 ? 'highlight' : 'highlights'
-    })`;
-  }
+  if (result?.joinedExisting) return 'Remove this import';
   return 'Undo';
+}
+
+/**
+ * Does the Undo need the sentence saying it reaches further back than this attempt?
+ *
+ * The scope the label can no longer put in a number. True on exactly the results where
+ * the counters describe an attempt and the button describes a batch, which is what
+ * `joinedExisting` means -- so a reader is told what Undo takes, without being told a
+ * figure that is wrong half the time.
+ */
+export function warnsUndoIsWiderThanItLooks(result: { joinedExisting: boolean } | null): boolean {
+  return result?.joinedExisting === true;
 }
 
 /**
