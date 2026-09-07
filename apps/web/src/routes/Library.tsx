@@ -3,6 +3,15 @@ import { PullCard, SynapseMap, type SynapseNode, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
 
 import { groupByWork, type WorkGroup } from '../lib/library.js';
+import { downloadText } from '../lib/download.js';
+import { flattenHighlights, toCsvHighlights, toStashMarkdown } from '../lib/export-formats.js';
+import { fetchHighlightsByPull } from '../lib/export-api.js';
+import {
+  exportFilename,
+  exportSlug,
+  stashExportItems,
+  stashExportSources,
+} from '../lib/export-rows.js';
 import { toMarkdown } from '../lib/highlights.js';
 import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
 import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
@@ -114,15 +123,12 @@ export function Library({ userId }: { userId: string }) {
     setBusy(true);
     try {
       const sources = await fetchExportData(userId);
-      const markdown = toMarkdown(sources, new Date());
-      const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `what-a-pull-highlights-${new Date().toISOString().slice(0, 10)}.md`;
-      a.click();
-      // Revoked on a later tick rather than immediately: the browser has not
-      // necessarily started reading the blob by the time click() returns.
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const now = new Date();
+      downloadText(
+        exportFilename(['highlights'], 'md', now),
+        'text/markdown',
+        toMarkdown(sources, now),
+      );
     } catch (e) {
       console.error('Could not export highlights', e);
       window.alert('Could not build the export just now.');
@@ -264,6 +270,67 @@ export function Library({ userId }: { userId: string }) {
    * question again at the moment it writes.
    */
   const nestTarget = activeStash && canNestNew(tree, activeStash.id) ? activeStash : null;
+
+  /*
+   * What is filed in the selected collection — all of it, not what is on screen.
+   *
+   * `visible` is `applyFilter`, which hides archived saves, so exporting it would
+   * produce a file named after a collection that is missing part of that
+   * collection — and worse, one whose contents change with a filter the reader
+   * set for reading rather than for exporting. Archiving is "out of the way", not
+   * "gone": the row still carries `stash_id`, and the strip still counts it. So
+   * the export is the collection, and the screen says so beside the button rather
+   * than leaving the reader to discover the difference from the file.
+   */
+  const stashItems = useMemo(
+    () => (stashId === null ? [] : (items ?? []).filter((i) => i.stashId === stashId)),
+    [items, stashId],
+  );
+
+  /*
+   * One collection, as a file the reader keeps.
+   *
+   * Two formats because they answer different questions and neither substitutes
+   * for the other: the Markdown is the collection as prose — every Pull's summary,
+   * why it matters, and the reader's note, marked as theirs — and the CSV is the
+   * passages they marked, one row each, for somebody who wants to count or sort
+   * or paste them somewhere. `toStashMarkdown` and `toCsvHighlights` write both.
+   *
+   * The Markdown needs nothing the screen has not already loaded, so it is built
+   * and handed over without a request — which means it works on a plane, where an
+   * export is exactly the thing a reader wants. The CSV is about highlights, and a
+   * highlight is not part of a save, so that one asks for them.
+   */
+  async function exportStash(format: 'markdown' | 'csv') {
+    if (!activeStash) return;
+    setBusy(true);
+    try {
+      const now = new Date();
+      const slug = exportSlug(activeStash.name);
+      if (format === 'markdown') {
+        downloadText(
+          exportFilename([slug], 'md', now),
+          'text/markdown',
+          toStashMarkdown(activeStash, stashExportItems(stashItems), now),
+        );
+      } else {
+        const highlights = await fetchHighlightsByPull(
+          userId,
+          stashItems.map((i) => i.id),
+        );
+        downloadText(
+          exportFilename([slug], 'csv', now),
+          'text/csv',
+          toCsvHighlights(flattenHighlights(stashExportSources(stashItems, highlights))),
+        );
+      }
+    } catch (e) {
+      console.error('Could not export the collection', e);
+      window.alert('Could not build the export just now.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /*
    * Why the list is empty, in words that are true of this library.
@@ -605,6 +672,46 @@ export function Library({ userId }: { userId: string }) {
           >
             Export highlights
           </button>
+          {/*
+            Offered only with a collection selected, because that is the only
+            state in which "this collection" names anything. Nothing here is
+            gated: every reader who can make a collection can take it away
+            again, on every plan, which is the whole of law 3's "unlimited
+            history" being a fact rather than a claim.
+          */}
+          {activeStash ? (
+            <span className="library__collection">
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void exportStash('markdown')}
+                disabled={busy}
+              >
+                Export “{activeStash.name}”
+              </button>
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void exportStash('csv')}
+                disabled={busy}
+              >
+                as CSV
+              </button>
+            </span>
+          ) : null}
+          {/*
+            Said before the download rather than discovered from the file. The
+            count is the collection's, not the list's, and the two differ the
+            moment a filter is on — which is precisely when a reader would
+            otherwise assume the file matches what they are looking at.
+          */}
+          {activeStash ? (
+            <span className="meta">
+              Markdown is the ideas and your notes; CSV is the passages you marked. Both carry all{' '}
+              {stashItems.length} {stashItems.length === 1 ? 'save' : 'saves'} filed here, archived
+              included.
+            </span>
+          ) : null}
         </div>
 
         <div className="library__filters" role="group" aria-label="View mode">

@@ -12,6 +12,10 @@ import {
   unusedRecoveryCodeCount,
   type AccountSession,
 } from '../lib/account-api.js';
+import { downloadText } from '../lib/download.js';
+import { fetchAnkiDeck } from '../lib/export-api.js';
+import { toAnkiTsv } from '../lib/export-formats.js';
+import { exportFilename } from '../lib/export-rows.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -500,13 +504,11 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
     setNote(null);
     try {
       const payload = await buildAccountExport(userId, email);
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `what-a-pull-export-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadText(
+        exportFilename(['export'], 'json', new Date()),
+        'application/json',
+        JSON.stringify(payload, null, 2),
+      );
 
       setNote(
         payload.incomplete.length === 0
@@ -514,6 +516,47 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
           : `Downloaded, but ${payload.incomplete.length} table${
               payload.incomplete.length === 1 ? '' : 's'
             } could not be read. The file lists which.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /*
+   * The same data as a deck somebody else's app can study.
+   *
+   * The JSON above is complete and unreadable; this is one narrow slice of it in
+   * a format that lands somewhere useful without a conversion step. A reader with
+   * a review habit already running in Anki should not have to abandon it to keep
+   * what they have learned here, and the honest way to say that is to hand them
+   * the cards rather than to argue that our scheduler is better.
+   *
+   * The review history travels as tags — `reps:3 lapses:1 last:good` — because
+   * there is no truthful way to translate one memory model's numbers into
+   * another's. `toAnkiTsv` says the same at more length.
+   */
+  const runDeck = async () => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const deck = await fetchAnkiDeck(userId);
+      downloadText(
+        exportFilename(['anki'], 'tsv', new Date()),
+        // `text/tab-separated-values`, which is the registered type for this file
+        // and what Anki's importer expects to be handed. Not `text/csv`: on a
+        // desktop that would hand the file to a spreadsheet, and this one is not
+        // defused for a spreadsheet — see `tsvField`.
+        'text/tab-separated-values',
+        toAnkiTsv(deck.questions, deck.history),
+      );
+      const cards = deck.questions.filter((q) => q.prompt.trim() && q.answer.trim()).length;
+      setNote(
+        cards === 0
+          ? 'Downloaded, but there is nothing to study yet — the deck is built from questions on ideas you have kept, and from questions you have written.'
+          : `Downloaded ${cards} card${cards === 1 ? '' : 's'}. In Anki: File → Import, and leave the field separator as the file says.`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -541,6 +584,13 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
       )}
       <button type="button" className="btn" disabled={busy} onClick={() => void run()}>
         {busy ? 'Gathering…' : 'Download everything'}
+      </button>
+      <p className="meta">
+        Or as a deck for Anki: the questions on ideas you have kept, plus any you have written
+        yourself, each tagged with how it has gone so far.
+      </p>
+      <button type="button" className="btn" disabled={busy} onClick={() => void runDeck()}>
+        {busy ? 'Gathering…' : 'Download Anki (TSV)'}
       </button>
     </section>
   );
