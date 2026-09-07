@@ -417,6 +417,148 @@ describe('questionsToWrite', () => {
   });
 
   /*
+   * THE THREE CODEX FOUND, each of which ends the same way: `insertQuizQuestions` upserts
+   * the batch in ONE statement, so a single row Postgres refuses loses every question on
+   * a summary `synthesize` has already been paid for, and `resume` replays from the
+   * persisted step output so it fails identically on every retry.
+   */
+  it('measures a jsonb bound the way Postgres renders it, objects included', () => {
+    /*
+     * Third statement of this bound. `JSON.stringify` was short by the space after every
+     * ARRAY separator; adding one per element was short by the spaces jsonb puts after
+     * every colon and every member comma inside an OBJECT, which is what `rationale`
+     * holds. Codex's example verbatim: a rationale whose compact JSON is exactly 20,000
+     * renders as 20,003 and violates `quiz_questions_rationale_shape`.
+     *
+     * `jsonbTextLength` walks the value rather than adjusting for a shape, and was
+     * checked against `length(x::jsonb::text)` on seven shapes -- arrays, objects,
+     * embedded quotes and newlines -- rather than derived a third time.
+     */
+    const shell = JSON.stringify([{ distractor: 'a', why: '' }]).length;
+    const why = 'w'.repeat(20_000 - shell);
+    const atTheCompactBound = [{ distractor: 'a', why }];
+    expect(JSON.stringify(atTheCompactBound)).toHaveLength(20_000);
+
+    const kept = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'this',
+              distractors: ['a', 'b'],
+              rationale: atTheCompactBound,
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    // Dropped: it fits `JSON.stringify` and does not fit the column.
+    expect(kept[0]?.rationale).toEqual([]);
+    // Three characters smaller and it fits both, so the bound is a bound and not a ban.
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'this',
+              distractors: ['a', 'b'],
+              rationale: [{ distractor: 'a', why: why.slice(0, -3) }],
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.rationale).toHaveLength(1);
+  });
+
+  it('trims and dedupes the options before it counts them', () => {
+    // Round three of 3a at a different layer: `[1, 2]` satisfied an element count while
+    // the client filter dropped both. Here it is whitespace and repeats -- two entries by
+    // count, one option after `mcqOptions` trims and dedupes against the answer, and a
+    // multiple choice stored that cannot render.
+    expect(
+      questionsToWrite(
+        [
+          {
+            questions: [
+              {
+                kind: 'mcq',
+                prompt: 'Which?',
+                answer: 'right',
+                distractors: [' right ', 'right '],
+              },
+            ],
+          },
+        ],
+        written,
+      ),
+    ).toEqual([]);
+    // Genuinely distinct options survive, trimmed.
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'mcq',
+              prompt: 'Which?',
+              answer: 'right',
+              distractors: [' wrong ', 'other', 'other'],
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.distractors).toEqual(['wrong', 'other']);
+  });
+
+  it('refuses a cloze that never had its blank taken out', () => {
+    // `quiz_questions_cloze_has_text` can only check the string is non-blank; the marker
+    // is a prose instruction in the prompt and a response schema cannot enforce it. An
+    // intact sentence renders as a fill-the-blank with nothing to fill -- and since the
+    // answer is the removed text, it shows the reader the answer.
+    expect(
+      questionsToWrite(
+        [
+          {
+            questions: [
+              {
+                kind: 'cloze',
+                prompt: 'Fill it',
+                answer: 'material',
+                cloze: 'The obstacle is the material.',
+              },
+            ],
+          },
+        ],
+        written,
+      ),
+    ).toEqual([]);
+    const ok = questionsToWrite(
+      [
+        {
+          questions: [
+            {
+              kind: 'cloze',
+              prompt: 'Fill it',
+              answer: 'material',
+              cloze: 'The obstacle is the ____.',
+            },
+          ],
+        },
+      ],
+      written,
+    );
+    expect(ok[0]?.cloze).toBe('The obstacle is the ____.');
+  });
+
+  /*
    * THE BOUNDS THE TABLE CARRIES, MET HERE RATHER THAN HIT.
    *
    * `20260905120001` adds `quiz_questions_prompt_length`, `_answer_length` and
@@ -461,8 +603,18 @@ describe('questionsToWrite', () => {
      *
      * Eight strings whose `JSON.stringify` length is exactly the bound: 25 characters of
      * punctuation plus 19,975 of content.
+     *
+     * DISTINCT strings, and they have to be. This fixture used seven identical ones when
+     * it came from 3a, where nothing deduped -- and 3g dedupes the options before it
+     * counts them, so the seven collapsed to one and the case stopped being about the
+     * byte bound at all. A fixture that is accidentally degenerate under a rule added
+     * later still passes its assertion for the wrong reason, or fails it for one.
      */
-    const exact = [...Array.from({ length: 7 }, () => 'z'.repeat(2497)), 'z'.repeat(2496)];
+    const exact = [
+      ...Array.from({ length: 7 }, (_, i) => 'z'.repeat(2496) + String.fromCharCode(97 + i)),
+      'z'.repeat(2496),
+    ];
+    expect(new Set(exact).size).toBe(8);
     expect(JSON.stringify(exact)).toHaveLength(20000);
     const kept = questionsToWrite([q({ distractors: exact })], written)[0]?.distractors ?? [];
     expect(kept).toHaveLength(7);

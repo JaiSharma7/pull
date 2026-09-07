@@ -511,13 +511,54 @@ const MAX_JSON_TEXT = 20000;
  */
 function withinJsonBudget<T>(items: readonly T[], max: number): T[] {
   const kept = [...items];
-  // `+ length - 1` is the space jsonb puts after each separator. See above.
-  while (kept.length > 0 && JSON.stringify(kept).length + kept.length - 1 > max) kept.pop();
+  while (kept.length > 0 && jsonbTextLength(kept) > max) kept.pop();
   return kept;
+}
+
+/**
+ * How long `x::text` will be when Postgres renders this value as jsonb.
+ *
+ * THE THIRD STATEMENT OF THIS BOUND, and the first two were both short in the same
+ * direction. `JSON.stringify` was the first: it renders `["a","b"]` where jsonb renders
+ * `["a", "b"]`. Adding one character per array element was the second, and Codex caught
+ * that it only covers ARRAYS -- `rationale` holds objects, and jsonb puts a space after
+ * every colon and after every member comma too, so `{"distractor": "a", "why": "b"}` is
+ * three characters longer than its compact form. A single boundary-sized rationale then
+ * violates `quiz_questions_rationale_shape`, and because `insertQuizQuestions` upserts
+ * the batch in one statement, that one row aborts every question on a summary already
+ * paid for.
+ *
+ * Counted rather than patched this time, because the arithmetic has now been wrong twice
+ * for the same reason: an adjustment that has to be re-derived whenever a shape changes
+ * is a bound that will be wrong again. This walks the value and adds what the renderer
+ * adds -- `", "` between members, `": "` after a key -- so a new shape costs nothing.
+ *
+ * Exact for the shapes this file writes: strings, arrays of strings, and arrays of flat
+ * string objects. It is conservative for astral text, where JS counts two UTF-16 units
+ * against Postgres's one character, so it can drop an entry Postgres would have taken
+ * and never keep one it would refuse.
+ */
+function jsonbTextLength(value: unknown): number {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 2;
+    return 2 + (value.length - 1) * 2 + value.reduce((n: number, v) => n + jsonbTextLength(v), 0);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return 2;
+    return (
+      2 +
+      (entries.length - 1) * 2 +
+      entries.reduce((n, [k, v]) => n + JSON.stringify(k).length + 2 + jsonbTextLength(v), 0)
+    );
+  }
+  return JSON.stringify(value).length;
 }
 const MAX_PROMPT = 2000;
 const MAX_EXPLANATION = 2000;
 const MAX_CLOZE = 1000;
+/** The blank `canonical_summary.baml` asks the model to leave, and the tests assert. */
+const CLOZE_BLANK = '____';
 
 export interface QuizQuestionRow {
   pullId: string;
@@ -622,9 +663,25 @@ export function questionsToWrite(
       // never name a distractor that was dropped for size -- and before the MCQ floor
       // is checked below, so a question left with one option goes rather than being
       // stored as a multiple choice that cannot be got wrong.
+      /*
+       * TRIMMED AND DEDUPED BEFORE THE FLOOR IS COUNTED, which is the order that makes
+       * the floor mean anything.
+       *
+       * Codex finding, and the same shape as round three of 3a: `distractors: [1, 2]`
+       * satisfied an element count while the client filter dropped both. Here it is
+       * whitespace and repeats -- `answer: "right"` with `[" right ", "right "]` is two
+       * entries by count, passes `MIN_MCQ_DISTRACTORS`, and is stored as a multiple
+       * choice. `mcqOptions` then trims and dedupes against the answer, finds one option
+       * left, and returns `[]`: a card that cannot render, on a summary that was paid
+       * for.
+       *
+       * Trimming also stops the rationale filter below discarding good entries. It
+       * matches on `cleanString(r.distractor)`, so an untrimmed distractor could never be
+       * named by a rationale that was itself trimmed.
+       */
       const distractors = withinJsonBudget(
-        cleanStringArray(q.distractors)
-          .filter((d) => d !== answer)
+        [...new Set(cleanStringArray(q.distractors).map((d) => d.trim()))]
+          .filter((d) => d && d !== answer)
           .slice(0, MAX_LIST),
         MAX_JSON_TEXT,
       );
@@ -637,7 +694,17 @@ export function questionsToWrite(
       // The two per-kind rules the database states, applied here so a question that
       // cannot be stored does not cost the ones that can.
       if (kind === 'mcq' && distractors.length < MIN_MCQ_DISTRACTORS) continue;
-      if (kind === 'cloze' && !cloze) continue;
+      /*
+       * AND A CLOZE NEEDS ITS BLANK, not merely a non-empty sentence.
+       *
+       * Codex finding. `quiz_questions_cloze_has_text` checks the string is non-blank and
+       * can check no more; the marker is a PROSE instruction in the prompt
+       * (`canonical_summary.baml`, "the idea removed and marked ____") and a response
+       * schema cannot enforce it. A sentence returned intact renders as a fill-the-blank
+       * with nothing to fill -- and since the answer is the removed text, an unredacted
+       * sentence shows the reader the answer they are being asked for.
+       */
+      if (kind === 'cloze' && (!cloze || !cloze.includes(CLOZE_BLANK))) continue;
 
       const rationaleEntries = Array.isArray(q.rationale)
         ? q.rationale
