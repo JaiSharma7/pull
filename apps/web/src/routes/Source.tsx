@@ -748,6 +748,23 @@ export function Source({
                         setAskAnswer('');
                         setAskError(null);
                         setAsked(null);
+                        /*
+                         * AND THE DRAFT'S ID WITH THEM, which the ref's own comment
+                         * says must happen and the `onChange` handlers alone did not
+                         * do. Clearing a textarea from state does not fire `onChange`,
+                         * so an id minted for a send that failed outlived every reset
+                         * on this button.
+                         *
+                         * What that costs: a Keep whose response is lost may still
+                         * have committed. Close the form, open another idea's, write a
+                         * different question, Keep -- and the RPC deduplicates on
+                         * `(user_id, client_mutation_id)`, finds the FIRST row, writes
+                         * nothing, and returns `created: false`. The screen reports
+                         * "Kept" over words that were never stored, about an idea that
+                         * never received them. A fresh id makes the second question a
+                         * second question.
+                         */
+                        askMutation.current = null;
                       }}
                     >
                       {asking === p.id ? 'Never mind' : 'Remember this'}

@@ -71,15 +71,33 @@ export type QuestionDraftResult =
  * An empty answer becomes null rather than `''`. `remember_pull` already does
  * `nullif(btrim(...), '')`, so this only makes the two agree about what was sent.
  */
+/**
+ * Characters, counted the way `length()` counts them.
+ *
+ * `String.prototype.length` is UTF-16 code units and Postgres `length(text)` is
+ * codepoints, and the two disagree by one for every character outside the basic plane --
+ * so an emoji is 2 here and 1 there. The direction is the safe one, since this module
+ * only refuses, but refusing is the bug: a reader who writes 1,200 emoji is told "a
+ * question can be 2000 characters at most" about a question the database would have
+ * taken at 1,200.
+ *
+ * Spreading a string iterates it by codepoint, which is exactly what Postgres counts in
+ * a UTF-8 database. The same count-versus-unit split the pipeline's jsonb clamp had, one
+ * layer up and in the other direction.
+ */
+function characters(s: string): number {
+  return [...s].length;
+}
+
 export function draftQuestion({ prompt, answer }: DraftQuestion): QuestionDraftResult {
   const p = prompt.trim();
   const a = answer.trim();
 
   if (!p) return { ok: false, error: 'A question needs something to ask.' };
-  if (p.length > MAX_PROMPT) {
+  if (characters(p) > MAX_PROMPT) {
     return { ok: false, error: `A question can be ${MAX_PROMPT} characters at most.` };
   }
-  if (a.length > MAX_ANSWER) {
+  if (characters(a) > MAX_ANSWER) {
     return { ok: false, error: `An answer can be ${MAX_ANSWER} characters at most.` };
   }
 

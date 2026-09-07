@@ -107,6 +107,37 @@ describe('draftQuestion', () => {
     if (!result.ok) expect(result.error).toContain('question');
   });
 
+  /**
+   * CHARACTERS, NOT UTF-16 CODE UNITS — the same count-versus-unit split as the jsonb
+   * clamp, one layer up and pointing the other way.
+   *
+   * `length(prompt)` in Postgres counts codepoints; `String.prototype.length` counts
+   * UTF-16 code units, and every character outside the basic plane is two of those and
+   * one of the former. So a form measuring `.length` refuses at half the bound for a
+   * reader writing emoji, and tells them the limit is 2000 characters while holding
+   * them to 1000.
+   *
+   * The astral half is what makes this a test rather than a restatement: the BMP case
+   * passes either way.
+   */
+  it('counts an astral character once, as the database does', () => {
+    const emoji = '\u{1F600}';
+    expect(emoji.length).toBe(2);
+    expect([...emoji]).toHaveLength(1);
+
+    const atBound = draftQuestion({ prompt: emoji.repeat(MAX_PROMPT), answer: '' });
+    expect(atBound.ok).toBe(true);
+
+    const over = draftQuestion({ prompt: emoji.repeat(MAX_PROMPT + 1), answer: '' });
+    expect(over.ok).toBe(false);
+  });
+
+  it('counts an astral answer the same way', () => {
+    const emoji = '\u{1F600}';
+    expect(draftQuestion({ prompt: 'q', answer: emoji.repeat(MAX_ANSWER) }).ok).toBe(true);
+    expect(draftQuestion({ prompt: 'q', answer: emoji.repeat(MAX_ANSWER + 1) }).ok).toBe(false);
+  });
+
   it('names the kind from the answer it is about to send, not from the raw field', () => {
     // The pair that would disagree if `kind` were read off the untrimmed input: a
     // whitespace answer becomes null, so the row must be a `recall`. A `short_answer`
