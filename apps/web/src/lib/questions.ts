@@ -25,10 +25,15 @@ export const MAX_ANSWER = 2000;
  *
  * `remember_pull` writes `(user_id, pull_id, kind, prompt, answer, client_mutation_id)`
  * and has no parameter for `options` or for `cloze`. So an `mcq` written here would be a
- * multiple choice with no wrong answers — `mcqOptions` builds what the reader sees from
- * the answer plus the options, and with none it returns a single button, the right one,
- * which grades `easy` — and a `cloze` would be a fill-the-blank with no blank. Both are
- * storable and both are broken, so neither is offered.
+ * multiple choice with no wrong answers — `mcqOptions` refuses to build fewer than two
+ * options at all, so the card would have nothing to render — and a `cloze` would be a
+ * fill-the-blank with no blank. Both are storable and both are broken, so neither is
+ * offered.
+ *
+ * An earlier version of this said `mcqOptions` "returns a single button, the right one,
+ * which grades `easy`". It returns an empty array, its own comment calls a single button
+ * the thing it exists to prevent, and such a tap would score `good` rather than `easy`.
+ * The conclusion survives the correction; the mechanism given for it did not.
  *
  * That is the same reasoning the migration gives for declining to put the matching
  * CHECK constraints on this table: a rule its only writer cannot satisfy forbids a kind
@@ -102,4 +107,126 @@ export function draftQuestion({ prompt, answer }: DraftQuestion): QuestionDraftR
   }
 
   return { ok: true, prompt: p, answer: a || null, kind: kindFor(a) };
+}
+
+/* --------------------------------------------------------------------------
+ * The form's state machine
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Which idea's form is open, and what has been typed into each of them.
+ *
+ * KEYED BY PULL, and that is the whole point. `Source.tsx` had one open flag per idea
+ * and one of everything else for the page -- prompt, answer, error, busy -- so the
+ * flag was per-idea and every value carrying the reader's words was not. Opening a
+ * second idea's form ran the toggle, which cleared the boxes, and a draft composed
+ * under the first idea was gone with no confirmation and no undo. A save landing while
+ * another form was open did the same thing. Both were demonstrated in review, and the
+ * comment on the old open flag congratulated itself for avoiding exactly this.
+ *
+ * Lifted out of the component because there is no React test harness in this repo --
+ * `apps/web` runs `environment: 'node'` -- so a state machine living in a component is
+ * a state machine nothing can drive. That is why the bugs above were races and
+ * shared-state mix-ups rather than logic errors in the half that is tested. This is
+ * where `lib/` already keeps logic that has to be checkable without a browser.
+ */
+export interface AskState {
+  /** The idea whose form is open, or null. One at a time, as before. */
+  openFor: string | null;
+  /** What has been typed, per idea. Absent means nothing typed yet. */
+  drafts: Readonly<Record<string, DraftQuestion>>;
+  /** The last refusal, per idea, so a failure cannot surface under a different one. */
+  errors: Readonly<Record<string, string>>;
+  /** The idea whose save is in flight, so one idea's request cannot label another's. */
+  busyFor: string | null;
+  /** The idea whose "Kept." line is showing. */
+  keptFor: string | null;
+}
+
+export const EMPTY_ASK: AskState = {
+  openFor: null,
+  drafts: {},
+  errors: {},
+  busyFor: null,
+  keptFor: null,
+};
+
+export type AskAction =
+  | { type: 'toggle'; pullId: string }
+  | { type: 'edit'; pullId: string; field: 'prompt' | 'answer'; value: string }
+  | { type: 'sending'; pullId: string }
+  | { type: 'kept'; pullId: string }
+  | { type: 'failed'; pullId: string; message: string };
+
+/** The draft for an idea, or a pair of empty strings. */
+export function draftFor(state: AskState, pullId: string): DraftQuestion {
+  return state.drafts[pullId] ?? { prompt: '', answer: '' };
+}
+
+function without<T>(map: Readonly<Record<string, T>>, key: string): Record<string, T> {
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
+export function askReducer(state: AskState, action: AskAction): AskState {
+  switch (action.type) {
+    /*
+     * Opens one idea's form, or closes it. What it does NOT do is touch any other
+     * idea's draft: closing is a dismissal of this one, and opening another is not a
+     * dismissal of anything.
+     *
+     * Dismissing does drop this idea's draft and its error, which is what "Never mind"
+     * means. The mutation id is dropped with it by the caller, for the reason the ref
+     * carries: an id that outlives the words it was minted for makes the RPC answer
+     * with the first question and discard the new wording.
+     */
+    case 'toggle': {
+      const closing = state.openFor === action.pullId;
+      return {
+        ...state,
+        openFor: closing ? null : action.pullId,
+        drafts: closing ? without(state.drafts, action.pullId) : state.drafts,
+        errors: without(state.errors, action.pullId),
+        keptFor: null,
+      };
+    }
+    case 'edit':
+      return {
+        ...state,
+        drafts: {
+          ...state.drafts,
+          [action.pullId]: { ...draftFor(state, action.pullId), [action.field]: action.value },
+        },
+        // A refusal is about what was in the box, so typing clears it.
+        errors: without(state.errors, action.pullId),
+      };
+    case 'sending':
+      return { ...state, busyFor: action.pullId, errors: without(state.errors, action.pullId) };
+    /*
+     * The row exists, so the words can go. Only this idea's: `openFor` is cleared only
+     * if this is the idea whose form is open, so a save that lands while the reader has
+     * moved to another idea does not close the form they are typing in.
+     */
+    case 'kept':
+      return {
+        openFor: state.openFor === action.pullId ? null : state.openFor,
+        drafts: without(state.drafts, action.pullId),
+        errors: without(state.errors, action.pullId),
+        busyFor: state.busyFor === action.pullId ? null : state.busyFor,
+        keptFor: action.pullId,
+      };
+    /*
+     * The words stay in the box, and the message is filed against the idea it is about
+     * -- so a failure that arrives after the reader has opened a different idea cannot
+     * report itself under that one, and one that arrives after they closed the form is
+     * still on record rather than written to a render site that no longer exists.
+     */
+    case 'failed':
+      return {
+        ...state,
+        errors: { ...state.errors, [action.pullId]: action.message },
+        busyFor: state.busyFor === action.pullId ? null : state.busyFor,
+      };
+  }
 }

@@ -4,7 +4,7 @@
  * `lib/questions.ts` shapes and bounds; this sends. The split exists because this module
  * imports `lib/supabase.ts`, which throws at import under vitest.
  *
- * One RPC and two table reads. `remember_pull` is `security invoker` — everything it
+ * One RPC, one select and one update. `remember_pull` is `security invoker` — everything it
  * writes is a row the reader already has a policy for, so RLS does the checking — while
  * the select and the update below go through `user_questions_read_own` and
  * `user_questions_update_own` directly.
@@ -41,9 +41,13 @@ export interface RememberedQuestion {
  * be asked.
  *
  * REPLAY-SAFE, and the mutation id is what makes it so. A second call carrying the same
- * id writes nothing and returns the first call's `questionId` with `created: false`, the
- * same shape `grade_recall` uses. So a retry after a timeout cannot leave a reader with
- * the same question twice.
+ * id writes nothing and returns the first call's `questionId` with `created: false`. So
+ * a retry after a timeout cannot duplicate a question THE READER HAS NOT RE-EDITED --
+ * `Source.tsx` mints a fresh id on every keystroke, deliberately, because an id that
+ * outlives the words it was minted for makes this answer with the old question and
+ * discard the new wording. An earlier version of this said "cannot leave a reader with
+ * the same question twice", full stop, and named `grade_recall` as the same shape; that
+ * returns `knowledge_states`, with no `created` and no id.
  */
 export async function rememberPull(
   pullId: string,
@@ -52,10 +56,19 @@ export async function rememberPull(
   const { data, error } = await supabase.rpc('remember_pull', {
     p_pull_id: pullId,
     p_prompt: args.prompt,
-    // `as never` for the reason `commitImport` needs one: the generated types render a
-    // parameter with no default as non-nullable, while the column it feeds is nullable
-    // and `remember_pull` does `nullif(btrim(coalesce(p_answer, '')), '')` precisely so
-    // a null may be sent.
+    /*
+     * `as never` because the generated types emit no `| null` for ANY rpc argument --
+     * `p_answer` is rendered `p_answer?: string` even though it is declared
+     * `p_answer text default null`, and `remember_pull` does
+     * `nullif(btrim(coalesce(p_answer, '')), '')` precisely so a null may be sent.
+     *
+     * An earlier version of this comment blamed "a parameter with no default" and cited
+     * `commitImport`, which does not exist in this repository. Both were wrong; the cast
+     * is still needed, and `record_interrupt`'s arguments in `api.ts` are the real
+     * precedent. It silences the parameter entirely, so a later widening of
+     * `args.answer` would compile — the conditional-spread form beside those calls keeps
+     * the check and is the better shape if this is ever touched again.
+     */
     p_answer: args.answer as never,
     p_kind: args.kind,
     p_mutation_id: args.mutationId,
@@ -85,10 +98,12 @@ export async function fetchUserQuestions(pullIds: readonly string[]): Promise<Us
   if (pullIds.length === 0) return [];
 
   // PAGED, because `max_rows = 100` in `supabase/config.toml` is a silent cap rather
-  // than an error. Review finding. Law 3 makes writing your own questions unlimited and
-  // this list presents itself as the complete set, so a reader past a hundred live
-  // questions on one source's ideas would watch the older ones vanish -- and there is no
-  // other screen that can retire them.
+  // than an error. Review finding. This list presents itself as the complete set, so a
+  // reader past a hundred live questions on one source's ideas would watch the older ones
+  // vanish -- and there is no other screen that can retire them. (Not law 3, which an
+  // earlier version of this cited: the five that stay free are audio, offline, unlimited
+  // history, unlimited stashing and curated Daily Pulls. Writing your own questions is
+  // not on that list, and the reason above does not need it to be.)
   const data = await pageAll<{
     id: string;
     pull_id: string;

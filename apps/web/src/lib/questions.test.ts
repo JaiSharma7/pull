@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { draftQuestion, kindFor, MAX_ANSWER, MAX_PROMPT, WRITABLE_KINDS } from './questions.js';
+import {
+  askReducer,
+  type AskState,
+  draftFor,
+  draftQuestion,
+  EMPTY_ASK,
+  kindFor,
+  MAX_ANSWER,
+  MAX_PROMPT,
+  WRITABLE_KINDS,
+} from './questions.js';
 
 /**
  * The form's half of `remember_pull`.
@@ -138,15 +148,150 @@ describe('draftQuestion', () => {
     expect(draftQuestion({ prompt: 'q', answer: emoji.repeat(MAX_ANSWER + 1) }).ok).toBe(false);
   });
 
-  it('names the kind from the answer it is about to send, not from the raw field', () => {
-    // The pair that would disagree if `kind` were read off the untrimmed input: a
-    // whitespace answer becomes null, so the row must be a `recall`. A `short_answer`
-    // with a null answer is a card that reveals nothing.
-    const result = draftQuestion({ prompt: 'What follows?', answer: '\t \n' });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.answer).toBeNull();
-      expect(result.kind).toBe('recall');
+  it('never pairs short_answer with the null it is about to send', () => {
+    /*
+     * THE INVARIANT, not the implementation detail this used to assert.
+     *
+     * It was titled "names the kind from the answer it is about to send, not from the
+     * raw field" and could not fail: `kindFor` trims internally, so reading it off the
+     * raw field and off the trimmed one are the same function of the same input for
+     * every string. Review's mutation sweep swapped one for the other and the suite
+     * stayed green — the test pinned nothing.
+     *
+     * What actually matters is that `answer` and `kind` agree once the row is built: a
+     * `short_answer` whose answer is null is a card that reveals nothing.
+     */
+    for (const answer of ['\t \n', '', '   ', '\u00a0']) {
+      const result = draftQuestion({ prompt: 'What follows?', answer });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.answer).toBeNull();
+        expect(result.kind).toBe('recall');
+      }
     }
+    const withAnswer = draftQuestion({ prompt: 'What follows?', answer: '  the way  ' });
+    expect(withAnswer.ok).toBe(true);
+    if (withAnswer.ok) {
+      expect(withAnswer.answer).toBe('the way');
+      expect(withAnswer.kind).toBe('short_answer');
+    }
+  });
+
+  it('pins the two bounds to the numbers the table enforces', () => {
+    // The module exists to mirror the table, and every other test here is written in
+    // terms of the constants — so the mirror could drift in either direction with the
+    // suite green. Review's sweep changed `MAX_ANSWER` to 20000 and nothing failed;
+    // that direction is the one that bites, because the form then accepts what
+    // `user_questions_answer_length` refuses and the reader is shown the raw constraint.
+    expect([MAX_PROMPT, MAX_ANSWER]).toEqual([2000, 2000]);
+  });
+});
+
+/**
+ * The three sequences review demonstrated against the old shared state.
+ *
+ * Each of them lost or misplaced something a reader had typed, and none of them was a
+ * logic error in a tested function — they were races and shared-state mix-ups in a
+ * component nothing can drive. That is why the machine is here now.
+ */
+describe('askReducer', () => {
+  const open = (s: AskState, pullId: string) => askReducer(s, { type: 'toggle', pullId });
+  const type = (s: AskState, pullId: string, prompt: string) =>
+    askReducer(s, { type: 'edit', pullId, field: 'prompt', value: prompt });
+
+  it('keeps one idea’s draft when the reader opens another', () => {
+    // The P1. `askPrompt` was one value for the page, so this sequence emptied the box
+    // under idea A with no confirmation and no undo.
+    let s = type(open(EMPTY_ASK, 'a'), 'a', 'What does A ask?');
+    s = open(s, 'b');
+    expect(s.openFor).toBe('b');
+    expect(draftFor(s, 'a').prompt).toBe('What does A ask?');
+    expect(draftFor(s, 'b').prompt).toBe('');
+  });
+
+  it('does not close the form the reader is typing in when another idea’s save lands', () => {
+    // A is in flight, the reader opens B and starts typing, A succeeds. The old code
+    // ran `setAsking(null)` and cleared the boxes unconditionally, so B closed under
+    // the reader and B's words went with it.
+    let s = type(open(EMPTY_ASK, 'a'), 'a', 'A’s question');
+    s = askReducer(s, { type: 'sending', pullId: 'a' });
+    s = type(open(s, 'b'), 'b', 'B’s half-written question');
+    s = askReducer(s, { type: 'kept', pullId: 'a' });
+
+    expect(s.openFor).toBe('b');
+    expect(draftFor(s, 'b').prompt).toBe('B’s half-written question');
+    // A's own draft is gone, because A's row exists now.
+    expect(draftFor(s, 'a').prompt).toBe('');
+    expect(s.keptFor).toBe('a');
+    expect(s.busyFor).toBeNull();
+  });
+
+  it('files a refusal against the idea it is about, not the one on screen', () => {
+    // The old `askError` was shared and rendered inside the open form, so a failure on
+    // A appeared under B — telling the reader B's question was lost when B's was never
+    // sent — or, if the form had been closed, appeared nowhere at all.
+    let s = type(open(EMPTY_ASK, 'a'), 'a', 'A’s question');
+    s = askReducer(s, { type: 'sending', pullId: 'a' });
+    s = open(s, 'b');
+    s = askReducer(s, { type: 'failed', pullId: 'a', message: 'That did not reach your account.' });
+
+    expect(s.errors.b).toBeUndefined();
+    expect(s.errors.a).toBe('That did not reach your account.');
+    // And the words are still there to try again with.
+    expect(draftFor(s, 'a').prompt).toBe('A’s question');
+    expect(s.busyFor).toBeNull();
+  });
+
+  it('gives a draft back when the reader returns to that idea', () => {
+    /*
+     * The round trip, which is where the keying actually earns its place — and which the
+     * first version of these tests could not see. Mutating the toggle to drop the
+     * toggled idea's draft unconditionally passed every other case here, because none of
+     * them re-opened an idea that already had words in it. That mutant is the P1 wearing
+     * different clothes: type into B, look at A, come back to B, and the sentence is gone.
+     */
+    let s = type(open(EMPTY_ASK, 'b'), 'b', 'B’s question');
+    s = open(s, 'a');
+    s = open(s, 'b');
+    expect(s.openFor).toBe('b');
+    expect(draftFor(s, 'b').prompt).toBe('B’s question');
+  });
+
+  it('leaves another idea’s request in flight when one save lands', () => {
+    // `busyFor` is one value, so clearing it unconditionally on a save would unlock a
+    // button whose own request is still out — the shared-flag bug one field over.
+    let s = askReducer(open(EMPTY_ASK, 'a'), { type: 'sending', pullId: 'a' });
+    s = askReducer(s, { type: 'kept', pullId: 'b' });
+    expect(s.busyFor).toBe('a');
+  });
+
+  it('drops the draft when the reader dismisses that form, and only then', () => {
+    let s = type(open(EMPTY_ASK, 'a'), 'a', 'A’s question');
+    s = type(open(s, 'b'), 'b', 'B’s question');
+    // Closing B is a dismissal of B.
+    s = open(s, 'b');
+    expect(s.openFor).toBeNull();
+    expect(draftFor(s, 'b').prompt).toBe('');
+    expect(draftFor(s, 'a').prompt).toBe('A’s question');
+  });
+
+  it('clears the refusal as soon as the reader edits the box it was about', () => {
+    let s = askReducer(type(open(EMPTY_ASK, 'a'), 'a', 'x'.repeat(MAX_PROMPT + 1)), {
+      type: 'failed',
+      pullId: 'a',
+      message: 'A question can be 2000 characters at most.',
+    });
+    expect(s.errors.a).toBeDefined();
+    s = type(s, 'a', 'Something shorter.');
+    expect(s.errors.a).toBeUndefined();
+  });
+
+  it('never labels one idea’s button with another idea’s request', () => {
+    // `askBusy` was shared, so B's freshly opened form rendered "Keeping…" and refused
+    // to save while A's request was in flight.
+    let s = askReducer(open(EMPTY_ASK, 'a'), { type: 'sending', pullId: 'a' });
+    s = open(s, 'b');
+    expect(s.busyFor).toBe('a');
+    expect(s.busyFor === 'b').toBe(false);
   });
 });
