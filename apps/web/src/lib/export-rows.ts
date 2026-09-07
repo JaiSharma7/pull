@@ -166,6 +166,19 @@ export interface QuizQuestionRow {
   prompt: string;
   answer: string;
   distractors: unknown;
+  /*
+   * BOTH CARRIED, because `faces()` is built around them and the deck was shipping
+   * without them. For a `cloze` the sentence with the blank IS the question --
+   * `quiz_questions_cloze_has_text` exists to guarantee it -- so a cloze card exported
+   * without it reads "Fill in the blank." with no blank to fill. Two reviewers found the
+   * same thing: the columns exist on both tables, `get_due_reviews` returns both, 7c's
+   * formatter handles and tests both, and the selects asked for neither.
+   *
+   * Inert while generation writes only `recall`; 3g is the merge that makes it live,
+   * with no change here to trigger it.
+   */
+  cloze: string | null;
+  explanation: string | null;
 }
 
 /** One of the reader's own, as `user_questions` returns it. */
@@ -176,6 +189,10 @@ export interface UserQuestionRow {
   prompt: string;
   answer: string | null;
   options: unknown;
+  cloze: string | null;
+  // The reader's own note on why their answer is the answer. An export whose premise is
+  // "your data leaving the product" was dropping their writing.
+  explanation: string | null;
 }
 
 /** A Pull the reader has kept, with the canonical questions written for it. */
@@ -204,8 +221,11 @@ export interface SavedPullRow {
  * `user_questions.answer` is nullable on purpose: a reader can write a prompt
  * they intend to answer from memory, with nothing to check it against. That is a
  * usable card in Review, where they grade themselves, and not a card at all in
- * Anki, whose whole model is a back. `toAnkiTsv` skips it too — this is where
- * the count the screen reports is made honest.
+ * Anki, whose whole model is a back. `toAnkiTsv` skips it too, and `Account.tsx`
+ * re-filters on the same rule before it reports a number -- so the count on screen and
+ * the cards in the file agree by three independent applications of one rule rather than
+ * by construction. An earlier version of this sentence said this drop is "where the
+ * count the screen reports is made honest", which credits it with more than it does.
  *
  * No dedupe pass: `saved_items_unique_pull` (20260829124532) is unique on
  * `(user_id, pull_id) where pull_id is not null`, so a Pull appears at most once
@@ -226,11 +246,16 @@ export function ankiDeck(
       kind: q.kind,
       prompt: q.prompt,
       answer: q.answer,
-      // A reader's own MCQ keeps its choices in `options`, which — unlike
-      // `distractors` — includes the right answer. `faces` builds the front from
-      // `[answer, ...distractors]` through `listed`, which drops duplicates, so
-      // the answer appearing in both is the same card either way.
+      // A reader's own MCQ keeps its choices in `options`, which is `distractors`
+      // under another name: the WRONG choices, not including the answer.
+      // `get_due_reviews` surfaces `uq.options` under the key `distractors` and says
+      // as much, `activities.ts` calls them "wrong options, for `mcq`", and
+      // `mcqOptions` builds `[answer, ...distractors]`. An earlier version of this
+      // comment said `options` includes the answer; `listed` dedupes, so the card is
+      // the same either way and only the reasoning was wrong.
       distractors: stringList(q.options),
+      cloze: q.cloze,
+      explanation: q.explanation,
       work: workTitleByPull.get(q.pull_id) ?? null,
     });
   }
@@ -244,6 +269,8 @@ export function ankiDeck(
         prompt: q.prompt,
         answer: q.answer,
         distractors: stringList(q.distractors),
+        cloze: q.cloze,
+        explanation: q.explanation,
         work: pull.workTitle,
       });
     }
@@ -278,7 +305,15 @@ export interface RecallEventRow {
  * `Feed.tsx` already draws this line for the interrupt kinds; this is the same line at
  * the export.
  */
-const RETRIEVAL_KINDS = new Set(['review', 'recall', 'say_it_back']);
+/**
+ * The three `recall_events` kinds that are a retrieval attempt.
+ *
+ * Exported so the WALK can filter on them too. `reviewEvents` below drops the other four
+ * on arrival, which is the right place for the rule to live but the wrong place to pay
+ * for it: unfiltered, the export pages a reader's whole grade history a hundred rows at
+ * a time to throw three-quarters of it away.
+ */
+export const RETRIEVAL_KINDS = new Set(['review', 'recall', 'say_it_back']);
 
 function isGrade(value: string): value is RecallGrade {
   return (RECALL_GRADES as readonly string[]).includes(value);

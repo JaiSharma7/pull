@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   buildAccountExport,
   deleteAccount,
@@ -494,12 +494,35 @@ export function RedeemRecoveryCode({ onDone }: { onDone: () => void }) {
 }
 
 function ExportData({ userId, email }: { userId: string; email: string | null }) {
-  const [busy, setBusy] = useState(false);
+  /*
+   * WHICH export is running, not merely that one is.
+   *
+   * A single boolean drove both labels, so pressing "Download everything" also turned
+   * "Download Anki (TSV)" into "Gathering…" — the screen claiming a deck was being built
+   * when nothing of the sort was, and, for a screen reader, the second button's
+   * accessible name changing under the reader for a reason unrelated to what they did.
+   * Review finding.
+   */
+  const [busy, setBusy] = useState<null | 'json' | 'deck'>(null);
+  /*
+   * Whether this panel is still mounted. Both exports are multi-second reads and the
+   * reader may leave; React 19 makes a setState on an unmounted component a silent
+   * no-op, so without this a failure after they navigate away tells them nothing and
+   * they press it again.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
   const run = async () => {
-    setBusy(true);
+    if (busy) return;
+    setBusy('json');
     setError(null);
     setNote(null);
     try {
@@ -518,9 +541,9 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
             } could not be read. The file lists which.`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mounted.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(null);
     }
   };
 
@@ -538,7 +561,8 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
    * another's. `toAnkiTsv` says the same at more length.
    */
   const runDeck = async () => {
-    setBusy(true);
+    if (busy) return;
+    setBusy('deck');
     setError(null);
     setNote(null);
     try {
@@ -559,9 +583,9 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
           : `Downloaded ${cards} card${cards === 1 ? '' : 's'}. In Anki: File → Import, and leave the field separator as the file says.`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mounted.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(null);
     }
   };
 
@@ -582,15 +606,31 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
           {note}
         </p>
       )}
-      <button type="button" className="btn" disabled={busy} onClick={() => void run()}>
-        {busy ? 'Gathering…' : 'Download everything'}
+      {/*
+        `aria-disabled`, so the pressed button keeps focus. A disabled element is not
+        focusable, and blurring it to `<body>` sends a keyboard reader back to the top of
+        the document at the moment they most want to hear what happened. The handlers
+        refuse a second press themselves.
+      */}
+      <button
+        type="button"
+        className="btn"
+        aria-disabled={busy !== null}
+        onClick={() => void run()}
+      >
+        {busy === 'json' ? 'Gathering…' : 'Download everything'}
       </button>
       <p className="meta">
-        Or as a deck for Anki: the questions on ideas you have kept, plus any you have written
-        yourself, each tagged with how it has gone so far.
+        Or as a deck for Anki: the questions on ideas you have kept, plus any you have written and
+        not retired, each tagged with how it has gone so far.
       </p>
-      <button type="button" className="btn" disabled={busy} onClick={() => void runDeck()}>
-        {busy ? 'Gathering…' : 'Download Anki (TSV)'}
+      <button
+        type="button"
+        className="btn"
+        aria-disabled={busy !== null}
+        onClick={() => void runDeck()}
+      >
+        {busy === 'deck' ? 'Gathering…' : 'Download Anki (TSV)'}
       </button>
     </section>
   );

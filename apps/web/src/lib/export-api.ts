@@ -6,6 +6,7 @@ import {
   type RecallEventRow,
   type SavedPullRow,
   type UserQuestionRow,
+  RETRIEVAL_KINDS,
 } from './export-rows.js';
 import type { Highlight } from './highlights.js';
 import { fetchHighlights } from './highlights-api.js';
@@ -75,6 +76,11 @@ export async function fetchHighlightsByPull(
  * -------------------------------------------------------------------------- */
 
 type SavedRow = {
+  // Declared rather than reached through a widening intersection: this is the module
+  // whose job is the mapping from what the database actually returns, and
+  // `& Record<string, unknown>` made every undeclared property `unknown` instead of an
+  // error. `id` is the keyset cursor, so it belongs in the shape.
+  id: string;
   pull_id: string | null;
   pulls: {
     id: string;
@@ -108,11 +114,23 @@ export interface AnkiDeck {
  * the reader's writing, they are kept in the table, and `buildAccountExport`
  * carries every row of `user_questions` into the JSON export.
  *
- * The history is every `recall_events` row rather than only those naming a
- * question, because that is what `summariseHistory` needs: a free-recall grade
- * names no question and counts towards each of its Pull's, which is how a reader
- * who has been reviewing since before they wrote a question gets a deck that
- * knows it.
+ * The history is every RETRIEVAL `recall_events` row rather than only those naming a
+ * question, because that is what `summariseHistory` needs: a grade that names no question
+ * counts towards each of its Pull's, which is how a reader who has been reviewing since
+ * before they wrote a question gets a deck that knows it.
+ *
+ * AND TODAY THAT IS EVERY ROW, WHICH THE TAGS DO NOT ADMIT. Nothing in the shipped
+ * product records a question id -- `Review.tsx` says so in as many words, and
+ * `record_interrupt` has no question parameter -- so `quiz_question_id` and
+ * `user_question_id` are null on every row and each one spreads across every question on
+ * its Pull. A Pull with three canonical questions and one of the reader's own turns 40
+ * attempts into `reps:40` on four separate cards. Review measured exactly that.
+ *
+ * The spreading rule is right and it is merged code (7c); what was wrong is this comment
+ * calling the shape historical when it is the only shape there is. `reps` and `lapses` on
+ * a card are the PULL's, not the card's, until a grade can name the question it answered
+ * -- which is what the PR adding `questionId` to `grade_recall`'s caller starts, and this
+ * paragraph is what has to change when it lands.
  */
 export async function fetchAnkiDeck(userId: string): Promise<AnkiDeck> {
   /*
@@ -125,14 +143,19 @@ export async function fetchAnkiDeck(userId: string): Promise<AnkiDeck> {
    * underneath it. `id` is the cursor on each: unique within one reader's rows, so it is
    * both a total order and something to ask for what sorts after.
    */
-  const savedRows = await pageAfter<SavedRow & Record<string, unknown>>((after, limit) => {
+  const savedRows = await pageAfter<SavedRow>((after, limit) => {
     let q = supabase
       .from('saved_items')
       .select(
-        'id, pull_id, pulls(id, quiz_questions(id, pull_id, kind, prompt, answer, distractors), summaries(works(title)))',
+        'id, pull_id, pulls(id, quiz_questions(id, pull_id, kind, prompt, answer, distractors, cloze, explanation), summaries(works(title)))',
       )
       .eq('user_id', userId)
       .not('pull_id', 'is', null)
+      // The embedded questions get an order too. Without one the planner decides which
+      // card of a Pull comes first, so a deck exported twice can differ for no reason --
+      // and `byPosition` one file over makes "a file exported twice is the same file"
+      // this PR's governing rule. Review finding.
+      .order('id', { ascending: true, referencedTable: 'pulls.quiz_questions' })
       .order('id', { ascending: true })
       .limit(limit);
     if (after !== null) q = q.gt('id', after);
@@ -141,10 +164,12 @@ export async function fetchAnkiDeck(userId: string): Promise<AnkiDeck> {
     throw rpcError(e);
   });
 
-  const ownRows = await pageAfter<OwnRow & Record<string, unknown>>((after, limit) => {
+  const ownRows = await pageAfter<OwnRow>((after, limit) => {
     let q = supabase
       .from('user_questions')
-      .select('id, pull_id, kind, prompt, answer, options, pulls(summaries(works(title)))')
+      .select(
+        'id, pull_id, kind, prompt, answer, options, cloze, explanation, pulls(summaries(works(title)))',
+      )
       .eq('user_id', userId)
       .is('retired_at', null)
       .order('id', { ascending: true })
@@ -166,29 +191,37 @@ export async function fetchAnkiDeck(userId: string): Promise<AnkiDeck> {
    * `last:` tag. Both are filtered and resolved in `export-rows.ts`, where they can be
    * tested.
    */
-  const eventRows = await pageAfter<RecallEventRow & { id: string } & Record<string, unknown>>(
-    (after, limit) => {
-      let q = supabase
-        .from('recall_events')
-        .select(
-          'id, pull_id, quiz_question_id, user_question_id, kind, grade, applied_at, submitted_at',
-        )
-        .eq('user_id', userId)
-        .order('id', { ascending: true })
-        .limit(limit);
-      if (after !== null) q = q.gt('id', after);
-      return q;
-    },
-    'id',
-  ).catch((e: unknown) => {
+  const eventRows = await pageAfter<RecallEventRow & { id: string }>((after, limit) => {
+    let q = supabase
+      .from('recall_events')
+      .select(
+        'id, pull_id, quiz_question_id, user_question_id, kind, grade, applied_at, submitted_at',
+      )
+      .eq('user_id', userId)
+      // FILTERED HERE, not after the walk. `reviewEvents` drops the four non-retrieval
+      // kinds anyway, but it does it client-side -- so a reader whose history is mostly
+      // convictions and calibrations paid a hundred rows at a time, sequentially, for
+      // rows thrown away on arrival. Review finding, twice. Identical output, a
+      // fraction of the walk, and it shortens the window in which the third and longest
+      // read can fail and discard the two completed before it.
+      .in('kind', [...RETRIEVAL_KINDS])
+      .order('id', { ascending: true })
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id').catch((e: unknown) => {
     throw rpcError(e);
   });
 
   const workTitleByPull = new Map<string, string | null>();
   const saved: SavedPullRow[] = [];
   for (const row of savedRows) {
-    // A save whose Pull is gone is expected rather than corrupt — `fetchLibrary`
-    // says the same of the same join — and there is nothing to revise about it.
+    // A save whose Pull is no longer READABLE is expected rather than corrupt: the
+    // embed comes back null when RLS hides it, which happens when a summary is
+    // unpublished after the save. Not "gone" -- `saved_items.pull_id` is
+    // `on delete cascade`, so a deleted pull takes the save with it and there is no row
+    // left to see. `fetchLibrary` says the same of the same join and gives the wrong
+    // reason for it; that file is merged and out of this diff.
     if (!row.pulls) continue;
     const workTitle = row.pulls.summaries?.works?.title ?? null;
     workTitleByPull.set(row.pulls.id, workTitle);

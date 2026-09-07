@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PullCard, SynapseMap, type SynapseNode, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
 
@@ -75,6 +75,22 @@ export function Library({ userId }: { userId: string }) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [stashId, setStashId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  /*
+   * Whether this screen is still on screen.
+   *
+   * An export is the longest read in the app and the reader is free to leave while it
+   * runs. Without this, a failure after they navigate away either popped a modal over
+   * another screen or set state on an unmounted component — which React 19 makes a silent
+   * no-op, so the reader was told nothing at all and would press it again.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   /** Bumped to ask for the library again — see the load effect. */
   const [attempt, setAttempt] = useState(0);
   /*
@@ -278,7 +294,10 @@ export function Library({ userId }: { userId: string }) {
    * produce a file named after a collection that is missing part of that
    * collection — and worse, one whose contents change with a filter the reader
    * set for reading rather than for exporting. Archiving is "out of the way", not
-   * "gone": the row still carries `stash_id`, and the strip still counts it. So
+   * "gone": the row still carries `stash_id`. (An earlier version of this sentence added
+   * "and the strip still counts it" -- the collections strip renders a name and a delete
+   * button and counts nothing; the only count on screen excludes archived saves, which is
+   * the argument for exporting the collection rather than against it.) So
    * the export is the collection, and the screen says so beside the button rather
    * than leaving the reader to discover the difference from the file.
    */
@@ -296,13 +315,25 @@ export function Library({ userId }: { userId: string }) {
    * passages they marked, one row each, for somebody who wants to count or sort
    * or paste them somewhere. `toStashMarkdown` and `toCsvHighlights` write both.
    *
-   * The Markdown needs nothing the screen has not already loaded, so it is built
-   * and handed over without a request — which means it works on a plane, where an
-   * export is exactly the thing a reader wants. The CSV is about highlights, and a
-   * highlight is not part of a save, so that one asks for them.
+   * The Markdown needs nothing the screen has not already loaded, so it is built and
+   * handed over without a second request. NOT "it works on a plane", which an earlier
+   * version of this sentence claimed: `fetchLibrary` has no cached fallback, so a Library
+   * opened offline renders the error branch and these buttons are never drawn at all. The
+   * property is real and smaller than it was stated -- once the screen is up, this export
+   * costs nothing. The CSV is about highlights, and a highlight is not part of a save, so
+   * that one asks for them.
    */
   async function exportStash(format: 'markdown' | 'csv') {
     if (!activeStash) return;
+    /*
+     * GUARDED HERE AS WELL AS BY `disabled`, because the Markdown path never awaits.
+     * `setBusy(true)` and `setBusy(false)` batch into one render, so `disabled` never
+     * engages between two clicks and the reader gets the same file twice, the second
+     * named "… (1).md". The CSV path is safe by accident -- its `await` lets React commit
+     * `disabled` first -- which is not a difference worth relying on.
+     */
+    if (busy) return;
+    setExportNote(null);
     setBusy(true);
     try {
       const now = new Date();
@@ -326,9 +357,16 @@ export function Library({ userId }: { userId: string }) {
       }
     } catch (e) {
       console.error('Could not export the collection', e);
-      window.alert('Could not build the export just now.');
+      /*
+       * ON THE SCREEN, not in a modal. `window.alert` blocks, and an export that fails
+       * after the reader has moved on put a dialog naming nothing over whatever they
+       * navigated to. The note below the buttons is also a live region, so the outcome is
+       * spoken -- a blind reader pressing Export got silence on success and a modal on
+       * failure, and the convention for this exists twice already in this file.
+       */
+      if (mounted.current) setExportNote('Could not build the export just now.');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -681,24 +719,40 @@ export function Library({ userId }: { userId: string }) {
           */}
           {activeStash ? (
             <span className="library__collection">
+              {/*
+                `aria-disabled` rather than `disabled`, on both. A disabled element is not
+                focusable, so the browser blurs it the moment `busy` flips — a keyboard
+                reader who just pressed Export is returned to the top of the document and
+                has to tab the whole page back to find out what happened. The handler's
+                own `if (busy) return` is what actually refuses the second press.
+              */}
               <button
                 type="button"
                 className="btn btn--plain"
                 onClick={() => void exportStash('markdown')}
-                disabled={busy}
+                aria-disabled={busy}
               >
                 Export “{activeStash.name}”
               </button>
+              {/*
+                An accessible name that says what it exports and from where. "as CSV" is
+                the whole of it by rotor or tab otherwise, which passes `jsx-a11y` because
+                it is *a* name — the delete button forty lines up already solves this.
+              */}
               <button
                 type="button"
                 className="btn btn--plain"
                 onClick={() => void exportStash('csv')}
-                disabled={busy}
+                aria-disabled={busy}
+                aria-label={`Export “${activeStash.name}” as CSV`}
               >
                 as CSV
               </button>
             </span>
           ) : null}
+          <p className="meta" role="status">
+            {exportNote ?? ''}
+          </p>
           {/*
             Said before the download rather than discovered from the file. The
             count is the collection's, not the list's, and the two differ the
@@ -707,9 +761,9 @@ export function Library({ userId }: { userId: string }) {
           */}
           {activeStash ? (
             <span className="meta">
-              Markdown is the ideas and your notes; CSV is the passages you marked. Both carry all{' '}
-              {stashItems.length} {stashItems.length === 1 ? 'save' : 'saves'} filed here, archived
-              included.
+              Markdown carries all {stashItems.length} {stashItems.length === 1 ? 'save' : 'saves'}{' '}
+              filed here, archived included. CSV carries one row per passage you marked, so an idea
+              you never highlighted or noted is not in it.
             </span>
           ) : null}
         </div>

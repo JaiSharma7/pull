@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ankiDeck,
   exportFilename,
@@ -113,6 +113,47 @@ describe('stashExportSources', () => {
     expect(sources).toHaveLength(2);
   });
 
+  /*
+   * THE CSV HALF OF THE ORPHAN RULE, which nothing covered.
+   *
+   * `stashExportItems` has a test for this and `stashExportSources` did not, so its own
+   * `item.work.id || `orphan:${index}`` could be changed to `??` — which keeps the empty
+   * string as a key, collapsing every removed source into one — and the suite stayed
+   * green. Mutation sweep finding: two spreadsheet "sources" silently became one.
+   */
+  it('keeps two removed sources apart, rather than merging them under one empty id', () => {
+    const sources = stashExportSources(
+      [
+        item({ id: 'a', headline: 'One', work: { id: '', title: 'Unknown source', kind: null } }),
+        item({ id: 'b', headline: 'Two', work: { id: '', title: 'Unknown source', kind: null } }),
+      ],
+      new Map(),
+    );
+    expect(sources).toHaveLength(2);
+  });
+
+  /*
+   * THE LAST TERM OF THE SORT, which the docstring calls what makes the file
+   * reproducible and which nothing asserted -- it could be replaced by `0` with the suite
+   * green, because `Array.prototype.sort` is stable and the rows happen to arrive in id
+   * order. "Happens to" is not the claim the comment makes.
+   */
+  it('breaks a tie over the same span by id, so the order is total', () => {
+    const same = (id: string) => ({
+      id,
+      pullId: 'p1',
+      field: 'body' as const,
+      start: 4,
+      end: 9,
+      text: id,
+    });
+    const sources = stashExportSources(
+      [item({ id: 'p1' })],
+      new Map([['p1', [same('h-z'), same('h-a'), same('h-m')]]]),
+    );
+    expect(sources[0]?.ideas[0]?.highlights).toEqual(['h-a', 'h-m', 'h-z']);
+  });
+
   it('orders a Pull’s highlights by field and offset, not by the id they arrived in', () => {
     const sources = stashExportSources(
       [item()],
@@ -179,6 +220,37 @@ describe('exportFilename', () => {
 
   /* `toISOString` throws a RangeError on an Invalid Date, and the throw would
      take the download with it rather than the date. */
+  /*
+   * THE DAY IS UTC, and a fixture alone cannot say so.
+   *
+   * The existing case is noon UTC and both CI and this container run in UTC, so a
+   * local-time implementation passes it — the mutation sweep swapped `toISOString` for a
+   * local render and nothing failed. Changing the *date* does not help either: while the
+   * process is in UTC the two agree by definition.
+   *
+   * So the test moves itself out of UTC. `process.env.TZ` is honoured by `Date`
+   * instances constructed after it changes, which is what makes 23:30 Pacific a
+   * different day from the same instant in UTC. Restored in `finally`, because a
+   * timezone left behind would quietly change every later test in the file.
+   *
+   * UTC is the right answer rather than an arbitrary one: `toStashMarkdown` writes the
+   * same day into the file, and a reader who exports on a flight should not get two
+   * different days in the name and the heading.
+   */
+  it('names the day in UTC, not in the reader’s zone', () => {
+    // `vi.stubEnv` rather than touching `process.env` directly: the web app's tsconfig
+    // carries no node types, and `unstubAllEnvs` restores whatever the runner had.
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    try {
+      const lateEvening = new Date('2026-09-06T23:30:00-07:00');
+      // Locally the 6th, in UTC the 7th. The filename must say the 7th.
+      expect(lateEvening.getDate()).toBe(6);
+      expect(exportFilename(['anki'], 'tsv', lateEvening)).toBe('what-a-pull-anki-2026-09-07.tsv');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('survives an invalid date rather than throwing the download away', () => {
     expect(exportFilename(['anki'], 'tsv', new Date(Number.NaN))).toBe(
       'what-a-pull-anki-undated.tsv',
@@ -194,6 +266,8 @@ describe('ankiDeck', () => {
     prompt: 'What did he count?',
     answer: 'The cost in life.',
     distractors: [],
+    cloze: null,
+    explanation: null,
     ...over,
   });
 
@@ -204,6 +278,8 @@ describe('ankiDeck', () => {
     prompt: 'Why does this stay with me?',
     answer: 'Because it is a ledger.',
     options: [],
+    cloze: null,
+    explanation: null,
     ...over,
   });
 
@@ -353,6 +429,8 @@ describe('reviewEvents', () => {
               prompt: 'What did he count?',
               answer: 'The cost in life.',
               distractors: [],
+              cloze: null,
+              explanation: null,
             },
           ],
         },
@@ -393,6 +471,8 @@ describe('the file an importer actually sees', () => {
           prompt: 'A prompt\twith a tab',
           answer: 'An answer\nover two lines',
           options: [],
+          cloze: null,
+          explanation: null,
         },
       ],
       new Map(),
