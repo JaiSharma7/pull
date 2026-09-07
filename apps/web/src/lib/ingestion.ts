@@ -282,11 +282,13 @@ const MAX_TEXT = 20000;
  */
 export function normaliseHighlight(text: string): string {
   /*
-   * `\s` IS NOT THE SAME SET IN JAVASCRIPT AND IN POSTGRES, and the difference is five
-   * codepoints that cost a reader a whole chunk.
+   * `\s` IS NOT THE SAME SET IN JAVASCRIPT AND IN POSTGRES, and on the database this
+   * app talks to the difference is five codepoints that cost a reader a whole chunk.
    *
-   * Review finding, found by scanning every codepoint in Unicode against both rules
-   * rather than by reading either. Postgres's `\s` matches U+001C, U+001D, U+001E,
+   * Review finding, and the set is measured against the HOSTED project rather than
+   * against whatever Postgres is nearest -- see `POSTGRES_ONLY_WHITESPACE` below, where
+   * a second review measured the opposite result on a local build and the query that
+   * settles it is written out. Hosted Postgres's `\s` matches U+001C, U+001D, U+001E,
    * U+001F and U+0085; JavaScript's does not. So a highlight made only of those is
    * non-empty here and empty to `commit_import`, which raises `22023` for the whole
    * 500-item chunk -- the exact failure `toImportItems` exists to prevent, since a
@@ -316,9 +318,30 @@ export function normaliseHighlight(text: string): string {
 /**
  * The five codepoints Postgres calls whitespace and JavaScript does not.
  *
- * Found by scanning every codepoint in Unicode against both rules, not by reading either.
  * Named as a constant because the set is the whole of the agreement with `commit_import`:
  * if the migration's `\s` ever means something else, this is the line that has to move.
+ *
+ * AND THE ANSWER DEPENDS ON THE SERVER, which is why the measurement below names one.
+ * A later review scanned Unicode against a Postgres 16 it had `initdb`'d locally and
+ * found NO codepoint in this direction -- glibc's `space` class has no U+001C-1F and no
+ * U+0085 -- and recommended deleting this constant on that basis. Re-measured against
+ * the hosted project (`zjvfwhjwaytyogdxeddo`), which is the database this agreement is
+ * with:
+ *
+ *   select chr(c) ~ '\s', btrim(regexp_replace(chr(c), '\s+', ' ', 'g')) = ''
+ *
+ *   U+001C U+001D U+001E U+001F U+0085  ->  t, t   (JavaScript: not whitespace)
+ *
+ * All five match, and all five normalise to empty. So the constant stays: deleting it
+ * would restore the failure on the only deployment that has readers. Written as a
+ * client-side mapping rather than trusted to either engine precisely because the two
+ * disagree by build.
+ *
+ * ONE GOES THE OTHER WAY and is deliberately not here. U+FEFF is whitespace to
+ * JavaScript and not to Postgres, so `.trim()` drops a highlight the server would have
+ * kept -- see the bound on that claim in `ingestion.test.ts`. A zero-width byte-order
+ * mark alone is not a highlight anybody loses, and mapping it would mean UN-trimming,
+ * which no reader benefits from.
  */
 const POSTGRES_ONLY_WHITESPACE = ['\u001c', '\u001d', '\u001e', '\u001f', '\u0085'];
 
@@ -400,7 +423,12 @@ export function toImportItems(highlights: readonly ParsedHighlight[]): {
 
     // The two the RPC raises on. A highlight with no title has nothing to file it
     // under; one with no text is not a highlight.
-    if (!title || !text || text.length > MAX_TEXT) {
+    // CHARACTERS, NOT UTF-16 CODE UNITS. `length(v_clean)` in `commit_import` counts
+    // codepoints and `String.prototype.length` counts code units, so an emoji is one
+    // there and two here -- and a reader pasting 11,000 emoji was refused under a
+    // sentence on screen promising them 20,000 characters. Review finding, and the same
+    // split `draftQuestion` has one PR over.
+    if (!title || !text || [...text].length > MAX_TEXT) {
       skipped += 1;
       continue;
     }

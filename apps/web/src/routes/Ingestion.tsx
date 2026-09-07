@@ -219,6 +219,27 @@ export function Ingestion() {
       // second one. Null on a first attempt, which is when `commit_import` opens one.
       const resume = result?.importId ?? null;
       const attempt = await commitImport(sourceKind, await hashFile(rawText), items, resume);
+      /*
+       * A SUPERSEDED ATTEMPT STRANDS ITS BATCH, and this comment is the whole of what is
+       * done about it.
+       *
+       * The inputs stay editable while a keep is in flight, deliberately. So a reader who
+       * picks a second file mid-upload gets the first attempt's answer discarded here --
+       * and with the counters goes the `importId`, which is the only Undo handle this PR
+       * ships. The rows landed; nothing on screen can take them back.
+       *
+       * Recoverable, and bounded: re-uploading the same file within `commit_import`'s
+       * six-hour reuse window rejoins the batch and restores the handle. Outside it, a
+       * re-upload opens a fresh, empty batch and Undo removes nothing.
+       *
+       * NOT FIXED HERE ON PURPOSE. The fix is a second Undo path -- a stranded id kept
+       * beside `result`, its own button, its own busy and failure states -- and a second
+       * path to the one RPC that deletes a reader's pulls is precisely the shape of
+       * change that has introduced a P1 on each of this PR's three rounds. It belongs in
+       * the PR that gives Library its own list of import batches, where an Undo already
+       * has a home and does not need inventing beside a file picker. Security review
+       * found it; recorded rather than rushed.
+       */
       if (generation.current !== mine) return;
       // MERGED, not replaced. A retry resends the whole file, so its counters describe
       // the attempt and not the batch -- see `mergeAttempts`.
@@ -563,16 +584,31 @@ export function Ingestion() {
               </button>
             )}
             <span className="meta">{footerLine(panel)}</span>
-            {/* THE SCOPE THE LABEL CAN NO LONGER PUT IN A NUMBER. `duplicates` counts
-                against everything the reader holds rather than against this batch, so
-                the count the button used to carry was wrong whenever those duplicates
-                came from somewhere else. This is true on every branch it renders on. */}
-            {warnsUndoIsWiderThanItLooks(result) && (
-              <p className="form-note">
-                This takes back everything kept from this file, including anything kept before now.
-              </p>
-            )}
           </div>
+
+          {/* THE SCOPE THE LABEL CAN NO LONGER PUT IN A NUMBER. `duplicates` counts
+              against everything the reader holds rather than against this batch, so the
+              count the button used to carry was wrong whenever those duplicates came
+              from somewhere else.
+
+              SAID AS A MAY, NOT AS A FACT, and an earlier version of this sentence said
+              "this takes back everything kept from this file, including anything kept
+              before now" -- which asserts a consequence `rejoined` cannot establish.
+              Its own comment records the false positive: a batch this walk DID open
+              whose every item the reader already held (the same passages pasted after
+              being uploaded, or the same file outside the reuse window) raises the flag
+              over an Undo that removes nothing. Security review demonstrated it end to
+              end. The hedge is the honest form, and it is the one that stays true when
+              the server finally reports which case this is.
+
+              OUTSIDE `.pull-card__footer`, which is `display: flex` with no
+              `flex-wrap` -- an 88-character sentence in there shares a row with two
+              buttons and the footer line. */}
+          {warnsUndoIsWiderThanItLooks(result) && (
+            <p className="form-note" style={{ marginTop: 'var(--space-2)' }}>
+              Undo acts on the whole batch, which may include highlights kept before now.
+            </p>
+          )}
         </section>
       )}
     </div>

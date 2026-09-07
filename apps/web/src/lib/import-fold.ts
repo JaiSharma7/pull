@@ -112,6 +112,12 @@ export interface UndoResult {
  * takes a null hash: `commit_import` gives a hashless source a five-minute reuse window
  * matched on `source_kind` alone, which still covers a chunked upload. Losing the hash
  * costs a weaker window; throwing would cost the reader their import.
+ *
+ * NOT A BRANCH THIS APP REACHES TODAY. `Ingestion.tsx` hashes the raw text on every
+ * keep, paste included, so every request this client makes carries a hash and takes the
+ * six-hour window. The null path needs `crypto.subtle` to be absent, which means an
+ * insecure origin. Kept and described because it is what the RPC does, not because it
+ * is what happens here.
  */
 export async function hashFile(content: string): Promise<string | null> {
   if (typeof crypto === 'undefined' || !crypto.subtle) return null;
@@ -264,8 +270,10 @@ export function mergeAttempts(prev: ImportResult | null, next: ImportResult): Im
  * with no id -- which is a first attempt, never a retry -- raises whatever it raised.
  *
  * `startImportId` is how a retry rejoins the batch its first attempt opened. Without it
- * the rejoin is `commit_import`'s reuse window, which is a clock -- six hours for a file
- * and five minutes for a paste -- so a reader who came back the next day would open a
+ * the rejoin is `commit_import`'s reuse window, which is a clock -- six hours where a
+ * hash was sent, five minutes where it was not, which is by hash and not by source kind:
+ * this client hashes a paste too, so a paste takes the six hours as well -- so a reader
+ * who came back the next day would open a
  * second batch and one Undo would take back only half their file. Naming the id is the
  * path the RPC documents as the exact one; the window is its fallback for a caller that
  * does not say.
@@ -357,6 +365,16 @@ export async function foldChunks(
      * `v_import_id` for null before the insert -- and one key in the jsonb it returns
      * would replace the proxy `rejoined` is reduced to below, which is wrong in both
      * directions and cannot be made right from this side.
+     *
+     * AND A THIRD, WHICH IS A QUOTA THAT ONLY EVER REFUNDS. `undo_import` sets
+     * `undone_at` and deletes the pulls; the `import_items` rows stay, nothing sweeps
+     * them, and `v_held` counts only live ones -- so each keep-then-undo cycle hands
+     * the item quota back while leaving its rows behind, and the only lifetime bound is
+     * `max_imports_per_user`. Security review measured the floor at 2,000 batches x
+     * 20,000 items per account, plus the unique index on `(user_id, content_hash)`.
+     * The fix is to charge `max_items_per_user` against every row rather than the live
+     * ones, or to bound lifetime `import_items` per user. Nothing to change on this
+     * side, which is why it is written down here.
      */
   }
 

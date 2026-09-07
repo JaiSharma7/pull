@@ -190,10 +190,17 @@ export function undoFailed(e: unknown): ImportFailure {
  * tombstone fired, and when it did match `result` was already null and clearing it was a
  * no-op.
  *
- * `22023` IS NOT ONLY THIS. The migration raises it from thirteen sites, and the other
- * twelve are per-item validation -- an empty title (`:833`), an over-long highlight
- * (`:839`), a non-string field (`:805`-`:817`). Clearing the batch id on one of those
- * would take Undo away from rows that really did land.
+ * `22023` IS NOT ONLY THIS. The migration raises it from thirteen sites: eight are
+ * per-item validation -- an empty title (`:833`), an over-long highlight (`:839`), a
+ * non-string field (`:805`-`:817`) -- and four are per-call, refusing the whole
+ * request before any item is read: the source kind (`:662`), the file-hash shape
+ * (`:667`), items-not-an-array (`:672`) and the 500 bound (`:677`). An earlier
+ * revision of this sentence called all twelve per-item.
+ *
+ * The conclusion is unchanged, and the per-call four are why: the client controls
+ * every one of them exactly, so none is reachable from this screen. What is left is
+ * the per-item eight, and clearing the batch id on one of those would take Undo away
+ * from rows that really did land.
  *
  * IT IS SAFE ONLY BECAUSE THE CLIENT AND THE SERVER NOW AGREE ABOUT WHAT IS EMPTY, and
  * an earlier version of this paragraph asserted that agreement instead of having it.
@@ -303,10 +310,14 @@ export function undoLabel(
 /**
  * Does the Undo need the sentence saying it reaches further back than this attempt?
  *
- * The scope the label can no longer put in a number. True on exactly the results where
- * the counters describe an attempt and the button describes a batch, which is what
- * `joinedExisting` means -- so a reader is told what Undo takes, without being told a
- * figure that is wrong half the time.
+ * The scope the label can no longer put in a number: a reader is told what Undo reaches,
+ * without being told a figure that is wrong half the time.
+ *
+ * TRUE WHERE `joinedExisting` IS, WHICH IS NOT EXACTLY WHERE THE WARNING BELONGS, and an
+ * earlier revision of this comment claimed the two coincide. They do not -- `rejoined`
+ * documents its own false positive, and on it this fires over an Undo that removes
+ * nothing. That is why the sentence it gates is a "may" rather than an assertion; the
+ * predicate is the best the client has, and the wording is what makes it honest.
  */
 export function warnsUndoIsWiderThanItLooks(result: { joinedExisting: boolean } | null): boolean {
   return result?.joinedExisting === true;

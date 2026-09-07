@@ -179,7 +179,10 @@ describe('normaliseHighlight', () => {
    * EVERY CODEPOINT POSTGRES CALLS WHITESPACE, not every codepoint JavaScript does.
    *
    * Review scanned the whole of Unicode against both rules and found exactly five where
-   * they disagree: Postgres's `\s` matches these and JavaScript's does not. A highlight
+   * Postgres matches and JavaScript does not -- measured against the HOSTED project,
+   * because a later review measured the opposite on a locally built Postgres and the
+   * answer turns out to depend on the ctype provider. The query that settles it is
+   * written out beside `POSTGRES_ONLY_WHITESPACE`. A highlight
    * made only of one of them was therefore non-empty to this client, sent, and refused
    * by `commit_import` with `22023` -- which takes the whole 500-item chunk, and which
    * `batchIsGone` then reads as "the batch is gone", clearing the Undo handle for rows
@@ -200,11 +203,41 @@ describe('normaliseHighlight', () => {
     expect(normaliseHighlight(`before${ch}after`)).toBe('before after');
   });
 
-  it('does not call empty anything the server would keep', () => {
+  it('does not call empty anything the server would keep, except the one it cannot help', () => {
     // The rule has to be a SUPERSET of the server's and nothing more. U+180E is
     // whitespace to neither Postgres nor modern JavaScript, and a client that dropped it
     // would lose a highlight the reader wrote.
     expect(normaliseHighlight('\u180e')).toBe('\u180e');
+
+    // AND ONE EXCEPTION, which this assertion exists to bound rather than to hide.
+    // U+FEFF goes the other way: JavaScript's `\s` matches it and hosted Postgres's does
+    // not, so `.trim()` drops a highlight the server would have kept. Not mapped,
+    // because fixing it means UN-trimming a zero-width byte-order mark, and a highlight
+    // that is nothing but a BOM is not one a reader notices losing. Asserted so the
+    // sentence above stays true as written -- "nothing more" is nearly, not exactly.
+    expect(normaliseHighlight('\ufeff')).toBe('');
+  });
+
+  /*
+   * CHARACTERS, NOT UTF-16 CODE UNITS, at the 20,000 bound.
+   *
+   * Review finding. `length(v_clean)` in `commit_import` counts codepoints; the client
+   * counted code units, so every astral character counted twice and a reader was refused
+   * at half the limit the screen promises them. Safe direction -- the client only
+   * refuses -- but the refusal is the bug.
+   */
+  it('measures the 20,000 bound in characters, as commit_import does', () => {
+    const emoji = '\u{1F600}';
+    expect(emoji.length).toBe(2);
+    expect([...emoji]).toHaveLength(1);
+
+    const atBound = toImportItems([{ bookTitle: 'Meditations', text: emoji.repeat(20000) }]);
+    expect(atBound.items).toHaveLength(1);
+    expect(atBound.skipped).toBe(0);
+
+    const over = toImportItems([{ bookTitle: 'Meditations', text: emoji.repeat(20001) }]);
+    expect(over.items).toHaveLength(0);
+    expect(over.skipped).toBe(1);
   });
 
   it('strips NUL, which the server cannot even be asked about', () => {
