@@ -7,7 +7,15 @@ import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
+import { draftQuestion } from '../lib/questions.js';
+import {
+  fetchUserQuestions,
+  rememberPull,
+  retireQuestion,
+  type UserQuestion,
+} from '../lib/questions-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
+import { mutationId } from '../lib/submission.js';
 import type { SourceDelta } from '../lib/types.js';
 
 /**
@@ -160,6 +168,35 @@ export function Source({
   const [related, setRelated] = useState<RelatedPull[]>([]);
   const [relatedTo, setRelatedTo] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  /*
+   * The reader's own questions on the ideas of this source, and the one they are
+   * writing.
+   *
+   * `asking` is a pull id rather than a boolean, so the form belongs to one idea: a
+   * shared open flag would put the box under whichever idea rendered last, and a reader
+   * who scrolled would find their half-typed question attached to the wrong one.
+   */
+  const [myQuestions, setMyQuestions] = useState<UserQuestion[]>([]);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [askPrompt, setAskPrompt] = useState('');
+  const [askAnswer, setAskAnswer] = useState('');
+  const [askError, setAskError] = useState<string | null>(null);
+  const [asked, setAsked] = useState<string | null>(null);
+  const [askBusy, setAskBusy] = useState(false);
+  /*
+   * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
+   *
+   * Review finding. It was minted inside the send, so a retry after a lost response
+   * carried a NEW id -- and `remember_pull` deduplicates on `(user_id,
+   * client_mutation_id)`, so a first write it could not report back was invisible to the
+   * second. The reader presses Keep twice and owns two copies of one question, which
+   * then splits their per-question history in half.
+   *
+   * Held until the write is confirmed, and cleared when the reader EDITS. An id that
+   * outlived an edit would be worse than a fresh one: the RPC would answer with the
+   * FIRST question and silently discard the new wording.
+   */
+  const askMutation = useRef<string | null>(null);
   const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
@@ -286,10 +323,16 @@ export function Source({
    * plain `live`, but this cannot live inside one effect run — two of its three
    * callers are event handlers.
    */
+  const questionLoad = useRef(0);
   const highlightLoad = useRef(0);
   const highlightsLive = useRef(true);
 
   /** Invalidate the loads in flight, and take the ticket for a new one. */
+  const claimQuestionLoad = useCallback(() => {
+    questionLoad.current += 1;
+    return questionLoad.current;
+  }, []);
+
   const claimHighlightLoad = useCallback(() => {
     highlightLoad.current += 1;
     return highlightLoad.current;
@@ -325,6 +368,71 @@ export function Source({
   }, [userId, detail, claimHighlightLoad]);
 
   useEffect(reloadHighlights, [reloadHighlights]);
+
+  const reloadQuestions = useCallback(() => {
+    if (!userId || !detail || detail.pulls.length === 0) return;
+    const ticket = claimQuestionLoad();
+    fetchUserQuestions(detail.pulls.map((p) => p.id))
+      .then((rows) => {
+        // Review finding. Saving a question reloads while the page's first load may
+        // still be in flight, and whichever answered LAST won regardless of which
+        // snapshot it read -- so a question just kept could vanish, or an optimistically
+        // retired one come back, until the page was remounted.
+        if (ticket === questionLoad.current) setMyQuestions(rows);
+      })
+      // Supplementary in the same sense the highlights are: the source reads perfectly
+      // well without the reader's own questions, and failing to load them must not take
+      // the page down.
+      .catch((e: unknown) => console.error('Could not load your questions', e));
+  }, [userId, detail, claimQuestionLoad]);
+
+  useEffect(reloadQuestions, [reloadQuestions]);
+
+  /**
+   * Write the question in the box, and put the idea into review.
+   *
+   * NOT OPTIMISTIC, unlike the highlight above it, and the difference is what failure
+   * costs. A highlight that fails to save is a mark that disappears from text still on
+   * screen; the reader sees it go and can select again. A question is a sentence they
+   * composed, and showing it as saved before it is would let them navigate away from
+   * words that were never stored. So the box holds what they typed until the row exists.
+   *
+   * The mutation id is minted BEFORE the send, which is what makes a retry after a
+   * timeout safe: `remember_pull` matches on `(user_id, client_mutation_id)` and returns
+   * the first call's question rather than writing a second one.
+   */
+  const saveQuestion = useCallback(
+    async (pullId: string) => {
+      if (askBusy) return;
+      const draft = draftQuestion({ prompt: askPrompt, answer: askAnswer });
+      if (!draft.ok) {
+        setAskError(draft.error);
+        return;
+      }
+
+      setAskBusy(true);
+      setAskError(null);
+      try {
+        await rememberPull(pullId, {
+          prompt: draft.prompt,
+          answer: draft.answer,
+          kind: draft.kind,
+          mutationId: (askMutation.current ??= mutationId()),
+        });
+        askMutation.current = null;
+        setAskPrompt('');
+        setAskAnswer('');
+        setAsking(null);
+        setAsked(pullId);
+        reloadQuestions();
+      } catch (e: unknown) {
+        setAskError(e instanceof Error ? e.message : 'That question did not reach your account.');
+      } finally {
+        setAskBusy(false);
+      }
+    },
+    [askAnswer, askBusy, askPrompt, reloadQuestions],
+  );
 
   /*
    * Ideas close to the one the reader actually came for.
@@ -515,6 +623,12 @@ export function Source({
         <ol className="source__pulls">
           {pulls.map((p) => {
             const minutes = readingMinutes(p.estimatedReadSeconds);
+            // Filtered once. This used to be a `.some()` guard followed by a `.filter()`
+            // inside an immediately-invoked function -- and that IIFE runs during render,
+            // so `react-hooks/refs` traced the ticket ref `reloadQuestions` now touches
+            // through it and refused the file. Two passes became one, and the rule can
+            // see that an `onClick` is not render.
+            const mine = myQuestions.filter((q) => q.pullId === p.id);
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
                 <h3 className="source__pull-headline">{p.headline}</h3>
@@ -616,6 +730,44 @@ export function Source({
                       }}
                     >
                       Highlight the selection
+                    </button>{' '}
+                    {/* REMEMBER THIS. The other half of what a reader can do with an
+                        idea they are looking at: mark the words, or write the question
+                        they want to be asked about them later.
+
+                        `remember_pull` does three things at once, and the copy below
+                        says all three, because a button that silently schedules
+                        something is a button that surprises people: it stores the
+                        question, saves the idea, and puts it into review. */}
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      onClick={() => {
+                        setAsking((prev) => (prev === p.id ? null : p.id));
+                        setAskPrompt('');
+                        setAskAnswer('');
+                        setAskError(null);
+                        setAsked(null);
+                        /*
+                         * AND THE DRAFT'S ID WITH THEM, which the ref's own comment
+                         * says must happen and the `onChange` handlers alone did not
+                         * do. Clearing a textarea from state does not fire `onChange`,
+                         * so an id minted for a send that failed outlived every reset
+                         * on this button.
+                         *
+                         * What that costs: a Keep whose response is lost may still
+                         * have committed. Close the form, open another idea's, write a
+                         * different question, Keep -- and the RPC deduplicates on
+                         * `(user_id, client_mutation_id)`, finds the FIRST row, writes
+                         * nothing, and returns `created: false`. The screen reports
+                         * "Kept" over words that were never stored, about an idea that
+                         * never received them. A fresh id makes the second question a
+                         * second question.
+                         */
+                        askMutation.current = null;
+                      }}
+                    >
+                      {asking === p.id ? 'Never mind' : 'Remember this'}
                     </button>
                     {highlights.some((h) => h.pullId === p.id) && (
                       <button
@@ -639,6 +791,114 @@ export function Source({
                       </button>
                     )}
                   </p>
+                )}
+
+                {userId && asking === p.id && (
+                  <div className="source__ask">
+                    <label className="field__label" htmlFor={`ask-prompt-${p.id}`}>
+                      What should this idea ask you?
+                    </label>
+                    <textarea
+                      id={`ask-prompt-${p.id}`}
+                      className="field__textarea"
+                      rows={2}
+                      value={askPrompt}
+                      onChange={(e) => {
+                        setAskPrompt(e.target.value);
+                        askMutation.current = null;
+                      }}
+                      placeholder="What does an obstacle become?"
+                    />
+                    <label className="field__label" htmlFor={`ask-answer-${p.id}`}>
+                      The answer
+                    </label>
+                    {/* Sentence case and not `.meta`, which is mono and UPPERCASED. A
+                        label is two or three words and reads fine shouted; this is a
+                        sentence, and law 1 leaves typography to do the work rather than
+                        raising the app's voice at the reader mid-explanation. */}
+                    <p className="source__ask-hint" id={`ask-answer-hint-${p.id}`}>
+                      Optional, and kept with the question so you can read it back here. Review
+                      shows you the idea and you mark yourself either way.
+                    </p>
+                    <textarea
+                      id={`ask-answer-${p.id}`}
+                      className="field__textarea"
+                      aria-describedby={`ask-answer-hint-${p.id}`}
+                      rows={2}
+                      value={askAnswer}
+                      onChange={(e) => {
+                        setAskAnswer(e.target.value);
+                        askMutation.current = null;
+                      }}
+                    />
+                    {askError && (
+                      <p className="meta" role="alert">
+                        {askError}
+                      </p>
+                    )}
+                    <p>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={askBusy}
+                        onClick={() => void saveQuestion(p.id)}
+                      >
+                        {askBusy ? 'Keeping…' : 'Keep this question'}
+                      </button>{' '}
+                      <span className="meta">
+                        Keeping it also saves this idea and puts it in your review.
+                      </span>
+                    </p>
+                  </div>
+                )}
+
+                {userId && asked === p.id && asking !== p.id && (
+                  <p className="meta" role="status">
+                    Kept. You will be asked it here from tomorrow.
+                  </p>
+                )}
+
+                {userId && mine.length > 0 && (
+                  <div className="source__ask-list">
+                    <p className="meta">
+                      {mine.length === 1
+                        ? 'Your question about this idea'
+                        : `Your ${mine.length} questions about this idea`}
+                    </p>
+                    <ul>
+                      {mine.map((q) => (
+                        <li key={q.id}>
+                          {q.prompt}
+                          {/* THE ANSWER THEY TYPED, SHOWN BACK TO THEM.
+                                  Review finding: supplying one stores the question as a
+                                  `short_answer`, and nothing put those words in front of
+                                  the reader again -- the field asked for something and
+                                  then swallowed it. Review reveals the idea's own body on
+                                  this release and 3d is what renders the reader's answer
+                                  against it; until then, this is where they can read what
+                                  they wrote. */}
+                          {q.answer && <span className="source__ask-answer">{q.answer}</span>}{' '}
+                          <button
+                            type="button"
+                            className="btn btn--plain"
+                            onClick={() => {
+                              // Optimistic here, unlike the write: removing a row
+                              // from a list the reader is looking at is reversible
+                              // by the reload in the catch, and a Retire that takes
+                              // a round trip to disappear reads as a dead button.
+                              setMyQuestions((prev) => prev.filter((x) => x.id !== q.id));
+                              retireQuestion(q.id).catch((e: unknown) => {
+                                console.error('Could not retire the question', e);
+                                reloadQuestions();
+                              });
+                            }}
+                          >
+                            Retire
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </li>
             );
