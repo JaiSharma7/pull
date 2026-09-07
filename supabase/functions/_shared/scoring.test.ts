@@ -253,6 +253,26 @@ describe('questionsToWrite', () => {
     expect(questionsToWrite([q({ prompt: 42 })], written)).toEqual([]);
   });
 
+  /*
+   * A NUL TAKES THE BATCH, and no CHECK in the migration can model it: `text` cannot
+   * hold one, so `p_items` fails at the jsonb cast -- 22P05, `unsupported Unicode
+   * escape sequence` -- before any constraint is consulted. Confirmed against the hosted
+   * database. Review finding, and free to close.
+   *
+   * Tab, newline and carriage return survive: a cloze sentence and an explanation are
+   * allowed to have lines in them. An astral character survives whole, which is the
+   * thing a naive code-unit scan would break.
+   */
+  it('strips the control characters Postgres cannot hold, and keeps the ones it can', () => {
+    const out = questionsToWrite([q({ prompt: 'a\u0000b\u0007c' })], written)[0];
+    expect(out?.prompt).toBe('abc');
+
+    expect(questionsToWrite([q({ prompt: 'one\ttwo' })], written)[0]?.prompt).toBe('one\ttwo');
+    expect(
+      questionsToWrite([q({ prompt: 'line\u{1F600}one\nline two' })], written)[0]?.prompt,
+    ).toBe('line\u{1F600}one\nline two');
+  });
+
   it('trims, so whitespace never becomes a prompt', () => {
     expect(questionsToWrite([q({ prompt: '  Why?  ' })], written)[0]?.prompt).toBe('Why?');
   });

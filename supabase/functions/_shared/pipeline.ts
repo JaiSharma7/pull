@@ -597,10 +597,19 @@ interface RawQuestion {
  * sentence and an explanation are allowed to have lines in them.
  */
 function cleanString(v: unknown): string {
-  // eslint-disable-next-line no-control-regex -- the point of the function
-  return typeof v === 'string'
-    ? v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim()
-    : '';
+  if (typeof v !== 'string') return '';
+  // Compared by code point rather than matched by a character class, for the reason
+  // `ingestion.ts` gives about the same problem: `no-control-regex` refuses a control
+  // character inside a regex literal, and `deno lint` enforces it on this directory
+  // while `pnpm check` does not -- so a suppression written for one linter is a green
+  // local run and a red CI. Iterating a string yields code points, so an astral
+  // character survives whole.
+  let out = '';
+  for (const ch of v) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (c > 0x1f || c === 0x09 || c === 0x0a || c === 0x0d) out += ch;
+  }
+  return out.trim();
 }
 
 function cleanStringArray(v: unknown): string[] {
