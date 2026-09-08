@@ -46,6 +46,7 @@ import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
 import { OnboardingDemo } from './components/OnboardingDemo.js';
 import { Ingestion } from './routes/Ingestion.js';
 import { Paths } from './routes/Paths.js';
+import { Path } from './routes/Path.js';
 
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
@@ -1012,18 +1013,14 @@ export function App() {
             {exploreOpen && <Explore onNavigate={navigate} />}
             {pathsOpen && <Paths onNavigate={navigate} />}
             {pathSlug !== null && (
-              <section className="stack measure" style={{ padding: 'var(--space-6)' }}>
-                <p className="meta">Learning Path</p>
-                <h1>{decodeSegment(pathSlug)}</h1>
-                <p>Path step runner is opening…</p>
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  onClick={() => navigate('/paths')}
-                >
-                  Back to paths
-                </button>
-              </section>
+              <Path
+                key={pathSlug}
+                slug={decodeSegment(pathSlug)}
+                userId={session?.user.id ?? null}
+                onNavigate={navigate}
+                onTitle={reportRouteTitle}
+                onGoToReview={() => goToTab('review')}
+              />
             )}
             {graphOpen && !guest && (
               <Graph
