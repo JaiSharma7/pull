@@ -41,6 +41,7 @@ const PATH_TITLES: Record<string, string> = {
 
   '/appearance': 'Appearance',
   '/account': 'Account',
+  '/paths': 'Learning Paths',
   '/privacy': 'Privacy Policy',
   '/terms': 'Terms of Service',
 };
@@ -75,7 +76,8 @@ export function isKnownPath(pathname: string): boolean {
   return (
     pathname.startsWith('/source/') ||
     pathname.startsWith('/pull/') ||
-    pathname.startsWith('/topic/')
+    pathname.startsWith('/topic/') ||
+    pathname.startsWith('/path/')
   );
 }
 
@@ -96,6 +98,10 @@ export function titleFor({ pathname, tab, documentTitle, query }: TitleInput): s
 
   if (pathname.startsWith('/topic/')) {
     return `${documentTitle?.trim() || 'Topic'}${suffix}`;
+  }
+
+  if (pathname.startsWith('/path/')) {
+    return `${documentTitle?.trim() || 'Learning Path'}${suffix}`;
   }
 
   if (pathname === '/search') {

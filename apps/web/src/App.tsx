@@ -45,6 +45,7 @@ import { Library } from './routes/Library.js';
 import { MetacognitiveDashboard } from './routes/MetacognitiveDashboard.js';
 import { OnboardingDemo } from './components/OnboardingDemo.js';
 import { Ingestion } from './routes/Ingestion.js';
+import { Paths } from './routes/Paths.js';
 
 import { Review } from './routes/Review.js';
 import { Search } from './routes/Search.js';
@@ -109,6 +110,7 @@ function readLocation(): string {
 
 const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/explore', label: 'Explore' },
+  { path: '/paths', label: 'Paths' },
   { path: '/search', label: 'Search' },
   /*
    * All four are `signedIn`, and the flag is load-bearing rather than tidy.
@@ -601,6 +603,8 @@ export function App() {
   const searchOpen = isPath(path, '/search');
   const searchQuery = queryParam(path, 'q') ?? '';
   const exploreOpen = isPath(path, '/explore');
+  const pathsOpen = isPath(path, '/paths');
+  const pathSlug = routeParam(path, '/path');
   const appearanceOpen = isPath(path, '/appearance');
   const graphOpen = isPath(path, '/graph');
   const importOpen = isPath(path, '/import');
@@ -644,6 +648,8 @@ export function App() {
     pullId !== null ||
     searchOpen ||
     exploreOpen ||
+    pathsOpen ||
+    pathSlug !== null ||
     appearanceOpen ||
     graphOpen ||
     importOpen ||
@@ -684,6 +690,8 @@ export function App() {
     pullId !== null ||
     searchOpen ||
     exploreOpen ||
+    pathsOpen ||
+    pathSlug !== null ||
     appearanceOpen ||
     topicSlug !== null;
   const visitor = !session;
@@ -1002,6 +1010,21 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
+            {pathsOpen && <Paths onNavigate={navigate} />}
+            {pathSlug !== null && (
+              <section className="stack measure" style={{ padding: 'var(--space-6)' }}>
+                <p className="meta">Learning Path</p>
+                <h1>{decodeSegment(pathSlug)}</h1>
+                <p>Path step runner is opening…</p>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => navigate('/paths')}
+                >
+                  Back to paths
+                </button>
+              </section>
+            )}
             {graphOpen && !guest && (
               <Graph
                 userId={session?.user.id ?? null}
