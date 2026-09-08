@@ -208,3 +208,116 @@
 .source__attribution {
   margin-top: calc(var(--space-2) * -1);
 }
+
+/*
+ * "Remember this" — the form for a question the reader writes about one idea, and
+ * the questions they have already written for it.
+ *
+ * No new controls. The label and the box are `.field__label` and `.field__textarea`,
+ * which is what every other form in the app uses, so this looks like the rest of the
+ * product rather than like a feature bolted to a source page. What is left here is
+ * rhythm: the vertical gap between a label and its box, and the hairline that separates
+ * a form from the idea it belongs to.
+ *
+ * The hairline is `--rule`, one pixel, on the top only. Boxing the form would be a
+ * second container inside a page that is already a column of ideas separated by rules,
+ * and design.md law 2 spends its structure on hairlines rather than on cards inside
+ * cards. (Named, because CLAUDE.md numbers its laws differently and a PR in this series
+ * was already corrected for citing law 1 here.)
+ */
+.source__ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * The sentence under "The answer".
+ *
+ * `.meta` would have been the obvious class and is the wrong one: it uppercases, which
+ * is legible for two or three words and shouting for a sentence. Muted and small, in
+ * the body face, sentence case.
+ */
+.source__ask-hint {
+  margin: calc(var(--space-1) * -1) 0 0;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+/*
+ * What the reader has already asked of this idea.
+ *
+ * A list rather than a paragraph because it is a list, and unbulleted because a bullet
+ * beside a question the reader wrote themselves is the page telling them how to read
+ * their own words. Each row is prompt then Retire, wrapping on a narrow screen instead
+ * of squeezing the question.
+ */
+.source__ask-list {
+  margin: var(--space-3) 0 0;
+}
+
+.source__ask-list ul {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.source__ask-list li {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * A refusal, told apart from the sentence beside it by more than its wording.
+ *
+ * It rendered in `.meta` -- mono, uppercased, `--text-muted` -- which is the same face,
+ * size, case and colour as the neutral hint two lines up, so "A QUESTION CAN BE 2000
+ * CHARACTERS AT MOST." appeared above an identical-looking line and read as inert. The
+ * only thing distinguishing them was `role="alert"`: a signal for screen-reader users
+ * and none at all for anybody else, which is the usual gap backwards.
+ *
+ * Accent AND a rule, so design.md law 5 is satisfied by something other than hue. Scoped
+ * to this screen rather than named `.form-error`, because 2c is adding a class by that
+ * name and two definitions racing to merge is worse than one duplicate to collapse
+ * afterwards. Every other in-form error in the app already carries the accent -- this
+ * screen was the outlier, not the one waiting for a shared class.
+ */
+.source__ask-error {
+  margin: 0;
+  font-size: var(--step--1);
+  color: var(--accent);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent);
+}
+
+/*
+ * A label sits with the box it names.
+ *
+ * `.source__ask` is a flex column with `gap: var(--space-2)`, and `.field__label` carries
+ * `margin-bottom: var(--space-2)` of its own -- so each label sat 1rem above its own
+ * textarea and 0.5rem below the field before it, grouping with the wrong one. The
+ * negative margin on `.source__ask-hint` below is a partial patch for the same thing.
+ * The gap is the rhythm here; the label should not add to it.
+ */
+.source__ask .field__label {
+  margin-bottom: 0;
+}
+
+/*
+ * The answer the reader stored, under the question they asked.
+ *
+ * Set apart by colour and size rather than by a box or a second accent — it is the back
+ * of their own card, not a status. (Not weight: an earlier version of this sentence said
+ * so and no `font-weight` is set here. It matters, because under `[data-contrast='high']`
+ * `--text-muted` resolves to `--text` and size is the only distinction left.) On its own
+ * line so a long answer does not run into the Retire button on a narrow screen.
+ */
+.source__ask-answer {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--step--1);
+  margin-top: var(--space-1);
+}
