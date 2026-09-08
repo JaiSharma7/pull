@@ -2299,6 +2299,7 @@ export type Database = {
         }
         Returns: Json
       }
+      counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
@@ -2407,6 +2408,10 @@ export type Database = {
           refreshed_at: string
           user_agent: string
         }[]
+      }
+      nearest_pulls: {
+        Args: { p_k?: number; p_pull_id: string }
+        Returns: Json
       }
       pause_path: { Args: { p_path_id: string }; Returns: Json }
       plan_interleave: {
