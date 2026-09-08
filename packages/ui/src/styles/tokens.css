@@ -74,7 +74,8 @@
   --radius: 3px;
   --radius-sm: 2px;
 
-  --measure: 64rem; /* Card and controls; prose carries its own readable measure. */
+  --measure: 34rem;
+  --measure-card: 64rem; /* Space for card controls, independent of prose and forms. */
 
   /*
    * The Depth Dial's own step, and the reason it is not `--step--1`.
@@ -213,7 +214,8 @@
    * Scaled from the body step, not restated as a bigger constant. A second literal
    * would drift when either value was tuned. Paragraphs set their own line length.
    */
-  --measure: calc(var(--step-0) * 52);
+  --measure: calc(var(--step-0) * 32);
+  --measure-card: calc(var(--step-0) * 52);
 }
 
 :root[data-text='large'] {

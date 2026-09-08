@@ -92,7 +92,7 @@ This product's claim is the opposite: _enough for today_. A bounded sitting that
 with a number attached to what it was worth. That claim is not made by copy, it is made
 by layout. So:
 
-- **Keep a visible margin.** Cards use the available laptop space up to `--measure`,
+- **Keep a visible margin.** Cards use the available laptop space up to `--measure-card`,
   including in focus mode. Paragraphs inside a card stay at 65 characters; the extra
   card width gives the depth controls room to stay on one line.
 - **The rails stay on screen** above 60rem. They _are_ the edges. What they show — what

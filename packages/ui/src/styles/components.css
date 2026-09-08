@@ -541,7 +541,7 @@
 
 /* The reading column, independent of the shell around it. */
 .shell__column {
-  max-width: var(--measure);
+  max-width: var(--measure-card);
   margin-inline: auto;
 }
 
