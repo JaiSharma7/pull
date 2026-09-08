@@ -1,6 +1,6 @@
 # Data model
 
-46 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+51 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -14,7 +14,7 @@ being wrong precisely because the diagram had drifted with it and the two still 
 
 ```
 User
- ├── profiles · preference_profiles · follows
+ ├── profiles · preference_profiles · follows · mfa_recovery_codes
  ├── stashes ─── saved_items · notes · highlights
  ├── history_events · progress
  ├── knowledge_states · user_knowledge_vectors    ← the Delta & Half-Life
@@ -23,6 +23,7 @@ User
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
  ├── user_questions                               ← questions you wrote yourself
+ ├── path_progress ─── path_step_done             ← learning path progress & test-outs
  └── feed_recipes · feed_impressions
 
 Work                                              ← the thing itself
@@ -36,9 +37,12 @@ Work                                              ← the thing itself
        │    └── quiz_questions
        └── artworks
 
+paths ─── path_steps                              ← curated sequences answering one question
+
 generation_jobs ─── job_steps ─── cost_ledger
+generation_dispatches · generation_hash_claims
 reports ─── moderation_decisions · rights_requests
-daily_pulls · interleave_config · rate_limits
+daily_pulls · daily_pull_selections · interleave_config · rate_limits
 blocked_email_domains                             ← refused at signup
 ```
 
@@ -164,6 +168,13 @@ to come from the edges themselves.
 table with a `check (id)` singleton constraint, so the question rate can be
 tuned from real usage without a deploy. A check constraint enforces that the
 five type weights sum to 100.
+
+**A path has an end.** `paths` and `path_steps` curate sequences of ideas that answer
+one overarching question through a progression of activities (`read`, `predict`,
+`compare`, `say_it_back`, `apply`). `path_progress` and `path_step_done` track the
+reader's journey and allow testing out of ideas already held solid. `apply_path_step`
+writes a private reflection note, pulls forward the next due date within 3 days, and
+advances the path idempotently via `client_mutation_id`.
 
 **Cost data is not user-facing.** `cost_ledger` and `moderation_decisions` have
 RLS enabled with a policy of `using (false)` — service-role only. That is
