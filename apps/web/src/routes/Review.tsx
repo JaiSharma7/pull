@@ -391,7 +391,6 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                   background: 'transparent',
                   color: 'var(--text)',
                   width: '100%',
-                  maxWidth: '40ch',
                 }}
               />
               <div
