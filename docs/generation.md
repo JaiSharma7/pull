@@ -31,6 +31,45 @@ not generate art per card. One hero image plus perhaps two section images, reuse
 they will do. Art is the first thing to switch off under cost pressure, and the product
 is designed so that switching it off degrades gracefully.
 
+## The questions ride the summary
+
+A generated Pull carries up to three questions — one `recall`, one `mcq`, one `cloze` —
+and they are produced by **the same call that produced the idea**. There is no question
+step, no second request and no second bill: `packages/prompts/baml_src` declares exactly
+one `function`, `WriteCanonicalSummary`, and adding a kind adds fields to its schema
+rather than a call to a provider.
+
+That is the whole reason this is affordable. A question generated per reader would be the
+$450 column of the table above; generated once with the summary it is a few hundred
+output tokens amortised across everyone who ever reads that idea. Grading is arithmetic
+the client does — `lib/activities.ts` compares a picked option to a stored answer — so
+nothing about asking or marking a question reaches a model. Law 2 is intact in both
+directions.
+
+**What it costs, measured and unmeasured.** On the way in it is exact: what is actually
+sent grew by **1,663 characters** — the prompt text by 1,331 and the JSON Schema by 332 —
+which is roughly 415 tokens, or about $0.0003 per summary at the configured $0.75 per
+million input tokens.
+
+An earlier version of this paragraph said 2,593 characters and ~650 tokens, and cited
+`supabase/functions/_shared/generated/prompts.ts` growing from 6,352 to 8,945 bytes. That
+is the growth of the whole TypeScript file — pretty-printed schema indentation and the
+export wrapper included — and none of that reaches a provider. Two reviewers caught it
+independently. The figures above were measured by importing both versions of that module
+and comparing `messages[].text` and `JSON.stringify(schema)`, which is what a request
+carries. Over-stating a cost is the safe direction, but the sentence claims to be exact. On the way out it is up to two
+extra questions per Pull, which is not something this repository can measure before a
+real generation runs — the honest figure will be the first hosted `cost_ledger` row for a
+`synthesize` step after this ships, compared against the ones before it. Stated as an
+estimate rather than a measurement, deliberately: the table above is measured, and mixing
+a guess into it would make the whole thing untrustworthy.
+
+Three is the ceiling because the response schema's `kind` enum has three members, not
+because of the index: `quiz_questions_pull_kind_key` is unique on `(pull_id, kind)` and
+`quiz_questions_kind_known` allows six kinds, so a pull can hold six rows. An earlier
+version of this line said a fourth question could not be a fourth row, which is true only
+of a fourth question of a kind already written.
+
 ## Three tiers — don't pay for research you don't need
 
 | Tier                 | When                                                       | Cost                |
