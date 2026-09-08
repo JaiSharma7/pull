@@ -12,6 +12,6 @@
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11",
-    "@supabase/supabase-js": "^2.112.4"
+    "@supabase/supabase-js": "^2.115.0"
   }
 }
