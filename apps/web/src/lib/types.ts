@@ -151,7 +151,7 @@ export interface GraphNode {
 export interface GraphEdge {
   fromPullId: string;
   toPullId: string;
-  kind: 'ancestor' | 'descendant' | 'opposes' | 'elaborates' | 'related';
+  kind: 'ancestor' | 'descendant' | 'opposes' | 'elaborates' | 'related' | 'supports';
   weight: number;
   rationale: string | null;
 }

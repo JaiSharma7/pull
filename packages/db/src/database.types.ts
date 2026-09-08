@@ -2611,6 +2611,7 @@ export type Database = {
         | "elaborates"
         | "ancestor"
         | "descendant"
+        | "supports"
       rights_status:
         | "public_domain"
         | "licensed"
@@ -2779,6 +2780,7 @@ export const Constants = {
         "elaborates",
         "ancestor",
         "descendant",
+        "supports",
       ],
       rights_status: [
         "public_domain",
