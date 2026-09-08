@@ -1,46 +1,51 @@
 /**
- * The house mark: a magician's top hat, drawn in the reader's ink with the band in
- * oxblood. The product is named for the thing pulled out of it, so the hat is the half
- * you can draw.
+ * The house mark: an upside-down magician's top hat, drawn in the reader's ink with
+ * an oxblood band and three small sparks in the muted text tone. The open brim sits at the top and
+ * the crown tapers downward, so the inversion survives at favicon scale instead of
+ * reading like an ordinary upright hat.
  *
- * This is the same hat the tab shows. `scripts/gen-icons.mjs` owns the icon files —
- * there is no rasteriser in this repo, so the PNGs are encoded from a pixel buffer and
- * the geometry has to be expressed analytically anyway — and the numbers below mirror
- * it exactly. `Mark.test.ts` renders this component and compares it against the
- * generated `apps/web/public/favicon.svg`, because a top bar and a browser tab showing
- * two different hats is precisely the drift nobody notices in review.
+ * `scripts/gen-icons.mjs` owns the browser/PWA files. The geometry below mirrors it and
+ * `Mark.test.ts` compares this renderer against the generated favicon, so the masthead
+ * and the browser tab cannot quietly become two different marks.
  *
- * Flat fills, no gradient, no shadow, one accent (design law 1). It is small on purpose:
- * `docs/design.md` is explicit that the sentence is the brand, so the mark sits beside
- * the wordmark at roughly its cap height and does not compete with it.
+ * Flat fills, no gradient, no shadow. The sparks are decorative, and they name an
+ * existing palette role rather than becoming a second UI accent.
  */
 
-/** Fractions of the mark's own square, mirroring `hat()` in scripts/gen-icons.mjs. */
-const CROWN_W = 0.3;
-const CAP_RY = 0.048;
-const BAND_H = 0.09;
 const BRIM_RX = 0.46;
-const BRIM_RY = 0.175;
-const BRIM_LIFT = 0.132;
-/** The lit crown — what the band leaves showing — is this much taller than it is wide. */
-const LIT_RATIO = 1.35;
+const BRIM_RY = 0.11;
+const OPEN_RX = 0.28;
+const OPEN_RY = 0.055;
+const CROWN_TOP_W = 0.34;
+const CROWN_BOTTOM_W = 0.24;
+const CROWN_H = 0.34;
+const BAND_H = 0.075;
+const BOTTOM_CAP_RY = 0.035;
+
+export interface SparkleGeometry {
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
+}
 
 export interface HatGeometry {
   /** Centre of the square the mark is drawn in. */
   c: number;
-  crownW: number;
-  capRy: number;
-  crownTop: number;
-  crownBottom: number;
-  bandTop: number;
-  bandH: number;
+  size: number;
   brimCy: number;
   brimRx: number;
   brimRy: number;
-  brimLift: number;
-  /** Where the brim's two ellipse edges cross: the crescent's raised tips. */
-  tipX: number;
-  tipY: number;
+  openRx: number;
+  openRy: number;
+  bodyTop: number;
+  bodyBottom: number;
+  crownTopW: number;
+  crownBottomW: number;
+  bandTop: number;
+  bandBottom: number;
+  bottomCapRy: number;
+  sparkles: readonly [SparkleGeometry, SparkleGeometry, SparkleGeometry];
 }
 
 /**
@@ -50,113 +55,136 @@ export interface HatGeometry {
 export function hatGeometry(size: number, inset = 1): HatGeometry {
   const c = size / 2;
   const s = size * inset;
-
-  const crownW = s * CROWN_W;
-  const capRy = s * CAP_RY;
-  const bandH = s * BAND_H;
-  const brimRx = s * BRIM_RX;
-  const brimRy = s * BRIM_RY;
-  const brimLift = s * BRIM_LIFT;
-  const litH = crownW * LIT_RATIO;
-
-  // Solved rather than nudged, so the silhouette is centred at any inset.
-  const brimCy = c - brimRy + (brimLift + bandH + litH) / 2;
-  const bandBottom = brimCy + brimRy - brimLift; // the brim's top edge at the centre
-  const bandTop = bandBottom - bandH;
-  const crownTop = bandTop - litH;
-
-  const m = brimLift / (2 * brimRy);
-  const tipX = brimRx * Math.sqrt(1 - m * m);
-  const tipY = brimCy - brimRy * m;
-
-  // The crown's foot stops just inside the brim's lower edge at the crown's own width,
-  // so the two shapes join into one silhouette with no seam and no spill.
-  const kCrown = Math.sqrt(1 - (crownW / 2 / brimRx) ** 2);
-  const crownBottom = brimCy + brimRy * kCrown * 0.9;
+  const brimCy = c - s * 0.08;
+  const bodyTop = brimCy + s * OPEN_RY * 1.02;
+  const bodyBottom = bodyTop + s * CROWN_H;
+  const bandTop = bodyTop + s * 0.02;
+  const bandBottom = bandTop + s * BAND_H;
 
   return {
     c,
-    crownW,
-    capRy,
-    crownTop,
-    crownBottom,
-    bandTop,
-    bandH,
+    size: s,
     brimCy,
-    brimRx,
-    brimRy,
-    brimLift,
-    tipX,
-    tipY,
+    brimRx: s * BRIM_RX,
+    brimRy: s * BRIM_RY,
+    openRx: s * OPEN_RX,
+    openRy: s * OPEN_RY,
+    bodyTop,
+    bodyBottom,
+    crownTopW: s * CROWN_TOP_W,
+    crownBottomW: s * CROWN_BOTTOM_W,
+    bandTop,
+    bandBottom,
+    bottomCapRy: s * BOTTOM_CAP_RY,
+    sparkles: [
+      { x: c, y: c - s * 0.315, rx: s * 0.075, ry: s * 0.09 },
+      { x: c - s * 0.165, y: c - s * 0.225, rx: s * 0.044, ry: s * 0.054 },
+      { x: c + s * 0.165, y: c - s * 0.225, rx: s * 0.044, ry: s * 0.054 },
+    ],
   };
 }
 
 const n = (v: number) => Number(v.toFixed(2));
 
-/**
- * The brim as one closed path: out along the lower edge of one ellipse, back along the
- * lower edge of the same ellipse lifted above it. The crescent between them is the
- * sweep, and its two tips are where the edges cross.
- */
-export function brimPath(h: HatGeometry): string {
+const widthAt = (h: HatGeometry, y: number) => {
+  const t = Math.max(0, Math.min(1, (y - h.bodyTop) / (h.bodyBottom - h.bodyTop)));
+  return h.crownTopW + (h.crownBottomW - h.crownTopW) * t;
+};
+
+export function bodyPath(h: HatGeometry): string {
   return (
-    `M ${n(h.c - h.tipX)} ${n(h.tipY)} ` +
-    `A ${n(h.brimRx)} ${n(h.brimRy)} 0 1 0 ${n(h.c + h.tipX)} ${n(h.tipY)} ` +
-    `A ${n(h.brimRx)} ${n(h.brimRy)} 0 0 1 ${n(h.c - h.tipX)} ${n(h.tipY)} Z`
+    `M ${n(h.c - h.crownTopW / 2)} ${n(h.bodyTop)} ` +
+    `L ${n(h.c + h.crownTopW / 2)} ${n(h.bodyTop)} ` +
+    `L ${n(h.c + h.crownBottomW / 2)} ${n(h.bodyBottom)} ` +
+    `L ${n(h.c - h.crownBottomW / 2)} ${n(h.bodyBottom)} Z`
+  );
+}
+
+export function bandPath(h: HatGeometry): string {
+  const topW = widthAt(h, h.bandTop);
+  const bottomW = widthAt(h, h.bandBottom);
+  return (
+    `M ${n(h.c - topW / 2)} ${n(h.bandTop)} ` +
+    `L ${n(h.c + topW / 2)} ${n(h.bandTop)} ` +
+    `L ${n(h.c + bottomW / 2)} ${n(h.bandBottom)} ` +
+    `L ${n(h.c - bottomW / 2)} ${n(h.bandBottom)} Z`
+  );
+}
+
+const ellipsePath = (cx: number, cy: number, rx: number, ry: number) =>
+  `M ${n(cx - rx)} ${n(cy)} ` +
+  `A ${n(rx)} ${n(ry)} 0 1 0 ${n(cx + rx)} ${n(cy)} ` +
+  `A ${n(rx)} ${n(ry)} 0 1 0 ${n(cx - rx)} ${n(cy)} Z`;
+
+/** A brim with a real hole through it, not a pale ellipse painted on top. */
+export function brimRingPath(h: HatGeometry): string {
+  return `${ellipsePath(h.c, h.brimCy, h.brimRx, h.brimRy)} ${ellipsePath(
+    h.c,
+    h.brimCy,
+    h.openRx,
+    h.openRy,
+  )}`;
+}
+
+/** Four-point sparkle, pinched enough to stay a sparkle at 16px rather than a diamond. */
+export function sparklePath(s: SparkleGeometry): string {
+  const ix = s.rx * 0.22;
+  const iy = s.ry * 0.22;
+  return (
+    `M ${n(s.x)} ${n(s.y - s.ry)} ` +
+    `L ${n(s.x + ix)} ${n(s.y - iy)} ` +
+    `L ${n(s.x + s.rx)} ${n(s.y)} ` +
+    `L ${n(s.x + ix)} ${n(s.y + iy)} ` +
+    `L ${n(s.x)} ${n(s.y + s.ry)} ` +
+    `L ${n(s.x - ix)} ${n(s.y + iy)} ` +
+    `L ${n(s.x - s.rx)} ${n(s.y)} ` +
+    `L ${n(s.x - ix)} ${n(s.y - iy)} Z`
   );
 }
 
 export interface MarkProps {
   className?: string;
-  /**
-   * Naming the mark for assistive technology. Left off by default: everywhere it is
-   * used today the wordmark says "What a Pull" right beside it, and a second copy of
-   * the same name is noise in a screen reader rather than help.
-   */
+  /** Naming the mark where it is not already followed by the What a Pull wordmark. */
   title?: string;
 }
 
-/** The square the geometry is expressed in. Rendered size comes from CSS. */
 const UNITS = 32;
+/*
+ * The sparks are ornament, so they take the muted text role rather than a hue of
+ * their own. A champagne gold here would be a second accent the moment anything
+ * pointed at it, which design law 1 does not allow and `design-laws.test.ts` catches
+ * both in `tokens.css` and in this file.
+ */
+const SPARK = 'var(--text-muted)';
 
 export function Mark({ className, title }: MarkProps) {
   const h = hatGeometry(UNITS);
-  // Cropped to the silhouette rather than to its square: the icon files need the
-  // padding around the hat, a mark sitting next to a word does not.
-  const top = h.crownTop;
-  const height = h.brimCy + h.brimRy - top;
+  const [big] = h.sparkles;
+  const top = big.y - big.ry;
+  const bottom = h.bodyBottom + h.bottomCapRy;
 
   return (
     <svg
       className={className}
-      viewBox={`${n(h.c - h.brimRx)} ${n(top)} ${n(h.brimRx * 2)} ${n(height)}`}
+      viewBox={`${n(h.c - h.brimRx)} ${n(top)} ${n(h.brimRx * 2)} ${n(bottom - top)}`}
       role={title ? 'img' : undefined}
       aria-hidden={title ? undefined : true}
       focusable="false"
     >
       {title ? <title>{title}</title> : null}
-      <rect
-        x={n(h.c - h.crownW / 2)}
-        y={n(h.crownTop + h.capRy)}
-        width={n(h.crownW)}
-        height={n(h.crownBottom - h.crownTop - h.capRy)}
-        fill="currentColor"
-      />
+      <path d={bodyPath(h)} fill="currentColor" />
       <ellipse
         cx={n(h.c)}
-        cy={n(h.crownTop + h.capRy)}
-        rx={n(h.crownW / 2)}
-        ry={n(h.capRy)}
+        cy={n(h.bodyBottom)}
+        rx={n(h.crownBottomW / 2)}
+        ry={n(h.bottomCapRy)}
         fill="currentColor"
       />
-      <rect
-        x={n(h.c - h.crownW / 2)}
-        y={n(h.bandTop)}
-        width={n(h.crownW)}
-        height={n(h.bandH)}
-        fill="var(--accent)"
-      />
-      <path d={brimPath(h)} fill="currentColor" />
+      <path d={bandPath(h)} fill="var(--accent)" />
+      <path d={brimRingPath(h)} fill="currentColor" fillRule="evenodd" clipRule="evenodd" />
+      {h.sparkles.map((sparkle, index) => (
+        <path key={index} d={sparklePath(sparkle)} fill={SPARK} />
+      ))}
     </svg>
   );
 }

@@ -4,7 +4,7 @@ import {
   type HighlightField,
   shapeHighlights,
 } from './highlights.js';
-import { pageAll } from './paging.js';
+import { pageAfter, pageAll } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -27,23 +27,39 @@ export async function fetchHighlights(userId: string, pullIds: string[]): Promis
    * pulls — two highlights at offset 0 on different pulls make the page boundary
    * ambiguous, which repeats or drops rows. `shapeHighlights` sorts what it is given,
    * so the display order is unaffected.
+   *
+   * KEYSET, NOT OFFSET, and the `id` order above is exactly what makes that available.
+   * `.range()` is `LIMIT/OFFSET`, so a row inserted before the current offset shifts
+   * every later page: one row comes back twice and another never comes back at all.
+   * Review measured both against this walk — a concurrent insert duplicated a row, a
+   * concurrent delete silently dropped one — and it is reachable rather than theoretical,
+   * because `createHighlight` mints its `id` on the client, so a highlight the offline
+   * queue drains mid-walk can sort anywhere.
+   *
+   * `paging.ts` already argued all of this for the export and then this function, which
+   * the stash CSV reaches through `fetchHighlightsByPull`, kept the offset walk -- so one
+   * PR shipped two exports that disagreed about it. Changed here rather than duplicated
+   * in the export, because `Source.tsx` reads through the same function and has the same
+   * problem, quietly, on any source a reader is actively marking up.
    */
-  const data = await pageAll<{
+  const data = await pageAfter<{
     id: string;
     pull_id: string;
     field: string;
     start_offset: number;
     end_offset: number;
     text: string;
-  }>((from, to) =>
-    supabase
+  }>((after, limit) => {
+    let q = supabase
       .from('highlights')
       .select('id, pull_id, field, start_offset, end_offset, text')
       .eq('user_id', userId)
       .in('pull_id', pullIds)
       .order('id', { ascending: true })
-      .range(from, to),
-  ).catch((e: unknown) => {
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id').catch((e: unknown) => {
     throw rpcError(e);
   });
 

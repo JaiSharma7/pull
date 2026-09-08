@@ -49,6 +49,25 @@ export interface DueReview {
   reps: number;
   dueAt: string;
   question: string | null;
+  /**
+   * The id of the question `question` came from, and which table it came from.
+   *
+   * Both have been in `get_due_reviews`'s payload since
+   * `20260905110000_your_highlights_are_yours_to_keep`, and were declared by nothing --
+   * so the screen could not send the id back even though `grade_recall` takes it and
+   * `recall_events` has a column for it. A grade filed against no question is a grade
+   * that cannot answer "which of my questions do I keep getting wrong".
+   *
+   * `questionSource` says which table, and the client does not have to care: one
+   * `p_question_id` goes to `grade_recall`, which looks it up under the caller's own RLS
+   * and files it in `user_question_id` or `quiz_question_id` accordingly. The screen
+   * uses the source only to tell the reader whose question they are being asked.
+   *
+   * Null together when a pull has no question at all, which is most of the corpus until
+   * 3b seeds it.
+   */
+  questionId: string | null;
+  questionSource: 'user' | 'canonical' | null;
 }
 
 export interface SourceDelta {

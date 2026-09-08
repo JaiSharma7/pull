@@ -311,10 +311,20 @@ export function Review() {
         mutationId,
         submittedAt,
         kind: 'review',
-        // No `questionId` yet. `get_due_reviews` returns the prompt and not the id
-        // it came from, so there is nothing truthful to send; 2b is the PR that
-        // adds `questionId` and `questionSource` to that shape, and the screen
-        // starts sending it in the same change that starts receiving it.
+        /*
+         * THE QUESTION THIS GRADE IS ABOUT. `get_due_reviews` has returned
+         * `questionId` since 20260905110000 and nothing read it, so every grade was
+         * filed against the idea and not against the question that was asked -- which
+         * is the difference between "I keep forgetting this idea" and "I keep getting
+         * this particular question wrong", and only the second can be acted on.
+         *
+         * One id whichever table it came from: `grade_recall` looks it up under the
+         * caller's own RLS and puts it in `user_question_id` when it is one of theirs,
+         * `quiz_question_id` otherwise. So the screen does not have to know, and a
+         * stranger's id simply fails to match and is rejected by the composite key
+         * rather than being filed against them.
+         */
+        ...(card.questionId ? { questionId: card.questionId } : {}),
         ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
       });
       /*
@@ -358,6 +368,10 @@ export function Review() {
             mutationId,
             submittedAt,
             recallKind: 'review',
+            // Queued with the grade for the same reason it is sent with one: a grade
+            // that replays tomorrow still has to say which question it answered, and
+            // the card it came from is long gone by then.
+            ...(card.questionId ? { questionId: card.questionId } : {}),
             ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
           },
           // The refusal decides whether queueing is worth anything. A grade the
@@ -490,7 +504,17 @@ export function Review() {
       */}
 
       <div className="pull-card">
-        <p className="pull-card__chip">{card.workTitle}</p>
+        <p className="pull-card__chip">
+          {card.workTitle}
+          {/* Whose question this is, where the reader is already looking for what they
+              are being asked. `get_due_reviews` prefers a reader's own question over
+              the canonical one, so without this a card silently changes what it asks
+              the moment they write one -- and the answer they are grading themselves
+              against is their own wording, not the catalogue's. Only said when it is
+              theirs: "canonical" is the unremarkable case and naming it on every card
+              would be noise. */}
+          {card.questionSource === 'user' && ' · Your question'}
+        </p>
         <hr className="pull-card__rule" />
         <h2 className="pull-card__headline">{card.question ?? card.headline}</h2>
 

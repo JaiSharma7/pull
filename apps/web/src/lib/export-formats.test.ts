@@ -190,6 +190,36 @@ describe('toAnkiTsv', () => {
     );
   });
 
+  /*
+   * THE INDEX MUST NOT MIX TWO PULLS, which is the one way grouping the history could
+   * differ from scanning it. `summariseHistory` skips a foreign event itself, so before
+   * the index there was nothing to get wrong; now the key is doing that work and a wrong
+   * one would silently attribute another idea's attempts to this card.
+   */
+  it('counts only the events of the question’s own Pull', () => {
+    const out = toAnkiTsv(
+      [question({ id: 'q-a', pullId: 'pull-a' }), question({ id: 'q-b', pullId: 'pull-b' })],
+      // `questionId: null` is the case the index is about: a free-recall grade names no
+      // question and counts towards every question on its own Pull, so the Pull key is
+      // the only thing keeping two ideas' histories apart.
+      [
+        event({ pullId: 'pull-a', questionId: null }),
+        event({ pullId: 'pull-a', questionId: null, grade: 'forgot' }),
+        event({ pullId: 'pull-b', questionId: null }),
+        event({ pullId: 'pull-elsewhere', questionId: null }),
+      ],
+    );
+    const tags = out
+      .trimEnd()
+      .split('\n')
+      .slice(ANKI_HEADER.length)
+      .map((line) => line.split('\t')[2]);
+    expect(tags[0]).toContain('reps:2');
+    expect(tags[0]).toContain('lapses:1');
+    expect(tags[1]).toContain('reps:1');
+    expect(tags[1]).not.toContain('lapses:');
+  });
+
   it('omits lapses and last when there is no history', () => {
     const line = toAnkiTsv([question({ work: null })], [])
       .trimEnd()

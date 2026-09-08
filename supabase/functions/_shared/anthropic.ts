@@ -39,8 +39,25 @@ export const DEFAULT_SUMMARY_MODEL = 'claude-haiku-4-5-20251001';
  * summary that hits this ceiling comes back `stop_reason: max_tokens` with a partial
  * tool input — billed and unusable, which is precisely what `BilledProviderError`
  * exists to report rather than silently retry.
+ *
+ * RAISED WITH THE COMPLETION IT HAS TO HOLD. 3g asks for up to three questions per Pull
+ * where the schema used to allow one, and each carries a prompt, an answer, up to eight
+ * distractors, a cloze sentence, an explanation and a rationale array — so the output
+ * side of a summary grew by roughly a factor of three while this number did not. Review
+ * finding, on the Anthropic path only: Gemini is the primary and sets no output ceiling,
+ * so this is the fallback truncating.
+ *
+ * What that costs is not a bad row, it is three of them. A truncated tool input is
+ * `BilledProviderError` -> `BilledStepError` -> retried, `MAX_ATTEMPTS = 3`, and every
+ * attempt is billed and ledgered. Law 2 is intact — nothing goes unrecorded — but a
+ * ceiling that is too low turns one paid call into three, deterministically, on exactly
+ * the long summaries worth having.
+ *
+ * 24,576 rather than a bound on `pulls`. Capping the array would bound the output too,
+ * and it would do it by throwing away ideas from a long book, which is a product
+ * decision this PR has no business making.
  */
-export const DEFAULT_MAX_TOKENS = 8192;
+export const DEFAULT_MAX_TOKENS = 24_576;
 
 const DEFAULT_TIMEOUT_MS = 90_000;
 
