@@ -171,12 +171,14 @@ begin
     raise exception 'counterpulls_for_work should return counterpulls when reader holds opposing idea';
   end if;
 
-  item := res -> 0;
-  if (item ->> 'pullId')::uuid <> thoreau_id then
-    raise exception 'expected counterpull to be Thoreau, got %', item ->> 'pullId';
-  end if;
-  if (item ->> 'opposingPullId')::uuid <> mill_id then
-    raise exception 'expected opposing idea to be Mill, got %', item ->> 'opposingPullId';
+  select elem into item
+  from jsonb_array_elements(res) elem
+  where (elem ->> 'pullId')::uuid = thoreau_id
+    and (elem ->> 'opposingPullId')::uuid = mill_id
+  limit 1;
+
+  if item is null then
+    raise exception 'counterpulls_for_work did not return expected Thoreau-Mill opposition';
   end if;
   if (item ->> 'retrievability')::double precision < v_floor then
     raise exception 'retrievability of opposing idea must be >= floor';

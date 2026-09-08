@@ -39,23 +39,34 @@ begin
     return '[]'::jsonb;
   end if;
 
-  with candidates as (
+  with nearest as (
     select
       p.id,
+      p.summary_id,
       p.headline,
       p.body,
-      w.id as work_id,
-      w.title as work_title,
       (p.embedding OPERATOR(extensions.<=>) anchor)::double precision as distance
     from public.pulls p
-    join public.summaries s on s.id = p.summary_id
+    where p.embedding is not null
+      and p.id <> p_pull_id
+    order by p.embedding OPERATOR(extensions.<=>) anchor asc
+    limit least(greatest(v_limit * 5, 50), 200)
+  ),
+  candidates as (
+    select
+      n.id,
+      n.headline,
+      n.body,
+      w.id as work_id,
+      w.title as work_title,
+      n.distance
+    from nearest n
+    join public.summaries s on s.id = n.summary_id
     join public.works w on w.id = s.work_id
     where s.status = 'published'
       and s.visibility = 'public'
       and s.work_id <> anchor_work
-      and p.id <> p_pull_id
-      and p.embedding is not null
-    order by p.embedding OPERATOR(extensions.<=>) anchor asc, p.id asc
+    order by n.distance asc, n.id asc
     limit v_limit
   )
   select coalesce(
@@ -115,6 +126,7 @@ begin
       ow.title as opposing_work_title,
       pr.rationale,
       pr.weight,
+      case when pr.from_pull_id = wp.id then 0 else 1 end as direction,
       public.retrievability(ks.stability, ks.last_seen_at) as retrievability
     from work_pulls wp
     join public.pull_relations pr
@@ -134,7 +146,7 @@ begin
     select distinct on (oe.pull_id, oe.opposing_pull_id)
       oe.*
     from opposed_edges oe
-    order by oe.pull_id, oe.opposing_pull_id, oe.retrievability desc
+    order by oe.pull_id, oe.opposing_pull_id, oe.direction asc, oe.retrievability desc, oe.weight desc
   )
   select coalesce(
     jsonb_agg(
