@@ -13,6 +13,7 @@
 import { pageAll } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
+import type { ReviewQuestion } from './types.js';
 
 /** A question the reader wrote, as the Source page lists it back to them. */
 export interface UserQuestion {
@@ -154,4 +155,62 @@ export async function retireQuestion(id: string): Promise<void> {
     .eq('id', id);
 
   if (error) throw rpcError(error);
+}
+
+/**
+ * Fetch questions for a pull: user's own live questions first, then canonical questions.
+ * Ordered newest first, matching get_due_reviews.
+ * Gracefully returns empty array on failure so the card falls back to free recall.
+ */
+export async function fetchQuestions(pullId: string): Promise<ReviewQuestion[]> {
+  try {
+    const [userRes, canonicalRes] = await Promise.all([
+      supabase
+        .from('user_questions')
+        .select('id, kind, prompt, answer, options, cloze, explanation')
+        .eq('pull_id', pullId)
+        .is('retired_at', null)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(3),
+      supabase
+        .from('quiz_questions')
+        .select('id, kind, prompt, answer, distractors, cloze, explanation, rationale')
+        .eq('pull_id', pullId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(3),
+    ]);
+
+    const userQs: ReviewQuestion[] = (userRes.data ?? []).map((r) => ({
+      id: r.id,
+      source: 'user',
+      kind: r.kind as ReviewQuestion['kind'],
+      prompt: r.prompt,
+      answer: r.answer,
+      distractors: Array.isArray(r.options) ? (r.options as string[]) : [],
+      cloze: r.cloze,
+      explanation: r.explanation,
+      rationale: [],
+    }));
+
+    const canonicalQs: ReviewQuestion[] = (canonicalRes.data ?? []).map((r) => ({
+      id: r.id,
+      source: 'canonical',
+      kind: r.kind as ReviewQuestion['kind'],
+      prompt: r.prompt,
+      answer: r.answer,
+      distractors: Array.isArray(r.distractors) ? (r.distractors as string[]) : [],
+      cloze: r.cloze,
+      explanation: r.explanation,
+      rationale: Array.isArray(r.rationale)
+        ? (r.rationale as Array<{ distractor: string; why: string }>)
+        : [],
+    }));
+
+    return [...userQs, ...canonicalQs].slice(0, 3);
+  } catch (e: unknown) {
+    console.error('Failed to fetch questions for pull', pullId, e);
+    return [];
+  }
 }

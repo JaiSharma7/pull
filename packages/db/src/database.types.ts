@@ -2271,12 +2271,14 @@ export type Database = {
       }
       record_interrupt: {
         Args: {
+          p_answer?: string
           p_confidence?: string
           p_grade?: Database["public"]["Enums"]["recall_grade"]
           p_kind: Database["public"]["Enums"]["interrupt_kind"]
           p_latency?: number
           p_mutation_id?: string
           p_pull_id: string
+          p_question_id?: string
           p_response: Database["public"]["Enums"]["interrupt_response"]
           p_session?: string
           p_slot: number

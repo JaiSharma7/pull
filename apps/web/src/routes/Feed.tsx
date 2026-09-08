@@ -623,6 +623,10 @@ export function Feed({
             mutationId: interruptMutationId,
             submittedAt: interruptSubmittedAt,
             ...(interruptGrade ? { grade: interruptGrade } : {}),
+            ...(answer?.confidence ? { confidence: answer.confidence } : {}),
+            ...(answer?.questionId ? { questionId: answer.questionId } : {}),
+            ...(typeof answer?.latencyMs === 'number' ? { latencyMs: answer.latencyMs } : {}),
+            ...(answer?.answer ? { answer: answer.answer } : {}),
           })
           .catch((e: unknown) => {
             /*
@@ -653,6 +657,10 @@ export function Feed({
                 mutationId: interruptMutationId,
                 submittedAt: interruptSubmittedAt,
                 recallKind: item.slot.kind,
+                ...(answer?.confidence ? { confidence: answer.confidence } : {}),
+                ...(answer?.questionId ? { questionId: answer.questionId } : {}),
+                ...(typeof answer?.latencyMs === 'number' ? { latencyMs: answer.latencyMs } : {}),
+                ...(answer?.answer ? { answer: answer.answer } : {}),
               },
               e,
             );
