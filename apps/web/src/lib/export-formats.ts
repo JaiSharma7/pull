@@ -343,11 +343,33 @@ export function toAnkiTsv(
   questions: readonly AnkiQuestion[],
   history: readonly ReviewEvent[],
 ): string {
+  /*
+   * INDEXED ONCE, because this loop was quadratic on the UI thread.
+   *
+   * `summariseHistory` filters the history it is given down to one Pull, and it was
+   * handed the WHOLE history once per question -- so the work was questions x events.
+   * Review put the shape at roughly 1.5 billion iterations for 15,000 questions against
+   * 100,000 events, which is a tab that stops responding behind a button whose only
+   * feedback is the word "Gathering…".
+   *
+   * Grouping by `pullId` first makes it events + questions x events-on-that-Pull, which
+   * is linear in everything that grows. The result is identical by construction:
+   * `summariseHistory`'s first act is to skip every event whose `pullId` does not match,
+   * so handing it exactly that Pull's events removes only work, never a row. Its
+   * signature and its own tests are untouched.
+   */
+  const byPull = new Map<string, ReviewEvent[]>();
+  for (const event of history) {
+    const seen = byPull.get(event.pullId);
+    if (seen) seen.push(event);
+    else byPull.set(event.pullId, [event]);
+  }
+
   const lines = [...ANKI_HEADER];
   for (const q of questions) {
     if (!q.prompt.trim() || !q.answer.trim()) continue;
     const { front, back } = faces(q);
-    const tags = ankiTags(q, summariseHistory(q, history));
+    const tags = ankiTags(q, summariseHistory(q, byPull.get(q.pullId) ?? []));
     lines.push([tsvField(front), tsvField(back), tsvField(tags)].join('\t'));
   }
   return lines.join('\n') + '\n';
