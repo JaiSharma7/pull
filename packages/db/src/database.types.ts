@@ -1121,6 +1121,7 @@ export type Database = {
       notes: {
         Row: {
           body: string
+          client_mutation_id: string | null
           created_at: string
           id: string
           pull_id: string | null
@@ -1131,6 +1132,7 @@ export type Database = {
         }
         Insert: {
           body: string
+          client_mutation_id?: string | null
           created_at?: string
           id?: string
           pull_id?: string | null
@@ -1141,6 +1143,7 @@ export type Database = {
         }
         Update: {
           body?: string
+          client_mutation_id?: string | null
           created_at?: string
           id?: string
           pull_id?: string | null
@@ -1162,6 +1165,166 @@ export type Database = {
             columns: ["summary_id"]
             isOneToOne: false
             referencedRelation: "summaries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      path_progress: {
+        Row: {
+          completed_at: string | null
+          path_id: string
+          paused_at: string | null
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          path_id: string
+          paused_at?: string | null
+          started_at?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          path_id?: string
+          paused_at?: string | null
+          started_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "path_progress_path_id_fkey"
+            columns: ["path_id"]
+            isOneToOne: false
+            referencedRelation: "paths"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      path_step_done: {
+        Row: {
+          done_at: string
+          ordinal: number
+          path_id: string
+          tested_out: boolean
+          user_id: string
+        }
+        Insert: {
+          done_at?: string
+          ordinal: number
+          path_id: string
+          tested_out?: boolean
+          user_id: string
+        }
+        Update: {
+          done_at?: string
+          ordinal?: number
+          path_id?: string
+          tested_out?: boolean
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "path_step_done_step_fk"
+            columns: ["path_id", "ordinal"]
+            isOneToOne: false
+            referencedRelation: "path_steps"
+            referencedColumns: ["path_id", "ordinal"]
+          },
+        ]
+      }
+      path_steps: {
+        Row: {
+          compare_pull_id: string | null
+          created_at: string
+          kind: string
+          ordinal: number
+          path_id: string
+          prompt: string | null
+          pull_id: string
+        }
+        Insert: {
+          compare_pull_id?: string | null
+          created_at?: string
+          kind: string
+          ordinal: number
+          path_id: string
+          prompt?: string | null
+          pull_id: string
+        }
+        Update: {
+          compare_pull_id?: string | null
+          created_at?: string
+          kind?: string
+          ordinal?: number
+          path_id?: string
+          prompt?: string | null
+          pull_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "path_steps_compare_pull_id_fkey"
+            columns: ["compare_pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "path_steps_path_id_fkey"
+            columns: ["path_id"]
+            isOneToOne: false
+            referencedRelation: "paths"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "path_steps_pull_id_fkey"
+            columns: ["pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      paths: {
+        Row: {
+          created_at: string
+          description: string
+          id: string
+          question: string
+          slug: string
+          status: Database["public"]["Enums"]["publish_status"]
+          title: string
+          topic_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          id?: string
+          question: string
+          slug: string
+          status?: Database["public"]["Enums"]["publish_status"]
+          title: string
+          topic_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          id?: string
+          question?: string
+          slug?: string
+          status?: Database["public"]["Enums"]["publish_status"]
+          title?: string
+          topic_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "paths_topic_id_fkey"
+            columns: ["topic_id"]
+            isOneToOne: false
+            referencedRelation: "topics"
             referencedColumns: ["id"]
           },
         ]
@@ -2094,6 +2257,19 @@ export type Database = {
         Args: { p_from_step: string; p_job_id: string; p_to_step?: string }
         Returns: boolean
       }
+      advance_path: {
+        Args: { p_ordinal: number; p_path_id: string }
+        Returns: Json
+      }
+      apply_path_step: {
+        Args: {
+          p_mutation_id?: string
+          p_ordinal: number
+          p_path_id: string
+          p_reflection: string
+        }
+        Returns: Json
+      }
       archive_generation_message: {
         Args: { p_msg_id: number }
         Returns: boolean
@@ -2169,6 +2345,8 @@ export type Database = {
         }
         Returns: Json
       }
+      get_path: { Args: { p_slug: string }; Returns: Json }
+      get_paths: { Args: never; Returns: Json }
       get_source_delta: { Args: { p_work_id: string }; Returns: Json }
       get_topic: { Args: { p_limit?: number; p_slug: string }; Returns: Json }
       get_user_knowledge_graph: { Args: { p_limit?: number }; Returns: Json }
@@ -2230,6 +2408,7 @@ export type Database = {
           user_agent: string
         }[]
       }
+      pause_path: { Args: { p_path_id: string }; Returns: Json }
       plan_interleave: {
         Args: {
           p_cards_before?: number
@@ -2341,6 +2520,7 @@ export type Database = {
         }
         Returns: number
       }
+      resume_path: { Args: { p_path_id: string }; Returns: Json }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
         Returns: number
@@ -2403,6 +2583,7 @@ export type Database = {
         Returns: number
       }
       synthetic_embedding: { Args: { p_axes: Json }; Returns: string }
+      test_out: { Args: { p_path_id: string }; Returns: Json }
       topic_affinity: {
         Args: { p_weights: Json; p_work_id: string }
         Returns: number
