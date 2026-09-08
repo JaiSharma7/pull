@@ -1414,8 +1414,7 @@ describe('a law-bearing token has exactly one home', () => {
         if (!/\.(?:shell__column|measure)\b/.test(selector)) continue;
         for (const m of body.matchAll(/max-(?:width|inline-size):\s*([^;]+)/g)) {
           const value = m[1]!.trim();
-          const token = selector.includes('.shell__column') ? '--measure-card' : '--measure';
-          if (value === `var(${token})`) continue;
+          if (value === 'var(--measure)') continue;
           offenders.push(`${label(f)}: ${selector.trim()} sets max-width: ${value}`);
         }
       }
@@ -1520,7 +1519,7 @@ describe('The Archive viewport laws', () => {
     }
   });
 
-  it('caps the card container at every width independently of prose', () => {
+  it('pins the reading column to --measure at every width, not only wide ones', () => {
     /*
      * The one dimension that must not respond. Extra width buys structure and
      * peripheral context; a 1400px line is one nobody can track back to the start of.
@@ -1536,7 +1535,7 @@ describe('The Archive viewport laws', () => {
       .replace(/@media[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
 
     expect(withoutMediaQueries, 'the reading column no longer caps its width').toMatch(
-      /\.shell__column\s*\{[^}]*max-width:\s*var\(--measure-card\)/,
+      /\.shell__column\s*\{[^}]*max-width:\s*var\(--measure\)/,
     );
   });
 
