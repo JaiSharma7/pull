@@ -80,3 +80,131 @@
   text-transform: uppercase;
   color: var(--text-soft);
 }
+
+/*
+ * Path step runner
+ */
+
+.path__nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.path__nav-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.path__paused-banner {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  margin-bottom: var(--space-4);
+}
+
+.path__headline-area {
+  margin-bottom: var(--space-4);
+}
+
+.path__title {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  letter-spacing: -0.02em;
+  margin: var(--space-1) 0 var(--space-2);
+  line-height: var(--line-tight);
+}
+
+.path__step-badge {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.path__prompt-box {
+  padding: var(--space-4);
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  margin-bottom: var(--space-4);
+}
+
+.path__prompt-text {
+  font-size: var(--step-0);
+  line-height: var(--line-normal);
+  color: var(--text);
+  margin: 0;
+}
+
+.path__step-content {
+  margin-top: var(--space-4);
+}
+
+.path__step-actions {
+  margin-top: var(--space-4);
+}
+
+.path__compare-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+@media (min-width: 640px) {
+  .path__compare-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.path__compare-card {
+  padding: var(--space-4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.path__compare-card h3 {
+  font-family: var(--font-display);
+  font-size: var(--step-0);
+  margin: var(--space-2) 0;
+  line-height: var(--line-snug);
+}
+
+.path__compare-card p {
+  font-size: var(--step--1);
+  color: var(--text-soft);
+  margin: 0;
+  line-height: var(--line-normal);
+}
+
+.path__conviction-bar {
+  margin: var(--space-3) 0;
+}
+
+/*
+ * Completion Screen
+ */
+
+.path__completion {
+  padding: var(--space-6) 0;
+}
+
+.path__question {
+  font-size: var(--step-1);
+  color: var(--text-soft);
+  margin-bottom: var(--space-4);
+}
+
+.path__recap-card {
+  padding: var(--space-5);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  margin-bottom: var(--space-5);
+}
+
+.path__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
