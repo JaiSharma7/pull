@@ -58,7 +58,7 @@ begin
   select p.id, s.work_id into thoreau_id, walden_work_id
   from public.pulls p
   join public.summaries s on s.id = p.summary_id
-  where p.headline like 'The cost of a thing is the amount%'
+  where p.headline like 'Living deliberately%'
   limit 1;
 
   if mill_id is null or thoreau_id is null then
