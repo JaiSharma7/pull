@@ -166,3 +166,25 @@
   color: var(--text-muted);
   pointer-events: none;
 }
+
+.synapse-preview {
+  pointer-events: none;
+  position: absolute;
+  top: 4.5rem;
+  right: var(--space-3);
+  width: min(24rem, calc(100% - var(--space-6)));
+  max-height: calc(100% - 9rem);
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--rule);
+  background: var(--surface-raised);
+  user-select: text;
+}
+
+.synapse-preview[data-pinned='true'] {
+  pointer-events: auto;
+}
+
+.synapse-preview p {
+  margin-block: var(--space-2);
+}

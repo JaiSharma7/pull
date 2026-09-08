@@ -26,6 +26,13 @@ const base = {
 };
 
 describe('PullCard', () => {
+  it('offers a native draggable depth slider with the available bounds', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, depth: 1 }));
+    expect(html).toContain('type="range"');
+    expect(html).toContain('min="0"');
+    expect(html).toContain('max="1"');
+    expect(html).toContain('aria-valuetext="Short');
+  });
   it('renders the headline and body', () => {
     const html = renderToStaticMarkup(createElement(PullCard, base));
     expect(html).toContain('Silencing a dissenter deprives society');

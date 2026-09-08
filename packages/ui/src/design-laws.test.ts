@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -129,7 +129,7 @@ const notTokens = cssFiles.filter((f) => f !== TOKENS);
 const COMPONENT_ROOTS = [WEB, join(import.meta.dirname)].filter(existsSync);
 
 /** Bare names still resolve in this package, which is where the named files live. */
-const read = (f: string) => readFileSync(f.includes('/') ? f : join(STYLES, f), 'utf8');
+const read = (f: string) => readFileSync(isAbsolute(f) ? f : join(STYLES, f), 'utf8');
 /** What to call a stylesheet in a failure message. */
 const label = (f: string) => basename(f);
 

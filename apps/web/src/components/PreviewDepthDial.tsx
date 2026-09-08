@@ -18,6 +18,17 @@ export function PreviewDepthDial({
   return (
     <fieldset className="design-preview__dial">
       <legend className="meta design-preview__dial-title">Depth</legend>
+      <input
+        className="depth-slider"
+        type="range"
+        min={0}
+        max={labels.length - 1}
+        step={1}
+        value={depth}
+        aria-label="Depth"
+        aria-valuetext={`${DEPTH_NAMES[depth]}: ${labels[depth]}`}
+        onChange={(event) => onDepth(Number(event.currentTarget.value))}
+      />
       {labels.map((label, index) => (
         <label
           className="design-preview__depth"

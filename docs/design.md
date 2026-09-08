@@ -92,8 +92,9 @@ This product's claim is the opposite: _enough for today_. A bounded sitting that
 with a number attached to what it was worth. That claim is not made by copy, it is made
 by layout. So:
 
-- **Never full-bleed.** The reading column stays at `--measure` at every screen size.
-  Extra width buys structure and peripheral context; it never buys a longer line.
+- **Keep a visible margin.** Cards use the available laptop space up to `--measure`,
+  including in focus mode. Paragraphs inside a card stay at 65 characters; the extra
+  card width gives the depth controls room to stay on one line.
 - **The rails stay on screen** above 60rem. They _are_ the edges. What they show — what
   this session has done, what the Delta spared you — is the visible evidence that a
   session is a finite thing.
@@ -123,8 +124,8 @@ MacBook 16:10   1512             982
 ```
 
 - **Width** was handled, but in two jumps. The rails are now `clamp()`ed, so a 70rem
-  window is proportioned for 70rem instead of for 60. The reading column is exempt on
-  purpose: it is the one dimension that must not respond.
+  window is proportioned for 70rem instead of for 60. Cards can use the available
+  width; their prose keeps a separate readable line length.
 - **Height** was not considered at all. Every rule keyed on width alone, which silently
   assumes 16:9. A 3:2 Surface at 200% scaling has just 47rem of height, and that is
   where a card, its rails and the tally stop fitting together. Under 48rem the vertical

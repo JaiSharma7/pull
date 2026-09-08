@@ -254,6 +254,38 @@ export type Database = {
           },
         ]
       }
+      daily_pull_selections: {
+        Row: {
+          day: string
+          ordinal: number
+          pull_id: string
+          reason: string
+          user_id: string
+        }
+        Insert: {
+          day: string
+          ordinal: number
+          pull_id: string
+          reason: string
+          user_id: string
+        }
+        Update: {
+          day?: string
+          ordinal?: number
+          pull_id?: string
+          reason?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_pull_selections_pull_id_fkey"
+            columns: ["pull_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       daily_pulls: {
         Row: {
           blurb: string | null
@@ -2124,6 +2156,7 @@ export type Database = {
       generate_mfa_recovery_codes: { Args: never; Returns: string[] }
       generation_secret: { Args: { p_name: string }; Returns: string }
       get_catalogue: { Args: never; Returns: Json }
+      get_daily_pulls: { Args: { p_day: string }; Returns: Json }
       get_due_reviews: { Args: { p_limit?: number }; Returns: Json }
       get_feed: {
         Args: {
