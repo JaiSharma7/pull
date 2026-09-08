@@ -3,6 +3,12 @@ import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from 
 import { PROGRESS_COPY } from '../lib/progress.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import type { KnowledgeGraphData } from '../lib/types.js';
+import {
+  CONFIDENTLY_WRONG_COPY,
+  formatAttemptDate,
+  type ConfidentlyWrongItem,
+} from '../lib/confidently-wrong.js';
+import { fetchConfidentlyWrong } from '../lib/confidently-wrong-api.js';
 
 export interface MetacognitiveDashboardProps {
   userId: string | null;
@@ -16,7 +22,23 @@ export function MetacognitiveDashboard({
   onGoToReview,
 }: MetacognitiveDashboardProps) {
   const [graphData, setGraphData] = useState<KnowledgeGraphData | null>(null);
+  const [confidentlyWrong, setConfidentlyWrong] = useState<ConfidentlyWrongItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetchConfidentlyWrong(userId)
+      .then((items) => {
+        if (live) setConfidentlyWrong(items);
+      })
+      .catch((e: unknown) => {
+        console.warn('Failed to load confidently wrong items:', e);
+      });
+
+    return () => {
+      live = false;
+    };
+  }, [userId]);
 
   useEffect(() => {
     let live = true;
@@ -275,6 +297,76 @@ export function MetacognitiveDashboard({
                 </div>
               </div>
             </div>
+          </section>
+
+          {/* Confidently Wrong Misconceptions Breakdown */}
+          <section
+            style={{
+              border: '1px solid var(--rule)',
+              padding: 'var(--space-4)',
+              backgroundColor: 'var(--surface)',
+            }}
+            className="stack"
+          >
+            <div
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}
+            >
+              <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
+                {CONFIDENTLY_WRONG_COPY.sectionTitle}
+              </h2>
+              {confidentlyWrong.length > 0 && (
+                <span className="meta" style={{ color: 'var(--accent)' }}>
+                  {confidentlyWrong.length} to repair
+                </span>
+              )}
+            </div>
+            <p className="meta">{CONFIDENTLY_WRONG_COPY.description}</p>
+
+            {confidentlyWrong.length === 0 ? (
+              <p className="meta" style={{ color: 'var(--text-faint)', margin: 0 }}>
+                {CONFIDENTLY_WRONG_COPY.empty}
+              </p>
+            ) : (
+              <ul
+                style={{
+                  listStyle: 'none',
+                  padding: 0,
+                  margin: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-3)',
+                }}
+              >
+                {confidentlyWrong.map((item) => (
+                  <li
+                    key={item.id}
+                    style={{
+                      paddingTop: 'var(--space-2)',
+                      borderTop: '1px solid var(--rule)',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      style={{
+                        textAlign: 'left',
+                        padding: 0,
+                        display: 'block',
+                        width: '100%',
+                        fontWeight: 500,
+                        lineHeight: 'var(--line-tight)',
+                      }}
+                      onClick={() => onNavigate(`/pull/${item.pullId}`)}
+                    >
+                      {item.headline}
+                    </button>
+                    <p className="meta" style={{ marginTop: 'var(--space-1)', marginBottom: 0 }}>
+                      {item.workTitle} · {formatAttemptDate(item.appliedAt)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           {/* Quick Actions */}

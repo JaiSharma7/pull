@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeGraphStats, GRAPH_LIMIT, SAMPLE_GRAPH } from '../lib/graph.js';
 import { PROGRESS_COPY } from '../lib/progress.js';
+import { CONFIDENTLY_WRONG_COPY } from '../lib/confidently-wrong.js';
 
 /*
  * The screen's own promise, checked against the screen.
@@ -122,5 +123,14 @@ describe('MetacognitiveDashboard stats calculations', () => {
         true,
       );
     }
+  });
+});
+
+describe('Confidently wrong section copy', () => {
+  it('explains what confidently wrong means without judging the reader', () => {
+    expect(CONFIDENTLY_WRONG_COPY.sectionTitle).toBe('Confidently wrong');
+    expect(CONFIDENTLY_WRONG_COPY.description).toContain("marked 'I’m sure' before missing");
+    expect(CONFIDENTLY_WRONG_COPY.description).toContain('30 days');
+    expect(CONFIDENTLY_WRONG_COPY.empty).toContain('No confident lapses in the last 30 days');
   });
 });
