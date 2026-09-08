@@ -56,6 +56,20 @@ describe('titleFor', () => {
     expect(titleFor({ ...base, pathname: '/topic/stoicism' })).toBe('Topic · What a Pull');
   });
 
+  it('names a learning path', () => {
+    expect(titleFor({ ...base, pathname: '/paths' })).toBe('Learning Paths · What a Pull');
+    expect(
+      titleFor({
+        ...base,
+        pathname: '/path/what-is-actually-up-to-me',
+        documentTitle: 'What is actually up to you?',
+      }),
+    ).toBe('What is actually up to you? · What a Pull');
+    expect(titleFor({ ...base, pathname: '/path/what-is-actually-up-to-me' })).toBe(
+      'Learning Path · What a Pull',
+    );
+  });
+
   it('says so when the address matches nothing', () => {
     expect(titleFor({ ...base, pathname: '/nonsense' })).toBe('Not found · What a Pull');
     expect(titleFor({ ...base, pathname: '/source' })).toBe('Not found · What a Pull');
@@ -66,6 +80,8 @@ describe('titleFor', () => {
     // which is a better message than a generic 404 and is that screen's to give.
     expect(isKnownPath('/source/anything')).toBe(true);
     expect(isKnownPath('/topic/anything')).toBe(true);
+    expect(isKnownPath('/path/anything')).toBe(true);
+    expect(isKnownPath('/paths')).toBe(true);
     expect(isKnownPath('/')).toBe(true);
     expect(isKnownPath('/account')).toBe(true);
     expect(isKnownPath('/nonsense')).toBe(false);
