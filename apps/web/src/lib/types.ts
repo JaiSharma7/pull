@@ -37,15 +37,32 @@ export interface FeedResponse {
   page: number;
 }
 
+export interface ReviewQuestion {
+  id: string;
+  source: 'user' | 'canonical';
+  kind: 'recall' | 'mcq' | 'cloze' | 'short_answer' | 'ordering' | 'scenario';
+  prompt: string;
+  answer: string | null;
+  distractors: string[] | null;
+  cloze: string | null;
+  explanation: string | null;
+  rationale: Array<{ distractor: string; why: string }> | null;
+}
+
 export interface DueReview {
   pullId: string;
   headline: string;
   body: string;
   whyItMatters: string | null;
+  example?: string | null;
+  explanation?: string | null;
   workTitle: string;
   workSlug: string;
+  contentVersion?: number;
   retrievability: number;
   stability: number;
+  difficulty?: number;
+  lapses?: number;
   reps: number;
   dueAt: string;
   question: string | null;
@@ -68,6 +85,7 @@ export interface DueReview {
    */
   questionId: string | null;
   questionSource: 'user' | 'canonical' | null;
+  questions?: ReviewQuestion[];
 }
 
 export interface SourceDelta {
