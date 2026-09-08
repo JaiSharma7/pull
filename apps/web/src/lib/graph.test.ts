@@ -81,6 +81,7 @@ describe('graph pure functions', () => {
     expect(stats.opposesCount).toBe(1);
     expect(stats.ancestorCount).toBe(1);
     expect(stats.elaboratesCount).toBe(1);
+    expect(stats.supportsCount).toBe(0);
   });
 
   it('formats retrievability human labels correctly', () => {

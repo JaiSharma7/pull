@@ -143,7 +143,7 @@ partial unique index on `(user_id, pull_id) where superseded_by is null` makes
 their whole history.
 
 **Lineage and counterpoints share one edge table.** `pull_relations.kind` covers
-`related`, `opposes`, `elaborates`, `ancestor` and `descendant`. Counterpull
+`related`, `opposes`, `elaborates`, `ancestor`, `descendant` and `supports`. Counterpull
 reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`.
 
 The read path reads `opposes` too, and not as a feature — as a correction.

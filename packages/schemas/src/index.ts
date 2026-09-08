@@ -35,6 +35,7 @@ export const RELATION_KINDS = [
   'elaborates',
   'ancestor',
   'descendant',
+  'supports',
 ] as const;
 export type RelationKind = (typeof RELATION_KINDS)[number];
 

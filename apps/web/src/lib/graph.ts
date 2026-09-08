@@ -182,6 +182,7 @@ export interface GraphStats {
   opposesCount: number;
   ancestorCount: number;
   elaboratesCount: number;
+  supportsCount: number;
 }
 
 /**
@@ -247,6 +248,7 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
       opposesCount: 0,
       ancestorCount: 0,
       elaboratesCount: 0,
+      supportsCount: 0,
     };
   }
 
@@ -263,11 +265,13 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
   let opposesCount = 0;
   let ancestorCount = 0;
   let elaboratesCount = 0;
+  let supportsCount = 0;
 
   for (const e of links) {
     if (e.kind === 'opposes') opposesCount++;
     else if (e.kind === 'ancestor' || e.kind === 'descendant') ancestorCount++;
     else if (e.kind === 'elaborates') elaboratesCount++;
+    else if (e.kind === 'supports') supportsCount++;
   }
 
   const retentionHealth = Math.round(((solidCount + refreshingCount) / totalNodes) * 100);
@@ -281,6 +285,7 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
     opposesCount,
     ancestorCount,
     elaboratesCount,
+    supportsCount,
   };
 }
 

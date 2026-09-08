@@ -39,6 +39,7 @@ import type { SourceDelta } from '../lib/types.js';
  * shows up as itself instead of silently disappearing from the page.
  */
 const RELATION_LABEL: Record<string, string> = {
+  supports: 'Supports this',
   opposes: 'Argues against this',
   elaborates: 'Elaborates on this',
   ancestor: 'This idea came from it',
