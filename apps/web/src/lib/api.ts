@@ -130,6 +130,8 @@ export async function recordInterrupt(args: {
   mutationId?: string;
   submittedAt?: number;
   confidence?: 'sure' | 'unsure';
+  questionId?: string;
+  answer?: string;
 }) {
   const { error } = await supabase.rpc('record_interrupt', {
     p_pull_id: args.pullId,
@@ -146,6 +148,8 @@ export async function recordInterrupt(args: {
       ? { p_submitted_at: new Date(args.submittedAt).toISOString() }
       : {}),
     ...(args.confidence ? { p_confidence: args.confidence } : {}),
+    ...(args.questionId ? { p_question_id: args.questionId } : {}),
+    ...(args.answer ? { p_answer: args.answer } : {}),
   });
   if (error) throw rpcError(error);
 }

@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { InterruptKind, Stance } from '@wap/schemas';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
 import { recognitionSupported, startRecognition } from '../lib/speech.js';
-import type { FeedRow } from '../lib/types.js';
+import type { FeedRow, ReviewQuestion } from '../lib/types.js';
+import { fetchQuestions } from '../lib/questions-api.js';
+import { resolveEffectiveKind, toActivityQuestion } from '../lib/review-question.js';
+import { gradeCloze, gradeMcq, mcqOptions, whyWrong, type WhyWrong } from '../lib/activities.js';
+import { elapsedSince } from '../lib/submission.js';
 
 /** What the reader gave back. Every field is optional — a conviction answer
  *  carries a stance and no grade, a recall answer the reverse. */
@@ -10,6 +14,11 @@ export interface InterruptAnswer {
   grade?: RecallGrade;
   stance?: Stance;
   explanation?: string;
+  confidence?: 'sure' | 'unsure';
+  questionId?: string;
+  latencyMs?: number;
+  answer?: string;
+  kind?: string;
 }
 
 export interface InterruptProps {
@@ -18,6 +27,496 @@ export interface InterruptProps {
   pull: FeedRow;
   onAnswer: (answer: InterruptAnswer) => void;
   onDismiss: () => void;
+}
+
+interface RecallInterruptCardProps {
+  pull: FeedRow;
+  onAnswer: (a: InterruptAnswer) => void;
+  onDismiss: () => void;
+}
+
+function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardProps) {
+  const [question, setQuestion] = useState<ReviewQuestion | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const [revealedAt, setRevealedAt] = useState<number | null>(null);
+  const [sure, setSure] = useState(false);
+  const [clozeInput, setClozeInput] = useState('');
+
+  interface AnsweredState {
+    kind: 'mcq' | 'cloze';
+    pickedOrTyped: string;
+    correct: boolean;
+    grade: RecallGrade;
+    reason: WhyWrong | null;
+    latencyMs?: number;
+  }
+  const [answered, setAnswered] = useState<AnsweredState | null>(null);
+  const displayedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    displayedAtRef.current = Date.now();
+    let cancelled = false;
+    fetchQuestions(pull.id).then((qs) => {
+      if (!cancelled && qs.length > 0) {
+        setQuestion(qs[0]!);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pull.id]);
+
+  const activityQ = useMemo(() => (question ? toActivityQuestion(question) : null), [question]);
+  const mcqChoices = useMemo(() => {
+    if (!activityQ || activityQ.kind !== 'mcq') return [];
+    return mcqOptions(activityQ, activityQ.id);
+  }, [activityQ]);
+
+  const effectiveKind = resolveEffectiveKind(activityQ, mcqChoices);
+
+  const chipLabel =
+    effectiveKind === 'mcq'
+      ? 'Do you still have this? · Multiple choice'
+      : effectiveKind === 'cloze'
+        ? 'Do you still have this? · Fill the blank'
+        : 'Do you still have this?';
+
+  return (
+    <section
+      className="pull-card"
+      aria-labelledby={`interrupt-${pull.id}`}
+      style={{ borderColor: 'var(--accent)' }}
+    >
+      <p className="pull-card__chip" style={{ color: 'var(--accent)' }}>
+        {chipLabel}
+      </p>
+      <hr className="pull-card__rule" />
+
+      <h2 className="pull-card__headline" id={`interrupt-${pull.id}`}>
+        {question?.prompt ?? pull.headline}
+      </h2>
+
+      {effectiveKind === 'recall' && (
+        <>
+          {revealed ? (
+            <>
+              <p className="pull-card__body">{question?.answer ?? pull.body}</p>
+              {question?.explanation && (
+                <div
+                  style={{
+                    marginBottom: 'var(--space-4)',
+                    borderLeft: '1px solid var(--rule-strong)',
+                    paddingLeft: 'var(--space-3)',
+                  }}
+                >
+                  <p className="meta" style={{ marginBottom: 'var(--space-1)' }}>
+                    Explanation
+                  </p>
+                  <p className="meta" style={{ color: 'var(--text-soft)', margin: 0 }}>
+                    {question.explanation}
+                  </p>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                {RECALL_GRADES.map((g: RecallGrade) => (
+                  <button
+                    key={g}
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      onAnswer({
+                        grade: g,
+                        confidence: sure ? 'sure' : 'unsure',
+                        questionId: question?.id,
+                        latencyMs: elapsedSince(revealedAt),
+                        answer: question?.answer ?? pull.body,
+                        kind: 'recall',
+                      })
+                    }
+                  >
+                    {GRADE_LABELS[g]}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-4)',
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => {
+                  setRevealed(true);
+                  setRevealedAt(Date.now());
+                }}
+              >
+                Show answer
+              </button>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--step--1)',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+                I’m sure
+              </label>
+            </div>
+          )}
+        </>
+      )}
+
+      {effectiveKind === 'mcq' && (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-2)',
+              marginBottom: 'var(--space-4)',
+            }}
+          >
+            {mcqChoices.map((opt) => {
+              const isSelected = answered?.pickedOrTyped === opt;
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  className="btn"
+                  aria-pressed={isSelected}
+                  disabled={answered !== null}
+                  style={{
+                    textAlign: 'left',
+                    width: '100%',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--step--1)',
+                    borderColor: isSelected ? 'var(--accent)' : undefined,
+                    fontWeight: isSelected ? 600 : undefined,
+                  }}
+                  onClick={() => {
+                    const latencyMs = elapsedSince(displayedAtRef.current);
+                    const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
+                    const reason = whyWrong(activityQ!, opt);
+                    setAnswered({
+                      kind: 'mcq',
+                      pickedOrTyped: opt,
+                      correct: res.correct,
+                      grade: res.grade,
+                      reason,
+                      latencyMs,
+                    });
+                  }}
+                >
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+
+          {answered === null ? (
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--step--1)',
+                color: 'var(--text-muted)',
+                marginBottom: 'var(--space-2)',
+              }}
+            >
+              <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+              I’m sure
+            </label>
+          ) : (
+            <div style={{ margin: 'var(--space-4) 0' }}>
+              {answered.correct ? (
+                <p
+                  className="meta"
+                  style={{ color: 'var(--accent)', marginBottom: 'var(--space-3)' }}
+                >
+                  Correct
+                </p>
+              ) : (
+                <p className="meta" role="alert" style={{ marginBottom: 'var(--space-3)' }}>
+                  Not quite
+                </p>
+              )}
+
+              {answered.reason && answered.reason.source === 'distractor' && (
+                <div
+                  style={{
+                    marginBottom: 'var(--space-3)',
+                    borderLeft: '1px solid var(--rule-strong)',
+                    paddingLeft: 'var(--space-3)',
+                  }}
+                >
+                  <p className="meta" style={{ marginBottom: 'var(--space-1)' }}>
+                    Why that’s wrong
+                  </p>
+                  <p className="meta" style={{ color: 'var(--text-soft)', margin: 0 }}>
+                    {answered.reason.why}
+                  </p>
+                </div>
+              )}
+
+              {question?.explanation && (
+                <div
+                  style={{
+                    marginBottom: 'var(--space-3)',
+                    borderLeft: '1px solid var(--rule-strong)',
+                    paddingLeft: 'var(--space-3)',
+                  }}
+                >
+                  <p className="meta" style={{ marginBottom: 'var(--space-1)' }}>
+                    Explanation
+                  </p>
+                  <p className="meta" style={{ color: 'var(--text-soft)', margin: 0 }}>
+                    {question.explanation}
+                  </p>
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 'var(--space-2)',
+                  flexWrap: 'wrap',
+                  marginTop: 'var(--space-4)',
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() =>
+                    onAnswer({
+                      grade: answered.grade,
+                      confidence: sure ? 'sure' : 'unsure',
+                      questionId: question?.id,
+                      latencyMs: answered.latencyMs,
+                      answer: answered.pickedOrTyped,
+                      kind: 'mcq',
+                    })
+                  }
+                >
+                  Continue
+                </button>
+                {answered.correct && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      onAnswer({
+                        grade: 'hard',
+                        confidence: sure ? 'sure' : 'unsure',
+                        questionId: question?.id,
+                        latencyMs: answered.latencyMs,
+                        answer: answered.pickedOrTyped,
+                        kind: 'mcq',
+                      })
+                    }
+                  >
+                    That was hard
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {effectiveKind === 'cloze' && (
+        <>
+          <p
+            className="pull-card__body"
+            style={{
+              fontStyle: 'italic',
+              marginBottom: 'var(--space-4)',
+            }}
+          >
+            {activityQ?.cloze ?? question?.cloze}
+          </p>
+
+          {answered === null ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!clozeInput.trim()) return;
+                const latencyMs = elapsedSince(displayedAtRef.current);
+                const res = gradeCloze(
+                  clozeInput,
+                  activityQ?.answer ?? '',
+                  sure ? 'sure' : 'unsure',
+                  latencyMs,
+                );
+                setAnswered({
+                  kind: 'cloze',
+                  pickedOrTyped: clozeInput,
+                  correct: res.correct,
+                  grade: res.grade,
+                  reason: null,
+                  latencyMs,
+                });
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 'var(--space-3)',
+                marginBottom: 'var(--space-3)',
+              }}
+            >
+              <input
+                type="text"
+                value={clozeInput}
+                placeholder="Type your answer…"
+                onChange={(e) => setClozeInput(e.target.value)}
+                style={{
+                  padding: 'var(--space-2) var(--space-3)',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: 'var(--step-0)',
+                  border: '1px solid var(--rule-strong)',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'transparent',
+                  color: 'var(--text)',
+                  width: '100%',
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-4)',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <button type="submit" className="btn btn--primary" disabled={!clozeInput.trim()}>
+                  Check answer
+                </button>
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--step--1)',
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={sure}
+                    onChange={(e) => setSure(e.target.checked)}
+                  />
+                  I’m sure
+                </label>
+              </div>
+            </form>
+          ) : (
+            <div style={{ margin: 'var(--space-4) 0' }}>
+              {answered.correct ? (
+                <p
+                  className="meta"
+                  style={{ color: 'var(--accent)', marginBottom: 'var(--space-3)' }}
+                >
+                  Correct
+                </p>
+              ) : (
+                <div style={{ marginBottom: 'var(--space-3)' }}>
+                  <p className="meta" role="alert" style={{ marginBottom: 'var(--space-1)' }}>
+                    Not quite
+                  </p>
+                  <p className="meta" style={{ color: 'var(--text-soft)', margin: 0 }}>
+                    Answer: <strong>{activityQ?.answer}</strong>
+                  </p>
+                </div>
+              )}
+
+              {question?.explanation && (
+                <div
+                  style={{
+                    marginBottom: 'var(--space-3)',
+                    borderLeft: '1px solid var(--rule-strong)',
+                    paddingLeft: 'var(--space-3)',
+                  }}
+                >
+                  <p className="meta" style={{ marginBottom: 'var(--space-1)' }}>
+                    Explanation
+                  </p>
+                  <p className="meta" style={{ color: 'var(--text-soft)', margin: 0 }}>
+                    {question.explanation}
+                  </p>
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 'var(--space-2)',
+                  flexWrap: 'wrap',
+                  marginTop: 'var(--space-4)',
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() =>
+                    onAnswer({
+                      grade: answered.grade,
+                      confidence: sure ? 'sure' : 'unsure',
+                      questionId: question?.id,
+                      latencyMs: answered.latencyMs,
+                      answer: answered.pickedOrTyped,
+                      kind: 'cloze',
+                    })
+                  }
+                >
+                  Continue
+                </button>
+                {answered.correct && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      onAnswer({
+                        grade: 'hard',
+                        confidence: sure ? 'sure' : 'unsure',
+                        questionId: question?.id,
+                        latencyMs: answered.latencyMs,
+                        answer: answered.pickedOrTyped,
+                        kind: 'cloze',
+                      })
+                    }
+                  >
+                    That was hard
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="pull-card__footer">
+        <span className="pull-card__trail">{pull.work.title}</span>
+        <button type="button" className="btn btn--plain" onClick={onDismiss}>
+          Skip
+        </button>
+      </div>
+    </section>
+  );
 }
 
 /**
@@ -53,15 +552,6 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
       return;
     }
 
-    /*
-     * `failed` rather than reading `listening` back.
-     *
-     * `recognition.start()` can throw synchronously — a second start on a live instance,
-     * or a refused microphone — in which case `onError` runs *inside* `startRecognition`,
-     * before it has returned. Setting `listening` to true afterwards then overwrote the
-     * `false` that error had just set, leaving a button reading "Stop" and a "Listening…"
-     * line above a recogniser that was not running.
-     */
     let failed = false;
     setDictationError(null);
     const teardown = startRecognition({
@@ -105,34 +595,8 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   );
 
   if (kind === 'recall') {
-    return shell(
-      'Do you still have this?',
-      <>
-        <h2 className="pull-card__headline" id={`interrupt-${pull.id}`}>
-          {pull.headline}
-        </h2>
-        {!revealed ? (
-          <button type="button" className="btn btn--primary" onClick={() => setRevealed(true)}>
-            Show answer
-          </button>
-        ) : (
-          <>
-            <p className="pull-card__body">{pull.body}</p>
-            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              {RECALL_GRADES.map((g: RecallGrade) => (
-                <button
-                  key={g}
-                  type="button"
-                  className="btn"
-                  onClick={() => onAnswer({ grade: g })}
-                >
-                  {GRADE_LABELS[g]}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </>,
+    return (
+      <RecallInterruptCard key={pull.id} pull={pull} onAnswer={onAnswer} onDismiss={onDismiss} />
     );
   }
 
