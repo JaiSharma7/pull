@@ -16,7 +16,7 @@ export { Meter } from './components/Meter.js';
 export type { MeterProps } from './components/Meter.js';
 export { Enough } from './components/Enough.js';
 export type { EnoughProps } from './components/Enough.js';
-export { Mark, brimPath, hatGeometry } from './components/Mark.js';
+export { Mark, brimRingPath, hatGeometry } from './components/Mark.js';
 export type { HatGeometry, MarkProps } from './components/Mark.js';
 export { SynapseMap } from './components/SynapseMap.js';
 export type { SynapseEdge, SynapseMapProps, SynapseNode } from './components/SynapseMap.js';
