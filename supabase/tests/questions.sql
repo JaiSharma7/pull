@@ -208,7 +208,8 @@ begin
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
    where s.status = 'published' and s.visibility = 'public'
-     and exists (select 1 from public.quiz_questions q where q.pull_id = p.id)
+     and (select count(*) from public.quiz_questions q where q.pull_id = p.id) = 1
+     and not exists (select 1 from public.quiz_questions q where q.pull_id = p.id and q.kind in ('mcq', 'cloze'))
    order by p.id
    limit 1;
 
