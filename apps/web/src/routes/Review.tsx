@@ -12,6 +12,7 @@ import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
 import {
   formatReviewProgress,
+  mcqOptionMarker,
   resolveActiveQuestion,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -172,18 +173,22 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
             }}
           >
             {mcqChoices.map((opt) => {
-              const isPicked = answered?.pickedOrTyped === opt;
-              const isTargetAnswer = (activeQuestion?.answer ?? '').trim() === opt.trim();
-              const showCorrect = answered !== null && isTargetAnswer;
-              const showIncorrect = answered !== null && isPicked && !answered.correct;
+              /* The word is the signal and the colour agrees with it -- law 5, colour is
+                 never the only signal. Before this the correct option was an oxblood
+                 border and nothing else. */
+              const marker = mcqOptionMarker(
+                opt,
+                activeQuestion?.answer,
+                answered?.pickedOrTyped ?? null,
+              );
 
               let borderColor = 'var(--rule-strong)';
               let textColor = 'var(--text)';
 
-              if (showCorrect) {
+              if (marker === 'Correct answer') {
                 borderColor = 'var(--accent)';
                 textColor = 'var(--accent)';
-              } else if (showIncorrect) {
+              } else if (marker === 'Your answer') {
                 borderColor = 'var(--rule)';
                 textColor = 'var(--text-muted)';
               }
@@ -195,6 +200,10 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                   className="btn"
                   disabled={answered !== null || grading}
                   style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                    gap: 'var(--space-3)',
                     textAlign: 'left',
                     textTransform: 'none',
                     letterSpacing: 'normal',
@@ -218,7 +227,8 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                     });
                   }}
                 >
-                  {opt}
+                  <span>{opt}</span>
+                  {marker ? <span className="meta">{marker}</span> : null}
                 </button>
               );
             })}
@@ -533,6 +543,25 @@ export function Review() {
   const [answeredCount, setAnsweredCount] = useState(0);
   const [sessionTotal, setSessionTotal] = useState<number | null>(null);
 
+  /*
+   * ONE FETCH PER PAGE, NOT PER ANSWER.
+   *
+   * This effect used to depend on `answeredCount` as well, so every graded card refired
+   * it and called `fetchDueReviews` again -- and offline, the catch set `error`, whose
+   * branch below replaces every card already on screen. An offline review session
+   * therefore ended after exactly one answer, which defeats the queue (1b) and the
+   * downloaded pack (4a) at the one moment they exist for.
+   *
+   * Now a page is fetched when the screen opens and again only when the page is used
+   * up (`grade` bumps `reloads` when the last card goes). Every card in between is
+   * answered from what is already here, and a grade the network loses is queued by
+   * `grade` rather than surfaced as a broken screen.
+   *
+   * The session total is decided at the same moments, which is what keeps "1 of 20"
+   * honest (law 7): it never moves while the reader is inside a page. When a further
+   * page arrives the total grows by that page -- everything before it has been
+   * answered -- so the count goes from "20 of 20" to "21 of 25", never "2 of 21".
+   */
   useEffect(() => {
     let cancelled = false;
     const userId = getCurrentUserId();
@@ -546,9 +575,7 @@ export function Review() {
           (row) => !graded.current.has(row.pullId) && !(queuedFor?.has(row.pullId) ?? false),
         );
         setDue(filtered);
-        setSessionTotal((prev) =>
-          prev === null ? filtered.length : Math.max(prev, filtered.length + answeredCount),
-        );
+        setSessionTotal((prev) => (prev === null ? filtered.length : prev + filtered.length));
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -560,7 +587,7 @@ export function Review() {
     return () => {
       cancelled = true;
     };
-  }, [reloads, answeredCount]);
+  }, [reloads]);
 
   const retry = useCallback(() => {
     setError(null);
@@ -598,6 +625,16 @@ export function Review() {
               ? 'Something went wrong reaching your review schedule.'
               : 'Something went wrong reaching your review schedule. Nothing has been lost.'}
         </p>
+        {/* Only reachable at a page boundary now, so anything answered before it is
+            already queued or already saved -- and worth saying, because the screen
+            above this sentence has just been replaced. */}
+        {offline && answeredCount > 0 && !lostGrade && !signedOut ? (
+          <p className="meta" role="status">
+            {answeredCount === 1
+              ? 'The one you answered is kept on this device and will be sent when you are back.'
+              : `The ${answeredCount} you answered are kept on this device and will be sent when you are back.`}
+          </p>
+        ) : null}
         <p className="meta">{error}</p>
         <button type="button" className="btn btn--primary" onClick={retry}>
           Try again

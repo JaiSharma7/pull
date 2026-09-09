@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatReviewProgress,
+  mcqOptionMarker,
   resolveActiveQuestion,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -196,5 +197,25 @@ describe('review-question', () => {
       expect(formatReviewProgress(3, 10)).toBe('Review · 3 of 10 fading');
       expect(formatReviewProgress(1, 1)).toBe('Review · 1 of 1 fading');
     });
+  });
+});
+
+describe('mcqOptionMarker', () => {
+  it('says nothing before the reader has answered', () => {
+    expect(mcqOptionMarker('Virtue', 'Virtue', null)).toBeNull();
+  });
+
+  it('names the correct option in words, not only in colour', () => {
+    expect(mcqOptionMarker('Virtue', 'Virtue', 'Wealth')).toBe('Correct answer');
+    expect(mcqOptionMarker('Virtue', ' Virtue ', 'Wealth')).toBe('Correct answer');
+  });
+
+  it("names the reader's wrong pick, and leaves the rest unmarked", () => {
+    expect(mcqOptionMarker('Wealth', 'Virtue', 'Wealth')).toBe('Your answer');
+    expect(mcqOptionMarker('Fame', 'Virtue', 'Wealth')).toBeNull();
+  });
+
+  it('marks a right pick as the correct answer rather than twice', () => {
+    expect(mcqOptionMarker('Virtue', 'Virtue', 'Virtue')).toBe('Correct answer');
   });
 });
