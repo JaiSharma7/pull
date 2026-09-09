@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PullCard } from '@wap/ui';
 import { nextUndone, stepCopy, type PathDetail, type PathStep } from '../lib/paths.js';
 import {
@@ -11,7 +11,8 @@ import {
 } from '../lib/paths-api.js';
 import { saveExplanation, setConviction } from '../lib/api.js';
 import { draftSubmissions } from '../lib/submission.js';
-import { recognitionSupported, startRecognition } from '../lib/speech.js';
+import { useDictation } from '../lib/use-dictation.js';
+import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
 export interface PathProps {
@@ -40,21 +41,16 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const [compareStance, setCompareStance] = useState<'agree' | 'disagree' | 'unsure' | null>(null);
 
   const [sayItBackText, setSayItBackText] = useState('');
-  const [sayItBackListening, setSayItBackListening] = useState(false);
-  const [sayItBackInterim, setSayItBackInterim] = useState('');
-  /* A refused microphone, or an engine that would not start. Silence here read as a
-     button that flicked back to "Dictate" for no stated reason. */
-  const [dictationError, setDictationError] = useState<string | null>(null);
   /*
-   * The teardown `startRecognition` hands back, held where Stop, submitting and
-   * unmounting can all reach it.
-   *
-   * The first version returned it from the click handler, which React discards, and
-   * treated Stop as a state flip. `startRecognition` is continuous, so Stop, advancing
-   * the step and leaving the route all left the microphone open. Same shape as
-   * `Interrupt.tsx`, which is the pattern this was meant to copy.
+   * The microphone, the interim preview and the reason it stopped, from the one hook
+   * `Interrupt.tsx` also uses. The first version of this screen copied that file's
+   * apparatus by hand and got it wrong: it returned the engine's teardown from a click
+   * handler, which React discards, so Stop, advancing the step and leaving the route
+   * all left a continuous recognition session live. See `lib/use-dictation.ts`.
    */
-  const stopListeningRef = useRef<(() => void) | null>(null);
+  const dictation = useDictation((text) =>
+    setSayItBackText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim())),
+  );
 
   const [applyText, setApplyText] = useState('');
   /* Per action, not per screen: a step that could not be saved says so under its own
@@ -80,19 +76,6 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
    * off `.current` during render.
    */
   const [submissionFor] = useState(() => draftSubmissions());
-
-  useEffect(() => {
-    return () => {
-      stopListeningRef.current?.();
-    };
-  }, []);
-
-  const stopDictation = () => {
-    stopListeningRef.current?.();
-    stopListeningRef.current = null;
-    setSayItBackListening(false);
-    setSayItBackInterim('');
-  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -122,6 +105,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   }, [slug, attempt, onTitle]);
 
   const reloadPath = async () => {
+    // Whatever moves the active step ends dictation -- Test out and Pause as much as
+    // a submission. Otherwise the engine stays live under the next step, with no Stop
+    // button on screen, appending to a field no longer rendered.
+    dictation.stop();
     try {
       const refreshed = await fetchPath(slug);
       if (refreshed) {
@@ -137,6 +124,7 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const handlePauseToggle = async () => {
     if (!path || inFlight || !userId) return;
     setInFlight(true);
+    setStepError(null);
     try {
       if (path.pausedAt) {
         await resumePath(path.id);
@@ -146,6 +134,11 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       await reloadPath();
     } catch (e) {
       console.error('Failed to toggle path pause', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline; the path could not be paused or resumed.'
+          : 'The path could not be paused or resumed. Try again.',
+      );
     } finally {
       setInFlight(false);
     }
@@ -154,11 +147,17 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const handleTestOut = async () => {
     if (!path || inFlight || !userId) return;
     setInFlight(true);
+    setStepError(null);
     try {
       await testOut(path.id);
       await reloadPath();
     } catch (e) {
       console.error('Failed to test out of path', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline; nothing could be tested out of.'
+          : 'Testing out did not go through. Try again.',
+      );
     } finally {
       setInFlight(false);
     }
@@ -170,9 +169,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       onNavigate('/');
       return;
     }
-    // A submission ends dictation. Otherwise the engine stays live under the next step
-    // and appends whatever it hears next to a field that is no longer on screen.
-    if (sayItBackListening) stopDictation();
+    // A submission ends dictation before the text is read, so nothing heard after the
+    // click lands in what is sent. `reloadPath` stops it again for every other route
+    // out of the step.
+    dictation.stop();
     setInFlight(true);
     setStepError(null);
     const draftKey = (content: string) => `${path.id}:${step.ordinal}:${step.kind}:${content}`;
@@ -218,41 +218,6 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
     } finally {
       setInFlight(false);
     }
-  };
-
-  const toggleSayItBackDictation = () => {
-    if (sayItBackListening) {
-      stopDictation();
-      return;
-    }
-
-    /*
-     * `startRecognition` calls `onError` SYNCHRONOUSLY when `recognition.start()`
-     * throws, so the `setListening(true)` after it would flip the button to "Stop" over
-     * an engine that never started. The flag is what `Interrupt.tsx` uses for the same
-     * reason.
-     */
-    let failed = false;
-    setDictationError(null);
-    const teardown = startRecognition({
-      onResult: (text) =>
-        setSayItBackText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim())),
-      onInterim: setSayItBackInterim,
-      onEnd: () => {
-        setSayItBackListening(false);
-        setSayItBackInterim('');
-      },
-      onError: () => {
-        failed = true;
-        setSayItBackListening(false);
-        setSayItBackInterim('');
-        setDictationError(
-          'Could not start dictation — your browser may have refused the microphone.',
-        );
-      },
-    });
-    stopListeningRef.current = teardown;
-    if (!failed) setSayItBackListening(true);
   };
 
   if (error) {
@@ -303,10 +268,41 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   }
 
   const totalSteps = path.steps.length;
+  // Ideas, not steps: a path may put one pull on two steps (predict, then compare), and
+  // the schedule holds the idea once.
+  const ideaCount = new Set(path.steps.map((s) => s.pull.id)).size;
   const applied = path.steps.some((s) => s.kind === 'apply' && s.done && !s.testedOut);
   const isCompleted = path.completedAt !== null || activeOrdinal === null;
   const currentStep =
     activeOrdinal !== null ? (path.steps.find((s) => s.ordinal === activeOrdinal) ?? null) : null;
+
+  /*
+   * No readable step at all -- every step is behind a summary this reader cannot see,
+   * or a summary was withdrawn after publication. `get_path` withholds `completedAt`
+   * here on purpose, and `nextUndone([])` is null, so without this branch the
+   * completion screen rendered over zero ideas and said they were all in Review.
+   */
+  if (totalSteps === 0) {
+    return (
+      <section className="stack measure" style={{ padding: 'var(--space-6)' }}>
+        <div className="path__nav-bar">
+          <button
+            type="button"
+            className="btn btn--plain meta"
+            onClick={() => onNavigate('/paths')}
+          >
+            ← All paths
+          </button>
+        </div>
+        <p className="meta">Learning Path</p>
+        <h1 className="path__title">{path.title}</h1>
+        <p>
+          Nothing on this path is readable to you yet. Its steps point at sources that are not
+          published, or not published to you.
+        </p>
+      </section>
+    );
+  }
 
   // Render Completion Screen if path is completed or no active undone step
   if (isCompleted || !currentStep) {
@@ -338,8 +334,16 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
             In your review schedule
           </p>
           <p>
-            All <strong>{totalSteps === 1 ? '1 idea' : `${totalSteps} ideas`}</strong> on this path
-            are in your review schedule now, and will come round as they start to fade.
+            {ideaCount === 1 ? (
+              <>
+                The <strong>one idea</strong> on this path is
+              </>
+            ) : (
+              <>
+                All <strong>{ideaCount} ideas</strong> on this path are
+              </>
+            )}{' '}
+            in your review schedule now, and will come round as they start to fade.
             {applied ? ' The one you applied will come round within three days.' : ''}
           </p>
         </div>
@@ -572,14 +576,14 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               <label className="field__label" htmlFor="say-it-back-input">
                 In your own words
               </label>
-              {recognitionSupported() && (
+              {dictation.supported && (
                 <button
                   type="button"
                   className="btn btn--plain meta"
                   style={{ textDecoration: 'underline' }}
-                  onClick={toggleSayItBackDictation}
+                  onClick={dictation.toggle}
                 >
-                  {sayItBackListening ? 'Stop' : 'Dictate'}
+                  {dictation.listening ? 'Stop' : 'Dictate'}
                 </button>
               )}
             </div>
@@ -594,23 +598,14 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
             {/* Always mounted: a live region inserted at the same moment as its text is
                 usually not announced at all, because there was no region to observe. */}
             <p className="meta" aria-live="polite">
-              {sayItBackListening ? sayItBackInterim || 'Listening…' : ''}
+              {dictation.listening ? dictation.interim || 'Listening…' : ''}
             </p>
-            {dictationError ? (
+            {dictation.error ? (
               <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
-                {dictationError}
+                {dictation.error}
               </p>
             ) : null}
-            {recognitionSupported() ? (
-              /* Said where the decision is made, as Interrupt.tsx says it. In most
-                 browsers speech recognition is not on the device -- the audio goes to
-                 the browser's own vendor. It never reaches us, but it does leave the
-                 reader's machine, and they are about to press the button that does it. */
-              <p className="meta">
-                Dictation uses your browser's speech recognition, which in most browsers sends the
-                audio to your browser's vendor. We never receive it. Typing sends nothing.
-              </p>
-            ) : null}
+            {dictation.supported ? <p className="meta">{DICTATION_DISCLOSURE}</p> : null}
           </div>
 
           <div className="path__step-actions">

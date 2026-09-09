@@ -120,6 +120,20 @@ describe('draftSubmissions', () => {
     });
   });
 
+  it('remembers a draft sent earlier, with other drafts in between', () => {
+    let minted = 0;
+    const submissionFor = draftSubmissions(
+      () => `id-${++minted}`,
+      () => 0,
+    );
+    const a = submissionFor('step 4:A');
+    submissionFor('step 4:B');
+    // A → B → A is A sent again. Holding only the last draft minted A a third id, and
+    // a second explanation row under it.
+    expect(submissionFor('step 4:A')).toBe(a);
+    expect(minted).toBe(2);
+  });
+
   it('mints real uuids and real stamps by default', () => {
     const submissionFor = draftSubmissions();
     const s = submissionFor('x');
