@@ -13,6 +13,7 @@ import type { DueReview } from '../lib/types.js';
 import {
   formatReviewProgress,
   mcqOptionMarker,
+  nextSessionTotal,
   resolveActiveQuestion,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -541,6 +542,11 @@ export function Review() {
   const graded = useRef<Set<string>>(new Set());
   const [reloads, setReloads] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
+  /* How many of those answers are waiting on this device rather than on the server.
+     The offline notice is phrased from this number, not from answeredCount: a grade
+     that went through before the connection dropped is already saved, and saying it
+     is "kept on this device" would be false. */
+  const [queuedCount, setQueuedCount] = useState(0);
   const [sessionTotal, setSessionTotal] = useState<number | null>(null);
 
   /*
@@ -549,8 +555,10 @@ export function Review() {
    * This effect used to depend on `answeredCount` as well, so every graded card refired
    * it and called `fetchDueReviews` again -- and offline, the catch set `error`, whose
    * branch below replaces every card already on screen. An offline review session
-   * therefore ended after exactly one answer, which defeats the queue (1b) and the
-   * downloaded pack (4a) at the one moment they exist for.
+   * therefore ended after exactly one answer, which defeats the grade queue (1b) at
+   * the one moment it exists for. (The downloaded pack, 4a, has no reader here yet:
+   * `fetchDueReviews` goes straight to the RPC, so a page used up offline still ends
+   * on the error screen. Practising from the pack is 4b, still to come.)
    *
    * Now a page is fetched when the screen opens and again only when the page is used
    * up (`grade` bumps `reloads` when the last card goes). Every card in between is
@@ -575,7 +583,7 @@ export function Review() {
           (row) => !graded.current.has(row.pullId) && !(queuedFor?.has(row.pullId) ?? false),
         );
         setDue(filtered);
-        setSessionTotal((prev) => (prev === null ? filtered.length : prev + filtered.length));
+        setSessionTotal((prev) => nextSessionTotal(prev, filtered.length));
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -589,11 +597,12 @@ export function Review() {
     };
   }, [reloads]);
 
+  /* Try again fetches the next page; it does not start the session over. The error
+     screen is only reachable before the first page or at a boundary, so what was
+     answered is real progress and the count must survive the retry. */
   const retry = useCallback(() => {
     setError(null);
     setDue(null);
-    setAnsweredCount(0);
-    setSessionTotal(null);
     setReloads((n) => n + 1);
   }, []);
 
@@ -626,13 +635,15 @@ export function Review() {
               : 'Something went wrong reaching your review schedule. Nothing has been lost.'}
         </p>
         {/* Only reachable at a page boundary now, so anything answered before it is
-            already queued or already saved -- and worth saying, because the screen
-            above this sentence has just been replaced. */}
+            already saved or already queued -- and worth saying which, because the
+            screen above this sentence has just been replaced. */}
         {offline && answeredCount > 0 && !lostGrade && !signedOut ? (
           <p className="meta" role="status">
-            {answeredCount === 1
-              ? 'The one you answered is kept on this device and will be sent when you are back.'
-              : `The ${answeredCount} you answered are kept on this device and will be sent when you are back.`}
+            {queuedCount === 0
+              ? `Everything you answered (${answeredCount}) was saved before the connection dropped.`
+              : queuedCount === answeredCount
+                ? `What you answered (${answeredCount}) is kept on this device and will be sent when you are back.`
+                : `${answeredCount - queuedCount} of the ${answeredCount} you answered were saved; ${queuedCount} ${queuedCount === 1 ? 'is' : 'are'} kept on this device and will be sent when you are back.`}
           </p>
         ) : null}
         <p className="meta">{error}</p>
@@ -721,7 +732,9 @@ export function Review() {
           e,
         ));
 
-      if (!queued) {
+      if (queued) {
+        setQueuedCount((n) => n + 1);
+      } else {
         setLostGrade(true);
         if (userId === null) setSignedOut(true);
         console.error('Recall grade was not recorded', e);

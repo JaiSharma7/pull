@@ -11,6 +11,7 @@ import {
 } from '../lib/review-question.js';
 import { gradeCloze, gradeMcq, mcqOptions, whyWrong, type WhyWrong } from '../lib/activities.js';
 import { elapsedSince } from '../lib/submission.js';
+import { onceInView } from '../lib/in-view.js';
 
 /** What the reader gave back. Every field is optional — a conviction answer
  *  carries a stance and no grade, a recall answer the reverse. */
@@ -66,11 +67,12 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
    * cards above. Those are exactly the two deterministic graders, so this corrupted the
    * memory model's inputs on both kinds Package 3 introduced.
    *
-   * Started once the question has arrived AND the card is in view. Where there is no
-   * `IntersectionObserver` -- the test environment, an old browser -- it starts when
-   * the question arrives, which is still after the fetch. Left `null` until then, and
-   * `elapsedSince(null)` is `undefined`: no measurement rather than a false one, which
-   * is the rule `lib/submission.ts` already states for the column.
+   * Started once the question has arrived AND the card is in view -- `onceInView` in
+   * `lib/in-view.ts` says what "in view" means and why the flag alone was not enough.
+   * Where there is no `IntersectionObserver` it starts when the question arrives, which
+   * is still after the fetch. Left `null` until then, and `elapsedSince(null)` is
+   * `undefined`: no measurement rather than a false one, which is the rule
+   * `lib/submission.ts` already states for the column.
    */
   const displayedAtRef = useRef<number | null>(null);
   const cardRef = useRef<HTMLElement | null>(null);
@@ -90,27 +92,13 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
   useEffect(() => {
     if (!question) return;
     const el = cardRef.current;
-    if (typeof IntersectionObserver === 'undefined' || !el) {
+    if (!el) {
       displayedAtRef.current ??= Date.now();
       return;
     }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        /* The ratio as well as the flag (review finding). The first notification
-           after `observe()` reports the current state whatever the threshold, and
-           `isIntersecting` is true for any overlap at all -- so a card with one line
-           in view would have started the clock and disconnected, with the question
-           still off screen. Half the card, or nothing. */
-        if (!entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) {
-          return;
-        }
-        displayedAtRef.current ??= Date.now();
-        observer.disconnect();
-      },
-      { threshold: 0.5 },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
+    return onceInView(el, () => {
+      displayedAtRef.current ??= Date.now();
+    });
   }, [question]);
 
   const activityQ = useMemo(() => (question ? toActivityQuestion(question) : null), [question]);
@@ -262,9 +250,17 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                     width: '100%',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 'var(--step--1)',
+                    /* The colour agrees with the word: the correct option in the accent,
+                       a wrong pick muted, exactly as Review.tsx has it. Before this the
+                       wrong pick was the most emphasised button on the screen. */
                     borderColor:
-                      marker === 'Correct answer' || isSelected ? 'var(--accent)' : undefined,
-                    fontWeight: isSelected ? 600 : undefined,
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--rule)'
+                          : undefined,
+                    color: marker === 'Your answer' ? 'var(--text-muted)' : undefined,
+                    fontWeight: marker === 'Correct answer' ? 600 : undefined,
                   }}
                   onClick={() => {
                     const latencyMs = elapsedSince(displayedAtRef.current);

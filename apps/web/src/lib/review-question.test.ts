@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatReviewProgress,
   mcqOptionMarker,
+  nextSessionTotal,
   resolveActiveQuestion,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -217,5 +218,19 @@ describe('mcqOptionMarker', () => {
 
   it('marks a right pick as the correct answer rather than twice', () => {
     expect(mcqOptionMarker('Virtue', 'Virtue', 'Virtue')).toBe('Correct answer');
+  });
+});
+
+describe('nextSessionTotal', () => {
+  it('takes the first page as the total', () => {
+    expect(nextSessionTotal(null, 20)).toBe(20);
+  });
+
+  it('adds a further page to a total whose cards have all been answered', () => {
+    expect(nextSessionTotal(20, 5)).toBe(25);
+  });
+
+  it('never shrinks, and an empty further page changes nothing', () => {
+    expect(nextSessionTotal(20, 0)).toBe(20);
   });
 });

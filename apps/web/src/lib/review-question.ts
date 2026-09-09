@@ -77,3 +77,16 @@ export function mcqOptionMarker(
   if (picked === option) return 'Your answer';
   return null;
 }
+
+/**
+ * The session total after a page of due cards arrives.
+ *
+ * Decided only when a page arrives, never per answer, which is what keeps "1 of 20"
+ * honest (law 7): the total cannot move while the reader is inside a page. The first
+ * page IS the total; a further page arrives only once everything before it has been
+ * answered, so it adds itself. `Math.max(prev, page + answered)` was the previous rule,
+ * and it let "1 of 20" become "2 of 21" as the same cards came back on every refetch.
+ */
+export function nextSessionTotal(prev: number | null, pageLength: number): number {
+  return prev === null ? pageLength : prev + pageLength;
+}
