@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PullCard } from '@wap/ui';
 import { nextUndone, stepCopy, type PathDetail, type PathStep } from '../lib/paths.js';
 import {
@@ -10,7 +10,7 @@ import {
   testOut,
 } from '../lib/paths-api.js';
 import { saveExplanation, setConviction } from '../lib/api.js';
-import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
+import { draftMutationIds, nextSubmissionStamp } from '../lib/submission.js';
 import { recognitionSupported, startRecognition } from '../lib/speech.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
@@ -42,8 +42,54 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const [sayItBackText, setSayItBackText] = useState('');
   const [sayItBackListening, setSayItBackListening] = useState(false);
   const [sayItBackInterim, setSayItBackInterim] = useState('');
+  /* A refused microphone, or an engine that would not start. Silence here read as a
+     button that flicked back to "Dictate" for no stated reason. */
+  const [dictationError, setDictationError] = useState<string | null>(null);
+  /*
+   * The teardown `startRecognition` hands back, held where Stop, submitting and
+   * unmounting can all reach it.
+   *
+   * The first version returned it from the click handler, which React discards, and
+   * treated Stop as a state flip. `startRecognition` is continuous, so Stop, advancing
+   * the step and leaving the route all left the microphone open. Same shape as
+   * `Interrupt.tsx`, which is the pattern this was meant to copy.
+   */
+  const stopListeningRef = useRef<(() => void) | null>(null);
 
   const [applyText, setApplyText] = useState('');
+  /* Per action, not per screen: a step that could not be saved says so under its own
+     button and leaves the rest of the path standing. */
+  const [stepError, setStepError] = useState<string | null>(null);
+
+  /*
+   * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
+   *
+   * `completeStep` minted a fresh id inside the handler on every click, and its catch
+   * only logged -- so a lost response followed by a second click wrote a second
+   * conviction, a second explanation or a second note, each keyed on an id the server
+   * had never seen. `set_conviction`, `explanations` and `apply_path_step` all
+   * deduplicate on the id, which is only worth anything if a retry carries the same one.
+   *
+   * `draftMutationIds` keys the id by (path, step, content), so the same draft gets the
+   * same id however many times it is sent and an edited one gets a fresh id -- with
+   * nothing to clear, which is the shape that has gone wrong here before. Lazily
+   * initialised state rather than a ref so the closure is built once and never read
+   * off `.current` during render.
+   */
+  const [mutationIdFor] = useState(() => draftMutationIds());
+
+  useEffect(() => {
+    return () => {
+      stopListeningRef.current?.();
+    };
+  }, []);
+
+  const stopDictation = () => {
+    stopListeningRef.current?.();
+    stopListeningRef.current = null;
+    setSayItBackListening(false);
+    setSayItBackInterim('');
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -121,7 +167,12 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       onNavigate('/');
       return;
     }
+    // A submission ends dictation. Otherwise the engine stays live under the next step
+    // and appends whatever it hears next to a field that is no longer on screen.
+    if (sayItBackListening) stopDictation();
     setInFlight(true);
+    setStepError(null);
+    const draftKey = (content: string) => `${path.id}:${step.ordinal}:${step.kind}:${content}`;
     try {
       if (step.kind === 'read') {
         await advanceStep(path.id, step.ordinal);
@@ -129,20 +180,20 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'compare') {
         if (compareStance) {
-          const mId = mutationId();
+          const mId = mutationIdFor(draftKey(compareStance));
           const stamp = nextSubmissionStamp();
           await setConviction(step.pull.id, compareStance, mId, stamp);
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'say_it_back') {
-        if (sayItBackText.trim()) {
-          const mId = mutationId();
-          await saveExplanation(userId, step.pull.id, sayItBackText.trim(), mId);
+        const text = sayItBackText.trim();
+        if (text) {
+          await saveExplanation(userId, step.pull.id, text, mutationIdFor(draftKey(text)));
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'apply') {
-        const mId = mutationId();
-        await applyStep(path.id, step.ordinal, applyText.trim(), mId);
+        const text = applyText.trim();
+        await applyStep(path.id, step.ordinal, text, mutationIdFor(draftKey(text)));
       }
 
       // Reset step-local interaction state
@@ -155,6 +206,11 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       await reloadPath();
     } catch (e) {
       console.error('Failed to advance step', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline. Your words are still here; try again when you are back.'
+          : 'That step could not be saved. Nothing was lost; try again.',
+      );
     } finally {
       setInFlight(false);
     }
@@ -162,11 +218,18 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
 
   const toggleSayItBackDictation = () => {
     if (sayItBackListening) {
-      setSayItBackListening(false);
-      setSayItBackInterim('');
+      stopDictation();
       return;
     }
 
+    /*
+     * `startRecognition` calls `onError` SYNCHRONOUSLY when `recognition.start()`
+     * throws, so the `setListening(true)` after it would flip the button to "Stop" over
+     * an engine that never started. The flag is what `Interrupt.tsx` uses for the same
+     * reason.
+     */
+    let failed = false;
+    setDictationError(null);
     const teardown = startRecognition({
       onResult: (text) =>
         setSayItBackText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim())),
@@ -176,13 +239,16 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         setSayItBackInterim('');
       },
       onError: () => {
+        failed = true;
         setSayItBackListening(false);
         setSayItBackInterim('');
+        setDictationError(
+          'Could not start dictation — your browser may have refused the microphone.',
+        );
       },
     });
-
-    setSayItBackListening(true);
-    return teardown;
+    stopListeningRef.current = teardown;
+    if (!failed) setSayItBackListening(true);
   };
 
   if (error) {
@@ -233,6 +299,7 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   }
 
   const totalSteps = path.steps.length;
+  const applied = path.steps.some((s) => s.kind === 'apply' && s.done && !s.testedOut);
   const isCompleted = path.completedAt !== null || activeOrdinal === null;
   const currentStep =
     activeOrdinal !== null ? (path.steps.find((s) => s.ordinal === activeOrdinal) ?? null) : null;
@@ -256,14 +323,20 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         <h1 className="display">{path.title}</h1>
         <p className="path__question">{path.question}</p>
 
+        {/*
+          True since 20260909010000, and only as far as it says. Every step a reader
+          advances puts its idea into `knowledge_states`, and a step tested out of was
+          there already -- so "all N" holds. The three-day sentence is the apply step's
+          alone, and only when the reader actually applied it rather than testing out.
+        */}
         <div className="path__recap-card">
           <p className="meta" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-            Rotation updated
+            In your review schedule
           </p>
           <p>
-            All <strong>{totalSteps} ideas</strong> in this progression have been integrated into
-            your metacognitive review schedule. Ideas with applications will resurface within three
-            days to test your practical retention.
+            All <strong>{totalSteps === 1 ? '1 idea' : `${totalSteps} ideas`}</strong> on this path
+            are in your review schedule now, and will come round as they start to fade.
+            {applied ? ' The one you applied will come round within three days.' : ''}
           </p>
         </div>
 
@@ -514,11 +587,26 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               onChange={(e) => setSayItBackText(e.target.value)}
               placeholder="State the core insight and its boundaries in your own words..."
             />
-            {sayItBackInterim && (
-              <p className="meta" aria-live="polite">
-                {sayItBackInterim}
+            {/* Always mounted: a live region inserted at the same moment as its text is
+                usually not announced at all, because there was no region to observe. */}
+            <p className="meta" aria-live="polite">
+              {sayItBackListening ? sayItBackInterim || 'Listening…' : ''}
+            </p>
+            {dictationError ? (
+              <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
+                {dictationError}
               </p>
-            )}
+            ) : null}
+            {recognitionSupported() ? (
+              /* Said where the decision is made, as Interrupt.tsx says it. In most
+                 browsers speech recognition is not on the device -- the audio goes to
+                 the browser's own vendor. It never reaches us, but it does leave the
+                 reader's machine, and they are about to press the button that does it. */
+              <p className="meta">
+                Dictation uses your browser's speech recognition, which in most browsers sends the
+                audio to your browser's vendor. We never receive it. Typing sends nothing.
+              </p>
+            ) : null}
           </div>
 
           <div className="path__step-actions">
@@ -547,6 +635,9 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
             <textarea
               id="apply-input"
               className="field__textarea"
+              // `notes_body_length` refuses more, and `apply_path_step` refuses it
+              // before writing; the field says so first.
+              maxLength={20000}
               value={applyText}
               onChange={(e) => setApplyText(e.target.value)}
               placeholder="Name a concrete situation, choice, or friction from your own week where this applies..."
@@ -569,6 +660,14 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
           </div>
         </div>
       )}
+
+      {/* Under whichever step is showing. The catch used to log and say nothing, so a
+          reader whose save failed watched the button re-enable and had to guess. */}
+      {stepError ? (
+        <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
+          {stepError}
+        </p>
+      ) : null}
     </main>
   );
 }

@@ -101,3 +101,30 @@ export function elapsedSince(revealedAt: number | null, now = Date.now()): numbe
   if (elapsed < 0 || elapsed > MAX_LATENCY_MS) return undefined;
   return elapsed;
 }
+
+/**
+ * One mutation id per DRAFT, decided in one place and never cleared by hand.
+ *
+ * `Path.tsx` minted a fresh `mutationId()` inside its click handler, and its catch only
+ * logged -- so a lost response followed by a second click wrote a second conviction,
+ * explanation or note, each under an id the server had never seen. Every one of those
+ * writes deduplicates on the id, which is only worth anything if a retry carries the
+ * same one.
+ *
+ * Keyed by what is being submitted rather than held and cleared: `Source.tsx`'s
+ * `askMutations` is deleted on success, on every edit and on dismissal, and that
+ * discipline has been lost three times on one file. Here the caller names the draft --
+ * the step and its content -- and the same name gets the same id however many times it
+ * is sent, while an edited draft is a different name and gets a fresh one. That is what
+ * an edit has to mean: the server would otherwise answer with the FIRST wording and
+ * silently discard the new one.
+ *
+ * `mint` is a parameter so the test can count how often it is called.
+ */
+export function draftMutationIds(mint: () => string = mutationId): (key: string) => string {
+  let held: { key: string; id: string } | null = null;
+  return (key) => {
+    if (held?.key !== key) held = { key, id: mint() };
+    return held.id;
+  };
+}

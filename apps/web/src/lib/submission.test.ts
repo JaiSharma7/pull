@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mutationId, nextSubmissionStamp } from './submission.js';
+import { draftMutationIds, mutationId, nextSubmissionStamp } from './submission.js';
 
 describe('submission stamps', () => {
   it('never repeats, even when the clock does not move', () => {
@@ -82,5 +82,35 @@ describe('mutationId', () => {
     for (const value of [undefined, {}, { randomUUID: null }]) {
       expect(() => withCrypto(value, () => mutationId())).not.toThrow();
     }
+  });
+});
+
+describe('draftMutationIds', () => {
+  it('gives the same draft the same id on every attempt', () => {
+    let minted = 0;
+    const idFor = draftMutationIds(() => `id-${++minted}`);
+
+    expect(idFor('step 2:agree')).toBe('id-1');
+    // A retry after a lost response: same draft, same id, nothing new minted.
+    expect(idFor('step 2:agree')).toBe('id-1');
+    expect(minted).toBe(1);
+  });
+
+  it('gives an edited draft a fresh id', () => {
+    let minted = 0;
+    const idFor = draftMutationIds(() => `id-${++minted}`);
+
+    expect(idFor('step 4:first wording')).toBe('id-1');
+    // An edit is a different submission. Under the old id the server would answer
+    // with the first wording and silently discard this one.
+    expect(idFor('step 4:second wording')).toBe('id-2');
+    expect(minted).toBe(2);
+  });
+
+  it('mints real uuids by default', () => {
+    const idFor = draftMutationIds();
+    expect(idFor('x')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });
