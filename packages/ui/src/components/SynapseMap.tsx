@@ -200,7 +200,7 @@ export function SynapseMap({
     }
 
     const nodeIds = filteredNodes.map((n) => n.pullId);
-    const initialPositions = initializePositions(nodeIds, cx, cy, 32);
+    const initialPositions = initializePositions(nodeIds, cx, cy, 52);
 
     simNodesRef.current = filteredNodes.map((n) => {
       const prev = existingMap.get(n.pullId);
@@ -222,7 +222,7 @@ export function SynapseMap({
     simEdgesRef.current = filteredEdges.map((e) => ({
       sourceId: e.fromPullId,
       targetId: e.toPullId,
-      length: 70 + (1 - e.weight) * 50,
+      length: 140 + (1 - e.weight) * 80,
       strength: e.weight || 0.6,
     }));
 
@@ -448,20 +448,6 @@ export function SynapseMap({
         ctx.arc(simNode.x, simNode.y, 2, 0, Math.PI * 2);
         ctx.fillStyle = tokens.textMuted;
         ctx.fill();
-      }
-
-      // Zoom changes scale, never which ideas the reader asked to see.
-      if (isSelected || isHovered) {
-        // Read from the tokens like everything else: this was `11px Fraunces, serif`, the one
-        // piece of type in the app that ignored the large-text setting and named its own family.
-        ctx.font = `500 ${tokens.labelSize} ${tokens.labelFamily}`;
-        ctx.fillStyle = isSelected ? tokens.accent : tokens.text;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-
-        // Clip headline if long
-        const text = data.headline.length > 36 ? data.headline.slice(0, 34) + '…' : data.headline;
-        ctx.fillText(text, simNode.x, simNode.y + r + 6);
       }
 
       ctx.restore();
