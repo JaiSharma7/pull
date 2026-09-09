@@ -2300,12 +2300,7 @@ export type Database = {
         Returns: Json
       }
       complete_path_step: {
-        Args: {
-          p_ordinal: number
-          p_path_id: string
-          p_pull_id: string
-          p_uid: string
-        }
+        Args: { p_ordinal: number; p_path_id: string; p_pull_id: string }
         Returns: boolean
       }
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
@@ -2595,10 +2590,7 @@ export type Database = {
         Args: { p_name: string; p_value: string }
         Returns: string
       }
-      settle_path_progress: {
-        Args: { p_path_id: string; p_uid: string }
-        Returns: boolean
-      }
+      settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean

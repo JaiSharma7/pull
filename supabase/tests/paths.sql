@@ -32,8 +32,11 @@
 --     run against this file and survived for exactly that reason. The footprint
 --     check therefore guards the shape of a future refusal that returns instead of
 --     raising, not the current ones
---   * `test_out` leaves a step the reader genuinely completed as completed, and only
---     tests out of steps not yet done
+--   * `test_out` leaves a step the reader genuinely completed as completed, only tests
+--     out of steps not yet done, and never out of the apply step
+--   * a reader cannot write path_step_done or path_progress directly; the RPCs are the
+--     only writers, so their guards are not advisory
+--   * a path finished again after a hidden step reopened it moves its completed_at
 --   * a step whose pull the caller cannot read is neither shown by `get_path` nor
 --     counted by `advance_path`, so the path completes for that caller; the reader
 --     who CAN read it is shown it and owes it
@@ -276,12 +279,21 @@ begin
   end if;
   code := null;
   begin
-    perform public.settle_path_progress(reader_a, path_pub);
+    perform public.settle_path_progress(path_pub);
   exception when others then
     code := sqlstate;
   end;
   if code is distinct from '42501' then
     raise exception 'settle_path_progress is callable by a reader (got %)', coalesce(code, 'no error');
+  end if;
+  code := null;
+  begin
+    perform public.complete_path_step(path_pub, 1::smallint, pull_1);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception 'complete_path_step is callable by a reader (got %)', coalesce(code, 'no error');
   end if;
 
   -- And the helper's own definition includes publication: a draft path has no
@@ -547,6 +559,36 @@ begin
       pg_temp.footprint(reader_b);
   end if;
 
+  -- And none of it can be written around the RPCs. 20260908030000 granted the
+  -- reader insert on path_step_done and insert/update on path_progress, which made
+  -- every guard above advisory.
+  code := null;
+  begin
+    insert into public.path_step_done (user_id, path_id, ordinal) values (reader_b, path_pub, 3);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'a reader inserted a path_step_done row directly (got %). Every RPC guard is '
+      'advisory while that grant stands.', coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    insert into public.path_progress (user_id, path_id, completed_at)
+    values (reader_b, path_pub, now());
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception 'a reader inserted a path_progress row directly (got %)', coalesce(code, 'no error');
+  end if;
+
+  if pg_temp.footprint(reader_b) <> 0 then
+    raise exception 'a refused direct write left rows behind (footprint %)', pg_temp.footprint(reader_b);
+  end if;
+
   -- ---------------------------------------------------------------------------
   -- 6. Reader B: testing out does not rewrite a done step, and cannot finish a path
   --    with nothing readable on it
@@ -574,25 +616,47 @@ begin
     raise exception 'test_out rewrote a completed step as tested out';
   end if;
 
-  -- Now B holds pull_2 solidly too: step 2 tests out, and that completes B's path.
+  -- Now B holds pull_2 solidly too -- but step 2 is the APPLY step, and holding the
+  -- idea is not having applied it. Testing out leaves it, and the path, undone.
   perform pg_temp.as_owner();
   insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
   values (reader_b, pull_2, 50.0, 0.2, now(), now() + interval '50 days');
   perform pg_temp.become(reader_b);
 
   test_out_res := public.test_out(path_pub);
-  if not ((test_out_res->'testedOutOrdinals') @> '[2]'::jsonb) then
-    raise exception 'Reader B expected to test out of ordinal 2, got %', test_out_res;
+  if (test_out_res->'testedOutOrdinals') @> '[2]'::jsonb or (test_out_res->>'completed')::boolean then
+    raise exception
+      'test_out skipped the apply step (%). The only way to complete an apply step is '
+      'apply_path_step, with a reflection.', test_out_res;
   end if;
-  if not ((test_out_res->>'completed')::boolean) then
-    raise exception 'testing out of the last readable step did not complete the path: %', test_out_res;
-  end if;
-
   select count(*) into n
   from public.path_step_done
-  where user_id = reader_b and path_id = path_pub and ordinal = 2 and tested_out = true;
+  where user_id = reader_b and path_id = path_pub and ordinal = 2;
+  if n <> 0 then
+    raise exception 'test_out wrote a path_step_done row for the apply step';
+  end if;
+
+  -- Applying it is what completes B's path (steps 1 and 2 being all B can read).
+  apply_out := public.apply_path_step(path_pub, 2::smallint, 'B''s application', null);
+  if not ((apply_out->>'ok')::boolean) then
+    raise exception 'apply_path_step failed for reader B: %', apply_out;
+  end if;
+  select count(*) into n
+  from public.path_progress
+  where user_id = reader_b and path_id = path_pub and completed_at is not null;
   if n <> 1 then
-    raise exception 'Reader B expected ordinal 2 tested out, got %', n;
+    raise exception 'reader B''s path did not complete after applying the last readable step';
+  end if;
+
+  -- The stored row is the RPCs' to write, not the reader's.
+  code := null;
+  begin
+    update public.path_progress set completed_at = null where user_id = reader_b and path_id = path_pub;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception 'a reader updated path_progress directly (got %)', coalesce(code, 'no error');
   end if;
 
   -- A path with no readable step is not finished by testing out of nothing.
@@ -755,26 +819,46 @@ begin
       row_out->>'completedSteps', row_out->>'stepCount';
   end if;
 
-  -- The write side: a test_out with nothing to test out of recomputes completion.
+  -- A finishes the reopened step DIRECTLY, with no intervening write. The stored
+  -- timestamp is from before the step existed for A -- set to yesterday here, because
+  -- now() is one value for the whole transaction and a same-second comparison would
+  -- prove nothing -- and finishing again must move it, not keep a date earlier than
+  -- the last step's own.
+  perform pg_temp.as_owner();
+  update public.path_progress set completed_at = now() - interval '1 day'
+   where user_id = reader_a and path_id = path_pub;
+  perform pg_temp.become(reader_a);
+
+  adv_out := public.advance_path(path_pub, 3::smallint);
+  if not ((adv_out->>'completed')::boolean) then
+    raise exception 'reader A''s path did not complete after the reopened step: %', adv_out;
+  end if;
+  select completed_at into due_after
+  from public.path_progress where user_id = reader_a and path_id = path_pub;
+  if due_after is null or due_after < now() - interval '1 minute' then
+    raise exception
+      'a path finished again kept its old completed_at (%), earlier than the step that '
+      'finished it.', due_after;
+  end if;
+  path_out := public.get_path(slug_pub);
+  if (path_out->>'completedAt') is null then
+    raise exception 'get_path withholds completedAt from a path with every readable step done';
+  end if;
+
+  -- The write side for B, who finished in section 6 and now owes step 3: a test_out
+  -- with nothing to test out of recomputes completion and clears the stored row.
+  perform pg_temp.become(reader_b);
   test_out_res := public.test_out(path_pub);
   if (test_out_res->>'completed')::boolean then
     raise exception 'test_out reported a path complete with a readable step undone: %', test_out_res;
   end if;
   select count(*) into n
   from public.path_progress
-  where user_id = reader_a and path_id = path_pub and completed_at is null;
+  where user_id = reader_b and path_id = path_pub and completed_at is null;
   if n <> 1 then
     raise exception 'a write with a readable step undone left the stored completed_at set';
   end if;
-
-  adv_out := public.advance_path(path_pub, 3::smallint);
-  if not ((adv_out->>'completed')::boolean) then
-    raise exception 'reader A''s path did not complete after the reopened step: %', adv_out;
-  end if;
-  path_out := public.get_path(slug_pub);
-  if (path_out->>'completedAt') is null then
-    raise exception 'get_path withholds completedAt from a path with every readable step done';
-  end if;
+  perform pg_temp.become(reader_a);
 
   -- While it is readable, A also finishes the path whose only step is behind it.
   adv_out := public.advance_path(path_hid, 1::smallint);
