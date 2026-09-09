@@ -83,13 +83,19 @@
 --     stayed up over a path being actively walked, even though it promised that
 --     advancing would resume. Advancing and testing out both clear it now.
 --
--- TWO HELPERS, NEITHER CALLABLE FROM A CLIENT. `readable_path_steps` and
--- `settle_path_progress` exist so that "the steps this caller can read" and "is this
--- path finished" are each written once: the previous version had the predicate in five
--- places and the count in two, and the first drift between them is defect 6 above.
--- Both are `security definer` with `search_path = ''` (lint invariant 4) and both are
--- revoked from `anon` and `authenticated` -- they take the reader's uid as a parameter,
--- which is only safe when the caller is one of the RPCs below, running as the owner.
+-- THREE HELPERS, NONE CALLABLE FROM A CLIENT. `readable_path_steps`,
+-- `settle_path_progress` and `complete_path_step` exist so that "the steps this caller
+-- can read", "is this path finished" and "mark this step done" are each written once:
+-- the previous version had the predicate in five places and the count in two, and the
+-- first drift between them is defect 6 above. All three are `security definer` with
+-- `search_path = ''` (lint invariant 4) and all three are revoked from `anon` and
+-- `authenticated` -- explicitly, because Supabase's default ACL grants execute to both
+-- on creation -- since they take the reader's uid as a parameter, which is only safe
+-- when the caller is one of the RPCs below, running as the owner.
+--
+-- And one asymmetry closed (review finding): `advance_path` refuses an apply step, so
+-- the only way to complete one is `apply_path_step` with a reflection. Without that
+-- the "not an apply step" guard was one-directional.
 -- -----------------------------------------------------------------------------
 
 -- ---------------------------------------------------------- readable_path_steps
@@ -101,8 +107,13 @@ stable
 security definer
 set search_path = ''
 as $$
+  -- The same predicate as the `path_steps_read` policy, both halves: the path is
+  -- published AND the step's pull is readable. The RPCs check publication first and
+  -- raise, but the helper carries it too so that "the steps a reader can read" means
+  -- the same thing however it is reached, and a draft path has no readable steps.
   select ps.ordinal, ps.pull_id, ps.kind
   from public.path_steps ps
+  join public.paths p on p.id = ps.path_id and p.status = 'published'
   join public.pulls pu on pu.id = ps.pull_id
   join public.summaries s on s.id = pu.summary_id
   where ps.path_id = p_path_id
@@ -110,11 +121,66 @@ as $$
 $$;
 
 comment on function public.readable_path_steps(uuid) is
-  'The steps of a path whose pull the calling reader can read -- the one definition '
-  'get_path shows, advance_path and test_out count, and apply_path_step writes '
-  'against. Internal: callable only by the path RPCs.';
+  'The steps of a published path whose pull the calling reader can read -- the one '
+  'definition get_path shows, advance_path and test_out count, and apply_path_step '
+  'writes against. Internal: callable only by the path RPCs.';
 
 revoke all on function public.readable_path_steps(uuid) from public, anon, authenticated;
+
+-- ---------------------------------------------------------- complete_path_step
+
+create or replace function public.complete_path_step(
+  p_uid     uuid,
+  p_path_id uuid,
+  p_ordinal smallint,
+  p_pull_id uuid
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.path_progress (user_id, path_id, started_at)
+  values (p_uid, p_path_id, now())
+  on conflict (user_id, path_id) do nothing;
+
+  -- Serialise this reader's writes on this path. Two requests completing the last
+  -- two steps at once each inserted their step, each counted one remaining, and
+  -- neither wrote `completed_at`. The second now waits here for the first.
+  perform 1 from public.path_progress
+   where user_id = p_uid and path_id = p_path_id
+   for update;
+
+  insert into public.path_step_done (user_id, path_id, ordinal)
+  values (p_uid, p_path_id, p_ordinal)
+  on conflict (user_id, path_id, ordinal) do nothing;
+
+  -- The idea enters the review schedule. Same shape as `remember_pull` and
+  -- `commit_import`: due tomorrow at the default stability, and an idea already
+  -- scheduled keeps its own schedule -- walking past it again is not evidence about
+  -- when it should next be asked.
+  insert into public.knowledge_states (user_id, pull_id, acquired_via)
+  values (p_uid, p_pull_id, 'read')
+  on conflict (user_id, pull_id) do nothing;
+
+  -- Completing a step resumes. The banner says so, and before this it said so while
+  -- staying up.
+  update public.path_progress
+     set paused_at = null
+   where user_id = p_uid and path_id = p_path_id and paused_at is not null;
+
+  return public.settle_path_progress(p_uid, p_path_id);
+end;
+$$;
+
+comment on function public.complete_path_step(uuid, uuid, smallint, uuid) is
+  'Mark one step done for one reader: start progress, lock it, record the step, put '
+  'its idea into the review schedule, resume, and settle completion. The one body '
+  'behind advance_path and apply_path_step. Internal: callable only by the path RPCs.';
+
+revoke all on function public.complete_path_step(uuid, uuid, smallint, uuid)
+  from public, anon, authenticated;
 
 -- --------------------------------------------------------- settle_path_progress
 
@@ -198,9 +264,13 @@ as $$
         'stepCount', coalesce(pc.total_steps, 0),
         'startedAt', cp.started_at,
         'pausedAt', cp.paused_at,
-        -- Derived, not reported: withheld while a readable step is undone. See get_path.
+        -- Derived, not reported: withheld while a readable step is undone, and when
+        -- there is no readable step at all -- the same two halves as
+        -- `settle_path_progress`, so the list never says what the next write would
+        -- take back. See get_path.
         'completedAt', case
-          when coalesce(pc.completed_steps, 0) < coalesce(pc.total_steps, 0) then null
+          when coalesce(pc.total_steps, 0) = 0 then null
+          when pc.completed_steps < pc.total_steps then null
           else cp.completed_at
         end,
         'completedSteps', coalesce(pc.completed_steps, 0)
@@ -325,8 +395,11 @@ begin
     -- private summary that is later published becomes readable, and `steps` below
     -- then carries an undone step. A stored timestamp beside an undone step would
     -- have the screen show "Completed" over a step it never rendered, so the
-    -- timestamp is withheld until every readable step is done again.
+    -- timestamp is withheld until every readable step is done again -- and withheld
+    -- outright when nothing is readable, which `settle_path_progress` treats as not
+    -- finished and would clear on the next write.
     'completedAt', case
+      when not exists (select 1 from step_data) then null
       when exists (select 1 from step_data sd where not sd.is_done) then null
       else cp.completed_at
     end,
@@ -376,7 +449,7 @@ as $$
 declare
   uid         uuid := (select auth.uid());
   v_pull_id   uuid;
-  v_completed boolean;
+  v_step_kind text;
 begin
   if uid is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -389,7 +462,7 @@ begin
   -- The step must exist AND be readable by this caller. A definer function sees every
   -- row, so the set the screen was shown is restated here; without it a reader could
   -- mark done a step they were never shown.
-  select rs.pull_id into v_pull_id
+  select rs.pull_id, rs.kind into v_pull_id, v_step_kind
   from public.readable_path_steps(p_path_id) rs
   where rs.ordinal = p_ordinal;
 
@@ -397,39 +470,19 @@ begin
     raise exception 'Step not found' using errcode = 'P0002';
   end if;
 
-  insert into public.path_progress (user_id, path_id, started_at)
-  values (uid, p_path_id, now())
-  on conflict (user_id, path_id) do nothing;
-
-  -- Serialise this reader's advances on this path. Two requests completing the last
-  -- two steps at once each inserted their step, each counted one remaining, and
-  -- neither wrote `completed_at`. The second now waits here for the first.
-  perform 1 from public.path_progress
-   where user_id = uid and path_id = p_path_id
-   for update;
-
-  insert into public.path_step_done (user_id, path_id, ordinal)
-  values (uid, p_path_id, p_ordinal)
-  on conflict (user_id, path_id, ordinal) do nothing;
-
-  -- The idea enters the review schedule. Same shape as `remember_pull` and
-  -- `commit_import`: due tomorrow at the default stability, and an idea already
-  -- scheduled keeps its own schedule -- walking past it again is not evidence about
-  -- when it should next be asked.
-  insert into public.knowledge_states (user_id, pull_id, acquired_via)
-  values (uid, v_pull_id, 'read')
-  on conflict (user_id, pull_id) do nothing;
-
-  -- Advancing resumes. The banner says so, and before this it said so while staying up.
-  update public.path_progress
-     set paused_at = null
-   where user_id = uid and path_id = p_path_id and paused_at is not null;
-
-  v_completed := public.settle_path_progress(uid, p_path_id);
+  -- An apply step is completed by applying it. This RPC is granted to every reader
+  -- and `apply_path_step` refuses a non-apply step, so without this the guard was
+  -- one-directional: a direct call here marked the apply step done with no
+  -- reflection and no three-day pull-forward, and the completion screen then said
+  -- the reader had applied something they had not.
+  if v_step_kind = 'apply' then
+    raise exception 'An apply step is completed through apply_path_step'
+      using errcode = '22023';
+  end if;
 
   return jsonb_build_object(
     'ok', true,
-    'completed', v_completed
+    'completed', public.complete_path_step(uid, p_path_id, p_ordinal, v_pull_id)
   );
 end;
 $$;
@@ -648,11 +701,13 @@ begin
     return jsonb_build_object('ok', true, 'noteId', v_note_id, 'replayed', true);
   end if;
 
-  -- Marks the step done and puts the idea into the schedule if it was not there.
-  perform public.advance_path(p_path_id, p_ordinal);
+  -- Marks the step done and puts the idea into the schedule if it was not there --
+  -- the same body `advance_path` runs, which refuses apply steps itself so that this
+  -- is the only way one is completed.
+  perform public.complete_path_step(uid, p_path_id, p_ordinal, v_pull_id);
 
-  -- Then resurfaces it within three days. The row exists now: `advance_path` upserted
-  -- it, so this always finds something to pull forward.
+  -- Then resurfaces it within three days. The row exists now: `complete_path_step`
+  -- upserted it, so this always finds something to pull forward.
   update public.knowledge_states
      set next_due_at = least(next_due_at, now() + interval '3 days')
    where user_id = uid and pull_id = v_pull_id;

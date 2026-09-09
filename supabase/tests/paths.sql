@@ -8,7 +8,10 @@
 --   * `get_path` is case-insensitive on its slug -- `paths.slug` is citext and the
 --     function runs with an empty search_path, which is exactly the setting that
 --     turns `=` case-sensitive
---   * the two helpers the RPCs share are not callable by a reader
+--   * the three helpers the RPCs share are not callable by a reader, and the readable
+--     set they define excludes a draft path
+--   * `advance_path` refuses an apply step, so the only way to complete one is with a
+--     reflection
 --   * a reader with NO prior `knowledge_states` row walks a path, and every step they
 --     advance puts its idea into the schedule: the row EXISTS afterwards, acquired by
 --     reading, and the apply step's idea is due within three days. Asserted by
@@ -35,7 +38,7 @@
 --     counted by `advance_path`, so the path completes for that caller; the reader
 --     who CAN read it is shown it and owes it
 --   * a path none of whose steps the caller can read cannot be completed by testing
---     out of nothing
+--     out of nothing, and one completed and then wholly hidden is not reported complete
 --   * a step that becomes readable after the path was finished reopens it, on both
 --     RPCs and in the stored row; a step hidden after it was done does not push
 --     `completedSteps` past `stepCount`
@@ -281,6 +284,24 @@ begin
     raise exception 'settle_path_progress is callable by a reader (got %)', coalesce(code, 'no error');
   end if;
 
+  -- And the helper's own definition includes publication: a draft path has no
+  -- readable steps even to the owner role, whose reads no policy filters.
+  perform pg_temp.as_owner();
+  select count(*) into n from public.readable_path_steps(path_drf);
+  if n <> 0 then
+    raise exception
+      'readable_path_steps returned % step(s) of a draft path. The helper is missing '
+      'the published half of the path_steps_read predicate.', n;
+  end if;
+  -- Two, not three: the owner role bypasses policies, but the helper still asks
+  -- `summary_is_readable`, and with no JWT there is no author to match C's private
+  -- summary against. The published half and the readable half are both in force.
+  select count(*) into n from public.readable_path_steps(path_pub);
+  if n <> 2 then
+    raise exception 'readable_path_steps as owner expected the 2 public steps of the published path, got %', n;
+  end if;
+  perform pg_temp.become(reader_a);
+
   -- ---------------------------------------------------------------------------
   -- 3. Reader A walks the path with NO prior knowledge_states row
   -- ---------------------------------------------------------------------------
@@ -449,6 +470,18 @@ begin
   end;
   if code is distinct from '22023' then
     raise exception 'apply_path_step on a read step should raise 22023, got %', coalesce(code, 'nothing');
+  end if;
+
+  -- And the other direction: an apply step cannot be completed by advance_path, which
+  -- would mark it done with no reflection and no three-day pull-forward.
+  code := null;
+  begin
+    perform public.advance_path(path_pub, 2::smallint);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '22023' then
+    raise exception 'advance_path on an apply step should raise 22023, got %', coalesce(code, 'nothing');
   end if;
 
   -- A draft path.
@@ -743,11 +776,36 @@ begin
     raise exception 'get_path withholds completedAt from a path with every readable step done';
   end if;
 
+  -- While it is readable, A also finishes the path whose only step is behind it.
+  adv_out := public.advance_path(path_hid, 1::smallint);
+  if not ((adv_out->>'completed')::boolean) then
+    raise exception 'reader A did not complete the one-step path while its step was readable';
+  end if;
+
   -- And back: C's summary is withdrawn again. A did step 3 while it was readable, and
   -- that done row must not count against a total that no longer includes the step.
   perform pg_temp.as_owner();
   update public.summaries set visibility = 'private' where id = priv_summary;
   perform pg_temp.become(reader_a);
+
+  -- The one-step path now has NO readable step for A. Its stored completed_at is
+  -- what settle_path_progress would take back on the next write, so neither RPC may
+  -- report it: the list would say Completed and the screen would render the
+  -- completion copy over zero ideas.
+  select e into row_out
+  from jsonb_array_elements(public.get_paths()) e
+  where e->>'id' = path_hid::text;
+  if (row_out->>'stepCount')::int <> 0 or (row_out->>'completedAt') is not null then
+    raise exception
+      'get_paths reports a path with no readable step as completed (% steps, completedAt %)',
+      row_out->>'stepCount', row_out->>'completedAt';
+  end if;
+  path_out := public.get_path(slug_hid);
+  if jsonb_array_length(path_out->'steps') <> 0 or (path_out->>'completedAt') is not null then
+    raise exception
+      'get_path reports a path with no readable step as completed (% steps, completedAt %)',
+      jsonb_array_length(path_out->'steps'), path_out->>'completedAt';
+  end if;
 
   select e into row_out
   from jsonb_array_elements(public.get_paths()) e

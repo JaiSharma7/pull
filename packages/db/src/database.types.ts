@@ -2299,6 +2299,15 @@ export type Database = {
         }
         Returns: Json
       }
+      complete_path_step: {
+        Args: {
+          p_ordinal: number
+          p_path_id: string
+          p_pull_id: string
+          p_uid: string
+        }
+        Returns: boolean
+      }
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
