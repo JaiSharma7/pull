@@ -63,6 +63,14 @@
 --     `path_steps`. The screen could never reach the missing step and the path never
 --     completed. All three now agree on one definition -- the steps whose pull the
 --     caller can read -- so an unreadable step is neither shown nor counted.
+--
+--     That makes completion RELATIVE TO THE CALLER, and the set can grow after the
+--     fact (review finding): a step behind a private summary that is published later
+--     becomes readable, and a stored `completed_at` beside it would have the screen
+--     say "Completed" over a step it never rendered. So the timestamp is derived on
+--     read -- `get_path` and `get_paths` withhold it while a readable step is undone
+--     -- and recomputed on write, where `advance_path` and `test_out` clear it when
+--     anything remains and set it again when nothing does.
 --   * `advance_path` selected `v_max_ordinal` and never read it. Removed.
 --   * `test_out` used `>=` against `known_retrievability_floor()`; every other caller of
 --     that floor uses `>`. Aligned.
@@ -117,7 +125,21 @@ as $$
         'stepCount', coalesce(pc.total_steps, 0),
         'startedAt', cp.started_at,
         'pausedAt', cp.paused_at,
-        'completedAt', cp.completed_at,
+        -- Completion is relative to what this caller can read, and it is derived
+        -- rather than reported: a step that becomes readable after the path was
+        -- finished -- a private summary published later -- reopens it. See get_path.
+        'completedAt', case
+          when exists (
+            select 1 from public.path_steps ps
+            where ps.path_id = p.id
+              and not exists (
+                select 1 from public.path_step_done psd
+                where psd.user_id = (select auth.uid())
+                  and psd.path_id = p.id and psd.ordinal = ps.ordinal
+              )
+          ) then null
+          else cp.completed_at
+        end,
         'completedSteps', coalesce(cp.completed_steps, 0)
       ) order by p.created_at asc
     ),
@@ -234,7 +256,16 @@ begin
     'topicSlug', t.slug,
     'startedAt', cp.started_at,
     'pausedAt', cp.paused_at,
-    'completedAt', cp.completed_at,
+    -- DERIVED, NOT REPORTED. `completed_at` is written when the caller has no
+    -- readable step left, and that set can grow after the fact: a step behind a
+    -- private summary that is later published becomes readable, and `steps` below
+    -- then carries an undone step. A stored timestamp beside an undone step would
+    -- have the screen show "Completed" over a step it never rendered, so the
+    -- timestamp is withheld until every readable step is done again.
+    'completedAt', case
+      when exists (select 1 from step_data sd where not sd.is_done) then null
+      else cp.completed_at
+    end,
     'steps', coalesce(
       (
         select jsonb_agg(
@@ -346,11 +377,16 @@ begin
       where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = ps.ordinal
     );
 
-  if v_remaining = 0 then
-    update public.path_progress
-       set completed_at = coalesce(completed_at, now())
-     where user_id = uid and path_id = p_path_id;
-  end if;
+  -- Recomputed, not only set. A path finished while a step was hidden behind a
+  -- private summary carries a `completed_at`; if that summary is published later the
+  -- reader owes the step again, and the next write here clears the timestamp until
+  -- they have done it. `get_path` withholds it on the read side for the same reason.
+  update public.path_progress
+     set completed_at = case
+       when v_remaining = 0 then coalesce(completed_at, now())
+       else null
+     end
+   where user_id = uid and path_id = p_path_id;
 
   return jsonb_build_object(
     'ok', true,
@@ -492,11 +528,13 @@ begin
       where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = ps.ordinal
     );
 
-  if v_remaining = 0 then
-    update public.path_progress
-       set completed_at = coalesce(completed_at, now())
-     where user_id = uid and path_id = p_path_id;
-  end if;
+  -- Same recomputation as `advance_path`, for the same reason.
+  update public.path_progress
+     set completed_at = case
+       when v_remaining = 0 then coalesce(completed_at, now())
+       else null
+     end
+   where user_id = uid and path_id = p_path_id;
 
   return jsonb_build_object(
     'ok', true,

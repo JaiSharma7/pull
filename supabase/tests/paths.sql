@@ -577,7 +577,57 @@ begin
     raise exception 'anon apply_path_step should raise 28000 or 42501';
   end if;
 
-  raise notice 'paths.sql: a path step enters the review schedule, a replay stops at its note, a done step stays done, a slug reads either case, an unreadable step is neither shown nor owed, and nobody sees another reader''s walk';
+  -- ---------------------------------------------------------------------------
+  -- 9. A step that becomes readable later reopens the path
+  -- ---------------------------------------------------------------------------
+  -- Reader A finished the path in section 3 with step 3 hidden. C's summary is now
+  -- published, so A can read step 3 and owes it: the stored timestamp must not be
+  -- reported while a readable step is undone, and the next write must clear it.
+  perform pg_temp.as_owner();
+  update public.summaries set visibility = 'public' where id = priv_summary;
+  perform pg_temp.become(reader_a);
+
+  path_out := public.get_path(slug_pub);
+  if jsonb_array_length(path_out->'steps') <> 3 then
+    raise exception 'after publication reader A should see 3 steps, got %',
+      jsonb_array_length(path_out->'steps');
+  end if;
+  if (path_out->>'completedAt') is not null then
+    raise exception
+      'get_path reports the path complete while a readable step is undone. The screen '
+      'would show "Completed" over a step it never rendered.';
+  end if;
+
+  paths_out := public.get_paths();
+  if (
+    select e->>'completedAt' from jsonb_array_elements(paths_out) e
+    where e->>'id' = path_pub::text
+  ) is not null then
+    raise exception 'get_paths reports the path complete while a readable step is undone';
+  end if;
+
+  -- The write side: a test_out with nothing to test out of recomputes completion.
+  test_out_res := public.test_out(path_pub);
+  if (test_out_res->>'completed')::boolean then
+    raise exception 'test_out reported a path complete with a readable step undone: %', test_out_res;
+  end if;
+  select count(*) into n
+  from public.path_progress
+  where user_id = reader_a and path_id = path_pub and completed_at is null;
+  if n <> 1 then
+    raise exception 'a write with a readable step undone left the stored completed_at set';
+  end if;
+
+  adv_out := public.advance_path(path_pub, 3::smallint);
+  if not ((adv_out->>'completed')::boolean) then
+    raise exception 'reader A''s path did not complete after the reopened step: %', adv_out;
+  end if;
+  path_out := public.get_path(slug_pub);
+  if (path_out->>'completedAt') is null then
+    raise exception 'get_path withholds completedAt from a path with every readable step done';
+  end if;
+
+  raise notice 'paths.sql: a path step enters the review schedule, a replay stops at its note, a done step stays done, a slug reads either case, an unreadable step is neither shown nor owed, a step readable later reopens the path, and nobody sees another reader''s walk';
 end $$;
 
 rollback;
