@@ -199,7 +199,11 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                   key={opt}
                   type="button"
                   className="btn"
-                  disabled={answered !== null || grading}
+                  /* `aria-disabled`, not `disabled`: a disabled button is painted at
+                     45% opacity, which put the verdict word -- the one thing that names
+                     the right option for a wrong pick -- below the contrast floor
+                     `docs/design.md` sets for every text role. The handler refuses. */
+                  aria-disabled={answered !== null || grading}
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
@@ -215,6 +219,7 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                     color: textColor,
                   }}
                   onClick={() => {
+                    if (answered !== null || grading) return;
                     const latencyMs = elapsedSince(displayedAtRef.current);
                     const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
                     const reason = whyWrong(activityQ!, opt);
@@ -639,11 +644,15 @@ export function Review() {
             screen above this sentence has just been replaced. */}
         {offline && answeredCount > 0 && !lostGrade && !signedOut ? (
           <p className="meta" role="status">
+            {/* Past tense on purpose (review finding): the feed stays mounted and
+                drains the queue whenever the connection returns, so by the time this
+                sentence shows some of what was queued may already have gone. What was
+                queued is a fact; where it is now is not one this screen knows. */}
             {queuedCount === 0
               ? `Everything you answered (${answeredCount}) was saved before the connection dropped.`
               : queuedCount === answeredCount
-                ? `What you answered (${answeredCount}) is kept on this device and will be sent when you are back.`
-                : `${answeredCount - queuedCount} of the ${answeredCount} you answered were saved; ${queuedCount} ${queuedCount === 1 ? 'is' : 'are'} kept on this device and will be sent when you are back.`}
+                ? `What you answered (${answeredCount}) was queued on this device to send when you are back.`
+                : `${answeredCount - queuedCount} of the ${answeredCount} you answered were saved; ${queuedCount} ${queuedCount === 1 ? 'was' : 'were'} queued on this device to send when you are back.`}
           </p>
         ) : null}
         <p className="meta">{error}</p>

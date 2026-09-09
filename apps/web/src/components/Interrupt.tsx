@@ -240,7 +240,9 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                   type="button"
                   className="btn"
                   aria-pressed={isSelected}
-                  disabled={answered !== null}
+                  /* `aria-disabled`, as Review.tsx: a disabled button is painted at 45%
+                     opacity, below the contrast floor for the verdict word. */
+                  aria-disabled={answered !== null}
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
@@ -259,10 +261,16 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                         : marker === 'Your answer'
                           ? 'var(--rule)'
                           : undefined,
-                    color: marker === 'Your answer' ? 'var(--text-muted)' : undefined,
+                    color:
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--text-muted)'
+                          : undefined,
                     fontWeight: marker === 'Correct answer' ? 600 : undefined,
                   }}
                   onClick={() => {
+                    if (answered !== null) return;
                     const latencyMs = elapsedSince(displayedAtRef.current);
                     const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
                     const reason = whyWrong(activityQ!, opt);

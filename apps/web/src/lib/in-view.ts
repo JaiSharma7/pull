@@ -17,8 +17,13 @@
  * Where there is no `IntersectionObserver` -- the test environment, an old browser --
  * the element is taken to be in view at once, which is what the caller would have
  * assumed before this existed. Returns a teardown; after `onSeen` fires it is a no-op.
+ *
+ * `IN_VIEW_THRESHOLDS` is exported for the one observer that cannot use `onceInView`
+ * -- the feed's dwell timer, which needs the leaving notifications too -- so the two
+ * agree on what a notification schedule looks like.
  */
 export const IN_VIEW_SHARE = 0.5;
+export const IN_VIEW_THRESHOLDS: readonly number[] = Array.from({ length: 21 }, (_, i) => i / 20);
 
 export interface InViewEntry {
   isIntersecting: boolean;
@@ -35,18 +40,26 @@ export function isGenuinelyInView(entry: InViewEntry, share = IN_VIEW_SHARE): bo
   return viewport > 0 && entry.intersectionRect.height >= viewport * share;
 }
 
-export function onceInView(el: Element, onSeen: () => void): () => void {
+export function onceInView(el: Element, onSeen: () => void, share = IN_VIEW_SHARE): () => void {
   if (typeof IntersectionObserver === 'undefined') {
     onSeen();
     return () => {};
   }
+  // Once means once. A notification already queued when `disconnect()` ran can still
+  // be delivered, and the caller's clock must not be restarted by it.
+  let seen = false;
   const observer = new IntersectionObserver(
     (entries) => {
-      if (!entries.some((entry) => isGenuinelyInView(entry))) return;
+      if (seen || !entries.some((entry) => isGenuinelyInView(entry, share))) return;
+      seen = true;
       observer.disconnect();
       onSeen();
     },
-    { threshold: [0, 0.1, 0.25, IN_VIEW_SHARE] },
+    // Dense, not stepped at a few round numbers (review finding): the viewport half is
+    // only evaluated at a threshold crossing, and a card between 1.3x and 2x the
+    // viewport crossed 0.25 too early and 0.5 too late to be caught at half a screen.
+    // Twenty steps put a crossing within five percent of wherever the rule is met.
+    { threshold: [...IN_VIEW_THRESHOLDS] },
   );
   observer.observe(el);
   return () => observer.disconnect();
