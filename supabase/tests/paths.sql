@@ -1,16 +1,38 @@
 -- ---------------------------------------------------------------------------
--- Package 5a: Paths, steps, progress, and an apply step that resurfaces.
+-- Paths, steps, progress, and an apply step that resurfaces.
 --
--- Tests:
---   * Paths and steps: draft paths invisible, published paths readable.
---   * RPCs: get_paths() and get_path(slug) return structured JSON.
---   * advance_path: starts progress, records step done, idempotent on replay,
---     marks completed when final step is done.
---   * pause_path / resume_path: updates paused_at.
---   * test_out: marks steps whose pull retrievability >= floor as tested out.
---   * apply_path_step: inserts note with client_mutation_id, pulls forward
---     next_due_at, advances path, and is idempotent on mutation replay.
---   * Isolation: Reader A cannot see or mutate Reader B's progress.
+-- Asserted, and each is a way the functions in 20260909010000 could be wrong:
+--
+--   * a draft path is invisible through RLS and through `get_paths()`; a published
+--     one is visible through both
+--   * `get_path` is case-insensitive on its slug -- `paths.slug` is citext and the
+--     function runs with an empty search_path, which is exactly the setting that
+--     turns `=` case-sensitive
+--   * a reader with NO prior `knowledge_states` row walks a path, and every step they
+--     advance puts its idea into the schedule: the row EXISTS afterwards, acquired by
+--     reading, and the apply step's idea is due within three days. Asserted by
+--     presence -- `if x is null then raise` -- never by a comparison a null satisfies,
+--     because that is how the first version of this file passed with the row missing
+--   * an idea already scheduled is pulled forward to three days and not later
+--   * advancing clears `paused_at`
+--   * a replayed `apply_path_step` returns the note it already wrote, writes no
+--     second one, and does not rewrite the first
+--   * `apply_path_step` refuses a step that is not an apply step, a draft path, a
+--     blank reflection and one over 20,000 characters -- and writes nothing when it
+--     refuses
+--   * `test_out` leaves a step the reader genuinely completed as completed, and only
+--     tests out of steps not yet done
+--   * a step whose pull the caller cannot read is neither shown by `get_path` nor
+--     counted by `advance_path`, so the path completes for that caller; the reader
+--     who CAN read it is shown it and owes it
+--   * Reader B sees none of Reader A's progress
+--   * anon can read paths and cannot mutate them
+--
+-- WHAT THIS FILE CANNOT PROVE. The `for update` lock that serialises two advances of
+-- the last two steps needs two sessions to demonstrate; psql has one. And `test_out`
+-- comparing `>` rather than `>=` against the floor differs only at exact equality,
+-- which `retrievability` -- an exponential of a timestamp difference -- cannot be
+-- made to hit on purpose. Both are stated in the migration and neither is asserted.
 --
 -- Everything runs as a real reader under RLS. The whole file rolls back.
 -- ---------------------------------------------------------------------------
@@ -29,12 +51,32 @@ begin
   end if;
 end $fn$;
 
+create or replace function pg_temp.become(p_uid uuid) returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', p_uid, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+end $fn$;
+
+create or replace function pg_temp.as_owner() returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $fn$;
+
 do $$
 declare
   reader_a  uuid := extensions.gen_random_uuid();
   reader_b  uuid := extensions.gen_random_uuid();
+  reader_c  uuid := extensions.gen_random_uuid();
   pull_1    uuid;
   pull_2    uuid;
+  pull_priv uuid;
+  priv_work    uuid := extensions.gen_random_uuid();
+  priv_summary uuid := extensions.gen_random_uuid();
   path_pub  uuid;
   path_drf  uuid;
   slug_pub  citext := 'test-path-public';
@@ -45,36 +87,55 @@ declare
   apply_out jsonb;
   test_out_res jsonb;
   refused   boolean;
+  code      text;
   n         int;
   mut_id    uuid := extensions.gen_random_uuid();
+  note_id   uuid;
+  note_body text;
+  via       public.acquisition;
   due_before timestamptz;
   due_after  timestamptz;
+  paused     timestamptz;
 begin
-  -- 1. Pick two seeded pulls that have readable summaries
+  -- 1. Two seeded pulls with readable summaries, and one nobody but reader C can read.
   select p.id into pull_1
   from public.pulls p
   join public.summaries s on s.id = p.summary_id and s.visibility = 'public' and s.status = 'published'
-  order by p.created_at asc
+  order by p.created_at asc, p.id
   limit 1;
 
   select p.id into pull_2
   from public.pulls p
   join public.summaries s on s.id = p.summary_id and s.visibility = 'public' and s.status = 'published'
   where p.id <> pull_1
-  order by p.created_at asc
+  order by p.created_at asc, p.id
   limit 1;
 
   if pull_1 is null or pull_2 is null then
     raise exception 'fixture setup: need at least 2 public pulls';
   end if;
 
-  -- Create test users
   insert into auth.users (id, email)
   values
     (reader_a, 'reader_a_paths@example.com'),
-    (reader_b, 'reader_b_paths@example.com');
+    (reader_b, 'reader_b_paths@example.com'),
+    (reader_c, 'reader_c_paths@example.com');
 
-  -- Create a published path with 2 steps
+  -- Reader C's private summary: readable by C through `summary_is_readable`'s author
+  -- clause, and by nobody else.
+  insert into public.works (id, kind, title, slug, rights_status)
+  values (priv_work, 'book', 'Reader C''s Own Notes', 'paths-test-private', 'user_owned');
+
+  insert into public.summaries
+    (id, work_id, version, status, visibility, author_id, title, published_at)
+  values (priv_summary, priv_work, 1, 'published', 'private', reader_c,
+          'Reader C''s Own Notes', now());
+
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (priv_summary, 1, 'A private idea', 'Only C can read this.', 5)
+  returning id into pull_priv;
+
+  -- A published path: read, apply, and a third step only reader C can see.
   insert into public.paths (id, slug, title, question, description, status)
   values (
     extensions.gen_random_uuid(),
@@ -89,9 +150,9 @@ begin
   insert into public.path_steps (path_id, ordinal, pull_id, kind, prompt)
   values
     (path_pub, 1, pull_1, 'read', 'Read the core claim'),
-    (path_pub, 2, pull_2, 'apply', 'Name one thing today');
+    (path_pub, 2, pull_2, 'apply', 'Name one thing today'),
+    (path_pub, 3, pull_priv, 'read', 'A step behind a private summary');
 
-  -- Create a draft path
   insert into public.paths (id, slug, title, question, description, status)
   values (
     extensions.gen_random_uuid(),
@@ -104,28 +165,24 @@ begin
   returning id into path_drf;
 
   insert into public.path_steps (path_id, ordinal, pull_id, kind)
-  values (path_drf, 1, pull_1, 'read');
+  values (path_drf, 1, pull_1, 'read'),
+         (path_drf, 2, pull_2, 'apply');
 
   -- ---------------------------------------------------------------------------
-  -- Reader A tests
+  -- 2. Visibility, as reader A
   -- ---------------------------------------------------------------------------
-  set local role authenticated;
-  perform set_config('request.jwt.claim.sub', reader_a::text, true);
-  perform pg_temp.assert_is_reader();
+  perform pg_temp.become(reader_a);
 
-  -- Draft path invisible through table RLS
   select count(*) into n from public.paths where id = path_drf;
   if n <> 0 then
     raise exception 'draft path should not be visible under RLS, got %', n;
   end if;
 
-  -- Published path visible through table RLS
   select count(*) into n from public.paths where id = path_pub;
   if n <> 1 then
     raise exception 'published path should be visible under RLS, got %', n;
   end if;
 
-  -- get_paths() includes published path, excludes draft
   paths_out := public.get_paths();
   if not (paths_out @> jsonb_build_array(jsonb_build_object('slug', slug_pub::text))) then
     raise exception 'get_paths() missing published path %', slug_pub;
@@ -134,37 +191,83 @@ begin
     raise exception 'get_paths() must not include draft path %', slug_drf;
   end if;
 
-  -- get_path(slug) returns full structure
   path_out := public.get_path(slug_pub);
-  if path_out is null or (path_out->>'title') <> 'How to master yourself' then
+  if path_out is null or (path_out->>'title') is distinct from 'How to master yourself' then
     raise exception 'get_path(%) failed to return path: %', slug_pub, path_out;
   end if;
+
+  -- The private step is not on reader A's screen, and the other two are.
   if jsonb_array_length(path_out->'steps') <> 2 then
-    raise exception 'get_path(%) expected 2 steps, got %', slug_pub, jsonb_array_length(path_out->'steps');
+    raise exception 'get_path(%) expected 2 readable steps, got %',
+      slug_pub, jsonb_array_length(path_out->'steps');
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(path_out->'steps') s where (s->>'ordinal')::int = 3
+  ) then
+    raise exception 'a step behind a summary reader A cannot read reached get_path';
   end if;
 
-  -- Advance step 1
+  -- Case-insensitive. `paths.slug` is citext; the function must compare it as citext.
+  path_out := public.get_path('TEST-PATH-PUBLIC'::citext);
+  if path_out is null or (path_out->>'id') is distinct from path_pub::text then
+    raise exception
+      'get_path is case-sensitive: TEST-PATH-PUBLIC did not find %. The slug is citext '
+      'and the comparison fell through to text.', slug_pub;
+  end if;
+
+  if public.get_path(slug_drf) is not null then
+    raise exception 'get_path returned a draft path';
+  end if;
+
+  -- ---------------------------------------------------------------------------
+  -- 3. Reader A walks the path with NO prior knowledge_states row
+  -- ---------------------------------------------------------------------------
+  select count(*) into n from public.knowledge_states where user_id = reader_a;
+  if n <> 0 then
+    raise exception 'fixture: reader A must start with no knowledge_states, has %', n;
+  end if;
+
+  -- Paused first, so the advance below has something to clear.
+  perform public.pause_path(path_pub);
+  select paused_at into paused
+  from public.path_progress where user_id = reader_a and path_id = path_pub;
+  if paused is null then
+    raise exception 'pause_path did not set paused_at';
+  end if;
+
   adv_out := public.advance_path(path_pub, 1::smallint);
   if not ((adv_out->>'ok')::boolean) or ((adv_out->>'completed')::boolean) then
     raise exception 'advance_path step 1 unexpected output: %', adv_out;
   end if;
 
-  -- Verify step 1 recorded in path_step_done and path_progress started
   select count(*) into n
   from public.path_step_done
-  where user_id = reader_a and path_id = path_pub and ordinal = 1;
+  where user_id = reader_a and path_id = path_pub and ordinal = 1 and tested_out = false;
   if n <> 1 then
     raise exception 'path_step_done ordinal 1 expected 1 row, got %', n;
   end if;
 
-  select count(*) into n
-  from public.path_progress
-  where user_id = reader_a and path_id = path_pub and started_at is not null and completed_at is null;
-  if n <> 1 then
-    raise exception 'path_progress expected active progress, got %', n;
+  -- Advancing resumes.
+  select paused_at into paused
+  from public.path_progress where user_id = reader_a and path_id = path_pub;
+  if paused is not null then
+    raise exception 'advance_path left paused_at set; the banner said advancing resumes';
   end if;
 
-  -- Pause path and resume path
+  -- THE IDEA ENTERED THE SCHEDULE. Asserted by presence.
+  select ks.acquired_via, ks.next_due_at into via, due_after
+  from public.knowledge_states ks
+  where ks.user_id = reader_a and ks.pull_id = pull_1;
+  if due_after is null then
+    raise exception
+      'advance_path did not put step 1''s idea into knowledge_states. The completion '
+      'screen tells the reader every idea is in their review schedule.';
+  end if;
+  if via is distinct from 'read' then
+    raise exception 'step 1''s idea was acquired via % rather than read', via;
+  end if;
+
+  -- pause / resume round-trip, unchanged from the first version of this file.
   perform public.pause_path(path_pub);
   select count(*) into n
   from public.path_progress
@@ -181,55 +284,135 @@ begin
     raise exception 'resume_path failed to clear paused_at';
   end if;
 
-  -- Apply step 2 (with reflection and mutation id)
-  -- Seed a knowledge_state first for pull_2 with a due date 10 days out
-  reset role;
-  insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
-  values (reader_a, pull_2, 10.0, 0.3, now() - interval '1 day', now() + interval '10 days')
-  on conflict (user_id, pull_id) do update set
-    next_due_at = now() + interval '10 days';
-
-  set local role authenticated;
-  perform set_config('request.jwt.claim.sub', reader_a::text, true);
-
-  select next_due_at into due_before
-  from public.knowledge_states
-  where user_id = reader_a and pull_id = pull_2;
+  -- The apply step, still with no knowledge_states row for its idea.
+  select count(*) into n from public.knowledge_states where user_id = reader_a and pull_id = pull_2;
+  if n <> 0 then
+    raise exception 'fixture: reader A must not hold pull_2 before applying';
+  end if;
 
   apply_out := public.apply_path_step(path_pub, 2::smallint, 'My reflection on control', mut_id);
   if not ((apply_out->>'ok')::boolean) or (apply_out->>'noteId') is null then
     raise exception 'apply_path_step unexpected output: %', apply_out;
   end if;
+  if (apply_out->>'replayed')::boolean then
+    raise exception 'a first apply reported itself as a replay: %', apply_out;
+  end if;
+  note_id := (apply_out->>'noteId')::uuid;
 
-  -- next_due_at was pulled forward within 3 days
-  select next_due_at into due_after
-  from public.knowledge_states
-  where user_id = reader_a and pull_id = pull_2;
-
+  select ks.next_due_at into due_after
+  from public.knowledge_states ks
+  where ks.user_id = reader_a and ks.pull_id = pull_2;
+  if due_after is null then
+    raise exception
+      'apply_path_step did not put the applied idea into knowledge_states, so it will '
+      'never come round in Review.';
+  end if;
   if due_after > now() + interval '3 days' + interval '1 minute' then
-    raise exception 'apply_path_step did not pull due date forward: before=%, after=%', due_before, due_after;
+    raise exception 'the applied idea is due at %, more than three days out', due_after;
   end if;
 
-  -- Step 2 was the final step: path is now completed!
+  select count(*) into n from public.notes
+  where user_id = reader_a and pull_id = pull_2 and body = 'My reflection on control';
+  if n <> 1 then
+    raise exception 'apply_path_step wrote % note(s) rather than one', n;
+  end if;
+
+  -- Steps 1 and 2 are every step reader A can read, so the path is complete for A --
+  -- the third step is behind a summary A cannot see and must not hold A hostage.
   select count(*) into n
   from public.path_progress
   where user_id = reader_a and path_id = path_pub and completed_at is not null;
   if n <> 1 then
-    raise exception 'path expected to be marked completed after step 2';
+    raise exception
+      'the path is not complete for reader A after every readable step. A step the '
+      'screen cannot show is being counted as owed.';
   end if;
 
-  -- Replay of apply_path_step is idempotent
-  apply_out := public.apply_path_step(path_pub, 2::smallint, 'My reflection on control', mut_id);
+  -- ---------------------------------------------------------------------------
+  -- 4. A replay returns the note it already wrote and changes nothing
+  -- ---------------------------------------------------------------------------
+  apply_out := public.apply_path_step(path_pub, 2::smallint, 'A DIFFERENT reflection', mut_id);
   if not ((apply_out->>'ok')::boolean) then
-    raise exception 'replay of apply_path_step failed';
+    raise exception 'replay of apply_path_step failed: %', apply_out;
+  end if;
+  if (apply_out->>'noteId')::uuid is distinct from note_id then
+    raise exception 'replay returned note % rather than the original %',
+      apply_out->>'noteId', note_id;
+  end if;
+  if not (apply_out->>'replayed')::boolean then
+    raise exception 'a replay did not say it was one: %', apply_out;
+  end if;
+
+  select count(*) into n from public.notes where user_id = reader_a and client_mutation_id = mut_id;
+  if n <> 1 then
+    raise exception 'a replayed apply wrote a second note (% rows for the mutation id)', n;
+  end if;
+  select body into note_body from public.notes where id = note_id;
+  if note_body is distinct from 'My reflection on control' then
+    raise exception 'a replay rewrote the note to %', note_body;
   end if;
 
   -- ---------------------------------------------------------------------------
-  -- Reader B isolation tests
+  -- 5. apply_path_step refuses what it should, and writes nothing when it does
   -- ---------------------------------------------------------------------------
-  perform set_config('request.jwt.claim.sub', reader_b::text, true);
+  select count(*) into n from public.notes where user_id = reader_a;
+  if n <> 1 then
+    raise exception 'fixture: reader A should hold exactly one note here, has %', n;
+  end if;
 
-  -- Reader B cannot see Reader A's progress or done steps
+  -- Not an apply step.
+  code := null;
+  begin
+    perform public.apply_path_step(path_pub, 1::smallint, 'A note on a read step', null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '22023' then
+    raise exception 'apply_path_step on a read step should raise 22023, got %', coalesce(code, 'nothing');
+  end if;
+
+  -- A draft path.
+  code := null;
+  begin
+    perform public.apply_path_step(path_drf, 2::smallint, 'A note on a draft path', null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from 'P0002' then
+    raise exception 'apply_path_step on a draft path should raise P0002, got %', coalesce(code, 'nothing');
+  end if;
+
+  -- Blank, and too long.
+  code := null;
+  begin
+    perform public.apply_path_step(path_pub, 2::smallint, '   ', null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '22023' then
+    raise exception 'a blank reflection should raise 22023, got %', coalesce(code, 'nothing');
+  end if;
+
+  code := null;
+  begin
+    perform public.apply_path_step(path_pub, 2::smallint, repeat('x', 20001), null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '22023' then
+    raise exception 'a 20001-character reflection should raise 22023, got %', coalesce(code, 'nothing');
+  end if;
+
+  select count(*) into n from public.notes where user_id = reader_a;
+  if n <> 1 then
+    raise exception 'a refused apply wrote a note (reader A now holds %)', n;
+  end if;
+
+  -- ---------------------------------------------------------------------------
+  -- 6. Reader B: isolation, and testing out does not rewrite a done step
+  -- ---------------------------------------------------------------------------
+  perform pg_temp.become(reader_b);
+
   select count(*) into n from public.path_progress;
   if n <> 0 then
     raise exception 'Reader B saw other reader progress: %', n;
@@ -240,40 +423,136 @@ begin
     raise exception 'Reader B saw other reader step done: %', n;
   end if;
 
-  -- Reader B can test out of step 1 if pull_1 is already known solid
-  reset role;
+  select count(*) into n from public.notes;
+  if n <> 0 then
+    raise exception 'Reader B saw another reader''s reflection: %', n;
+  end if;
+
+  -- B holds pull_1 solidly and has ALSO completed step 1 by walking it.
+  perform pg_temp.as_owner();
   insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
   values (reader_b, pull_1, 50.0, 0.2, now(), now() + interval '50 days');
+  perform pg_temp.become(reader_b);
 
-  set local role authenticated;
-  perform set_config('request.jwt.claim.sub', reader_b::text, true);
+  perform public.advance_path(path_pub, 1::smallint);
 
   test_out_res := public.test_out(path_pub);
   if not ((test_out_res->>'ok')::boolean) then
     raise exception 'test_out failed for Reader B: %', test_out_res;
   end if;
+  if (test_out_res->'testedOutOrdinals') @> '[1]'::jsonb then
+    raise exception 'test_out reported testing out of a step reader B had completed';
+  end if;
 
-  -- Reader B tested out of ordinal 1
   select count(*) into n
   from public.path_step_done
-  where user_id = reader_b and path_id = path_pub and ordinal = 1 and tested_out = true;
+  where user_id = reader_b and path_id = path_pub and ordinal = 1 and tested_out = false;
   if n <> 1 then
-    raise exception 'Reader B expected to test out of ordinal 1, got %', n;
+    raise exception 'test_out rewrote a completed step as tested out';
+  end if;
+
+  -- Now B holds pull_2 solidly too: step 2 tests out, and that completes B's path.
+  perform pg_temp.as_owner();
+  insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
+  values (reader_b, pull_2, 50.0, 0.2, now(), now() + interval '50 days');
+  perform pg_temp.become(reader_b);
+
+  test_out_res := public.test_out(path_pub);
+  if not ((test_out_res->'testedOutOrdinals') @> '[2]'::jsonb) then
+    raise exception 'Reader B expected to test out of ordinal 2, got %', test_out_res;
+  end if;
+  if not ((test_out_res->>'completed')::boolean) then
+    raise exception 'testing out of the last readable step did not complete the path: %', test_out_res;
+  end if;
+
+  select count(*) into n
+  from public.path_step_done
+  where user_id = reader_b and path_id = path_pub and ordinal = 2 and tested_out = true;
+  if n <> 1 then
+    raise exception 'Reader B expected ordinal 2 tested out, got %', n;
   end if;
 
   -- ---------------------------------------------------------------------------
-  -- Anon tests
+  -- 7. Reader C: an idea already scheduled is pulled forward, and the private step
+  --    is both shown and owed to the one reader who can read it
   -- ---------------------------------------------------------------------------
-  set local role anon;
-  perform set_config('request.jwt.claim.sub', '', true);
+  perform pg_temp.as_owner();
+  insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
+  values (reader_c, pull_2, 10.0, 0.3, now() - interval '1 day', now() + interval '10 days');
+  perform pg_temp.become(reader_c);
 
-  -- Anon can read published paths and steps via RPC
+  path_out := public.get_path(slug_pub);
+  if jsonb_array_length(path_out->'steps') <> 3 then
+    raise exception 'reader C, who authored the private summary, should see 3 steps, got %',
+      jsonb_array_length(path_out->'steps');
+  end if;
+
+  select next_due_at into due_before
+  from public.knowledge_states where user_id = reader_c and pull_id = pull_2;
+
+  apply_out := public.apply_path_step(path_pub, 2::smallint, 'C''s reflection', null);
+  if not ((apply_out->>'ok')::boolean) then
+    raise exception 'apply_path_step failed for reader C: %', apply_out;
+  end if;
+
+  select next_due_at into due_after
+  from public.knowledge_states where user_id = reader_c and pull_id = pull_2;
+  if due_after is null then
+    raise exception 'reader C''s knowledge_states row for pull_2 vanished';
+  end if;
+  if due_after > now() + interval '3 days' + interval '1 minute' then
+    raise exception 'apply_path_step did not pull the due date forward: before=%, after=%',
+      due_before, due_after;
+  end if;
+  if due_after >= due_before then
+    raise exception 'the due date was not moved earlier: before=%, after=%', due_before, due_after;
+  end if;
+
+  -- Two of C's three readable steps remain, so C's path is not complete.
+  select count(*) into n
+  from public.path_progress
+  where user_id = reader_c and path_id = path_pub and completed_at is not null;
+  if n <> 0 then
+    raise exception
+      'reader C''s path completed with steps 1 and 3 undone. The remaining count is '
+      'not counting the steps this reader can read.';
+  end if;
+
+  perform public.advance_path(path_pub, 1::smallint);
+  adv_out := public.advance_path(path_pub, 3::smallint);
+  if not ((adv_out->>'completed')::boolean) then
+    raise exception 'reader C''s path did not complete after every readable step: %', adv_out;
+  end if;
+
+  -- And reader A, for whom step 3 does not exist, cannot advance it.
+  perform pg_temp.become(reader_a);
+  code := null;
+  begin
+    perform public.advance_path(path_pub, 3::smallint);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from 'P0002' then
+    raise exception 'reader A advanced a step behind a summary they cannot read (got %)',
+      coalesce(code, 'no error');
+  end if;
+
+  -- ---------------------------------------------------------------------------
+  -- 8. Anon
+  -- ---------------------------------------------------------------------------
+  perform set_config('role', 'anon', true);
+  perform set_config('request.jwt.claims', '', true);
+
   paths_out := public.get_paths();
   if jsonb_array_length(paths_out) = 0 then
     raise exception 'anon expected to see published paths in get_paths()';
   end if;
 
-  -- Anon mutating functions raise 28000
+  path_out := public.get_path('Test-Path-Public'::citext);
+  if path_out is null or jsonb_array_length(path_out->'steps') <> 2 then
+    raise exception 'anon get_path with a mixed-case slug: %', path_out;
+  end if;
+
   refused := false;
   begin
     perform public.advance_path(path_pub, 1::smallint);
@@ -286,8 +565,19 @@ begin
     raise exception 'anon advance_path should raise 28000 or 42501';
   end if;
 
-  -- Success notice
-  raise notice 'paths.sql: all assertions passed';
+  refused := false;
+  begin
+    perform public.apply_path_step(path_pub, 2::smallint, 'anon reflection', null);
+  exception when others then
+    if sqlstate in ('28000', '42501') then
+      refused := true;
+    end if;
+  end;
+  if not refused then
+    raise exception 'anon apply_path_step should raise 28000 or 42501';
+  end if;
+
+  raise notice 'paths.sql: a path step enters the review schedule, a replay stops at its note, a done step stays done, a slug reads either case, an unreadable step is neither shown nor owed, and nobody sees another reader''s walk';
 end $$;
 
 rollback;
