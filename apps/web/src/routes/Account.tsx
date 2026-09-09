@@ -12,6 +12,7 @@ import {
   unusedRecoveryCodeCount,
   type AccountSession,
 } from '../lib/account-api.js';
+import { OAuthButtons } from '../components/OAuthButtons.js';
 import { downloadText } from '../lib/download.js';
 import { fetchAnkiDeck } from '../lib/export-api.js';
 import { toAnkiTsv } from '../lib/export-formats.js';
@@ -43,7 +44,7 @@ export function Account({ userId, email }: { userId: string; email: string | nul
   return (
     <section className="stack measure">
       <p className="meta">Account</p>
-      <h1 className="display">{email ?? 'Your account'}</h1>
+      <h2>{email ?? 'Your account'}</h2>
       <p className="lede">
         Where you are signed in, what is stored, and how to take it with you or remove it.
       </p>
@@ -329,8 +330,8 @@ function SecondFactor() {
     <section className="stack">
       <h2>Second factor</h2>
       <p className="meta">
-        Signing in sends a code to your email, so the account is as strong as the mailbox. An
-        authenticator app adds something the mailbox cannot give away.
+        Google or Microsoft handles your sign-in. An authenticator app adds another check before
+        someone can access your account.
       </p>
 
       {error && (
@@ -464,8 +465,8 @@ export function RedeemRecoveryCode({ onDone }: { onDone: () => void }) {
     <section className="stack measure">
       <h2>Use a recovery code</h2>
       <p className="meta">
-        This removes the authenticator app from your account so you can sign in with an email code
-        again. You can add a new one afterwards.
+        This removes the authenticator app from your account so you can sign in with Google or
+        Microsoft again. You can add a new one afterwards.
       </p>
       <label className="stack" htmlFor="recovery-code">
         <span className="meta">Recovery code</span>
@@ -648,122 +649,146 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
  * the authority; this is only politeness.
  */
 function DeleteAccount({ email }: { email: string | null }) {
-  const [typed, setTyped] = useState('');
-  const [fresh, setFresh] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
-
-  useEffect(() => {
-    sessionAgeSeconds()
-      .then((age) => setFresh(age !== null && age <= REAUTH_WINDOW_SECONDS))
-      .catch(() => setFresh(null));
-  }, []);
-
-  const reauth = async () => {
-    if (!email) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const { error: e } = await supabase.auth.signInWithOtp({ email });
-      if (e) throw e;
-      setSent(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const run = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await deleteAccount();
-      // The row is gone; the token in memory is now attached to nothing. Signing out
-      // locally is what clears it, and it must not fail the deletion if it throws.
-      await supabase.auth.signOut().catch(() => undefined);
-      window.location.assign('/');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  };
-
-  const confirmed = email !== null && typed.trim().toLowerCase() === email.toLowerCase();
-
+  const [open, setOpen] = useState(false);
   return (
     <section className="stack">
       <h2>Delete this account</h2>
       <p>
-        This removes your profile, preferences, saves, notes, highlights, history, stances,
-        explanations, and anything you submitted for generation. It cannot be undone, and there is
-        no grace period.
+        Permanently remove your account and personal data. You can export your data above first.
       </p>
-      <p className="meta">
-        Spending records keep a row with no name attached — a model, a token count and a cost —
-        because the cost ledger is how this project answers what generation costs. Nothing in it
-        identifies you.
-      </p>
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        Delete account
+      </button>
+      {open && <DeleteAccountDialog email={email} onClose={() => setOpen(false)} />}
+    </section>
+  );
+}
 
-      {error && (
-        <p className="meta" role="alert">
-          {error}
+export function DeleteAccountDialog({
+  email,
+  onClose,
+}: {
+  email: string | null;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const [typed, setTyped] = useState('');
+  const [fresh, setFresh] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [checks, setChecks] = useState(0);
+  useEffect(() => {
+    dialog.current?.showModal();
+    input.current?.focus();
+  }, []);
+  useEffect(() => {
+    let live = true;
+    sessionAgeSeconds()
+      .then((age) => {
+        if (live) setFresh(age !== null && age >= 0 && age <= REAUTH_WINDOW_SECONDS);
+      })
+      .catch(() => {
+        if (live) setError('Could not verify your sign-in. Check your connection and try again.');
+      });
+    return () => {
+      live = false;
+    };
+  }, [checks]);
+  async function run(event: React.FormEvent) {
+    event.preventDefault();
+    if (typed !== 'CONFIRM' || fresh !== true || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const age = await sessionAgeSeconds();
+      if (age === null || age < 0 || age > REAUTH_WINDOW_SECONDS) {
+        setFresh(false);
+        setBusy(false);
+        return;
+      }
+      await deleteAccount();
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      window.location.assign('/');
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : 'Could not delete your account. Please try again.',
+      );
+      setBusy(false);
+    }
+  }
+  return (
+    <dialog
+      ref={dialog}
+      className="account-dialog"
+      aria-labelledby="delete-account-title"
+      aria-describedby="delete-account-description"
+      onCancel={(event) => {
+        if (busy) event.preventDefault();
+      }}
+      onClose={onClose}
+    >
+      <form className="stack" onSubmit={(event) => void run(event)}>
+        <h2 id="delete-account-title">Delete your account?</h2>
+        <p id="delete-account-description">
+          This permanently deletes {email ?? 'your account'}, including your profile, preferences,
+          saves, notes, highlights, history, and submitted generation material. There is no undo.
         </p>
-      )}
-
-      {fresh === false && (
-        <div className="stack">
-          <p className="meta">
-            Deleting an account needs a recent sign-in. Send yourself a new code, enter it on the
-            sign-in screen, then come back here.
+        <p className="meta">Anonymous spending records remain, without your identity.</p>
+        {error && (
+          <p className="meta" role="alert">
+            {error}
           </p>
-          {sent ? (
-            <p className="meta" role="status">
-              Code sent to {email}.
-            </p>
-          ) : (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || !email}
-              onClick={() => void reauth()}
-            >
-              Send me a code
-            </button>
-          )}
-        </div>
-      )}
-
-      {fresh !== false && (
-        <div className="stack">
-          <label className="stack" htmlFor="confirm-email">
-            <span className="meta">Type {email ?? 'your email address'} to confirm</span>
-            <input
-              id="confirm-email"
-              autoComplete="off"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-            />
-          </label>
+        )}
+        {fresh === null && !error && <p role="status">Checking your sign-in…</p>}
+        {fresh === null && error && (
           <button
             type="button"
-            /*
-             * The accent, not a red of its own. Law 1 allows exactly one accent
-             * colour and `design-laws.test.ts` fails a second hex, so a bespoke
-             * danger colour is not available — and oxblood already reads as a
-             * warning. What actually makes this safe is the typed confirmation
-             * above, which keeps the button disabled until the reader has written
-             * out their own address; colour was never doing that work.
-             */
-            className="btn btn--primary"
-            disabled={busy || !confirmed}
-            onClick={() => void run()}
+            className="btn"
+            onClick={() => {
+              setError(null);
+              setChecks((n) => n + 1);
+            }}
           >
-            {busy ? 'Deleting…' : 'Delete my account permanently'}
+            Try again
+          </button>
+        )}
+        {fresh === false && (
+          <div className="stack">
+            <p>For your security, sign in again, then return here to confirm deletion.</p>
+            <OAuthButtons next="/settings?section=account" />
+          </div>
+        )}
+        <label className="stack" htmlFor="delete-account-confirm">
+          <span className="meta">Type CONFIRM to delete your account</span>
+          <input
+            ref={input}
+            id="delete-account-confirm"
+            autoComplete="off"
+            spellCheck={false}
+            value={typed}
+            disabled={busy}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </label>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => dialog.current?.close()}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={busy || fresh !== true || typed !== 'CONFIRM'}
+          >
+            {busy ? 'Deleting…' : 'Delete permanently'}
           </button>
         </div>
-      )}
-    </section>
+      </form>
+    </dialog>
   );
 }
