@@ -10,7 +10,7 @@ import {
   testOut,
 } from '../lib/paths-api.js';
 import { saveExplanation, setConviction } from '../lib/api.js';
-import { draftMutationIds, nextSubmissionStamp } from '../lib/submission.js';
+import { draftSubmissions } from '../lib/submission.js';
 import { recognitionSupported, startRecognition } from '../lib/speech.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
@@ -70,13 +70,16 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
    * had never seen. `set_conviction`, `explanations` and `apply_path_step` all
    * deduplicate on the id, which is only worth anything if a retry carries the same one.
    *
-   * `draftMutationIds` keys the id by (path, step, content), so the same draft gets the
-   * same id however many times it is sent and an edited one gets a fresh id -- with
-   * nothing to clear, which is the shape that has gone wrong here before. Lazily
+   * `draftSubmissions` keys the id AND the submission stamp by (path, step, content),
+   * so the same draft gets the same pair however many times it is sent and an edited
+   * one gets a fresh pair -- with nothing to clear, which is the shape that has gone
+   * wrong here before. The stamp rides with the id because `set_conviction` orders
+   * stances by it: a retry with a fresh stamp would claim the reader decided later
+   * than they did and could supersede a newer stance from another tab. Lazily
    * initialised state rather than a ref so the closure is built once and never read
    * off `.current` during render.
    */
-  const [mutationIdFor] = useState(() => draftMutationIds());
+  const [submissionFor] = useState(() => draftSubmissions());
 
   useEffect(() => {
     return () => {
@@ -180,20 +183,21 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'compare') {
         if (compareStance) {
-          const mId = mutationIdFor(draftKey(compareStance));
-          const stamp = nextSubmissionStamp();
-          await setConviction(step.pull.id, compareStance, mId, stamp);
+          const { mutationId, submittedAt } = submissionFor(draftKey(compareStance));
+          await setConviction(step.pull.id, compareStance, mutationId, submittedAt);
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'say_it_back') {
         const text = sayItBackText.trim();
         if (text) {
-          await saveExplanation(userId, step.pull.id, text, mutationIdFor(draftKey(text)));
+          const { mutationId } = submissionFor(draftKey(text));
+          await saveExplanation(userId, step.pull.id, text, mutationId);
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'apply') {
         const text = applyText.trim();
-        await applyStep(path.id, step.ordinal, text, mutationIdFor(draftKey(text)));
+        const { mutationId } = submissionFor(draftKey(text));
+        await applyStep(path.id, step.ordinal, text, mutationId);
       }
 
       // Reset step-local interaction state
