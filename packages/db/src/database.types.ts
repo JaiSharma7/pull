@@ -2437,6 +2437,14 @@ export type Database = {
         }
         Returns: Json
       }
+      readable_path_steps: {
+        Args: { p_path_id: string }
+        Returns: {
+          kind: string
+          ordinal: number
+          pull_id: string
+        }[]
+      }
       record_failed_job_step: {
         Args: {
           p_attempt: number
@@ -2577,6 +2585,10 @@ export type Database = {
       set_worker_secret: {
         Args: { p_name: string; p_value: string }
         Returns: string
+      }
+      settle_path_progress: {
+        Args: { p_path_id: string; p_uid: string }
+        Returns: boolean
       }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }

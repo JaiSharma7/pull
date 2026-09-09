@@ -61,16 +61,21 @@
 --     `summary_is_readable`, so a step whose pull the reader cannot read was dropped
 --     from `steps`, while `advance_path` and `test_out` counted `remaining` over ALL
 --     `path_steps`. The screen could never reach the missing step and the path never
---     completed. All three now agree on one definition -- the steps whose pull the
---     caller can read -- so an unreadable step is neither shown nor counted.
+--     completed. All three now agree on ONE definition -- `readable_path_steps`, the
+--     steps whose pull the caller can read -- so an unreadable step is neither shown
+--     nor counted. The definer functions call the helper; the invoker functions get the
+--     same set from the `path_steps_read` policy, which is written from the same
+--     predicate.
 --
 --     That makes completion RELATIVE TO THE CALLER, and the set can grow after the
 --     fact (review finding): a step behind a private summary that is published later
 --     becomes readable, and a stored `completed_at` beside it would have the screen
 --     say "Completed" over a step it never rendered. So the timestamp is derived on
 --     read -- `get_path` and `get_paths` withhold it while a readable step is undone
---     -- and recomputed on write, where `advance_path` and `test_out` clear it when
---     anything remains and set it again when nothing does.
+--     -- and recomputed on write by `settle_path_progress`, which clears it when
+--     anything remains and sets it again when nothing does. And "nothing remains" is
+--     only completion when there was something to do: a path none of whose steps the
+--     caller can read is not one they have finished (review finding).
 --   * `advance_path` selected `v_max_ordinal` and never read it. Removed.
 --   * `test_out` used `>=` against `known_retrievability_floor()`; every other caller of
 --     that floor uses `>`. Aligned.
@@ -78,11 +83,78 @@
 --     stayed up over a path being actively walked, even though it promised that
 --     advancing would resume. Advancing and testing out both clear it now.
 --
--- `security definer` is kept where it was, and each definer pins `search_path = ''`.
--- `get_paths` and `get_path` stay `security invoker`, so the row policies decide what a
--- caller sees; the explicit `summary_is_readable` joins inside the definers are what
--- carries the caller's view into functions that RLS does not apply to.
+-- TWO HELPERS, NEITHER CALLABLE FROM A CLIENT. `readable_path_steps` and
+-- `settle_path_progress` exist so that "the steps this caller can read" and "is this
+-- path finished" are each written once: the previous version had the predicate in five
+-- places and the count in two, and the first drift between them is defect 6 above.
+-- Both are `security definer` with `search_path = ''` (lint invariant 4) and both are
+-- revoked from `anon` and `authenticated` -- they take the reader's uid as a parameter,
+-- which is only safe when the caller is one of the RPCs below, running as the owner.
 -- -----------------------------------------------------------------------------
+
+-- ---------------------------------------------------------- readable_path_steps
+
+create or replace function public.readable_path_steps(p_path_id uuid)
+returns table (ordinal smallint, pull_id uuid, kind text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select ps.ordinal, ps.pull_id, ps.kind
+  from public.path_steps ps
+  join public.pulls pu on pu.id = ps.pull_id
+  join public.summaries s on s.id = pu.summary_id
+  where ps.path_id = p_path_id
+    and public.summary_is_readable(s);
+$$;
+
+comment on function public.readable_path_steps(uuid) is
+  'The steps of a path whose pull the calling reader can read -- the one definition '
+  'get_path shows, advance_path and test_out count, and apply_path_step writes '
+  'against. Internal: callable only by the path RPCs.';
+
+revoke all on function public.readable_path_steps(uuid) from public, anon, authenticated;
+
+-- --------------------------------------------------------- settle_path_progress
+
+create or replace function public.settle_path_progress(p_uid uuid, p_path_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_readable  int;
+  v_remaining int;
+  v_completed boolean;
+begin
+  select count(*), count(*) filter (where psd.ordinal is null)
+    into v_readable, v_remaining
+  from public.readable_path_steps(p_path_id) rs
+  left join public.path_step_done psd
+    on psd.user_id = p_uid and psd.path_id = p_path_id and psd.ordinal = rs.ordinal;
+
+  -- Finished means every readable step is done AND there was a step to do. Over an
+  -- empty readable set `remaining = 0` is vacuously true, and a reader who can see
+  -- none of a path's steps has not finished it.
+  v_completed := v_readable > 0 and v_remaining = 0;
+
+  -- Recomputed, not only set: a path finished while a step was hidden carries a
+  -- timestamp, and if that step becomes readable the reader owes it again.
+  update public.path_progress
+     set completed_at = case when v_completed then coalesce(completed_at, now()) else null end
+   where user_id = p_uid and path_id = p_path_id;
+
+  return v_completed;
+end;
+$$;
+
+comment on function public.settle_path_progress(uuid, uuid) is
+  'Recompute completed_at for one reader on one path from the steps they can read; '
+  'returns whether it is complete. Internal: callable only by the path RPCs.';
+
+revoke all on function public.settle_path_progress(uuid, uuid) from public, anon, authenticated;
 
 -- ------------------------------------------------------------------- get_paths
 
@@ -94,24 +166,25 @@ security invoker
 set search_path = ''
 as $$
   with caller_progress as (
-    select
-      pp.path_id,
-      pp.started_at,
-      pp.paused_at,
-      pp.completed_at,
-      coalesce(count(psd.ordinal), 0)::int as completed_steps
-    from public.path_progress pp
-    left join public.path_step_done psd
-      on psd.user_id = pp.user_id and psd.path_id = pp.path_id
-    where pp.user_id = (select auth.uid())
-    group by pp.path_id, pp.started_at, pp.paused_at, pp.completed_at
+    select path_id, started_at, paused_at, completed_at
+    from public.path_progress
+    where user_id = (select auth.uid())
   ),
+  -- One pass over the steps this caller can read (`path_steps_read` under invoker
+  -- RLS), counting the done ones against that same set -- so `stepCount`,
+  -- `completedSteps` and `completedAt` all describe the same steps. Counting every
+  -- `path_step_done` row instead let a step that was done and then hidden push the
+  -- count past the total and label an unfinished path "Completed".
   path_counts as (
-    select
-      path_id,
-      count(*)::int as total_steps
-    from public.path_steps
-    group by path_id
+    select ps.path_id,
+           count(*)::int as total_steps,
+           count(psd.ordinal)::int as completed_steps
+    from public.path_steps ps
+    left join public.path_step_done psd
+      on psd.user_id = (select auth.uid())
+     and psd.path_id = ps.path_id
+     and psd.ordinal = ps.ordinal
+    group by ps.path_id
   )
   select coalesce(
     jsonb_agg(
@@ -125,22 +198,12 @@ as $$
         'stepCount', coalesce(pc.total_steps, 0),
         'startedAt', cp.started_at,
         'pausedAt', cp.paused_at,
-        -- Completion is relative to what this caller can read, and it is derived
-        -- rather than reported: a step that becomes readable after the path was
-        -- finished -- a private summary published later -- reopens it. See get_path.
+        -- Derived, not reported: withheld while a readable step is undone. See get_path.
         'completedAt', case
-          when exists (
-            select 1 from public.path_steps ps
-            where ps.path_id = p.id
-              and not exists (
-                select 1 from public.path_step_done psd
-                where psd.user_id = (select auth.uid())
-                  and psd.path_id = p.id and psd.ordinal = ps.ordinal
-              )
-          ) then null
+          when coalesce(pc.completed_steps, 0) < coalesce(pc.total_steps, 0) then null
           else cp.completed_at
         end,
-        'completedSteps', coalesce(cp.completed_steps, 0)
+        'completedSteps', coalesce(pc.completed_steps, 0)
       ) order by p.created_at asc
     ),
     '[]'::jsonb
@@ -236,8 +299,9 @@ begin
       end as compare_pull
     from public.path_steps ps
     join public.pulls pu on pu.id = ps.pull_id
-    -- The steps a caller can READ, which is the same set `advance_path` and `test_out`
-    -- count. A step this join drops is not on the screen and is not owed either.
+    -- The steps a caller can READ -- the same set `readable_path_steps` gives the
+    -- definers, here through the row policies. A step this join drops is not on the
+    -- screen and is not owed either.
     join public.summaries s on s.id = pu.summary_id and public.summary_is_readable(s)
     join public.works w on w.id = s.work_id
     left join public.pulls cpu on cpu.id = ps.compare_pull_id
@@ -312,7 +376,7 @@ as $$
 declare
   uid         uuid := (select auth.uid());
   v_pull_id   uuid;
-  v_remaining int;
+  v_completed boolean;
 begin
   if uid is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -322,15 +386,12 @@ begin
     raise exception 'Path not found' using errcode = 'P0002';
   end if;
 
-  -- The step must exist AND its pull must be readable by this caller. A definer
-  -- function sees every row, so the policy `path_steps_read` applies to the screen is
-  -- restated here; without it a reader could mark done a step they were never shown.
-  select ps.pull_id into v_pull_id
-  from public.path_steps ps
-  join public.pulls pu on pu.id = ps.pull_id
-  join public.summaries s on s.id = pu.summary_id
-  where ps.path_id = p_path_id and ps.ordinal = p_ordinal
-    and public.summary_is_readable(s);
+  -- The step must exist AND be readable by this caller. A definer function sees every
+  -- row, so the set the screen was shown is restated here; without it a reader could
+  -- mark done a step they were never shown.
+  select rs.pull_id into v_pull_id
+  from public.readable_path_steps(p_path_id) rs
+  where rs.ordinal = p_ordinal;
 
   if v_pull_id is null then
     raise exception 'Step not found' using errcode = 'P0002';
@@ -364,33 +425,11 @@ begin
      set paused_at = null
    where user_id = uid and path_id = p_path_id and paused_at is not null;
 
-  -- What is left, over the steps this caller can read -- the same set `get_path`
-  -- shows, so a step the screen cannot reach is not one the path waits for.
-  select count(*) into v_remaining
-  from public.path_steps ps
-  join public.pulls pu on pu.id = ps.pull_id
-  join public.summaries s on s.id = pu.summary_id
-  where ps.path_id = p_path_id
-    and public.summary_is_readable(s)
-    and not exists (
-      select 1 from public.path_step_done psd
-      where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = ps.ordinal
-    );
-
-  -- Recomputed, not only set. A path finished while a step was hidden behind a
-  -- private summary carries a `completed_at`; if that summary is published later the
-  -- reader owes the step again, and the next write here clears the timestamp until
-  -- they have done it. `get_path` withholds it on the read side for the same reason.
-  update public.path_progress
-     set completed_at = case
-       when v_remaining = 0 then coalesce(completed_at, now())
-       else null
-     end
-   where user_id = uid and path_id = p_path_id;
+  v_completed := public.settle_path_progress(uid, p_path_id);
 
   return jsonb_build_object(
     'ok', true,
-    'completed', (v_remaining = 0)
+    'completed', v_completed
   );
 end;
 $$;
@@ -465,7 +504,7 @@ declare
   uid         uuid := (select auth.uid());
   v_floor     double precision := public.known_retrievability_floor();
   v_ordinals  smallint[];
-  v_remaining int;
+  v_completed boolean;
 begin
   if uid is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -488,18 +527,14 @@ begin
   -- every other reader of `known_retrievability_floor()` has it -- and has NOT already
   -- done. A step the reader completed stays completed; testing out is not a rewrite.
   with eligible as (
-    select ps.ordinal
-    from public.path_steps ps
-    join public.pulls pu on pu.id = ps.pull_id
-    join public.summaries s on s.id = pu.summary_id
+    select rs.ordinal
+    from public.readable_path_steps(p_path_id) rs
     join public.knowledge_states ks
-      on ks.user_id = uid and ks.pull_id = ps.pull_id
-    where ps.path_id = p_path_id
-      and public.summary_is_readable(s)
-      and public.retrievability(ks.stability, ks.last_seen_at) > v_floor
+      on ks.user_id = uid and ks.pull_id = rs.pull_id
+    where public.retrievability(ks.stability, ks.last_seen_at) > v_floor
       and not exists (
         select 1 from public.path_step_done psd
-        where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = ps.ordinal
+        where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = rs.ordinal
       )
   ),
   inserted as (
@@ -517,29 +552,12 @@ begin
      set paused_at = null
    where user_id = uid and path_id = p_path_id and paused_at is not null;
 
-  select count(*) into v_remaining
-  from public.path_steps ps
-  join public.pulls pu on pu.id = ps.pull_id
-  join public.summaries s on s.id = pu.summary_id
-  where ps.path_id = p_path_id
-    and public.summary_is_readable(s)
-    and not exists (
-      select 1 from public.path_step_done psd
-      where psd.user_id = uid and psd.path_id = p_path_id and psd.ordinal = ps.ordinal
-    );
-
-  -- Same recomputation as `advance_path`, for the same reason.
-  update public.path_progress
-     set completed_at = case
-       when v_remaining = 0 then coalesce(completed_at, now())
-       else null
-     end
-   where user_id = uid and path_id = p_path_id;
+  v_completed := public.settle_path_progress(uid, p_path_id);
 
   return jsonb_build_object(
     'ok', true,
     'testedOutOrdinals', to_jsonb(v_ordinals),
-    'completed', (v_remaining = 0)
+    'completed', v_completed
   );
 end;
 $$;
@@ -571,9 +589,10 @@ begin
   end if;
 
   -- The same bounds `notes_body_length` enforces, checked before anything is written
-  -- so the refusal names the field rather than a constraint. Blank is refused too:
-  -- the constraint counts characters and a reflection of spaces has some.
-  if p_reflection is null or btrim(p_reflection) = '' or length(p_reflection) > 20000 then
+  -- so the refusal names the field rather than a constraint. Blank is refused too, and
+  -- blank means no non-whitespace character at all: `btrim` strips spaces only, and a
+  -- reflection of tabs and newlines has a length.
+  if p_reflection is null or p_reflection !~ '\S' or length(p_reflection) > 20000 then
     raise exception 'A reflection is between 1 and 20000 characters'
       using errcode = '22023';
   end if;
@@ -582,12 +601,12 @@ begin
     raise exception 'Path not found' using errcode = 'P0002';
   end if;
 
-  select ps.pull_id, ps.kind into v_pull_id, v_step_kind
-  from public.path_steps ps
-  join public.pulls pu on pu.id = ps.pull_id
-  join public.summaries s on s.id = pu.summary_id
-  where ps.path_id = p_path_id and ps.ordinal = p_ordinal
-    and public.summary_is_readable(s);
+  -- Looked up here as well as in `advance_path`, because the note is written before
+  -- the step is advanced and must not be written against a step the caller cannot
+  -- read or one that is not an apply step.
+  select rs.pull_id, rs.kind into v_pull_id, v_step_kind
+  from public.readable_path_steps(p_path_id) rs
+  where rs.ordinal = p_ordinal;
 
   if v_pull_id is null then
     raise exception 'Step not found' using errcode = 'P0002';

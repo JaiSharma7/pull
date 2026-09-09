@@ -8,6 +8,7 @@
 --   * `get_path` is case-insensitive on its slug -- `paths.slug` is citext and the
 --     function runs with an empty search_path, which is exactly the setting that
 --     turns `=` case-sensitive
+--   * the two helpers the RPCs share are not callable by a reader
 --   * a reader with NO prior `knowledge_states` row walks a path, and every step they
 --     advance puts its idea into the schedule: the row EXISTS afterwards, acquired by
 --     reading, and the apply step's idea is due within three days. Asserted by
@@ -17,14 +18,27 @@
 --   * advancing clears `paused_at`
 --   * a replayed `apply_path_step` returns the note it already wrote, writes no
 --     second one, and does not rewrite the first
---   * `apply_path_step` refuses a step that is not an apply step, a draft path, a
---     blank reflection and one over 20,000 characters -- and writes nothing when it
---     refuses
+--   * `apply_path_step` refuses a step that is not an apply step, a draft path, an
+--     unreadable step, a blank reflection (spaces, tabs or newlines) and one over
+--     20,000 characters -- and writes NOTHING when it refuses: no note, no step done,
+--     no schedule entry, no progress row. Asserted against a reader with no prior
+--     activity, on undone steps, so a refusal that did not raise but wrote first
+--     would have somewhere to leave a mark. A refusal that RAISES cannot, whatever
+--     order its statements are in: the exception aborts the call and Postgres
+--     discards its writes, and a mutant that advanced the step before raising was
+--     run against this file and survived for exactly that reason. The footprint
+--     check therefore guards the shape of a future refusal that returns instead of
+--     raising, not the current ones
 --   * `test_out` leaves a step the reader genuinely completed as completed, and only
 --     tests out of steps not yet done
 --   * a step whose pull the caller cannot read is neither shown by `get_path` nor
 --     counted by `advance_path`, so the path completes for that caller; the reader
 --     who CAN read it is shown it and owes it
+--   * a path none of whose steps the caller can read cannot be completed by testing
+--     out of nothing
+--   * a step that becomes readable after the path was finished reopens it, on both
+--     RPCs and in the stored row; a step hidden after it was done does not push
+--     `completedSteps` past `stepCount`
 --   * Reader B sees none of Reader A's progress
 --   * anon can read paths and cannot mutate them
 --
@@ -67,6 +81,16 @@ begin
   perform set_config('request.jwt.claims', '', true);
 end $fn$;
 
+/* Everything a refused call could have left behind for one reader, as one number.
+   Run as the reader, so every table is read under that reader's own policies. */
+create or replace function pg_temp.footprint(p_uid uuid) returns int
+language sql as $fn$
+  select (select count(*) from public.notes where user_id = p_uid)
+       + (select count(*) from public.path_step_done where user_id = p_uid)
+       + (select count(*) from public.knowledge_states where user_id = p_uid)
+       + (select count(*) from public.path_progress where user_id = p_uid);
+$fn$;
+
 do $$
 declare
   reader_a  uuid := extensions.gen_random_uuid();
@@ -79,10 +103,13 @@ declare
   priv_summary uuid := extensions.gen_random_uuid();
   path_pub  uuid;
   path_drf  uuid;
+  path_hid  uuid;
   slug_pub  citext := 'test-path-public';
   slug_drf  citext := 'test-path-draft';
+  slug_hid  citext := 'test-path-hidden';
   paths_out jsonb;
   path_out  jsonb;
+  row_out   jsonb;
   adv_out   jsonb;
   apply_out jsonb;
   test_out_res jsonb;
@@ -168,6 +195,21 @@ begin
   values (path_drf, 1, pull_1, 'read'),
          (path_drf, 2, pull_2, 'apply');
 
+  -- A published path whose ONLY step is behind C's private summary.
+  insert into public.paths (id, slug, title, question, description, status)
+  values (
+    extensions.gen_random_uuid(),
+    slug_hid,
+    'A path nobody can see',
+    'What is on it?',
+    'Every step is behind a private summary.',
+    'published'
+  )
+  returning id into path_hid;
+
+  insert into public.path_steps (path_id, ordinal, pull_id, kind)
+  values (path_hid, 1, pull_priv, 'read');
+
   -- ---------------------------------------------------------------------------
   -- 2. Visibility, as reader A
   -- ---------------------------------------------------------------------------
@@ -217,6 +259,26 @@ begin
 
   if public.get_path(slug_drf) is not null then
     raise exception 'get_path returned a draft path';
+  end if;
+
+  -- The helpers are not a client's to call.
+  code := null;
+  begin
+    perform public.readable_path_steps(path_pub);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception 'readable_path_steps is callable by a reader (got %)', coalesce(code, 'no error');
+  end if;
+  code := null;
+  begin
+    perform public.settle_path_progress(reader_a, path_pub);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception 'settle_path_progress is callable by a reader (got %)', coalesce(code, 'no error');
   end if;
 
   -- ---------------------------------------------------------------------------
@@ -353,11 +415,29 @@ begin
   end if;
 
   -- ---------------------------------------------------------------------------
-  -- 5. apply_path_step refuses what it should, and writes nothing when it does
+  -- 5. Reader B: isolation, and a refused apply writes nothing at all
   -- ---------------------------------------------------------------------------
-  select count(*) into n from public.notes where user_id = reader_a;
-  if n <> 1 then
-    raise exception 'fixture: reader A should hold exactly one note here, has %', n;
+  perform pg_temp.become(reader_b);
+
+  select count(*) into n from public.path_progress;
+  if n <> 0 then
+    raise exception 'Reader B saw other reader progress: %', n;
+  end if;
+
+  select count(*) into n from public.path_step_done;
+  if n <> 0 then
+    raise exception 'Reader B saw other reader step done: %', n;
+  end if;
+
+  select count(*) into n from public.notes;
+  if n <> 0 then
+    raise exception 'Reader B saw another reader''s reflection: %', n;
+  end if;
+
+  -- B has done nothing yet, and every step below is undone for B -- so a mutant that
+  -- advanced, scheduled or started progress before refusing has somewhere to show.
+  if pg_temp.footprint(reader_b) <> 0 then
+    raise exception 'fixture: reader B must have no footprint before the refusals';
   end if;
 
   -- Not an apply step.
@@ -382,7 +462,18 @@ begin
     raise exception 'apply_path_step on a draft path should raise P0002, got %', coalesce(code, 'nothing');
   end if;
 
-  -- Blank, and too long.
+  -- A step B cannot read.
+  code := null;
+  begin
+    perform public.apply_path_step(path_pub, 3::smallint, 'A note on a hidden step', null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from 'P0002' then
+    raise exception 'apply_path_step on an unreadable step should raise P0002, got %', coalesce(code, 'nothing');
+  end if;
+
+  -- Blank: spaces, then tabs and newlines, which `btrim` alone would have let through.
   code := null;
   begin
     perform public.apply_path_step(path_pub, 2::smallint, '   ', null);
@@ -395,6 +486,19 @@ begin
 
   code := null;
   begin
+    perform public.apply_path_step(path_pub, 2::smallint, E'\n\t \r', null);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '22023' then
+    raise exception
+      'a reflection of tabs and newlines should raise 22023, got %. Blank means no '
+      'non-whitespace character, not no space character.', coalesce(code, 'nothing');
+  end if;
+
+  -- Too long.
+  code := null;
+  begin
     perform public.apply_path_step(path_pub, 2::smallint, repeat('x', 20001), null);
   exception when others then
     code := sqlstate;
@@ -403,31 +507,17 @@ begin
     raise exception 'a 20001-character reflection should raise 22023, got %', coalesce(code, 'nothing');
   end if;
 
-  select count(*) into n from public.notes where user_id = reader_a;
-  if n <> 1 then
-    raise exception 'a refused apply wrote a note (reader A now holds %)', n;
+  if pg_temp.footprint(reader_b) <> 0 then
+    raise exception
+      'a refused apply left something behind for reader B (footprint %): a note, a '
+      'step done, a schedule entry or a progress row was written before the refusal.',
+      pg_temp.footprint(reader_b);
   end if;
 
   -- ---------------------------------------------------------------------------
-  -- 6. Reader B: isolation, and testing out does not rewrite a done step
+  -- 6. Reader B: testing out does not rewrite a done step, and cannot finish a path
+  --    with nothing readable on it
   -- ---------------------------------------------------------------------------
-  perform pg_temp.become(reader_b);
-
-  select count(*) into n from public.path_progress;
-  if n <> 0 then
-    raise exception 'Reader B saw other reader progress: %', n;
-  end if;
-
-  select count(*) into n from public.path_step_done;
-  if n <> 0 then
-    raise exception 'Reader B saw other reader step done: %', n;
-  end if;
-
-  select count(*) into n from public.notes;
-  if n <> 0 then
-    raise exception 'Reader B saw another reader''s reflection: %', n;
-  end if;
-
   -- B holds pull_1 solidly and has ALSO completed step 1 by walking it.
   perform pg_temp.as_owner();
   insert into public.knowledge_states (user_id, pull_id, stability, difficulty, last_seen_at, next_due_at)
@@ -470,6 +560,28 @@ begin
   where user_id = reader_b and path_id = path_pub and ordinal = 2 and tested_out = true;
   if n <> 1 then
     raise exception 'Reader B expected ordinal 2 tested out, got %', n;
+  end if;
+
+  -- A path with no readable step is not finished by testing out of nothing.
+  test_out_res := public.test_out(path_hid);
+  if (test_out_res->>'completed')::boolean then
+    raise exception 'test_out completed a path reader B cannot see a single step of';
+  end if;
+  select count(*) into n
+  from public.path_progress
+  where user_id = reader_b and path_id = path_hid and completed_at is not null;
+  if n <> 0 then
+    raise exception 'a path with no readable step was stored as completed';
+  end if;
+  select e into row_out
+  from jsonb_array_elements(public.get_paths()) e
+  where e->>'id' = path_hid::text;
+  if row_out is null then
+    raise exception 'the hidden-step path is missing from get_paths';
+  end if;
+  if (row_out->>'stepCount')::int <> 0 or (row_out->>'completedAt') is not null then
+    raise exception 'get_paths reports the hidden-step path as % steps, completed %',
+      row_out->>'stepCount', row_out->>'completedAt';
   end if;
 
   -- ---------------------------------------------------------------------------
@@ -578,7 +690,8 @@ begin
   end if;
 
   -- ---------------------------------------------------------------------------
-  -- 9. A step that becomes readable later reopens the path
+  -- 9. A step that becomes readable later reopens the path; one hidden later does
+  --    not overcount
   -- ---------------------------------------------------------------------------
   -- Reader A finished the path in section 3 with step 3 hidden. C's summary is now
   -- published, so A can read step 3 and owes it: the stored timestamp must not be
@@ -598,12 +711,15 @@ begin
       'would show "Completed" over a step it never rendered.';
   end if;
 
-  paths_out := public.get_paths();
-  if (
-    select e->>'completedAt' from jsonb_array_elements(paths_out) e
-    where e->>'id' = path_pub::text
-  ) is not null then
+  select e into row_out
+  from jsonb_array_elements(public.get_paths()) e
+  where e->>'id' = path_pub::text;
+  if (row_out->>'completedAt') is not null then
     raise exception 'get_paths reports the path complete while a readable step is undone';
+  end if;
+  if (row_out->>'stepCount')::int <> 3 or (row_out->>'completedSteps')::int <> 2 then
+    raise exception 'get_paths after publication: expected 2 of 3, got % of %',
+      row_out->>'completedSteps', row_out->>'stepCount';
   end if;
 
   -- The write side: a test_out with nothing to test out of recomputes completion.
@@ -627,7 +743,26 @@ begin
     raise exception 'get_path withholds completedAt from a path with every readable step done';
   end if;
 
-  raise notice 'paths.sql: a path step enters the review schedule, a replay stops at its note, a done step stays done, a slug reads either case, an unreadable step is neither shown nor owed, a step readable later reopens the path, and nobody sees another reader''s walk';
+  -- And back: C's summary is withdrawn again. A did step 3 while it was readable, and
+  -- that done row must not count against a total that no longer includes the step.
+  perform pg_temp.as_owner();
+  update public.summaries set visibility = 'private' where id = priv_summary;
+  perform pg_temp.become(reader_a);
+
+  select e into row_out
+  from jsonb_array_elements(public.get_paths()) e
+  where e->>'id' = path_pub::text;
+  if (row_out->>'stepCount')::int <> 2 or (row_out->>'completedSteps')::int <> 2 then
+    raise exception
+      'get_paths after withdrawal: expected 2 of 2, got % of %. completedSteps is '
+      'counting a done row for a step the total no longer includes.',
+      row_out->>'completedSteps', row_out->>'stepCount';
+  end if;
+  if (row_out->>'completedAt') is null then
+    raise exception 'get_paths withholds completedAt from a path with every readable step done';
+  end if;
+
+  raise notice 'paths.sql: a path step enters the review schedule, a replay stops at its note, a refusal writes nothing, a done step stays done, a slug reads either case, an unreadable step is neither shown nor owed, a step readable later reopens the path, an empty path cannot be finished, and nobody sees another reader''s walk';
 end $$;
 
 rollback;
