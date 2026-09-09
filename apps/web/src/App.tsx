@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { Mark } from '@wap/ui';
-import { Appearance } from './routes/Appearance.js';
+import { Settings } from './routes/Settings.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
 import { Daily } from './routes/Daily.js';
@@ -23,7 +22,6 @@ import { History } from './routes/History.js';
  * are route-gated rather than tab-gated, which is what makes them safe to defer.
  */
 const Legal = lazy(() => import('./routes/Legal.js').then((m) => ({ default: m.Legal })));
-const Account = lazy(() => import('./routes/Account.js').then((m) => ({ default: m.Account })));
 
 /*
  * Shown while a split chunk arrives. Matches the shell's own loading state rather than
@@ -77,7 +75,6 @@ const SECTIONS: { id: Tab; label: string }[] = [
   { id: 'review', label: 'Review' },
   { id: 'library', label: 'Library' },
   { id: 'history', label: 'History' },
-  { id: 'preferences', label: 'Preferences' },
 ];
 
 /**
@@ -129,29 +126,7 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
   { path: '/import', label: 'Import', signedIn: true },
   { path: '/metacognition', label: 'Progress', signedIn: true },
 
-  /*
-   * A destination rather than a seventh section, and last of the three.
-
-   *
-   * The sections are the reader's own material — a feed, a library, a history —
-   * and every one of them is a row keyed to a user, which is why `SECTIONS` is
-   * hidden from a visitor entirely. Appearance is neither: it is stored on the
-   * device, it needs no account, and a visitor must be able to reach it. That is
-   * the same shape Explore and Search already have, so it goes where they are.
-   */
-  { path: '/appearance', label: 'Appearance' },
-  /*
-   * The one destination a visitor must NOT see, which is why the list now carries a
-   * flag rather than being split in two.
-   *
-   * Everything else here is reachable without an account -- that is the argument
-   * Appearance makes just above. Account is the opposite: every control on it acts on
-   * a reader, so for a visitor it would be a link to a sign-in wall wearing the name
-   * of a page. Keeping it in `DESTINATIONS` with a flag preserves the property the
-   * comment above depends on and CLAUDE.md states -- this array is the authority for
-   * what has an address -- which splitting it into two arrays would quietly end.
-   */
-  { path: '/account', label: 'Account', signedIn: true },
+  { path: '/settings', label: 'Settings' },
 ];
 
 /**
@@ -559,7 +534,7 @@ export function App() {
    * discarding the shared idea at the exact moment the reader agreed to it.
    *
    * So the destination rides in the query string, through the sign-in screen and
-   * through the email round trip (see `emailRedirectTo` in `Auth`). This is the
+   * through the OAuth round trip (see `oauthRequest`). This is the
    * screen's copy of it; the session listener above is what spends it.
    */
   const next = safeNext(queryParam(path, 'next'));
@@ -607,6 +582,7 @@ export function App() {
   const pathsOpen = isPath(path, '/paths');
   const pathSlug = routeParam(path, '/path');
   const appearanceOpen = isPath(path, '/appearance');
+  const settingsOpen = isPath(path, '/settings');
   const graphOpen = isPath(path, '/graph');
   const importOpen = isPath(path, '/import');
   const demoOpen = isPath(path, '/demo');
@@ -652,6 +628,7 @@ export function App() {
     pathsOpen ||
     pathSlug !== null ||
     appearanceOpen ||
+    settingsOpen ||
     graphOpen ||
     importOpen ||
     demoOpen ||
@@ -694,6 +671,7 @@ export function App() {
     pathsOpen ||
     pathSlug !== null ||
     appearanceOpen ||
+    settingsOpen ||
     topicSlug !== null;
   const visitor = !session;
   /*
@@ -774,8 +752,13 @@ export function App() {
 
       <header className="shell__masthead">
         <span className="shell__brand">
-          <Mark className="shell__mark" />
-          <span className="shell__wordmark">What a Pull</span>
+          <img
+            className="shell__logo"
+            src="/brand/wordmark.png"
+            alt="What a Pull"
+            width="1000"
+            height="225"
+          />
         </span>
 
         {/*
@@ -1044,12 +1027,18 @@ export function App() {
                 onGoToReview={() => goToTab('review')}
               />
             )}
-            {appearanceOpen && <Appearance />}
-
-            {accountOpen && session && !guest && (
-              <Suspense fallback={<RouteFallback />}>
-                <Account userId={session.user.id} email={session.user.email ?? null} />
-              </Suspense>
+            {(settingsOpen || appearanceOpen || (accountOpen && session && !guest)) && (
+              <Settings
+                session={session}
+                section={
+                  accountOpen
+                    ? 'account'
+                    : appearanceOpen
+                      ? 'appearance'
+                      : queryParam(path, 'section')
+                }
+                onNavigate={navigate}
+              />
             )}
             {/*
               An answer rather than an empty column.

@@ -76,10 +76,15 @@ export function Daily({
       <h1>{formatDay(day)}</h1>
       {curation.pulls.length === 0 ? (
         <>
-          <h2>You’re caught up for today.</h2>
+          <h2>
+            {curation.editorialDay !== undefined
+              ? 'No editorial picks are available yet.'
+              : 'You’re caught up for today.'}
+          </h2>
           <p>
-            There are no new or fading ideas to show right now. Recent daily selections stay out of
-            the rotation for two weeks.
+            {curation.editorialDay !== undefined
+              ? 'Explore the library while we prepare the daily selection.'
+              : 'There are no new or fading ideas to show right now. Recent daily selections stay out of the rotation for two weeks.'}
           </p>
           <button type="button" className="btn" onClick={onGoToFeed}>
             Read the feed instead
@@ -87,7 +92,11 @@ export function Daily({
         </>
       ) : (
         <>
-          <p className="meta">Your daily mix of new ideas and ideas to refresh.</p>
+          <p className="meta">
+            {curation.editorialDay
+              ? `From the editorial archive · ${formatDay(curation.editorialDay)}. Your personal daily mix is temporarily unavailable.`
+              : 'Your daily mix of new ideas and ideas to refresh.'}
+          </p>
           <ol className="daily__list">
             {curation.pulls.map((p) => (
               <li key={p.pullId} className="daily__item">
@@ -95,7 +104,13 @@ export function Daily({
                   {p.workTitle}
                   {p.workYear ? ` · ${p.workYear}` : ''}
                 </p>
-                <p className="meta">{p.reason === 'fading' ? 'Worth revisiting' : 'New to you'}</p>
+                <p className="meta">
+                  {p.reason === 'editorial'
+                    ? 'Editorial pick'
+                    : p.reason === 'fading'
+                      ? 'Worth revisiting'
+                      : 'New to you'}
+                </p>
                 <h2 className="daily__headline">{p.headline}</h2>
                 <p className="daily__body">{p.body}</p>
                 {p.whyItMatters && (
@@ -115,7 +130,8 @@ export function Daily({
           </ol>
           <p className="meta">
             That is the whole of it — {curation.pulls.length}{' '}
-            {curation.pulls.length === 1 ? 'idea' : 'ideas'}, chosen for you.
+            {curation.pulls.length === 1 ? 'idea' : 'ideas'}
+            {curation.editorialDay ? ' from the editorial archive.' : ', chosen for you.'}
           </p>
         </>
       )}

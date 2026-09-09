@@ -229,16 +229,18 @@ policy changes first and the change is a commit you can read.
 
 ## Who else processes your data
 
-Three, and only three:
+The app uses these services:
 
-| Processor                      | What it handles                                        | Where                   |
-| ------------------------------ | ------------------------------------------------------ | ----------------------- |
-| **Supabase** (and AWS beneath) | Database, authentication, server functions             | `ca-central-1`, Canada  |
-| **Vercel**                     | Serving the web app and its static assets              | Global edge network     |
-| **Google** (Gemini API)        | Generating summaries — including a document you submit | Google's infrastructure |
+| Processor                             | What it handles                                                   | Where                                  |
+| ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
+| **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
+| **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
+| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
 
-Sign-in emails are delivered through Supabase Auth's email provider, which necessarily
-sees your address and the code.
+Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your
+account identifier, email address and basic profile information needed to sign you in.
+We do not receive your provider password. Email codes and email/password sign-in are disabled.
 
 That is the complete list. There is no analytics vendor, no session-replay tool, no crash
 reporter, no tag manager, and no advertising SDK in the app today.
