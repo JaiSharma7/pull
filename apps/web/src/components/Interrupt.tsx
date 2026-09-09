@@ -96,7 +96,14 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
     }
     const observer = new IntersectionObserver(
       (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
+        /* The ratio as well as the flag (review finding). The first notification
+           after `observe()` reports the current state whatever the threshold, and
+           `isIntersecting` is true for any overlap at all -- so a card with one line
+           in view would have started the clock and disconnected, with the question
+           still off screen. Half the card, or nothing. */
+        if (!entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) {
+          return;
+        }
         displayedAtRef.current ??= Date.now();
         observer.disconnect();
       },
