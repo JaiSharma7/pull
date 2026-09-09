@@ -9,10 +9,12 @@ export function Settings({
   session,
   section,
   onNavigate,
+  onPreferencesSaved,
 }: {
   session: Session | null;
   section: string | null;
   onNavigate: (path: string) => void;
+  onPreferencesSaved: () => void;
 }) {
   const current = section === 'account' || section === 'reading' ? section : 'appearance';
   const hasAccount = session !== null && !isGuest(session);
@@ -47,7 +49,10 @@ export function Settings({
         <Preferences
           key={session.user.id}
           userId={session.user.id}
-          onDone={() => onNavigate('/settings')}
+          onDone={() => {
+            onPreferencesSaved();
+            onNavigate('/settings');
+          }}
         />
       )}
       {current === 'account' && hasAccount && (

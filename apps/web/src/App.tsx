@@ -1038,6 +1038,7 @@ export function App() {
                       : queryParam(path, 'section')
                 }
                 onNavigate={navigate}
+                onPreferencesSaved={() => setPrefsSaved((n) => n + 1)}
               />
             )}
             {/*
