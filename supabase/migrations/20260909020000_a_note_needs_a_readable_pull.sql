@@ -23,23 +23,26 @@
 -- guard alone is one statement from useless -- insert the note against a readable pull,
 -- then move it. But the update half cannot live in `notes_update_own`. A policy's
 -- `with check` sees only the row as it will be, so a readability leg there would refuse
--- EVERY edit to a note whose pull has since stopped being readable -- the summary
--- withdrawn, the import undone, a shared summary made private -- and a reader who can
+-- EVERY edit to a note whose pull has since stopped being readable, and a reader who can
 -- no longer read the idea could no longer fix a typo in, or unpublish, what they wrote
--- about it. The note was true when it was written. What must not happen is its being
--- MOVED onto something unreadable, and that is a comparison of old and new, which only
--- a trigger can make. `notes_keep_readable` fires before an update of `pull_id` or
--- `summary_id` and refuses -- 42501, the code the policy would have raised -- when the
--- new target differs from the old and the caller cannot read it. Clearing either column
--- is always allowed, and setting a column to the value it already has is not a move.
+-- about it. Today that state is reached only by an operator or the pipeline unpublishing
+-- or privatising a summary -- nothing a reader can do does it, and an undone import
+-- cascades the note away with its pull -- so this is the shape held ahead of the path
+-- rather than a live failure. The note was true when it was written. What must not
+-- happen is its being MOVED onto something unreadable, and that is a comparison of old
+-- and new, which only a trigger can make. `notes_keep_readable` fires before an update
+-- of `pull_id` or `summary_id` and refuses -- 42501, the code the policy would have
+-- raised -- when the new target differs from the old and the caller cannot read it.
+-- Clearing either column is always allowed, and setting a column to the value it
+-- already has is not a move.
 --
 -- The trigger function is `security invoker`, so its subqueries run under the caller's
 -- own RLS on `pulls` and `summaries`, exactly as the insert policy's do, and it pins
 -- `search_path` for the reason every function here does. Its execute right is revoked
 -- as `set_updated_at`'s was in 20260829124835: a trigger fires without it, and nothing
 -- else should be able to call the function at all. `notes_update_own` itself keeps the
--- shape 20260901190000 gave it -- owner and guest legs -- and only its comment changes,
--- to say where the other half now lives.
+-- shape 20260901190000 gave it -- owner and guest legs -- and gains a comment saying
+-- where the other half now lives.
 --
 -- `apply_path_step` is the other writer of `notes`, and it is `security definer`, so no
 -- policy applies to it. It selects the step's pull through `summary_is_readable` before
@@ -48,8 +51,7 @@
 -- rather than writes.
 --
 -- Invariant 5 (no two permissive policies overlapping on SELECT) is untouched: this
--- file redefines the INSERT policy only, and `notes_read` remains the one SELECT policy
--- on the table.
+-- file redefines no SELECT policy, and `notes_read` remains the one on the table.
 --
 -- `highlights_own`, `saved_items_own` and `history_events_own` (20260829124730) have
 -- the same shape and the same hole, and are written by the client too. They are not
@@ -118,8 +120,8 @@ comment on policy notes_update_own on public.notes is
 
 -- -----------------------------------------------------------------------------
 -- AND THE PRECEDENT GETS THE SAME TREATMENT. `user_questions_update_own`
--- (20260905110000) is the policy the insert leg above was copied from, and its update
--- half repeats the readability leg in `with check` -- so a question the reader wrote
+-- (20260905110000) is the sibling of the insert policy the leg above was copied from,
+-- and it repeats that readability leg in its `with check` -- so a question the reader wrote
 -- about an idea that has since been withdrawn cannot be retired, which is the documented
 -- way to stop being asked it, nor edited, for exactly the reason given above. The same
 -- split: the policy keeps the owner leg, and `user_questions_keep_readable` refuses the

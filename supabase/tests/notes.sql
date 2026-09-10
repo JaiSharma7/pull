@@ -19,8 +19,8 @@
 --     the update policy: it can still be retired and edited once its pull is withdrawn,
 --     moved onto something readable, and not onto something unreadable
 --
--- Everything runs as a real reader under RLS, except the one step that withdraws a
--- summary from under a note, which is the owner's act. The whole file rolls back.
+-- Every assertion runs as a real reader under RLS. The fixture, and the one step that
+-- withdraws a summary from under a note, are the owner's acts. The whole file rolls back.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
