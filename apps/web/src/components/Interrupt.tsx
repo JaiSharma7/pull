@@ -85,8 +85,9 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
       if (cancelled) return;
       // Rotated by the day rather than always the first: a feed row carries no `reps`,
       // and `questions[0]` here was the same one-question-per-idea bottleneck Review
-      // had. The day is the counter so the same card asks the same question all day
-      // and a different one tomorrow. See `chooseQuestion`.
+      // had. The UTC day is the counter, as `lib/history.ts` counts days, so the same
+      // card asks the same question until the UTC date turns -- mid-afternoon west of
+      // Greenwich -- and a different one after. See `chooseQuestion`.
       setQuestion(chooseQuestion(qs, Math.floor(Date.now() / 86_400_000)));
     });
     return () => {

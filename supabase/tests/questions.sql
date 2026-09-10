@@ -976,7 +976,7 @@ begin
   /*
    * AND THE ORDER IS NUMERIC, not the text of the number. The outer aggregate in
    * 20260905120002 sorted on `t ->> 'retrievability'`, which is TEXT, and was right by
-   * accident: at three fixed decimals '0.050' < '0.122' < '0.500' lexically as well as
+   * accident: at three fixed decimals '0.729' < '0.799' < '0.928' lexically as well as
    * numerically, so no fixture can tell the two apart today. What this asserts is the
    * shape -- three straddling rows come back ascending -- so that a change to the
    * rounding, or a value that escapes [0, 1], fails here rather than quietly reversing
@@ -990,7 +990,8 @@ begin
   values (bulk_summary, 903, 'Half gone', 'Body', 5) returning id into pull_r2;
   insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
   values (bulk_summary, 904, 'Mostly there', 'Body', 5) returning id into pull_r3;
-  -- retrievability = exp(-days / stability): about 0.05, 0.12 and 0.50.
+  -- retrievability = 0.9 ^ (days / stability), per 20260829130252: about 0.73, 0.80
+  -- and 0.93, which the three-decimal text form happens to order the same way.
   insert into public.knowledge_states
     (user_id, pull_id, acquired_via, next_due_at, stability, last_seen_at)
   values (reader_a, pull_r1, 'saved', now() - interval '1 hour', 1.0, now() - interval '3 days'),
@@ -998,14 +999,16 @@ begin
          (reader_a, pull_r3, 'saved', now() - interval '1 hour', 1.0, now() - interval '17 hours');
   perform pg_temp.become(reader_a);
 
+  -- One page, read three times: three calls could see three pages.
+  due := public.get_due_reviews(100);
   select t.ord into pos1
-    from jsonb_array_elements(public.get_due_reviews(100)) with ordinality as t(e, ord)
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
    where t.e ->> 'pullId' = pull_r1::text;
   select t.ord into pos2
-    from jsonb_array_elements(public.get_due_reviews(100)) with ordinality as t(e, ord)
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
    where t.e ->> 'pullId' = pull_r2::text;
   select t.ord into pos3
-    from jsonb_array_elements(public.get_due_reviews(100)) with ordinality as t(e, ord)
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
    where t.e ->> 'pullId' = pull_r3::text;
   if pos1 is null or pos2 is null or pos3 is null then
     raise exception
@@ -1014,7 +1017,7 @@ begin
   end if;
   if not (pos1 < pos2 and pos2 < pos3) then
     raise exception
-      'the page is not ordered by retrievability ascending: 0.05 at %, 0.12 at %, 0.50 '
+      'the page is not ordered by retrievability ascending: 0.73 at %, 0.80 at %, 0.93 '
       'at %. The outer aggregate is not comparing numbers.', pos1, pos2, pos3;
   end if;
 

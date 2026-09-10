@@ -54,7 +54,7 @@ describe('review-question', () => {
   });
 
   describe('resolveActiveQuestion', () => {
-    it('returns the first question when questions are present', () => {
+    it('returns the only question however many times the idea has been reviewed', () => {
       const q1: ReviewQuestion = {
         id: 'q1',
         source: 'user',
@@ -84,6 +84,51 @@ describe('review-question', () => {
       };
 
       expect(resolveActiveQuestion(card)).toBe(q1);
+    });
+
+    it('rotates by how many times the idea has been reviewed', () => {
+      const shape = {
+        answer: 'A',
+        distractors: null,
+        cloze: null,
+        explanation: null,
+        rationale: null,
+      };
+      const recall: ReviewQuestion = {
+        ...shape,
+        id: 'r',
+        source: 'canonical',
+        kind: 'recall',
+        prompt: 'Recall',
+      };
+      const mcq: ReviewQuestion = {
+        ...shape,
+        id: 'm',
+        source: 'canonical',
+        kind: 'mcq',
+        prompt: 'Choose',
+        distractors: ['B', 'C'],
+      };
+      const card: DueReview = {
+        pullId: 'p1',
+        headline: 'Headline',
+        body: 'Body',
+        whyItMatters: null,
+        workTitle: 'Work',
+        workSlug: 'work',
+        retrievability: 0.8,
+        stability: 10,
+        reps: 0,
+        dueAt: '2026-09-08T00:00:00Z',
+        question: 'Recall',
+        questionId: 'r',
+        questionSource: 'canonical',
+        questions: [recall, mcq],
+      };
+
+      expect(resolveActiveQuestion(card)?.id).toBe('r');
+      expect(resolveActiveQuestion({ ...card, reps: 1 })?.id).toBe('m');
+      expect(resolveActiveQuestion({ ...card, reps: 2 })?.id).toBe('r');
     });
 
     it('returns null when questions array is empty or undefined', () => {
@@ -260,7 +305,30 @@ describe('chooseQuestion', () => {
   });
 
   it('is the same pick for the same turn -- a card does not rename itself between loads', () => {
-    expect(chooseQuestion(three, 7)).toBe(chooseQuestion(three, 7));
+    // Two fetches build two arrays. The pick depends on the turn and the order, not on
+    // which array object it was handed, and 7 on a card of three is the second.
+    const again = [q('r', 'recall'), q('m', 'mcq'), q('c', 'cloze')];
+    expect(chooseQuestion(three, 7)?.id).toBe('m');
+    expect(chooseQuestion(again, 7)?.id).toBe('m');
+  });
+
+  it("asks the reader's own question every time once they have written one", () => {
+    // `get_due_reviews` has ranked a reader's question above a canonical one since
+    // 20260905110000; rotating past it would undo that two visits in three.
+    const mine = { ...q('mine', 'recall'), source: 'user' as const };
+    const card = [mine, q('m', 'mcq'), q('c', 'cloze')];
+    for (const turn of [0, 1, 2, 3, 7]) {
+      expect(chooseQuestion(card, turn)?.id).toBe('mine');
+    }
+  });
+
+  it("rotates among the reader's own questions when there are several", () => {
+    const first = { ...q('mine-1', 'recall'), source: 'user' as const };
+    const second = { ...q('mine-2', 'cloze'), source: 'user' as const };
+    const card = [first, second, q('m', 'mcq')];
+    expect(chooseQuestion(card, 0)?.id).toBe('mine-1');
+    expect(chooseQuestion(card, 1)?.id).toBe('mine-2');
+    expect(chooseQuestion(card, 2)?.id).toBe('mine-1');
   });
 
   it('treats a missing, negative or fractional turn as the first', () => {

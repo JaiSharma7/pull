@@ -23,6 +23,9 @@
  * was never a ranking of kinds, and now nothing is. Which of the survivors is asked
  * is the client's decision (`chooseQuestion` in `lib/review-question.ts`), rotated
  * by how often the reader has met the idea, so every kind on the card gets its turn.
+ * That rotation runs among the canonical questions only when the reader has written
+ * none of their own: a reader's own question outranks a canonical one on the client
+ * as it does in the cut here, and is asked every time, which is what writing one means.
  *
  * DO NOT REINSTATE IT. If a future kind arrives before its renderer, the right place
  * to hold it back is the client's `resolveEffectiveKind`, which already degrades an
@@ -40,10 +43,14 @@
  * breaks on `pull_id`, so the array is a total order in the same terms as the cut.
  *
  * WHY THE WHOLE FUNCTION IS RESTATED. Migrations are append-only (law 6), so a change
- * to a `create or replace` function is a new file carrying the whole body. Everything
- * below is 20260905120002's function verbatim except the two lines this header
- * describes; diff the two before reviewing it. The ACL is restated for the reason
- * that file gives.
+ * to a `create or replace` function is a new file carrying the whole body. Diff the
+ * two before reviewing it; against 20260905120002 the body differs in exactly these
+ * places: the rank term is gone from both branches of the union and from the lateral's
+ * `jsonb_agg`, and the union's positional `order by 1 desc, 3 desc, 4` is renumbered
+ * `1 desc, 2 desc, 3` because the column it counted past is gone -- the same three
+ * terms, not a new order; the outer aggregate compares numbers and breaks ties on
+ * `pullId`; and the function's comment says so. Everything else is verbatim. The ACL
+ * is restated for the reason that file gives.
  */
 
 create or replace function public.get_due_reviews(p_limit int default 20)

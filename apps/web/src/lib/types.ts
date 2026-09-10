@@ -79,10 +79,13 @@ export interface DueReview {
    * `p_question_id` goes to `grade_recall`, which looks it up under the caller's own RLS
    * and files it in `user_question_id` or `quiz_question_id` accordingly.
    *
-   * All three describe `questions[0]` and nothing else. Since 20260909030000 the screen
-   * rotates through `questions` (`resolveActiveQuestion`), so whose question is being
-   * asked, which id to grade against and what to show come from the rotated element's
-   * own `source`, `id` and `prompt`; these three are the fallback when there is none.
+   * All three are `questions[0]`'s prompt, id and source, and nothing else -- null
+   * exactly when the array is empty, so they can never supply what the array cannot.
+   * They stay for a payload that predates the array (`questions` is optional here for
+   * that reason). Since 20260909030000 the screen rotates through `questions`
+   * (`resolveActiveQuestion`), so whose question is being asked, which id to grade
+   * against and what to show come from the rotated element's own `source`, `id` and
+   * `prompt` whenever the array is there.
    *
    * Null together when a pull has no question at all, which is most of the corpus until
    * 3b seeds it.
