@@ -331,7 +331,7 @@ describe('chooseQuestion', () => {
     expect(chooseQuestion(card, 2)?.id).toBe('mine-1');
   });
 
-  it('treats a missing, negative or fractional turn as the first', () => {
+  it('floors a fractional turn, and treats a missing or negative one as the first', () => {
     expect(chooseQuestion(three, Number.NaN)?.id).toBe('r');
     expect(chooseQuestion(three, -4)?.id).toBe('r');
     expect(chooseQuestion(three, 1.9)?.id).toBe('m');
