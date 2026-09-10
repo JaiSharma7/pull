@@ -235,7 +235,11 @@ function sql() {
   console.log('     missing as (');
   console.log('       select t.* from target t');
   console.log('       where not exists (');
-  console.log('         select 1 from public.works w where lower(w.title) = lower(t.title)');
+  console.log('         select 1 from public.works w');
+  console.log('         join public.summaries s on s.work_id = w.id');
+  console.log('         where lower(w.title) = lower(t.title)');
+  console.log("           and s.status = 'published' and s.visibility = 'public'");
+  console.log("           and w.rights_status in ('public_domain', 'licensed')");
   console.log('       )');
   console.log('       and not exists (');
   console.log('         select 1 from public.generation_jobs g');
