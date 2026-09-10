@@ -109,6 +109,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         if (controller.signal.aborted) return;
         setPath(detail);
         setSettled(true);
+        // A load that worked ends the failure before it (review finding): with
+        // `userId` in the deps, signing in from the error screen refetches through
+        // here, and nothing else clears `error`.
+        setError(null);
         if (detail) {
           onTitle?.(detail.title);
           const next = nextUndone(detail.steps);

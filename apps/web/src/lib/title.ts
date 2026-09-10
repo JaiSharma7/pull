@@ -1,3 +1,5 @@
+import { routeParam } from './routes.js';
+
 /**
  * What the browser tab, the history entry and the screen reader should call this page.
  *
@@ -74,17 +76,16 @@ export interface TitleInput {
 export function isKnownPath(pathname: string): boolean {
   if (pathname === '/') return true;
   if (PATH_TITLES[pathname]) return true;
-  return (
-    pathname.startsWith('/source/') ||
-    pathname.startsWith('/pull/') ||
-    pathname.startsWith('/topic/') ||
-    // One segment, as `routeParam` in `routes.ts` reads it: `/path/a/b` is not a path
-    // called `a/b`. Matching the prefix alone called it known, so `routeOpen` hid the
-    // feed, `App` rendered nothing for it, and the 404 branch never fired -- a titled,
-    // empty screen, which is the failure the signed-in destinations were fixed for.
-    /^\/path\/[^/]+\/?$/.test(pathname)
-  );
+  // The parameterised routes are known exactly when `routeParam` -- the reader `App`
+  // uses to open them -- finds one segment: `/path/a/b` is not a path called `a/b`.
+  // Matching the prefix alone called it known, so `notFound` stayed false while
+  // `routeOpen` was false too, and the reader got the feed, or a titled empty screen,
+  // under an address that described neither. One rule in one place, so the title and
+  // the screen cannot disagree about which addresses exist.
+  return PARAMETERISED.some((prefix) => routeParam(pathname, prefix) !== null);
 }
+
+const PARAMETERISED = ['/source', '/pull', '/topic', '/path'] as const;
 
 export function titleFor({ pathname, tab, documentTitle, query }: TitleInput): string {
   const suffix = ` · ${SITE_TITLE}`;
