@@ -42,6 +42,7 @@ everything through one generic book-summary shape:
 | **Search**   | Keyword + semantic                                              |
 | **Review**   | The deliberate recall destination (the feed is the ambient one) |
 | **Library**  | Saved Pulls, stashes, notes, history                            |
+| **Paths**    | Curated sequences that answer one question and have an end      |
 | **Studio**   | Generate or write _(round 2)_                                   |
 | **My Feeds** | User-defined channels _(round 3)_                               |
 
