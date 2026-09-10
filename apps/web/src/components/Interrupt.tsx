@@ -5,9 +5,14 @@ import { useDictation } from '../lib/use-dictation.js';
 import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import type { FeedRow, ReviewQuestion } from '../lib/types.js';
 import { fetchQuestions } from '../lib/questions-api.js';
-import { resolveEffectiveKind, toActivityQuestion } from '../lib/review-question.js';
+import {
+  mcqOptionMarker,
+  resolveEffectiveKind,
+  toActivityQuestion,
+} from '../lib/review-question.js';
 import { gradeCloze, gradeMcq, mcqOptions, whyWrong, type WhyWrong } from '../lib/activities.js';
 import { elapsedSince } from '../lib/submission.js';
+import { onceInView } from '../lib/in-view.js';
 
 /** What the reader gave back. Every field is optional — a conviction answer
  *  carries a stance and no grade, a recall answer the reverse. */
@@ -52,10 +57,28 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
     latencyMs?: number;
   }
   const [answered, setAnswered] = useState<AnsweredState | null>(null);
+  /*
+   * WHEN THE QUESTION WAS ACTUALLY PUT TO THE READER.
+   *
+   * This was set as the first statement of the mount effect, before `fetchQuestions`
+   * resolved -- and `Feed.tsx` mounts every interrupt at once, including cards far
+   * below the fold. So the clock started while the question was still in flight and
+   * the card still off screen, and the "latency" the MCQ and cloze graders split
+   * `easy` from `good` on included the fetch and however long the reader spent on the
+   * cards above. Those are exactly the two deterministic graders, so this corrupted the
+   * memory model's inputs on both kinds Package 3 introduced.
+   *
+   * Started once the question has arrived AND the card is in view -- `onceInView` in
+   * `lib/in-view.ts` says what "in view" means and why the flag alone was not enough.
+   * Where there is no `IntersectionObserver` it starts when the question arrives, which
+   * is still after the fetch. Left `null` until then, and `elapsedSince(null)` is
+   * `undefined`: no measurement rather than a false one, which is the rule
+   * `lib/submission.ts` already states for the column.
+   */
   const displayedAtRef = useRef<number | null>(null);
+  const cardRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    displayedAtRef.current = Date.now();
     let cancelled = false;
     fetchQuestions(pull.id).then((qs) => {
       if (!cancelled && qs.length > 0) {
@@ -66,6 +89,18 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
       cancelled = true;
     };
   }, [pull.id]);
+
+  useEffect(() => {
+    if (!question) return;
+    const el = cardRef.current;
+    if (!el) {
+      displayedAtRef.current ??= Date.now();
+      return;
+    }
+    return onceInView(el, () => {
+      displayedAtRef.current ??= Date.now();
+    });
+  }, [question]);
 
   const activityQ = useMemo(() => (question ? toActivityQuestion(question) : null), [question]);
   const mcqChoices = useMemo(() => {
@@ -84,6 +119,7 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
 
   return (
     <section
+      ref={cardRef}
       className="pull-card"
       aria-labelledby={`interrupt-${pull.id}`}
       style={{ borderColor: 'var(--accent)' }}
@@ -124,13 +160,16 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                     key={g}
                     type="button"
                     className="btn"
+                    /* No `answer`. Free recall is self-graded with no text input, so
+                       there is nothing the reader wrote -- and this used to send the
+                       stored reference answer, or failing that the card's own body, into
+                       the one column that holds what a reader actually said. */
                     onClick={() =>
                       onAnswer({
                         grade: g,
                         confidence: sure ? 'sure' : 'unsure',
                         questionId: question?.id,
                         latencyMs: elapsedSince(revealedAt),
-                        answer: question?.answer ?? pull.body,
                         kind: 'recall',
                       })
                     }
@@ -190,22 +229,49 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
           >
             {mcqChoices.map((opt) => {
               const isSelected = answered?.pickedOrTyped === opt;
+              /* Law 5: the word carries the verdict, and the colour agrees with it. */
+              const marker = mcqOptionMarker(
+                opt,
+                activityQ?.answer,
+                answered?.pickedOrTyped ?? null,
+              );
               return (
                 <button
                   key={opt}
                   type="button"
                   className="btn"
                   aria-pressed={isSelected}
-                  disabled={answered !== null}
+                  /* `aria-disabled`, as Review.tsx: a disabled button is painted at 45%
+                     opacity, below the contrast floor for the verdict word. */
+                  aria-disabled={answered !== null}
                   style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                    gap: 'var(--space-3)',
                     textAlign: 'left',
                     width: '100%',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 'var(--step--1)',
-                    borderColor: isSelected ? 'var(--accent)' : undefined,
-                    fontWeight: isSelected ? 600 : undefined,
+                    /* The colour agrees with the word: the correct option in the accent,
+                       a wrong pick muted, exactly as Review.tsx has it. Before this the
+                       wrong pick was the most emphasised button on the screen. */
+                    borderColor:
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--rule)'
+                          : undefined,
+                    color:
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--text-muted)'
+                          : undefined,
+                    fontWeight: marker === 'Correct answer' ? 600 : undefined,
                   }}
                   onClick={() => {
+                    if (answered !== null) return;
                     const latencyMs = elapsedSince(displayedAtRef.current);
                     const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
                     const reason = whyWrong(activityQ!, opt);
@@ -219,7 +285,8 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                     });
                   }}
                 >
-                  {opt}
+                  <span>{opt}</span>
+                  {marker ? <span className="meta">{marker}</span> : null}
                 </button>
               );
             })}
