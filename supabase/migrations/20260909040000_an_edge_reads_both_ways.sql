@@ -11,11 +11,13 @@
  * `Source.tsx` had one label map, written as if the anchor were always the `from`
  * side. For the symmetric kinds that read oddly at worst. For `ancestor` and
  * `descendant` it was inverted whenever the anchor was the `to` side: "Grew out of
- * this idea" over the idea it grew out of. Today every seeded pair is stored in both
- * directions, so the `from` edge wins the tiebreak and the page happens to be right;
- * the first one-way edge -- `supports` has had no writer since 20260908050000 added
- * it, and the pipeline will be the first -- would read backwards, and the only fix
- * would be a label map that lies for the other side.
+ * this idea" over the idea it grew out of. Today every seeded lineage and counterpull
+ * pair is stored in both directions, so the `from` edge wins the tiebreak and the page
+ * happens to be right, and the one seeded edge stored one way is `related`, which
+ * reads the same from either side; the first one-way `ancestor`, `descendant` or
+ * `supports` -- the last has had no writer since 20260908050000 added it, and the
+ * pipeline will be the first -- would read backwards, and the only fix would be a
+ * label map that lies for the other side.
  *
  * So the side reaches the client. `direction` is `'from'` when the edge was written
  * from the anchor (the kind describes the neighbour relative to this idea), `'to'`

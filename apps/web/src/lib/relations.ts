@@ -38,8 +38,10 @@ const FROM_THERE: Record<string, string> = {
 
 /**
  * A payload without a side -- a `related_pulls` older than 20260909040000 -- is read
- * as `'from'`, which is what the single map assumed and is right for every seeded
- * pair, since both directions are stored and the `from` edge wins the tiebreak.
+ * as `'from'`, which is what the single map assumed. It is right for every seeded
+ * edge: the antisymmetric pairs are stored in both directions and the `from` edge
+ * wins the tiebreak, and the one seeded edge stored one way is `related`, which reads
+ * the same from either side.
  */
 export function relationLabel(kind: string, direction: EdgeDirection | null): string {
   const map = direction === 'to' ? FROM_THERE : FROM_HERE;
