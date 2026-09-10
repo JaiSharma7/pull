@@ -6,9 +6,10 @@ import type { KnowledgeGraphData } from '../lib/types.js';
 import {
   CONFIDENTLY_WRONG_COPY,
   formatAttemptDate,
-  type ConfidentlyWrongItem,
+  type ConfidentlyWrongList,
 } from '../lib/confidently-wrong.js';
 import { fetchConfidentlyWrong } from '../lib/confidently-wrong-api.js';
+import { isOfflineFailure } from '../lib/offline.js';
 
 export interface MetacognitiveDashboardProps {
   userId: string | null;
@@ -30,8 +31,8 @@ export function MetacognitiveDashboard({
    * again rather than the previous reader's list, without a reset inside the effect.
    */
   const [lapses, setLapses] = useState<
-    | { forUser: string | null; items: ConfidentlyWrongItem[] }
-    | { forUser: string | null; failed: string }
+    | ({ forUser: string | null } & ConfidentlyWrongList)
+    | { forUser: string | null; failed: string; offline: boolean }
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,13 +40,19 @@ export function MetacognitiveDashboard({
   useEffect(() => {
     let live = true;
     fetchConfidentlyWrong(userId)
-      .then((items) => {
-        if (live) setLapses({ forUser: userId, items });
+      .then((list) => {
+        if (live) setLapses({ forUser: userId, ...list });
       })
       .catch((e: unknown) => {
         if (!live) return;
         console.error('Failed to load confidently wrong items:', e);
-        setLapses({ forUser: userId, failed: e instanceof Error ? e.message : String(e) });
+        setLapses({
+          forUser: userId,
+          failed: e instanceof Error ? e.message : String(e),
+          // The same distinction Paths and Path draw: a request that never left the
+          // device is told as "offline", not as a transport error's own words.
+          offline: isOfflineFailure(e),
+        });
       });
 
     return () => {
@@ -55,6 +62,7 @@ export function MetacognitiveDashboard({
 
   const confidentlyWrong = lapses && lapses.forUser === userId ? lapses : null;
   const repairs = confidentlyWrong && 'items' in confidentlyWrong ? confidentlyWrong.items : [];
+  const repairTotal = confidentlyWrong && 'total' in confidentlyWrong ? confidentlyWrong.total : 0;
 
   useEffect(() => {
     let live = true;
@@ -330,9 +338,9 @@ export function MetacognitiveDashboard({
               <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
                 {CONFIDENTLY_WRONG_COPY.sectionTitle}
               </h2>
-              {repairs.length > 0 && (
+              {repairTotal > 0 && (
                 <span className="meta" style={{ color: 'var(--accent)' }}>
-                  {repairs.length} to repair
+                  {repairTotal} to repair
                 </span>
               )}
             </div>
@@ -344,7 +352,9 @@ export function MetacognitiveDashboard({
               </p>
             ) : 'failed' in confidentlyWrong ? (
               <p className="meta" role="alert" style={{ margin: 0 }}>
-                {CONFIDENTLY_WRONG_COPY.failed} {confidentlyWrong.failed}
+                {confidentlyWrong.offline
+                  ? CONFIDENTLY_WRONG_COPY.offline
+                  : `${CONFIDENTLY_WRONG_COPY.failed} ${confidentlyWrong.failed}`}
               </p>
             ) : repairs.length === 0 ? (
               <p className="meta" style={{ color: 'var(--text-faint)', margin: 0 }}>
@@ -390,6 +400,11 @@ export function MetacognitiveDashboard({
                   </li>
                 ))}
               </ul>
+            )}
+            {repairTotal > repairs.length && (
+              <p className="meta" style={{ margin: 0 }}>
+                {CONFIDENTLY_WRONG_COPY.more(repairTotal - repairs.length)}
+              </p>
             )}
           </section>
 

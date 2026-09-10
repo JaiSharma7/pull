@@ -2,17 +2,24 @@ import {
   dedupeConfidentlyWrong,
   newestFirst,
   parseConfidentlyWrongRows,
-  type ConfidentlyWrongItem,
+  type ConfidentlyWrongList,
 } from './confidently-wrong.js';
 import { pageAfter } from './paging.js';
 import { supabase } from './supabase.js';
 
 export { CONFIDENTLY_WRONG_COPY, formatAttemptDate } from './confidently-wrong.js';
-export type { ConfidentlyWrongItem } from './confidently-wrong.js';
+export type { ConfidentlyWrongItem, ConfidentlyWrongList } from './confidently-wrong.js';
 
 /**
  * The ideas the reader was sure of and then missed, in the last `days` days, one per
- * idea, most recent first, at most `limit` of them.
+ * idea, most recent first, at most `limit` of them -- and how many there were before
+ * the cut, so the screen can say what it left out rather than call twenty "all".
+ *
+ * The embed rides on every event, repeats included, and is folded away with them; a
+ * reader wrong on one idea a hundred times fetches its headline a hundred times. Named
+ * here rather than fixed: walking ids alone and embedding the twenty survivors once is
+ * a second request and a second parser, for a population that is one page for almost
+ * every reader.
  *
  * WALKED, THEN ORDERED, THEN DEDUPLICATED, THEN CUT -- in that order. The first
  * version took twenty events from the server and deduplicated them here, so a reader
@@ -39,8 +46,8 @@ export async function fetchConfidentlyWrong(
   userId: string | null,
   days = 30,
   limit = 20,
-): Promise<ConfidentlyWrongItem[]> {
-  if (!userId) return [];
+): Promise<ConfidentlyWrongList> {
+  if (!userId) return { items: [], total: 0 };
 
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -72,5 +79,6 @@ export async function fetchConfidentlyWrong(
     return after === null ? query : query.gt('id', String(after));
   }, 'id');
 
-  return dedupeConfidentlyWrong(newestFirst(parseConfidentlyWrongRows(rows))).slice(0, limit);
+  const ideas = dedupeConfidentlyWrong(newestFirst(parseConfidentlyWrongRows(rows)));
+  return { items: ideas.slice(0, limit), total: ideas.length };
 }

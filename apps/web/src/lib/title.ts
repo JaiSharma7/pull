@@ -107,15 +107,18 @@ export function titleFor({ pathname, tab, documentTitle, query }: TitleInput): s
    * Not the raw id: `/source/8f3e…` in a history list is worse than a generic word,
    * because it looks like an answer. The generic word is honest about waiting.
    */
-  if (pathname.startsWith('/source/') || pathname.startsWith('/pull/')) {
+  // Read with `routeParam`, as `isKnownPath` reads them, so the two cannot drift.
+  const opens = (prefix: string): boolean => routeParam(pathname, prefix) !== null;
+
+  if (opens('/source') || opens('/pull')) {
     return `${documentTitle?.trim() || 'Source'}${suffix}`;
   }
 
-  if (pathname.startsWith('/topic/')) {
+  if (opens('/topic')) {
     return `${documentTitle?.trim() || 'Topic'}${suffix}`;
   }
 
-  if (pathname.startsWith('/path/')) {
+  if (opens('/path')) {
     return `${documentTitle?.trim() || 'Learning Path'}${suffix}`;
   }
 

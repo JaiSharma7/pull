@@ -17,7 +17,17 @@ export const CONFIDENTLY_WRONG_COPY = {
   // own record, on the one screen that is named for measurement.
   loading: 'Checking your recent recalls…',
   failed: 'Could not load your confident lapses just now.',
+  offline: 'You appear to be offline. Your confident lapses need an active connection.',
+  /** The list is cut at twenty ideas; the reader is told what the cut left out. */
+  more: (n: number) => `And ${n} more in the last 30 days.`,
 } as const;
+
+/** What `fetchConfidentlyWrong` returns: the ideas shown, and how many there were. */
+export interface ConfidentlyWrongList {
+  items: ConfidentlyWrongItem[];
+  /** Distinct ideas in the window, before the cut. `items.length` when nothing was cut. */
+  total: number;
+}
 
 type RawWork = { id?: string; title?: string };
 type RawSummary = { works?: RawWork | RawWork[] | null };
