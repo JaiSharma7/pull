@@ -77,8 +77,12 @@ export interface DueReview {
    *
    * `questionSource` says which table, and the client does not have to care: one
    * `p_question_id` goes to `grade_recall`, which looks it up under the caller's own RLS
-   * and files it in `user_question_id` or `quiz_question_id` accordingly. The screen
-   * uses the source only to tell the reader whose question they are being asked.
+   * and files it in `user_question_id` or `quiz_question_id` accordingly.
+   *
+   * All three describe `questions[0]` and nothing else. Since 20260909030000 the screen
+   * rotates through `questions` (`resolveActiveQuestion`), so whose question is being
+   * asked, which id to grade against and what to show come from the rotated element's
+   * own `source`, `id` and `prompt`; these three are the fallback when there is none.
    *
    * Null together when a pull has no question at all, which is most of the corpus until
    * 3b seeds it.

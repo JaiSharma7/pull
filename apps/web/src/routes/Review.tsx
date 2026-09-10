@@ -72,7 +72,7 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
     <div className="pull-card">
       <p className="pull-card__chip">
         {card.workTitle}
-        {card.questionSource === 'user' && ' · Your question'}
+        {activeQuestion?.source === 'user' && ' · Your question'}
         {effectiveKind === 'mcq' && ' · Multiple choice'}
         {effectiveKind === 'cloze' && ' · Fill the blank'}
       </p>
