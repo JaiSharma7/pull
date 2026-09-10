@@ -39,6 +39,21 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const [predictRevealed, setPredictRevealed] = useState(false);
 
   const [compareStance, setCompareStance] = useState<'agree' | 'disagree' | 'unsure' | null>(null);
+  /*
+   * Which DECISION the stance is, not only which stance (review finding). A draft's
+   * submission stamp is fixed so a retry cannot claim the reader decided later than
+   * they did -- but a stance the reader comes BACK to after choosing another is a new
+   * decision, and `set_conviction` orders decisions by their stamps: sent under the
+   * first attempt's older stamp it would lose to the stance chosen in between, and the
+   * path would move on with the wrong one on record. Changing the selection bumps the
+   * epoch, so the same stance re-chosen is a fresh draft; a retry without changing it
+   * is not.
+   */
+  const [stanceEpoch, setStanceEpoch] = useState(0);
+  const chooseStance = (stance: 'agree' | 'disagree' | 'unsure') => {
+    if (stance !== compareStance) setStanceEpoch((epoch) => epoch + 1);
+    setCompareStance(stance);
+  };
 
   const [sayItBackText, setSayItBackText] = useState('');
   /*
@@ -104,11 +119,13 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
     };
   }, [slug, attempt, onTitle]);
 
-  const reloadPath = async () => {
-    // Whatever moves the active step ends dictation -- Test out and Pause as much as
-    // a submission. Otherwise the engine stays live under the next step, with no Stop
-    // button on screen, appending to a field no longer rendered.
-    dictation.stop();
+  /*
+   * Whether the refetch landed. A caller that has just written something must know:
+   * the first version swallowed the failure here, so a step that was saved and then
+   * could not be re-read left the reader on the same step with the field already
+   * cleared, the button disabled and nothing said (review finding).
+   */
+  const reloadPath = async (): Promise<boolean> => {
     try {
       const refreshed = await fetchPath(slug);
       if (refreshed) {
@@ -116,10 +133,25 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         const next = nextUndone(refreshed.steps);
         setActiveOrdinal(next ? next.ordinal : null);
       }
+      return true;
     } catch (e) {
       console.error('Failed to refresh path', e);
+      return false;
     }
   };
+
+  /*
+   * Dictation ends when the active step changes, and only then. Stopping it on every
+   * refetch killed a live microphone under Pause, Resume and a Test out that tested
+   * nothing out -- none of which move the step, all of which left the field on screen
+   * with the button flipped back to Dictate and no explanation (review finding).
+   */
+  useEffect(() => {
+    dictation.stop();
+  }, [activeOrdinal, dictation.stop]);
+
+  const REFRESH_FAILED =
+    'That was saved, but the path could not be refreshed. Try again to carry on.';
 
   const handlePauseToggle = async () => {
     if (!path || inFlight || !userId) return;
@@ -131,7 +163,7 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       } else {
         await pausePath(path.id);
       }
-      await reloadPath();
+      if (!(await reloadPath())) setStepError(REFRESH_FAILED);
     } catch (e) {
       console.error('Failed to toggle path pause', e);
       setStepError(
@@ -150,7 +182,7 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
     setStepError(null);
     try {
       await testOut(path.id);
-      await reloadPath();
+      if (!(await reloadPath())) setStepError(REFRESH_FAILED);
     } catch (e) {
       console.error('Failed to test out of path', e);
       setStepError(
@@ -170,8 +202,7 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       return;
     }
     // A submission ends dictation before the text is read, so nothing heard after the
-    // click lands in what is sent. `reloadPath` stops it again for every other route
-    // out of the step.
+    // click lands in what is sent.
     dictation.stop();
     setInFlight(true);
     setStepError(null);
@@ -183,7 +214,9 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'compare') {
         if (compareStance) {
-          const { mutationId, submittedAt } = submissionFor(draftKey(compareStance));
+          const { mutationId, submittedAt } = submissionFor(
+            draftKey(`${compareStance}#${stanceEpoch}`),
+          );
           await setConviction(step.pull.id, compareStance, mutationId, submittedAt);
         }
         await advanceStep(path.id, step.ordinal);
@@ -200,14 +233,20 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         await applyStep(path.id, step.ordinal, text, mutationId);
       }
 
+      // The step is saved; the screen has to catch up before the draft goes. If the
+      // refetch fails the words stay in the field and the button stays live, and the
+      // retry replays every write under the same ids.
+      if (!(await reloadPath())) {
+        setStepError(REFRESH_FAILED);
+        return;
+      }
+
       // Reset step-local interaction state
       setPrediction('');
       setPredictRevealed(false);
       setCompareStance(null);
       setSayItBackText('');
       setApplyText('');
-
-      await reloadPath();
     } catch (e) {
       console.error('Failed to advance step', e);
       setStepError(
@@ -336,14 +375,15 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
           <p>
             {ideaCount === 1 ? (
               <>
-                The <strong>one idea</strong> on this path is
+                The <strong>one idea</strong> on this path is in your review schedule now, and will
+                come round as it starts to fade.
               </>
             ) : (
               <>
-                All <strong>{ideaCount} ideas</strong> on this path are
+                All <strong>{ideaCount} ideas</strong> on this path are in your review schedule now,
+                and will come round as they start to fade.
               </>
-            )}{' '}
-            in your review schedule now, and will come round as they start to fade.
+            )}
             {applied ? ' The one you applied will come round within three days.' : ''}
           </p>
         </div>
@@ -529,21 +569,21 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               <button
                 type="button"
                 className={`btn ${compareStance === 'agree' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('agree')}
+                onClick={() => chooseStance('agree')}
               >
                 Agree
               </button>
               <button
                 type="button"
                 className={`btn ${compareStance === 'disagree' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('disagree')}
+                onClick={() => chooseStance('disagree')}
               >
                 Disagree
               </button>
               <button
                 type="button"
                 className={`btn ${compareStance === 'unsure' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('unsure')}
+                onClick={() => chooseStance('unsure')}
               >
                 Unsure
               </button>
