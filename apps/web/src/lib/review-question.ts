@@ -28,8 +28,16 @@ export function toActivityQuestion(q: ReviewQuestion): Question {
  * `questions[0]`, and a card leaves the page once it is graded, so one question per
  * idea was ever asked and every seeded mcq and cloze was unreachable.
  *
- * Rotated by `turn` -- how many times the reader has met the idea -- so each kind on
- * the card gets its go in order, and the same reader on the same card sees the same
+ * THE READER'S OWN QUESTIONS, when they have written any, are the whole pool. That is
+ * the one ranking of the two the product has ever had -- `get_due_reviews` has put a
+ * reader's question ahead of a canonical one since 20260905110000, and the export deck
+ * mirrors it -- and a reader who wrote a question about an idea is asking to be asked
+ * it, not a seeded one two visits in three. Rotation runs among their own when there
+ * are several (an import can leave three on one pull), and among the canonical ones
+ * only when they have written none.
+ *
+ * Rotated by `turn` -- how many times the reader has met the idea -- so each question
+ * in the pool gets its go in order, and the same reader on the same card sees the same
  * question until they answer it. Pure, so the feed can rotate on a different counter
  * (it has no `reps`) with the same rule.
  */
@@ -38,14 +46,17 @@ export function chooseQuestion(
   turn: number,
 ): ReviewQuestion | null {
   if (!questions || questions.length === 0) return null;
+  const own = questions.filter((q) => q.source === 'user');
+  const pool = own.length > 0 ? own : questions;
   const n = Number.isFinite(turn) && turn > 0 ? Math.floor(turn) : 0;
-  return questions[n % questions.length]!;
+  return pool[n % pool.length]!;
 }
 
 /**
  * The active question for a due review card: rotated by how many times the idea has
  * been reviewed, so a reader who has been asked the recall question is asked the
- * multiple choice next, then the cloze, then round again.
+ * multiple choice next, then the cloze, then round again -- or their own question,
+ * every time, once they have written one.
  */
 export function resolveActiveQuestion(card: DueReview): ReviewQuestion | null {
   return chooseQuestion(card.questions, card.reps);
