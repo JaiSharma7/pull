@@ -81,6 +81,10 @@ describe('titleFor', () => {
     expect(isKnownPath('/source/anything')).toBe(true);
     expect(isKnownPath('/topic/anything')).toBe(true);
     expect(isKnownPath('/path/anything')).toBe(true);
+    // One segment only, as `routeParam` reads it: a deeper address is nobody's, and
+    // calling it known left a titled, empty screen where the 404 should have been.
+    expect(isKnownPath('/path/anything/else')).toBe(false);
+    expect(isKnownPath('/path/')).toBe(false);
     expect(isKnownPath('/paths')).toBe(true);
     expect(isKnownPath('/')).toBe(true);
     expect(isKnownPath('/account')).toBe(true);

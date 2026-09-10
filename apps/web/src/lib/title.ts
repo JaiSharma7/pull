@@ -78,7 +78,11 @@ export function isKnownPath(pathname: string): boolean {
     pathname.startsWith('/source/') ||
     pathname.startsWith('/pull/') ||
     pathname.startsWith('/topic/') ||
-    pathname.startsWith('/path/')
+    // One segment, as `routeParam` in `routes.ts` reads it: `/path/a/b` is not a path
+    // called `a/b`. Matching the prefix alone called it known, so `routeOpen` hid the
+    // feed, `App` rendered nothing for it, and the 404 branch never fired -- a titled,
+    // empty screen, which is the failure the signed-in destinations were fixed for.
+    /^\/path\/[^/]+\/?$/.test(pathname)
   );
 }
 

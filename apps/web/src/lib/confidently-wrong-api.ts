@@ -3,14 +3,28 @@ import {
   parseConfidentlyWrongRows,
   type ConfidentlyWrongItem,
 } from './confidently-wrong.js';
+import { pageAll } from './paging.js';
 import { supabase } from './supabase.js';
 
 export { CONFIDENTLY_WRONG_COPY, formatAttemptDate } from './confidently-wrong.js';
 export type { ConfidentlyWrongItem } from './confidently-wrong.js';
 
 /**
- * Fetch recall_events where confidence = 'sure' and grade = 'forgot' over the last N days.
- * Returns unique items deduplicated by pull_id (most recent first).
+ * The ideas the reader was sure of and then missed, in the last `days` days, one per
+ * idea, most recent first, at most `limit` of them.
+ *
+ * PAGED, THEN DEDUPLICATED, THEN CUT -- in that order. The first version took twenty
+ * events from the server and deduplicated them here, so a reader confidently wrong five
+ * times on each of four ideas saw four items in a list whose own copy calls them the
+ * misconceptions worth repairing first. Repeated lapses are exactly this list's
+ * population, and the cut has to come after the events have been folded into ideas.
+ * `pageAll` walks the range because `max_rows = 100` is a silent cap, not an error (see
+ * `paging.ts`); the walk is bounded by thirty days of one reader's own lapses.
+ *
+ * A failure is thrown, not swallowed into `[]`. The screen tells loading, failed and
+ * "nothing in thirty days" apart, and it can only do that if the difference reaches it:
+ * the first version returned an empty list on a network error, and the dashboard read
+ * that as a clean record.
  */
 export async function fetchConfidentlyWrong(
   userId: string | null,
@@ -21,8 +35,8 @@ export async function fetchConfidentlyWrong(
 
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-  try {
-    const { data, error } = await supabase
+  const rows = await pageAll<unknown>((from, to) =>
+    supabase
       .from('recall_events')
       .select(
         `
@@ -35,8 +49,7 @@ export async function fetchConfidentlyWrong(
           summaries (
             works (
               id,
-              title,
-              slug
+              title
             )
           )
         )
@@ -46,17 +59,11 @@ export async function fetchConfidentlyWrong(
       .eq('grade', 'forgot')
       .gte('applied_at', sinceIso)
       .order('applied_at', { ascending: false })
-      .limit(limit);
+      // A total order, so the offset walk does not read a row twice across a page
+      // boundary when two events share a timestamp.
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
 
-    if (error) {
-      console.warn('Failed to fetch confidently wrong events:', error);
-      return [];
-    }
-
-    const parsed = parseConfidentlyWrongRows(data ?? []);
-    return dedupeConfidentlyWrong(parsed);
-  } catch (err: unknown) {
-    console.warn('Network error fetching confidently wrong events:', err);
-    return [];
-  }
+  return dedupeConfidentlyWrong(parseConfidentlyWrongRows(rows)).slice(0, limit);
 }

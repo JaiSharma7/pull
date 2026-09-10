@@ -22,23 +22,39 @@ export function MetacognitiveDashboard({
   onGoToReview,
 }: MetacognitiveDashboardProps) {
   const [graphData, setGraphData] = useState<KnowledgeGraphData | null>(null);
-  const [confidentlyWrong, setConfidentlyWrong] = useState<ConfidentlyWrongItem[]>([]);
+  /*
+   * Loading, failed, or loaded -- three states, not a list that starts empty. "No
+   * confident lapses" was rendered while the request was in flight and after it had
+   * failed, which is a false negative about the reader's own record. The answer is
+   * tagged with the session it was fetched for, so a change of reader shows "checking"
+   * again rather than the previous reader's list, without a reset inside the effect.
+   */
+  const [lapses, setLapses] = useState<
+    | { forUser: string | null; items: ConfidentlyWrongItem[] }
+    | { forUser: string | null; failed: string }
+    | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
     fetchConfidentlyWrong(userId)
       .then((items) => {
-        if (live) setConfidentlyWrong(items);
+        if (live) setLapses({ forUser: userId, items });
       })
       .catch((e: unknown) => {
-        console.warn('Failed to load confidently wrong items:', e);
+        if (!live) return;
+        console.error('Failed to load confidently wrong items:', e);
+        setLapses({ forUser: userId, failed: e instanceof Error ? e.message : String(e) });
       });
 
     return () => {
       live = false;
     };
   }, [userId]);
+
+  const confidentlyWrong = lapses && lapses.forUser === userId ? lapses : null;
+  const repairs = confidentlyWrong && 'items' in confidentlyWrong ? confidentlyWrong.items : [];
 
   useEffect(() => {
     let live = true;
@@ -314,15 +330,23 @@ export function MetacognitiveDashboard({
               <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
                 {CONFIDENTLY_WRONG_COPY.sectionTitle}
               </h2>
-              {confidentlyWrong.length > 0 && (
+              {repairs.length > 0 && (
                 <span className="meta" style={{ color: 'var(--accent)' }}>
-                  {confidentlyWrong.length} to repair
+                  {repairs.length} to repair
                 </span>
               )}
             </div>
             <p className="meta">{CONFIDENTLY_WRONG_COPY.description}</p>
 
-            {confidentlyWrong.length === 0 ? (
+            {confidentlyWrong === null ? (
+              <p className="meta" role="status" style={{ margin: 0 }}>
+                {CONFIDENTLY_WRONG_COPY.loading}
+              </p>
+            ) : 'failed' in confidentlyWrong ? (
+              <p className="meta" role="alert" style={{ margin: 0 }}>
+                {CONFIDENTLY_WRONG_COPY.failed} {confidentlyWrong.failed}
+              </p>
+            ) : repairs.length === 0 ? (
               <p className="meta" style={{ color: 'var(--text-faint)', margin: 0 }}>
                 {CONFIDENTLY_WRONG_COPY.empty}
               </p>
@@ -337,7 +361,7 @@ export function MetacognitiveDashboard({
                   gap: 'var(--space-3)',
                 }}
               >
-                {confidentlyWrong.map((item) => (
+                {repairs.map((item) => (
                   <li
                     key={item.id}
                     style={{
