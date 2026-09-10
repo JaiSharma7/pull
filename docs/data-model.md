@@ -1,6 +1,6 @@
 # Data model
 
-51 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+52 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -24,7 +24,8 @@ User
  ├── imports ─── import_items                     ← highlights you kept
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
- └── feed_recipes · feed_impressions
+ ├── feed_recipes · feed_impressions
+ └── muted_works                                  ← sources the reader asked to see less of
 
 Work                                              ← the thing itself
  ├── editions                                     ← its concrete forms
