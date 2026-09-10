@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { InterruptKind, Stance } from '@wap/schemas';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
-import { recognitionSupported, startRecognition } from '../lib/speech.js';
+import { useDictation } from '../lib/use-dictation.js';
+import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import type { FeedRow, ReviewQuestion } from '../lib/types.js';
 import { fetchQuestions } from '../lib/questions-api.js';
 import {
@@ -596,50 +597,12 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
 export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   const [revealed, setRevealed] = useState(false);
   const [explanation, setExplanation] = useState('');
-  const [listening, setListening] = useState(false);
-  /* Shown under the field, never appended. `startRecognition` hands interim words over
-     separately for exactly this: they are a preview the engine may still revise. */
-  const [interim, setInterim] = useState('');
-  /* A refused microphone, or an engine that would not start. Silence here read as a
-     button that flicked back to "Dictate" for no stated reason. */
-  const [dictationError, setDictationError] = useState<string | null>(null);
-  const stopListeningRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    return () => {
-      stopListeningRef.current?.();
-    };
-  }, []);
-
-  const toggleListening = () => {
-    if (listening) {
-      stopListeningRef.current?.();
-      setListening(false);
-      setInterim('');
-      return;
-    }
-
-    let failed = false;
-    setDictationError(null);
-    const teardown = startRecognition({
-      onResult: (text) => setExplanation((prev) => (prev ? prev + ' ' + text.trim() : text.trim())),
-      onInterim: setInterim,
-      onEnd: () => {
-        setListening(false);
-        setInterim('');
-      },
-      onError: () => {
-        failed = true;
-        setListening(false);
-        setInterim('');
-        setDictationError(
-          'Could not start dictation — your browser may have refused the microphone.',
-        );
-      },
-    });
-    stopListeningRef.current = teardown;
-    if (!failed) setListening(true);
-  };
+  /* The microphone, the interim preview (a preview the engine may still revise --
+     shown under the field, never appended) and the reason it stopped, from the one
+     hook `Path.tsx` shares. See `lib/use-dictation.ts`. */
+  const dictation = useDictation((text) =>
+    setExplanation((prev) => (prev ? prev + ' ' + text.trim() : text.trim())),
+  );
 
   const shell = (label: string, children: React.ReactNode) => (
     <section
@@ -694,17 +657,17 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             <label className="field__label" htmlFor={`explain-${pull.id}`}>
               In your own words
             </label>
-            {recognitionSupported() && (
+            {dictation.supported && (
               <button
                 type="button"
                 className="btn btn--plain meta"
                 style={{ textDecoration: 'underline' }}
-                onClick={toggleListening}
+                onClick={dictation.toggle}
               >
                 {/* Typography is the ornament — docs/design.md. This read "🎤 Dictate"
                     and "● Listening (click to stop)". The label carries the state, so
                     there is no `aria-pressed` to double-encode it into "Stop, pressed". */}
-                {listening ? 'Stop' : 'Dictate'}
+                {dictation.listening ? 'Stop' : 'Dictate'}
               </button>
             )}
           </div>
@@ -721,23 +684,16 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
           {/* Always mounted: a live region inserted at the same moment as its text is
               usually not announced at all, because there was no region to observe. */}
           <p className="meta" aria-live="polite">
-            {listening ? interim || 'Listening…' : ''}
+            {dictation.listening ? dictation.interim || 'Listening…' : ''}
           </p>
-          {dictationError ? (
+          {dictation.error ? (
             <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
-              {dictationError}
+              {dictation.error}
             </p>
           ) : null}
-          {recognitionSupported() ? (
-            /* Said where the decision is made, not only in docs/privacy.md. In most
-               browsers speech recognition is not on the device — the audio goes to the
-               browser's own vendor. It never reaches us, but it does leave
-               the reader's machine, and they are about to press the button that does it. */
-            <p className="meta">
-              Dictation uses your browser's speech recognition, which in most browsers sends the
-              audio to your browser's vendor. We never receive it. Typing sends nothing.
-            </p>
-          ) : null}
+          {/* Said where the decision is made, not only in docs/privacy.md; the sentence
+              itself lives in lib/dictation.ts so both screens say the same thing. */}
+          {dictation.supported ? <p className="meta">{DICTATION_DISCLOSURE}</p> : null}
         </div>
         {revealed ? (
           <>
@@ -791,11 +747,7 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
               className="btn btn--primary"
               disabled={explanation.trim().length < 10}
               onClick={() => {
-                if (listening) {
-                  stopListeningRef.current?.();
-                  setListening(false);
-                  setInterim('');
-                }
+                dictation.stop();
                 setRevealed(true);
               }}
             >

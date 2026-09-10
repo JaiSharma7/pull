@@ -101,3 +101,58 @@ export function elapsedSince(revealedAt: number | null, now = Date.now()): numbe
   if (elapsed < 0 || elapsed > MAX_LATENCY_MS) return undefined;
   return elapsed;
 }
+
+/**
+ * One mutation id AND one submission stamp per DRAFT, decided in one place and never
+ * cleared by hand.
+ *
+ * `Path.tsx` minted a fresh `mutationId()` inside its click handler, and its catch only
+ * logged -- so a lost response followed by a second click wrote a second conviction,
+ * explanation or note, each under an id the server had never seen. Every one of those
+ * writes deduplicates on the id, which is only worth anything if a retry carries the
+ * same one.
+ *
+ * THE STAMP TRAVELS WITH THE ID, and that is the second half of the same fix (review
+ * finding). `set_conviction` orders a reader's stances by `submitted_at`, so a retry
+ * that reused the id but minted a new stamp would tell the server the reader decided
+ * LATER than they did -- and if the first request never reached the database while
+ * another tab recorded a newer stance in between, the stale retry would supersede the
+ * newer stance. That is the exact inversion `submitted_at` exists to prevent, so a
+ * draft's stamp is fixed at the first attempt and every retry sends both provenance
+ * values unchanged.
+ *
+ * Keyed by what is being submitted rather than held and cleared: `Source.tsx`'s
+ * `askMutations` is deleted on success, on every edit and on dismissal, and that
+ * discipline has been lost three times on one file. Here the caller names the draft --
+ * the step and its content -- and the same name gets the same id and stamp however
+ * many times it is sent, even with other drafts sent in between, while an edited draft
+ * is a different name and gets fresh ones. That is what an edit has to mean: the
+ * server would otherwise answer with the FIRST wording and silently discard the new
+ * one.
+ *
+ * `mint` and `stamp` are parameters so the test can count how often each is called.
+ */
+export interface DraftSubmission {
+  mutationId: string;
+  submittedAt: number;
+}
+
+export function draftSubmissions(
+  mint: () => string = mutationId,
+  stamp: () => number = nextSubmissionStamp,
+): (key: string) => DraftSubmission {
+  // Every draft this screen has sent, not only the last one (review finding): a reader
+  // who sends A, edits to B, and restores A is sending A again, and holding only B
+  // would have minted A a second id. Bounded by the reader's own edits on one screen,
+  // which is small; the keys carry the text, so a screen with many long drafts holds
+  // many long keys, and that is the whole cost.
+  const held = new Map<string, DraftSubmission>();
+  return (key) => {
+    let submission = held.get(key);
+    if (submission === undefined) {
+      submission = { mutationId: mint(), submittedAt: stamp() };
+      held.set(key, submission);
+    }
+    return submission;
+  };
+}
