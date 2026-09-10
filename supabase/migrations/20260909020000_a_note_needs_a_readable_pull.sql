@@ -115,3 +115,53 @@ comment on policy notes_update_own on public.notes is
   'a pull or summary they cannot read is refused by the notes_keep_readable trigger, '
   'not here, so that a note outlives the readability of what it was written about. '
   'See 20260901190000 and 20260909020000.';
+
+-- -----------------------------------------------------------------------------
+-- AND THE PRECEDENT GETS THE SAME TREATMENT. `user_questions_update_own`
+-- (20260905110000) is the policy the insert leg above was copied from, and its update
+-- half repeats the readability leg in `with check` -- so a question the reader wrote
+-- about an idea that has since been withdrawn cannot be retired, which is the documented
+-- way to stop being asked it, nor edited, for exactly the reason given above. The same
+-- split: the policy keeps the owner leg, and `user_questions_keep_readable` refuses the
+-- move. `pull_id` is `not null` there, so the trigger has one leg rather than two.
+-- -----------------------------------------------------------------------------
+
+drop policy if exists user_questions_update_own on public.user_questions;
+create policy user_questions_update_own on public.user_questions
+  for update
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+create or replace function public.user_questions_keep_readable()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.pull_id is distinct from old.pull_id
+     and not exists (select 1 from public.pulls p where p.id = new.pull_id) then
+    raise insufficient_privilege using
+      message = 'A question can be moved only onto a pull you can read.';
+  end if;
+
+  return new;
+end $$;
+
+revoke all on function public.user_questions_keep_readable() from anon, authenticated, public;
+
+drop trigger if exists user_questions_keep_readable on public.user_questions;
+create trigger user_questions_keep_readable
+  before update of pull_id on public.user_questions
+  for each row execute function public.user_questions_keep_readable();
+
+comment on function public.user_questions_keep_readable() is
+  'Before a question is moved: the new pull must be readable by the caller under their '
+  'own RLS. Old and new are compared here because a policy cannot see both, and a '
+  'question whose pull has since become unreadable must stay editable and retirable. '
+  'See 20260909020000.';
+
+comment on policy user_questions_update_own on public.user_questions is
+  'A reader may edit or retire their own question. Moving it onto a pull they cannot '
+  'read is refused by the user_questions_keep_readable trigger, not here, so that a '
+  'question outlives the readability of the idea it was written about. See '
+  '20260905110000 and 20260909020000.';

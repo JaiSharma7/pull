@@ -15,6 +15,9 @@
 --     published, kept where it is, moved off, or moved onto something readable --
 --     and still not moved onto something unreadable. This is why the update half is
 --     a trigger and not a policy leg.
+--   * the same for a question the reader wrote, which 20260905110000 had guarded in
+--     the update policy: it can still be retired and edited once its pull is withdrawn,
+--     moved onto something readable, and not onto something unreadable
 --
 -- Everything runs as a real reader under RLS, except the one step that withdraws a
 -- summary from under a note, which is the owner's act. The whole file rolls back.
@@ -64,6 +67,7 @@ declare
   note_b       uuid;
   note_shared  uuid;
   note_free    uuid;
+  question_b   uuid;
   code         text;
   n            int;
 begin
@@ -185,6 +189,11 @@ begin
   if n <> 3 then
     raise exception 'reader B expected 3 notes of their own, has %', n;
   end if;
+
+  -- And a question of B's own about the shared idea, while it can be read.
+  insert into public.user_questions (user_id, pull_id, prompt)
+  values (reader_b, shared_pull, 'What did A share?')
+  returning id into question_b;
 
   perform pg_temp.become(reader_a);
 
@@ -330,7 +339,64 @@ begin
     raise exception 'reader B could not move a note off a withdrawn pull and onto a public one';
   end if;
 
-  raise notice 'notes.sql: a note needs a readable pull on the way in, cannot be moved onto one it cannot read, and outlives the readability of the one it was written about';
+  -- ---------------------------------------------------------------------------
+  -- 5. So does a question the reader wrote
+  -- ---------------------------------------------------------------------------
+  code := null;
+  begin
+    update public.user_questions set retired_at = now() where id = question_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'reader B could not retire a question whose pull was withdrawn (got %). '
+      'user_questions_update_own still judges the row rather than the move.', code;
+  end if;
+
+  update public.user_questions set prompt = 'What did A share, again?' where id = question_b;
+
+  select count(*) into n
+  from public.user_questions
+  where id = question_b and retired_at is not null and prompt like '%again?';
+  if n <> 1 then
+    raise exception 'reader B''s question on the withdrawn pull did not keep its edits';
+  end if;
+
+  code := null;
+  begin
+    update public.user_questions set pull_id = priv_pull where id = question_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved a question onto reader A''s private pull (got %). '
+      'user_questions_keep_readable is not refusing the move.', coalesce(code, 'no error');
+  end if;
+
+  update public.user_questions set pull_id = public_pull where id = question_b;
+
+  code := null;
+  begin
+    update public.user_questions set pull_id = shared_pull where id = question_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved a question back onto a withdrawn pull (got %)',
+      coalesce(code, 'no error');
+  end if;
+
+  select count(*) into n
+  from public.user_questions
+  where id = question_b and pull_id = public_pull;
+  if n <> 1 then
+    raise exception 'reader B could not move a question off a withdrawn pull and onto a public one';
+  end if;
+
+  raise notice 'notes.sql: a note needs a readable pull on the way in, cannot be moved onto one it cannot read, and outlives the readability of the one it was written about -- and so does a question the reader wrote';
 end $$;
 
 rollback;
