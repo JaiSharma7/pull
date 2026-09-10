@@ -184,6 +184,12 @@ declare
   own_2    uuid;
   pull_later uuid;
   pull_faded uuid;
+  pull_r1  uuid;
+  pull_r2  uuid;
+  pull_r3  uuid;
+  pos1     int;
+  pos2     int;
+  pos3     int;
 
   due      jsonb;
   qs2      jsonb;
@@ -290,15 +296,19 @@ begin
   delete from public.quiz_questions q where q.pull_id = pull_2;
 
   /*
-   * AND THE RECALL IS THE ONE THE READER IS ASKED, while `recall` is the only kind the
-   * deployed Review screen can render.
+   * AND NO KIND IS PINNED AHEAD OF THE OTHERS.
    *
    * 3g writes three kinds in ONE statement, so all three share `now()` to the
-   * microsecond and the old ordering (`created_at desc, id`) broke the tie on
-   * `gen_random_uuid()`. Which question a reader got was a lottery, and two of the three
-   * tickets are unanswerable: `Review.tsx` renders `question` with a Reveal button and
-   * no kind awareness, so an mcq shows with nothing to choose and a cloze with no blank.
-   * Measured over 300 pulls before the fix: recall came first 87 times.
+   * microsecond. While `recall` was the only kind the Review screen could render,
+   * 20260905120002 ranked it first so the reader was never handed an mcq with nothing
+   * to choose from; this section asserted that. Both screens render by kind now and
+   * rotate through the array, and the rank was starving every other kind -- with it
+   * pinned, no mcq or cloze was ever asked. 20260909030000 removed it.
+   *
+   * What is asserted instead: the order is TOTAL. Three rows tied on `created_at` come
+   * back in `id` order, not in whichever order the planner produced them, so the same
+   * card reads the same on two loads and a rotation by turn lands on the same question
+   * for the same turn. (Section 4 asserts the same stability on `pull_1`.)
    *
    * `pull_2` is used because the six above have just been deleted, so these three are
    * the whole of its canonical set and the caps are not what is being tested here.
@@ -332,18 +342,26 @@ begin
   if qs is null or jsonb_array_length(qs) <> 3 then
     raise exception 'expected the three canonical kinds back, got %', qs;
   end if;
-  if qs -> 0 ->> 'kind' is distinct from 'recall' then
+  if qs -> 0 ->> 'id' is distinct from
+     (select q.id::text from public.quiz_questions q where q.pull_id = pull_2 order by q.id limit 1) then
     raise exception
-      'the first canonical question is a % rather than a recall -- the Review screen '
-      'cannot render it, and which kind won was decided by a uuid', qs -> 0 ->> 'kind';
+      'three canonical questions tied on created_at did not come back in id order '
+      '(first is %). The order is not total, so the same card reads differently on '
+      'two loads.', qs -> 0 ->> 'kind';
+  end if;
+  select count(distinct e ->> 'kind') into n from jsonb_array_elements(qs) e;
+  if n <> 3 then
+    raise exception 'expected all three kinds on the card, got % distinct', n;
   end if;
 
   /*
-   * AND THE DETERMINISTIC VARIANT, which is worse than the lottery. `insertQuizQuestions`
-   * upserts on `(pull_id, kind)`, and `on conflict do update` KEEPS the existing
-   * `created_at` -- so a pull whose recall row predates a re-generation has a recall
-   * that is OLDER than the mcq and cloze beside it, and under `created_at desc` it sorted
-   * last every single time rather than one time in three.
+   * AND RECENCY DECIDES, WHICHEVER KIND IS NEWEST. `insertQuizQuestions` upserts on
+   * `(pull_id, kind)`, and `on conflict do update` KEEPS the existing `created_at` --
+   * so a pull whose recall row predates a re-generation has a recall OLDER than the
+   * mcq and cloze beside it. Under the rank it was still asked first; now it sorts
+   * last, because the newest question about an idea is the one a reader is asked
+   * first and the rotation reaches the older ones in turn. A reinstated rank fails
+   * here as well as in section 6b-2.
    */
   update public.quiz_questions q set created_at = now() - interval '30 days'
    where q.pull_id = pull_2 and q.kind = 'recall';
@@ -354,18 +372,22 @@ begin
    where e ->> 'pullId' = pull_2::text;
   perform pg_temp.as_owner();
 
-  if qs -> 0 ->> 'kind' is distinct from 'recall' then
+  if qs -> 2 ->> 'kind' is distinct from 'recall' then
     raise exception
-      'an older recall sorted behind the newer kinds (got %), which is the re-generation '
-      'case: the upsert keeps the original created_at', qs -> 0 ->> 'kind';
+      'an older recall did not sort behind the newer kinds (it is at % with % first). '
+      'A kind is being ranked ahead of recency again.',
+      (select t.ord from jsonb_array_elements(qs) with ordinality t(e, ord) where t.e ->> 'kind' = 'recall'),
+      qs -> 0 ->> 'kind';
   end if;
   -- And the singular field the deployed screen actually reads follows it. Read in the
   -- same query, as the reader: `get_due_reviews` is `security invoker` and returns an
   -- empty array to the owner role, so a second call outside `become` compares against
   -- null and passes for the wrong reason -- which is how the first draft of this
   -- assertion failed.
-  if txt is distinct from 'Prompt for recall' then
-    raise exception 'the singular `question` is % rather than the recall prompt', txt;
+  if txt is distinct from (qs -> 0 ->> 'prompt') then
+    raise exception
+      'the singular `question` (%) is not the first element''s prompt (%)', txt,
+      qs -> 0 ->> 'prompt';
   end if;
 
   delete from public.knowledge_states ks
@@ -951,6 +973,58 @@ begin
   delete from public.knowledge_states ks where ks.pull_id = pull_faded;
   perform pg_temp.become(reader_a);
 
+  /*
+   * AND THE ORDER IS NUMERIC, not the text of the number. The outer aggregate in
+   * 20260905120002 sorted on `t ->> 'retrievability'`, which is TEXT, and was right by
+   * accident: at three fixed decimals '0.729' < '0.799' < '0.928' lexically as well as
+   * numerically, so no fixture can tell the two apart today. What this asserts is the
+   * shape -- three straddling rows come back ascending -- so that a change to the
+   * rounding, or a value that escapes [0, 1], fails here rather than quietly reversing
+   * the page. 20260909030000 made the comparison numeric; this is the guard that it
+   * stays so.
+   */
+  perform pg_temp.as_owner();
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (bulk_summary, 902, 'Nearly gone', 'Body', 5) returning id into pull_r1;
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (bulk_summary, 903, 'Half gone', 'Body', 5) returning id into pull_r2;
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (bulk_summary, 904, 'Mostly there', 'Body', 5) returning id into pull_r3;
+  -- retrievability = 0.9 ^ (days / stability), per 20260829130252: about 0.73, 0.80
+  -- and 0.93, which the three-decimal text form happens to order the same way.
+  insert into public.knowledge_states
+    (user_id, pull_id, acquired_via, next_due_at, stability, last_seen_at)
+  values (reader_a, pull_r1, 'saved', now() - interval '1 hour', 1.0, now() - interval '3 days'),
+         (reader_a, pull_r2, 'saved', now() - interval '1 hour', 1.0, now() - interval '51 hours'),
+         (reader_a, pull_r3, 'saved', now() - interval '1 hour', 1.0, now() - interval '17 hours');
+  perform pg_temp.become(reader_a);
+
+  -- One page, read three times: three calls could see three pages.
+  due := public.get_due_reviews(100);
+  select t.ord into pos1
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
+   where t.e ->> 'pullId' = pull_r1::text;
+  select t.ord into pos2
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
+   where t.e ->> 'pullId' = pull_r2::text;
+  select t.ord into pos3
+    from jsonb_array_elements(due) with ordinality as t(e, ord)
+   where t.e ->> 'pullId' = pull_r3::text;
+  if pos1 is null or pos2 is null or pos3 is null then
+    raise exception
+      'the three straddling rows are not all on the page (%, %, %); the fixture cannot '
+      'assert their order', pos1, pos2, pos3;
+  end if;
+  if not (pos1 < pos2 and pos2 < pos3) then
+    raise exception
+      'the page is not ordered by retrievability ascending: 0.73 at %, 0.80 at %, 0.93 '
+      'at %. The outer aggregate is not comparing numbers.', pos1, pos2, pos3;
+  end if;
+
+  perform pg_temp.as_owner();
+  delete from public.knowledge_states ks where ks.pull_id in (pull_r1, pull_r2, pull_r3);
+  perform pg_temp.become(reader_a);
+
   -- A CARD'S QUESTIONS ARE ITS OWN, which nothing asserted until now.
   --
   -- Neither `uq.pull_id = due.pull_id` nor `qq.pull_id = due.pull_id` had any coverage:
@@ -1063,6 +1137,24 @@ begin
   end if;
   if qs -> 0 ->> 'source' is distinct from 'canonical' then
     raise exception 'the first question is not canonical (got %)', qs -> 0 ->> 'source';
+  end if;
+  /*
+   * NO KIND IS PINNED FIRST ANY MORE. 20260905120002 ranked the recall question to
+   * element 0 while it was the only kind the screen could render; both screens now
+   * render by kind and rotate through the array, and with the recall pinned every
+   * mcq and cloze on the card was unreachable. The mcq and the cloze were written by
+   * this file after the seeded recall, so recency alone puts them first and the
+   * recall third -- which is the order a rank term would invert. A reinstated rank
+   * fails here.
+   */
+  if not ((qs -> 0 ->> 'id') in (mcq_id::text, cloze_id::text)) then
+    raise exception
+      'the first canonical question is % rather than the newer mcq or cloze. A kind '
+      'is being ranked ahead of recency again, and the other kinds cannot be reached.',
+      qs -> 0 ->> 'kind';
+  end if;
+  if qs -> 2 ->> 'id' is distinct from seeded_q::text then
+    raise exception 'the seeded recall should be third by recency, got %', qs -> 2 ->> 'id';
   end if;
   -- The singular fields follow the array here too. They are built from
   -- `questions[0]`, so on a card with no question of the reader's they must say
