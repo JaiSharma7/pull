@@ -1,4 +1,4 @@
-import { routeParam } from './routes.js';
+import { isPath, routeParam } from './routes.js';
 
 /**
  * What the browser tab, the history entry and the screen reader should call this page.
@@ -74,8 +74,8 @@ export interface TitleInput {
  * knows yet which it will be.
  */
 export function isKnownPath(pathname: string): boolean {
-  if (pathname === '/') return true;
-  if (PATH_TITLES[pathname]) return true;
+  if (isPath(pathname, '/')) return true;
+  if (fixedRoute(pathname)) return true;
   // The parameterised routes are known exactly when `routeParam` -- the reader `App`
   // uses to open them -- finds one segment: `/path/a/b` is not a path called `a/b`.
   // Matching the prefix alone called it known, so `notFound` stayed false while
@@ -86,6 +86,15 @@ export function isKnownPath(pathname: string): boolean {
 }
 
 const PARAMETERISED = ['/source', '/pull', '/topic', '/path'] as const;
+
+/**
+ * The fixed route this address names, read the way `App` reads it -- `isPath`, which
+ * drops a trailing slash, the query and the fragment -- rather than as a raw key.
+ * `/explore/` opened in `App` and was "Not found" here (review finding).
+ */
+function fixedRoute(pathname: string): string | undefined {
+  return Object.keys(PATH_TITLES).find((route) => isPath(pathname, route));
+}
 
 export function titleFor({ pathname, tab, documentTitle, query }: TitleInput): string {
   const suffix = ` · ${SITE_TITLE}`;
@@ -110,13 +119,13 @@ export function titleFor({ pathname, tab, documentTitle, query }: TitleInput): s
     return `${documentTitle?.trim() || 'Learning Path'}${suffix}`;
   }
 
-  if (pathname === '/search') {
+  if (isPath(pathname, '/search')) {
     const q = query?.trim();
     return q ? `${q} · Search${suffix}` : `Search${suffix}`;
   }
 
-  const known = PATH_TITLES[pathname];
-  if (known) return `${known}${suffix}`;
+  const fixed = fixedRoute(pathname);
+  if (fixed) return `${PATH_TITLES[fixed]}${suffix}`;
 
   // Only `/` reaches here, since anything else has been matched or called not-found.
   return tab === 'feed' ? SITE_TITLE : `${TAB_TITLES[tab]}${suffix}`;

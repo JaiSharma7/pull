@@ -90,6 +90,11 @@ describe('titleFor', () => {
     expect(isKnownPath('/topic/anything/else')).toBe(false);
     expect(isKnownPath('/path/')).toBe(false);
     expect(isKnownPath('/paths')).toBe(true);
+    // And a fixed route is read as `App` reads it: a trailing slash is the same
+    // address, not an unknown one.
+    expect(isKnownPath('/explore/')).toBe(true);
+    expect(isKnownPath('/path/x/')).toBe(true);
+    expect(titleFor({ ...base, pathname: '/explore/' })).toBe('Explore · What a Pull');
     expect(isKnownPath('/')).toBe(true);
     expect(isKnownPath('/account')).toBe(true);
     expect(isKnownPath('/nonsense')).toBe(false);
