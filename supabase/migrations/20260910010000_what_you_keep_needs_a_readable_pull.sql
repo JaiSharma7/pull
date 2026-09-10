@@ -3,7 +3,7 @@
 --
 -- 20260909020000 closed this hole in `notes` and named the three tables that still
 -- had it. They are `highlights_own`, `saved_items_own` and `history_events_own`
--- (20260829124730:95-120), never redefined since, all the same shape:
+-- (20260829124730:98-118), never redefined since, all the same shape:
 --
 --     for all using (auth.uid() = user_id) with check (auth.uid() = user_id)
 --
@@ -44,8 +44,11 @@
 -- everywhere else here), so their subqueries run under the caller's own RLS exactly
 -- as the insert policies' do, and each pins `search_path` for the reason every
 -- function here does. Execute is revoked as `set_updated_at`'s is in 20260829124835:
--- a trigger fires without it, and a trigger function in `public` is otherwise a
--- PostgREST RPC endpoint nobody meant to publish.
+-- a trigger fires without it, and nothing else should be able to call it. That file
+-- gives the reason as PostgREST exposing a `public` function as an RPC endpoint;
+-- PostgREST in fact excludes functions returning `trigger`, so the revoke is defence
+-- in depth rather than the closing of an open door. It is kept for consistency with
+-- every other trigger function here, which is worth more than the one line it costs.
 --
 -- Splitting `for all` into four is not cosmetic. `for all` covers SELECT, so a
 -- second SELECT policy beside it is what `db:lint` invariant 5 exists to catch;
@@ -58,26 +61,85 @@
 --
 --   * `record_read` (20260829222803) is the only writer of `history_events`. It is
 --     `security invoker` and its `insert ... select` already joins `pulls` and
---     `summaries` under the caller's RLS, so an unreadable pull yields no row and it
---     never had this bug. The new leg is for the direct PostgREST insert, which the
---     old policy allowed and which no function guards. Its `on conflict do update
---     set dwell_ms` is unaffected: the update names no target column, so the trigger
---     does not fire, and the replay stays idempotent (asserted in history_events.sql).
+--     `summaries` under the caller's RLS, so an unreadable pull yields no row on THIS
+--     table. That is the whole of the claim, and an earlier draft of this header
+--     overstated it as "it never had this bug": `record_read` guards only its first
+--     statement, and its other two write `p_pull_id` verbatim. Measured, as reader B
+--     against reader A's private imported pull:
+--
+--         record_read(priv) -> history_events=0  knowledge_states=1  feed_impressions=1
+--
+--     So the new leg here is for the direct PostgREST insert, which the old policy
+--     allowed and which no function guards; and `knowledge_states` and
+--     `feed_impressions` still carry the hole, named below. Its `on conflict do update
+--     set dwell_ms` is unaffected: it changes none of the three columns, so the
+--     trigger's old/new comparison finds no move (asserted in history_events.sql).
 --   * `remember_pull` (20260905110000) is `security invoker` and inserts into
 --     `saved_items`. It writes `user_questions` first, and `user_questions_insert_own`
---     has carried the readability leg since 20260905110000 -- so the pull is already
---     known readable by the time the save is written, and this migration cannot
---     refuse a call that policy accepted.
+--     has carried the readability leg since 20260905110000 -- so on a first call the
+--     pull is already known readable by the time the save is written. A REPLAY is the
+--     exception worth naming: its question insert is `on conflict do nothing`, so no
+--     `with check` runs, and if the save row was deleted meanwhile and the pull has
+--     since stopped being readable, the new leg refuses a replay whose first call was
+--     accepted. That is the guard working, not a regression -- but it is not the
+--     blanket "cannot refuse what that policy accepted" an earlier draft claimed.
 --   * `commit_import` and `undo_import` (same file) are `security definer`, so no
 --     policy applies to them. `commit_import` writes `saved_items` against pulls it
 --     has just created under a summary the caller authors.
+--
+-- THE GUARD IS ONLY AS GOOD AS WHO MAY ADD A TRIGGER BESIDE IT.
+--
+-- `before update of <cols>` fires on the SET LIST, not on whether the column changed,
+-- and BEFORE triggers run in name order. `authenticated` holds TRIGGER on every table
+-- in `public` (the blanket `grant all` the platform's default privileges hand out), so
+-- a competing trigger sorting after `highlights_keep_readable` can set `new.pull_id`
+-- on a statement that never names it -- the guard has already run, or never fired.
+-- Reproduced on a database replayed from zero, as reader B against A's private pull:
+--
+--     update highlights set pull_id = <private>  -> 42501            (the guard works)
+--     create trigger zz_aaa before update ...    -> ALLOWED
+--     update highlights set text = 'laundered'   -> ACCEPTED, and the row now names
+--                                                   the private pull
+--
+-- Moving the guard to `after update` fixes the instance; revoking the privilege fixes
+-- the class, costs nothing, and is what is done here. `authenticated` keeps SELECT,
+-- INSERT, UPDATE and DELETE -- everything the app uses -- and `create trigger` becomes
+-- 42501. It needs a direct database connection to exploit (PostgREST issues no DDL),
+-- so this is defence in depth rather than a live hole, which is also why it is one
+-- line rather than a redesign.
+--
+-- The statement is in section 4, with the rest of the DDL.
 --
 -- WHAT THIS MIGRATION DOES NOT FIX, said plainly rather than left to be discovered:
 -- `saved_items.stash_id` has the same unchecked shape -- a reader may file a save
 -- into a stash they do not own, because `saved_items_own` never looked at the stash
 -- either. It is a different claim (ownership, not readability), it leaks nothing
--- (`stashes_read` and `saved_items_select_own` both scope reads to the owner), and
+-- (`saved_items_select_own` scopes every read of a save to its owner, and it is the
+-- only policy that matters here -- `stashes_read` does NOT scope to the owner, since a
+-- stash marked public is readable by everyone), and
 -- guarding it belongs with the stash policies rather than here.
+--
+-- Three more, found by the security review of this change and left deliberately:
+--
+--   * `knowledge_states` and `feed_impressions` take an unreadable pull from
+--     `record_read`, as measured above, and accept one by direct insert too --
+--     `knowledge_states_own` and `feed_impressions_own` are the same unguarded `for
+--     all` shape. `knowledge_states` is written on EVERY read, so its guard carries
+--     the same cost question `history_events` carried here, and it deserves the same
+--     measurement rather than being appended to this file. `convictions`,
+--     `explanations`, `progress`, `interrupt_events` and `recall_events` are the same
+--     shape again. Nothing leaks: `get_daily_pulls` is the only `security definer`
+--     reader of `knowledge_states` and re-filters `published`/`public` on both its
+--     candidate and its output query.
+--   * The TRIGGER revoke above is scoped to the three tables this file makes a claim
+--     about. Every other table in `public` still hands `authenticated` that privilege,
+--     `notes` and `user_questions` (20260909020000) included, and they carry triggers
+--     of exactly this design. Revoking it everywhere is one statement and no risk, but
+--     it is a change to every table's grants and belongs in a migration that says so.
+--   * `authenticated` also holds TRUNCATE on these tables, which bypasses RLS
+--     entirely. Same door (a direct connection), same systemic answer, and not what
+--     this file is about: truncation destroys rows, it does not forge a claim that a
+--     pull was readable.
 --
 -- -----------------------------------------------------------------------------
 -- THE COST ON THE READ PATH, MEASURED
@@ -100,10 +162,14 @@
 --     split, work leg only                            459 us/call
 --     split, all three legs (this migration)          626 us/call     42 buffers
 --
--- The split alone is free. Each leg costs roughly 100-130 us, and they are additive
--- rather than dominated by one: `pulls_read_via_summary` and `works_read_readable`
--- each resolve through `summaries`, so each leg is an index lookup plus a policy
--- evaluation. Buffers per insert, which is the capacity number and far less noisy
+-- The split alone is free. Read as increments over the split baseline of 324: the pull
+-- leg and the work leg each cost about 135 us on their own, the summary leg a further
+-- 41 on top of the pull leg, and the third leg 126 on top of those -- +302 in total, or
+-- +273 over today's `for all`. So they are additive rather than dominated by one, which
+-- is what `pulls_read_via_summary` and `works_read_readable` each resolving through
+-- `summaries` predicts: every leg is an index lookup plus a policy evaluation. (There is
+-- no summary-leg-alone configuration in the harness, so its 41 is measured only on top
+-- of the pull leg.) Buffers per insert, which is the capacity number and far less noisy
 -- than wall time, go from 27 to 42 -- +15 shared hits, all cache hits on primary
 -- keys and `summaries_work_idx`.
 --
@@ -348,9 +414,12 @@ create trigger history_events_keep_readable
 
 comment on function public.history_events_keep_readable() is
   'Before a history event is moved: the new pull, summary or work must be readable by the '
-  'caller under their own RLS. Named columns only, so record_read''s `on conflict do '
-  'update set dwell_ms` does not fire it and the offline replay stays idempotent. '
-  'See 20260910010000.';
+  'caller under their own RLS. Only a move is refused -- old and new are compared here '
+  'because a policy cannot see both -- which is what leaves record_read''s `on conflict '
+  'do update set dwell_ms` idempotent: it changes none of these columns, so the '
+  'comparison is false. Naming the columns on the trigger additionally spares that '
+  'replay the call altogether, which is a cost saving and not the thing that makes it '
+  'safe. See 20260910010000.';
 
 comment on policy history_events_select_own on public.history_events is
   'A reader sees their own history and nobody else''s. Unlimited and free by law 3. '
@@ -359,7 +428,9 @@ comment on policy history_events_select_own on public.history_events is
 
 comment on policy history_events_insert_own on public.history_events is
   'A read can be recorded only against a pull, summary and work the reader can read. '
-  'record_read already selects through the same RLS; these legs are for the direct '
+  'record_read cannot trip them: it selects its pull and summary through the caller''s '
+  'own RLS, and a readable summary implies a readable work under works_read_readable. '
+  'The legs are here for the direct '
   'PostgREST insert the old policy allowed. Costs +273us and +15 buffers per read, '
   'measured -- see the header of 20260910010000.';
 
@@ -371,3 +442,22 @@ comment on policy history_events_update_own on public.history_events is
 comment on policy history_events_delete_own on public.history_events is
   'A reader may always forget something they read, whatever became of it. '
   'See 20260910010000.';
+
+
+-- 4. who may put a trigger beside the guard -------------------------------------
+--
+-- See the header for the reproduction. `before update of <cols>` fires on the SET
+-- list and BEFORE triggers run in name order, so a competing trigger that sorts after
+-- one of the three above can set the column the guard is watching on a statement that
+-- never names it. `authenticated` holds TRIGGER on every table in `public` by default,
+-- which is all that attack needs. It keeps SELECT, INSERT, UPDATE and DELETE -- every
+-- privilege the app actually uses -- and loses only the one that lets it rewrite a row
+-- behind the guard's back.
+--
+-- Scoped to these three tables on purpose: they are the ones this file makes a claim
+-- about. The same privilege is still held on every other table, `notes` and
+-- `user_questions` among them, and taking it away everywhere belongs in a migration
+-- whose subject that is. See the header's "does not fix".
+
+revoke trigger on public.highlights, public.saved_items, public.history_events
+  from anon, authenticated;

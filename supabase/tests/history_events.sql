@@ -14,13 +14,20 @@
 --   * a refused event writes nothing
 --   * `record_read` still records a public pull, and still records reader A's own
 --     private import -- the guard refuses the stranger, not the read
---   * `record_read` on a pull B cannot read writes nothing and raises nothing: its
---     `insert ... select` already runs under the caller's RLS, so it was never the
---     hole, and it must not become one
---   * ITS REPLAY IS STILL IDEMPOTENT. `record_read` resolves a conflict with
---     `do update set dwell_ms`, which names no target column, so the trigger must not
---     fire on it -- one row, the larger dwell. `lib/offline.ts` replays a queued read
---     on exactly this promise
+--   * `record_read` on a pull B cannot read writes NO HISTORY EVENT and raises
+--     nothing: its `insert ... select` already runs under the caller's RLS, so this
+--     table was never the hole, and it must not become one. That is all this file
+--     asserts and all it should be read as claiming -- `record_read` guards only its
+--     first statement, and still writes `knowledge_states` and `feed_impressions`
+--     against the same unreadable pull. Those tables are named in 20260910010000's
+--     "does not fix"; they are not this file's subject
+--   * ITS REPLAY IS STILL IDEMPOTENT -- one row, the larger dwell. `lib/offline.ts`
+--     replays a queued read on exactly this promise. What keeps it true is that the
+--     trigger compares old and new: `do update set dwell_ms` changes none of the three
+--     columns, so nothing is a move. Naming those columns on the trigger additionally
+--     spares the replay the call, which is a cost saving; removing the column list and
+--     leaving the body alone keeps this file green, so this assertion is not evidence
+--     for the column list and does not claim to be
 --   * reader B cannot MOVE an event onto A's private pull, summary or work afterwards
 --   * the split kept every capability the `for all` policy had: B still reads, amends
 --     and deletes their own history, and still sees none of A's
@@ -28,8 +35,14 @@
 --     where it is and deleted -- law 3 promises unlimited history, and a reader must
 --     be able to forget something after its summary is withdrawn
 --
--- Everything runs as a real reader under RLS, except the one step that withdraws a
--- summary from under an event, which is the owner's act. The whole file rolls back.
+-- Every assertion runs as a real reader under RLS. The fixture, and the one step that
+-- withdraws a summary from under an event, are the owner's acts. The whole file rolls back.
+--
+-- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
+-- and section 5's "still refused from an unreadable start". Sections 2 and 3, and the
+-- nonexistent-target check (which accepts the foreign key's 23503 as readily as 42501),
+-- pass against the old `for all` policy too -- they are regression guards on what the
+-- split must not cost, not evidence for the guard.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
@@ -414,6 +427,47 @@ begin
   if n <> 2 then
     raise exception
       'reader B could not delete an event on a withdrawn pull (% rows left)', n;
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 6. Nobody may put a trigger beside the guard
+  --
+  -- `before update of <cols>` fires on the SET list and BEFORE triggers run in name
+  -- order, so a trigger sorting after `history_events_keep_readable` could set the column the
+  -- guard watches on a statement that never names it -- the guard has already run, or
+  -- never fired, and the row lands on a pull the reader cannot read. Reproduced before
+  -- 20260910010000 revoked TRIGGER from anon and authenticated on this table.
+  --
+  -- The function is the reader's own, in pg_temp, which they may always create and
+  -- execute. Pointing at a `public` trigger function instead would prove nothing:
+  -- Postgres checks EXECUTE at CREATE TRIGGER time, and 20260829124835 revoked that
+  -- from these roles, so the refusal would be the function's rather than the table's.
+  -- -------------------------------------------------------------------------
+  code := null;
+  begin
+    execute 'create function pg_temp.zz_beside_the_guard() returns trigger '
+            'language plpgsql as $q$ begin return new; end $q$';
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'fixture: the reader could not create their own pg_temp function (got %), so '
+      'the next assertion would pass for the wrong reason', code;
+  end if;
+
+  code := null;
+  begin
+    execute 'create trigger zz_beside_the_guard before update on public.history_events '
+            'for each row execute function pg_temp.zz_beside_the_guard()';
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'a reader created a trigger on public.history_events (got %). TRIGGER is still '
+      'granted, so the guard can be walked around by one that sorts after it.',
+      coalesce(code, 'no error');
   end if;
 
   raise notice 'history_events.sql: a read needs a readable pull, summary and work on the '
