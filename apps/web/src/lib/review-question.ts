@@ -20,11 +20,35 @@ export function toActivityQuestion(q: ReviewQuestion): Question {
 }
 
 /**
- * Get the active question for a due review card.
- * `get_due_reviews` orders user questions first, then canonical questions.
+ * Which of a card's questions to ask this time.
+ *
+ * `get_due_reviews` returns up to three per idea -- the reader's own first, then the
+ * newest canonical ones -- and until 20260909030000 pinned the recall question to
+ * element 0, because the screen could only render that kind. Both screens took
+ * `questions[0]`, and a card leaves the page once it is graded, so one question per
+ * idea was ever asked and every seeded mcq and cloze was unreachable.
+ *
+ * Rotated by `turn` -- how many times the reader has met the idea -- so each kind on
+ * the card gets its go in order, and the same reader on the same card sees the same
+ * question until they answer it. Pure, so the feed can rotate on a different counter
+ * (it has no `reps`) with the same rule.
+ */
+export function chooseQuestion(
+  questions: readonly ReviewQuestion[] | null | undefined,
+  turn: number,
+): ReviewQuestion | null {
+  if (!questions || questions.length === 0) return null;
+  const n = Number.isFinite(turn) && turn > 0 ? Math.floor(turn) : 0;
+  return questions[n % questions.length]!;
+}
+
+/**
+ * The active question for a due review card: rotated by how many times the idea has
+ * been reviewed, so a reader who has been asked the recall question is asked the
+ * multiple choice next, then the cloze, then round again.
  */
 export function resolveActiveQuestion(card: DueReview): ReviewQuestion | null {
-  return card.questions && card.questions.length > 0 ? card.questions[0]! : null;
+  return chooseQuestion(card.questions, card.reps);
 }
 
 /**

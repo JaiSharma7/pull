@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chooseQuestion,
   formatReviewProgress,
   mcqOptionMarker,
   nextSessionTotal,
@@ -232,5 +233,65 @@ describe('nextSessionTotal', () => {
 
   it('never shrinks, and an empty further page changes nothing', () => {
     expect(nextSessionTotal(20, 0)).toBe(20);
+  });
+});
+
+describe('chooseQuestion', () => {
+  const q = (id: string, kind: ReviewQuestion['kind']): ReviewQuestion => ({
+    id,
+    source: 'canonical',
+    kind,
+    prompt: `Prompt ${id}`,
+    answer: 'Answer',
+    distractors: kind === 'mcq' ? ['A', 'B'] : null,
+    cloze: kind === 'cloze' ? 'The ___.' : null,
+    explanation: null,
+    rationale: null,
+  });
+  const three = [q('r', 'recall'), q('m', 'mcq'), q('c', 'cloze')];
+
+  it('gives every kind on the card its turn, in order, then round again', () => {
+    // A card leaves the page once graded, so the only way the mcq and the cloze are
+    // ever asked is a different pick on a different visit.
+    expect(chooseQuestion(three, 0)?.id).toBe('r');
+    expect(chooseQuestion(three, 1)?.id).toBe('m');
+    expect(chooseQuestion(three, 2)?.id).toBe('c');
+    expect(chooseQuestion(three, 3)?.id).toBe('r');
+  });
+
+  it('is the same pick for the same turn -- a card does not rename itself between loads', () => {
+    expect(chooseQuestion(three, 7)).toBe(chooseQuestion(three, 7));
+  });
+
+  it('treats a missing, negative or fractional turn as the first', () => {
+    expect(chooseQuestion(three, Number.NaN)?.id).toBe('r');
+    expect(chooseQuestion(three, -4)?.id).toBe('r');
+    expect(chooseQuestion(three, 1.9)?.id).toBe('m');
+  });
+
+  it('returns null with nothing to choose from', () => {
+    expect(chooseQuestion([], 3)).toBeNull();
+    expect(chooseQuestion(undefined, 0)).toBeNull();
+  });
+
+  it('is what resolveActiveQuestion rotates a due card by', () => {
+    const base = {
+      pullId: 'p1',
+      headline: 'Headline',
+      body: 'Body',
+      whyItMatters: null,
+      workTitle: 'Work',
+      workSlug: 'work',
+      retrievability: 0.8,
+      stability: 10,
+      dueAt: '2026-09-08T00:00:00Z',
+      question: 'Headline',
+      questionId: null,
+      questionSource: null,
+      questions: three,
+    };
+    expect(resolveActiveQuestion({ ...base, reps: 0 })?.id).toBe('r');
+    expect(resolveActiveQuestion({ ...base, reps: 1 })?.id).toBe('m');
+    expect(resolveActiveQuestion({ ...base, reps: 5 })?.id).toBe('c');
   });
 });
