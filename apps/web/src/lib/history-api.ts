@@ -11,8 +11,11 @@ import { supabase } from './supabase.js';
  * is a claim, not a feature.
  *
  * Affordable by design rather than by subsidy: these are rows in Postgres under an
- * owner-only RLS policy (`history_events_own`), so "unlimited" costs what storage
- * costs. No model runs here (law 2).
+ * owner-only RLS policy (`history_events_select_own`, split out of `history_events_own`
+ * by 20260910010000), so "unlimited" costs what storage costs. No model runs here
+ * (law 2). Nothing on this screen writes; `record_read` is still the only writer, and
+ * the readability legs that migration added to the insert half cannot refuse it,
+ * because it already selects through the caller's own RLS.
  */
 
 /**
