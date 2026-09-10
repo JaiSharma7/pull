@@ -1,0 +1,425 @@
+-- ---------------------------------------------------------------------------
+-- A read needs a readable pull.
+--
+-- `history_events_own` (20260829124730) was `for all using (auth.uid() = user_id)`,
+-- which never looked at `pull_id`, `summary_id` or `work_id`. 20260909020000 left this
+-- table out because it is written on every read and the subquery's cost is a decision
+-- of its own; 20260910010000 makes that decision, with the measurement in its header.
+-- Asserted here, and each is a way that migration could be wrong:
+--
+--   * reader B cannot record a read against reader A's private imported pull, by uuid
+--   * nor against A's private summary, nor against A's private work -- three columns,
+--     three legs, and the work leg is the one a `pulls`-only guard would miss
+--   * nor against a pull that does not exist, whichever guard says so
+--   * a refused event writes nothing
+--   * `record_read` still records a public pull, and still records reader A's own
+--     private import -- the guard refuses the stranger, not the read
+--   * `record_read` on a pull B cannot read writes nothing and raises nothing: its
+--     `insert ... select` already runs under the caller's RLS, so it was never the
+--     hole, and it must not become one
+--   * ITS REPLAY IS STILL IDEMPOTENT. `record_read` resolves a conflict with
+--     `do update set dwell_ms`, which names no target column, so the trigger must not
+--     fire on it -- one row, the larger dwell. `lib/offline.ts` replays a queued read
+--     on exactly this promise
+--   * reader B cannot MOVE an event onto A's private pull, summary or work afterwards
+--   * the split kept every capability the `for all` policy had: B still reads, amends
+--     and deletes their own history, and still sees none of A's
+--   * an event whose pull has since stopped being readable can still be amended, kept
+--     where it is and deleted -- law 3 promises unlimited history, and a reader must
+--     be able to forget something after its summary is withdrawn
+--
+-- Everything runs as a real reader under RLS, except the one step that withdraws a
+-- summary from under an event, which is the owner's act. The whole file rolls back.
+-- ---------------------------------------------------------------------------
+
+\set ON_ERROR_STOP on
+
+begin;
+
+create or replace function pg_temp.assert_is_reader() returns void
+language plpgsql as $fn$
+begin
+  if current_user <> 'authenticated' then
+    raise exception
+      'assertions must run as the reader, not as %. RLS is invisible to an '
+      'owner-role query, so this file would be proving nothing.', current_user;
+  end if;
+end $fn$;
+
+create or replace function pg_temp.become(p_uid uuid) returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', p_uid, 'role', 'authenticated')::text, true);
+  perform pg_temp.assert_is_reader();
+end $fn$;
+
+create or replace function pg_temp.as_owner() returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $fn$;
+
+do $$
+declare
+  reader_a uuid := extensions.gen_random_uuid();
+  reader_b uuid := extensions.gen_random_uuid();
+  priv_work      uuid := extensions.gen_random_uuid();
+  priv_summary   uuid := extensions.gen_random_uuid();
+  shared_work    uuid := extensions.gen_random_uuid();
+  shared_summary uuid := extensions.gen_random_uuid();
+  priv_pull      uuid;
+  shared_pull    uuid;
+  public_pull    uuid;
+  public_pull_2  uuid;
+  public_summary uuid;
+  public_work    uuid;
+  event_b      bigint;
+  event_shared bigint;
+  code  text;
+  n     int;
+  dwell int;
+begin
+  if (select count(*) from public.pulls) > 500 then
+    raise exception
+      'refusing to run: found % pulls, which is not a seed corpus.',
+      (select count(*) from public.pulls);
+  end if;
+
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at,
+                          raw_app_meta_data, raw_user_meta_data)
+  values
+    (reader_a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'he-a-' || left(reader_a::text, 8) || '@example.test', '', now(), now(), now(),
+     '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb),
+    (reader_b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'he-b-' || left(reader_b::text, 8) || '@example.test', '', now(), now(), now(),
+     '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
+
+  insert into public.works (id, kind, title, slug, rights_status)
+  values (priv_work, 'book', 'Reader A''s Highlights', 'he-test-private', 'user_owned');
+
+  insert into public.summaries
+    (id, work_id, version, status, visibility, author_id, title, published_at)
+  values (priv_summary, priv_work, 1, 'published', 'private', reader_a,
+          'Reader A''s Highlights', now());
+
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (priv_summary, 1, 'A private highlight', 'Only A can read this.', 5)
+  returning id into strict priv_pull;
+
+  insert into public.works (id, kind, title, slug, rights_status)
+  values (shared_work, 'book', 'Reader A''s Shared Notes', 'he-test-shared', 'user_owned');
+
+  insert into public.summaries
+    (id, work_id, version, status, visibility, author_id, title, published_at)
+  values (shared_summary, shared_work, 1, 'published', 'public', reader_a,
+          'Reader A''s Shared Notes', now());
+
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  values (shared_summary, 1, 'A shared idea', 'Anyone can read this, for now.', 5)
+  returning id into strict shared_pull;
+
+  select p.id, p.summary_id, s.work_id into public_pull, public_summary, public_work
+  from public.pulls p
+  join public.summaries s on s.id = p.summary_id
+   and s.visibility = 'public' and s.status = 'published'
+  where s.id <> shared_summary
+  order by p.id
+  limit 1;
+
+  select p.id into public_pull_2
+  from public.pulls p
+  join public.summaries s on s.id = p.summary_id
+   and s.visibility = 'public' and s.status = 'published'
+  where s.id <> shared_summary and p.id <> public_pull
+  order by p.id
+  limit 1;
+
+  if public_pull is null or public_pull_2 is null then
+    raise exception 'fixture: the seed has fewer than two public pulls';
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 1. B cannot see it, and cannot claim to have read it either
+  -- -------------------------------------------------------------------------
+  perform pg_temp.become(reader_b);
+
+  select count(*) into n from public.pulls where id = priv_pull;
+  if n <> 0 then
+    raise exception 'fixture: reader B can read A''s private pull, so this file proves nothing';
+  end if;
+
+  select count(*) into n from public.works where id = priv_work;
+  if n <> 0 then
+    raise exception 'fixture: reader B can read A''s private work, so the work leg proves nothing';
+  end if;
+
+  code := null;
+  begin
+    insert into public.history_events (user_id, kind, pull_id) values (reader_b, 'read', priv_pull);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B recorded a read of reader A''s private pull (got %). '
+      'history_events_insert_own has no pull_id leg.', coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    insert into public.history_events (user_id, kind, summary_id)
+    values (reader_b, 'read', priv_summary);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B recorded a read of reader A''s private summary (got %). The insert '
+      'guard checks pull_id and not summary_id.', coalesce(code, 'no error');
+  end if;
+
+  -- The leg a pulls-only guard would miss. `works_read_readable` (20260905101000) hides
+  -- an imported book from everyone but its importer, and an event naming it is the same
+  -- false claim as one naming the pull.
+  code := null;
+  begin
+    insert into public.history_events (user_id, kind, work_id) values (reader_b, 'read', priv_work);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B recorded a read of reader A''s private work (got %). The insert guard '
+      'has no work_id leg.', coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    insert into public.history_events (user_id, kind, pull_id)
+    values (reader_b, 'read', extensions.gen_random_uuid());
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is null or code not in ('42501', '23503') then
+    raise exception 'an event against a nonexistent pull was accepted (got %)',
+      coalesce(code, 'no error');
+  end if;
+
+  select count(*) into n from public.history_events where user_id = reader_b;
+  if n <> 0 then
+    raise exception 'a refused history event was written anyway (% rows)', n;
+  end if;
+
+  -- `record_read` was never the hole: its `insert ... select` joins pulls and summaries
+  -- under the caller's own RLS, so an unreadable pull yields no row. It must not become
+  -- one either -- and it must not start raising, since the offline queue replays it.
+  code := null;
+  begin
+    perform public.record_read(priv_pull, 30000, 0);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception 'record_read raised % on a pull the caller cannot read; it used to write nothing', code;
+  end if;
+
+  select count(*) into n from public.history_events where user_id = reader_b;
+  if n <> 0 then
+    raise exception 'record_read wrote % event(s) for a pull the caller cannot read', n;
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 2. The guard refuses the stranger, not the read
+  -- -------------------------------------------------------------------------
+  perform public.record_read(public_pull, 30000, 0);
+
+  select h.id into strict event_b
+  from public.history_events h where h.user_id = reader_b and h.pull_id = public_pull;
+
+  select count(*) into n
+  from public.history_events
+  where id = event_b and summary_id = public_summary and work_id = public_work;
+  if n <> 1 then
+    raise exception 'record_read no longer records the summary and work behind a public pull';
+  end if;
+
+  perform public.record_read(shared_pull, 15000, 0);
+  select h.id into strict event_shared
+  from public.history_events h where h.user_id = reader_b and h.pull_id = shared_pull;
+
+  -- A direct insert of a readable triple, which is what the policy actually guards.
+  insert into public.history_events (user_id, kind, pull_id, summary_id, work_id, dwell_ms)
+  values (reader_b, 'read', public_pull_2,
+          (select p.summary_id from public.pulls p where p.id = public_pull_2),
+          (select s.work_id from public.pulls p join public.summaries s on s.id = p.summary_id
+            where p.id = public_pull_2),
+          1000);
+
+  select count(*) into n from public.history_events where user_id = reader_b;
+  if n <> 3 then
+    raise exception 'reader B expected 3 events of their own, has %', n;
+  end if;
+
+  -- The replay `lib/offline.ts` promises is idempotent: same pull, same day, one row,
+  -- the larger dwell. The trigger must not fire on `do update set dwell_ms`.
+  perform public.record_read(public_pull, 45000, 0);
+
+  select count(*), max(dwell_ms) into n, dwell
+  from public.history_events where user_id = reader_b and pull_id = public_pull;
+  if n <> 1 then
+    raise exception 'a replayed read wrote % rows for one pull and day', n;
+  end if;
+  if dwell <> 45000 then
+    raise exception 'a replayed read did not raise dwell_ms (got %)', dwell;
+  end if;
+
+  perform pg_temp.become(reader_a);
+
+  perform public.record_read(priv_pull, 30000, 0);
+  select count(*) into n from public.history_events where user_id = reader_a and pull_id = priv_pull;
+  if n <> 1 then
+    raise exception 'reader A could not record a read of their own private import (% rows)', n;
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 3. The split kept every capability the `for all` policy had
+  -- -------------------------------------------------------------------------
+  select count(*) into n from public.history_events;
+  if n <> 1 then
+    raise exception
+      'reader A sees % events, not just their own 1. The split lost the owner scope '
+      'on SELECT.', n;
+  end if;
+
+  perform pg_temp.become(reader_b);
+
+  select count(*) into n from public.history_events;
+  if n <> 3 then
+    raise exception 'reader B sees % events rather than their own 3', n;
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 4. The update half: an event cannot be moved onto what its owner cannot read
+  -- -------------------------------------------------------------------------
+  code := null;
+  begin
+    update public.history_events set pull_id = priv_pull where id = event_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved an event onto reader A''s private pull (got %). The update half '
+      'does not repeat the insert guard.', coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    update public.history_events set summary_id = priv_summary where id = event_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved an event onto reader A''s private summary (got %)',
+      coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    update public.history_events set work_id = priv_work where id = event_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved an event onto reader A''s private work (got %). The trigger has '
+      'no work_id leg.', coalesce(code, 'no error');
+  end if;
+
+  select count(*) into n from public.history_events
+  where id = event_b and pull_id = public_pull and summary_id = public_summary
+    and work_id = public_work;
+  if n <> 1 then
+    raise exception 'reader B''s event no longer names what it was recorded against';
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 5. History outlives the readability of what was read
+  -- -------------------------------------------------------------------------
+  perform pg_temp.as_owner();
+  update public.summaries set visibility = 'private' where id = shared_summary;
+
+  perform pg_temp.become(reader_b);
+
+  select count(*) into n from public.pulls where id = shared_pull;
+  if n <> 0 then
+    raise exception 'fixture: reader B can still read the withdrawn pull, so section 5 proves nothing';
+  end if;
+
+  -- The amendment a policy leg would have refused.
+  code := null;
+  begin
+    update public.history_events set dwell_ms = 60000 where id = event_shared;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'reader B could not amend an event whose pull was withdrawn (got %). The '
+      'readability check is judging the row as it will be, not the move.', code;
+  end if;
+
+  -- Setting the column to what it already holds is not a move.
+  code := null;
+  begin
+    update public.history_events set pull_id = shared_pull where id = event_shared;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'reader B could not save an event that stays on its withdrawn pull (got %). The '
+      'trigger is not comparing old and new.', code;
+  end if;
+
+  select count(*) into n from public.history_events
+  where id = event_shared and pull_id = shared_pull and dwell_ms = 60000;
+  if n <> 1 then
+    raise exception 'reader B''s event on the withdrawn pull did not keep its amendment';
+  end if;
+
+  -- Still not onto something unreadable, from an unreadable start.
+  code := null;
+  begin
+    update public.history_events set work_id = priv_work where id = event_shared;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved an event from a withdrawn pull onto A''s private work (got %)',
+      coalesce(code, 'no error');
+  end if;
+
+  -- And a reader may always forget something they read, whatever became of it. Law 3
+  -- promises unlimited history; it does not promise history the reader cannot clear.
+  delete from public.history_events where id = event_shared;
+  select count(*) into n from public.history_events where user_id = reader_b;
+  if n <> 2 then
+    raise exception
+      'reader B could not delete an event on a withdrawn pull (% rows left)', n;
+  end if;
+
+  raise notice 'history_events.sql: a read needs a readable pull, summary and work on the '
+    'way in, record_read still writes nothing for a pull the caller cannot read and still '
+    'replays idempotently, an event cannot be moved onto anything unreadable by any of the '
+    'three columns, and history stays amendable and deletable after what was read is withdrawn';
+end $$;
+
+rollback;
