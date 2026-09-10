@@ -6,6 +6,7 @@ import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import type { FeedRow, ReviewQuestion } from '../lib/types.js';
 import { fetchQuestions } from '../lib/questions-api.js';
 import {
+  chooseQuestion,
   mcqOptionMarker,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -81,9 +82,13 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
   useEffect(() => {
     let cancelled = false;
     fetchQuestions(pull.id).then((qs) => {
-      if (!cancelled && qs.length > 0) {
-        setQuestion(qs[0]!);
-      }
+      if (cancelled) return;
+      // Rotated by the day rather than always the first: a feed row carries no `reps`,
+      // and `questions[0]` here was the same one-question-per-idea bottleneck Review
+      // had. The UTC day is the counter, as `lib/history.ts` counts days, so the same
+      // card asks the same question until the UTC date turns -- mid-afternoon west of
+      // Greenwich -- and a different one after. See `chooseQuestion`.
+      setQuestion(chooseQuestion(qs, Math.floor(Date.now() / 86_400_000)));
     });
     return () => {
       cancelled = true;
