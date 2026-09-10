@@ -37,6 +37,24 @@ begin
   end if;
 end $fn$;
 
+-- The owner, for a fixture written mid-file, and the way back to the reader whose
+-- claims were saved before it. Section 7b uses these; the sections before it
+-- predate them and switch inline.
+create or replace function pg_temp.as_owner() returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $fn$;
+
+create or replace function pg_temp.as_reader(p_claims text) returns void
+language plpgsql as $fn$
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims', p_claims, true);
+  perform pg_temp.assert_is_reader();
+end $fn$;
+
 do $$
 declare
   reader_knows uuid := extensions.gen_random_uuid();  -- knows the Mill pull
@@ -510,8 +528,7 @@ begin
   -- in either direction, and the Enchiridion is a third work, so the row can only
   -- come from this edge and cannot be displaced by the Walden one.
   saved_claims := current_setting('request.jwt.claims', true);
-  perform set_config('role', 'postgres', true);
-  perform set_config('request.jwt.claims', '', true);
+  perform pg_temp.as_owner();
 
   select p.id into strict lineage_id
   from public.pulls p
@@ -522,9 +539,7 @@ begin
   insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight, rationale)
   values (lineage_id, mill_id, 'elaborates', 0.6, 'Written from the Enchiridion''s side.');
 
-  perform set_config('role', 'authenticated', true);
-  perform set_config('request.jwt.claims', saved_claims, true);
-  perform pg_temp.assert_is_reader();
+  perform pg_temp.as_reader(saved_claims);
 
   if not exists (
     select 1 from jsonb_array_elements(public.related_pulls(mill_id, 6)) r
@@ -539,13 +554,10 @@ begin
       'elaborates on Mill when the edge says the opposite.';
   end if;
 
-  perform set_config('role', 'postgres', true);
-  perform set_config('request.jwt.claims', '', true);
+  perform pg_temp.as_owner();
   delete from public.pull_relations
   where from_pull_id = lineage_id and to_pull_id = mill_id and kind = 'elaborates';
-  perform set_config('role', 'authenticated', true);
-  perform set_config('request.jwt.claims', saved_claims, true);
-  perform pg_temp.assert_is_reader();
+  perform pg_temp.as_reader(saved_claims);
 
   -- ------------------------- 8. the expansion holds no keyword match at all
   --

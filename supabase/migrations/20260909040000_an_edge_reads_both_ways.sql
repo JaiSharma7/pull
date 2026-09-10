@@ -14,10 +14,10 @@
  * this idea" over the idea it grew out of. Today every seeded lineage and counterpull
  * pair is stored in both directions, so the `from` edge wins the tiebreak and the page
  * happens to be right, and the one seeded edge stored one way is `related`, which
- * reads the same from either side; the first one-way `ancestor`, `descendant` or
- * `supports` -- the last has had no writer since 20260908050000 added it, and the
- * pipeline will be the first -- would read backwards, and the only fix would be a
- * label map that lies for the other side.
+ * reads the same from either side; the first one-way `ancestor`, `descendant`,
+ * `elaborates` or `supports` -- the last has had no writer since 20260908050000 added
+ * it, and the pipeline will be the first -- would read backwards, and the only fix
+ * would be a label map that lies for the other side.
  *
  * So the side reaches the client. `direction` is `'from'` when the edge was written
  * from the anchor (the kind describes the neighbour relative to this idea), `'to'`
@@ -168,3 +168,14 @@ $$;
 
 comment on function public.related_pulls(uuid, int) is
   'Authored relation edges first, then nearest stored vectors, deduplicated to one idea per source. Each authored row says which side the anchor is on: direction ''from'' when the edge was written from it (the kind describes the neighbour relative to this idea), ''to'' when it was written from the neighbour, null for a vector neighbour. The neighbour scan is bounded at 200 so a source page does not rank the whole corpus to show six rows, and the answer is bounded at 50 -- ten times what the page asks for, and well short of one row per source in the library.';
+
+-- The convention the two label maps depend on, on the column a writer will look at
+-- rather than only in prose (review finding): `\d+ pull_relations` shows it, and the
+-- pipeline that writes the first one-way edge has it in front of it.
+comment on column public.pull_relations.kind is
+  'Describes the TO pull relative to the FROM pull: from A to B, ''descendant'' means B '
+  'grew out of A, ''ancestor'' means B is what A came from, ''supports'' and '
+  '''elaborates'' mean B supports or elaborates on A, ''opposes'' and ''related'' read '
+  'the same either way. related_pulls reports which side its anchor is on as '
+  'direction; the seed stores lineage and counterpull pairs in both directions with a '
+  'rationale written from each. See 20260909040000.';

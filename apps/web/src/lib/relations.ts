@@ -1,3 +1,5 @@
+import type { RelationKind } from '@wap/schemas';
+
 /**
  * How an authored edge reads to a person, from the side the reader is standing on.
  *
@@ -16,8 +18,15 @@
  */
 export type EdgeDirection = 'from' | 'to';
 
+/*
+ * Keyed by `RelationKind`, so a member added by a migration -- which `enum-parity.ts`
+ * forces into `packages/schemas` in the same commit -- fails typecheck here until it
+ * has a sentence for each side. The lookup below still falls through for a value the
+ * bundle does not know, which is a runtime fact rather than a type: a reader on a
+ * cached bundle can meet a kind the schema learned after they last loaded the app.
+ */
 /** The neighbour, described relative to this idea: the edge was written from here. */
-const FROM_HERE: Record<string, string> = {
+const FROM_HERE: Record<RelationKind, string> = {
   supports: 'Supports this',
   opposes: 'Argues against this',
   elaborates: 'Elaborates on this',
@@ -27,7 +36,7 @@ const FROM_HERE: Record<string, string> = {
 };
 
 /** This idea, described relative to the neighbour: the edge was written from there. */
-const FROM_THERE: Record<string, string> = {
+const FROM_THERE: Record<RelationKind, string> = {
   supports: 'This idea supports it',
   opposes: 'This idea argues against it',
   elaborates: 'This idea elaborates on it',
@@ -44,6 +53,6 @@ const FROM_THERE: Record<string, string> = {
  * the same from either side.
  */
 export function relationLabel(kind: string, direction: EdgeDirection | null): string {
-  const map = direction === 'to' ? FROM_THERE : FROM_HERE;
+  const map: Record<string, string> = direction === 'to' ? FROM_THERE : FROM_HERE;
   return map[kind] ?? kind;
 }
