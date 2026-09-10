@@ -68,6 +68,9 @@ declare
   res_again jsonb;
   related  jsonb;
   found    boolean;
+  -- Section 7b: a one-way edge onto the anchor, and the claims to come back to.
+  lineage_id   uuid;
+  saved_claims text;
 begin
   select p.id into strict mill_id
   from public.pulls p
@@ -476,6 +479,74 @@ begin
       'An edge stored FROM this pull is the one whose sentence describes it.';
   end if;
 
+  -- ------------------------------------ 7b. an edge says which side it was written from
+  --
+  -- `kind` describes the `to` pull relative to the `from` pull, and until
+  -- 20260909040000 the payload dropped the side, so the client read every edge as if
+  -- the anchor were `from` -- inverted for `ancestor` and `descendant` whenever it
+  -- was not. The Mill row above is the edge written FROM Mill, so it must say so; a
+  -- vector neighbour has no side; and an edge that exists only in the other
+  -- direction must come back as `to`, with the rationale written from that side.
+  if not exists (
+    select 1 from jsonb_array_elements(related) r
+    where r ->> 'relation' = 'opposes' and r ->> 'direction' = 'from'
+  ) then
+    raise exception
+      'the edge written from Mill did not say direction = from. The client cannot '
+      'label an edge without knowing which side of it the anchor is on.';
+  end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(related) r
+    where (r ->> 'relation' is null) <> (r ->> 'direction' is null)
+       or (r ->> 'direction') not in ('from', 'to')
+  ) then
+    raise exception
+      'a related row carried a direction without a relation, a relation without a '
+      'direction, or a direction that is neither from nor to.';
+  end if;
+
+  -- A one-way edge FROM the Enchiridion TO Mill: the seed has no edge between them
+  -- in either direction, and the Enchiridion is a third work, so the row can only
+  -- come from this edge and cannot be displaced by the Walden one.
+  saved_claims := current_setting('request.jwt.claims', true);
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+
+  select p.id into strict lineage_id
+  from public.pulls p
+  join public.summaries s on s.id = p.summary_id
+  join public.works w on w.id = s.work_id
+  where w.slug = 'the-enchiridion' and p.headline like 'You are disturbed by your judgement%';
+
+  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight, rationale)
+  values (lineage_id, mill_id, 'elaborates', 0.6, 'Written from the Enchiridion''s side.');
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims', saved_claims, true);
+  perform pg_temp.assert_is_reader();
+
+  if not exists (
+    select 1 from jsonb_array_elements(public.related_pulls(mill_id, 6)) r
+    where (r ->> 'id')::uuid = lineage_id
+      and r ->> 'relation' = 'elaborates'
+      and r ->> 'direction' = 'to'
+      and r ->> 'rationale' = 'Written from the Enchiridion''s side.'
+  ) then
+    raise exception
+      'an edge that exists only from the neighbour did not come back as direction = to '
+      'with that side''s rationale. Read as from, "elaborates" would say the Enchiridion '
+      'elaborates on Mill when the edge says the opposite.';
+  end if;
+
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+  delete from public.pull_relations
+  where from_pull_id = lineage_id and to_pull_id = mill_id and kind = 'elaborates';
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims', saved_claims, true);
+  perform pg_temp.assert_is_reader();
+
   -- ------------------------- 8. the expansion holds no keyword match at all
   --
   -- "Close to these, in other words" is a claim about the rows in it. `near`
@@ -566,7 +637,8 @@ begin
                'lexical and the vector half, is deterministic in results and in '
                'rationale, survives hostile input, never repeats a source, and '
                'never presents a keyword match as something the words missed, '
-               'and clamps a caller-supplied page size at both ends';
+               'and clamps a caller-supplied page size at both ends, and says which '
+               'side of an authored edge the anchor is on';
 end $$;
 
 rollback;
