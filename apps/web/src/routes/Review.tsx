@@ -12,6 +12,8 @@ import { getCurrentUserId } from '../lib/supabase.js';
 import type { DueReview } from '../lib/types.js';
 import {
   formatReviewProgress,
+  mcqOptionMarker,
+  nextSessionTotal,
   resolveActiveQuestion,
   resolveEffectiveKind,
   toActivityQuestion,
@@ -172,18 +174,22 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
             }}
           >
             {mcqChoices.map((opt) => {
-              const isPicked = answered?.pickedOrTyped === opt;
-              const isTargetAnswer = (activeQuestion?.answer ?? '').trim() === opt.trim();
-              const showCorrect = answered !== null && isTargetAnswer;
-              const showIncorrect = answered !== null && isPicked && !answered.correct;
+              /* The word is the signal and the colour agrees with it -- law 5, colour is
+                 never the only signal. Before this the correct option was an oxblood
+                 border and nothing else. */
+              const marker = mcqOptionMarker(
+                opt,
+                activeQuestion?.answer,
+                answered?.pickedOrTyped ?? null,
+              );
 
               let borderColor = 'var(--rule-strong)';
               let textColor = 'var(--text)';
 
-              if (showCorrect) {
+              if (marker === 'Correct answer') {
                 borderColor = 'var(--accent)';
                 textColor = 'var(--accent)';
-              } else if (showIncorrect) {
+              } else if (marker === 'Your answer') {
                 borderColor = 'var(--rule)';
                 textColor = 'var(--text-muted)';
               }
@@ -193,8 +199,16 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                   key={opt}
                   type="button"
                   className="btn"
-                  disabled={answered !== null || grading}
+                  /* `aria-disabled`, not `disabled`: a disabled button is painted at
+                     45% opacity, which put the verdict word -- the one thing that names
+                     the right option for a wrong pick -- below the contrast floor
+                     `docs/design.md` sets for every text role. The handler refuses. */
+                  aria-disabled={answered !== null || grading}
                   style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                    gap: 'var(--space-3)',
                     textAlign: 'left',
                     textTransform: 'none',
                     letterSpacing: 'normal',
@@ -205,6 +219,7 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                     color: textColor,
                   }}
                   onClick={() => {
+                    if (answered !== null || grading) return;
                     const latencyMs = elapsedSince(displayedAtRef.current);
                     const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
                     const reason = whyWrong(activityQ!, opt);
@@ -218,7 +233,8 @@ function ActiveReviewCard({ card, grading, onGrade }: ActiveReviewCardProps) {
                     });
                   }}
                 >
-                  {opt}
+                  <span>{opt}</span>
+                  {marker ? <span className="meta">{marker}</span> : null}
                 </button>
               );
             })}
@@ -531,8 +547,34 @@ export function Review() {
   const graded = useRef<Set<string>>(new Set());
   const [reloads, setReloads] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
+  /* How many of those answers are waiting on this device rather than on the server.
+     The offline notice is phrased from this number, not from answeredCount: a grade
+     that went through before the connection dropped is already saved, and saying it
+     is "kept on this device" would be false. */
+  const [queuedCount, setQueuedCount] = useState(0);
   const [sessionTotal, setSessionTotal] = useState<number | null>(null);
 
+  /*
+   * ONE FETCH PER PAGE, NOT PER ANSWER.
+   *
+   * This effect used to depend on `answeredCount` as well, so every graded card refired
+   * it and called `fetchDueReviews` again -- and offline, the catch set `error`, whose
+   * branch below replaces every card already on screen. An offline review session
+   * therefore ended after exactly one answer, which defeats the grade queue (1b) at
+   * the one moment it exists for. (The downloaded pack, 4a, has no reader here yet:
+   * `fetchDueReviews` goes straight to the RPC, so a page used up offline still ends
+   * on the error screen. Practising from the pack is 4b, still to come.)
+   *
+   * Now a page is fetched when the screen opens and again only when the page is used
+   * up (`grade` bumps `reloads` when the last card goes). Every card in between is
+   * answered from what is already here, and a grade the network loses is queued by
+   * `grade` rather than surfaced as a broken screen.
+   *
+   * The session total is decided at the same moments, which is what keeps "1 of 20"
+   * honest (law 7): it never moves while the reader is inside a page. When a further
+   * page arrives the total grows by that page -- everything before it has been
+   * answered -- so the count goes from "20 of 20" to "21 of 25", never "2 of 21".
+   */
   useEffect(() => {
     let cancelled = false;
     const userId = getCurrentUserId();
@@ -546,9 +588,7 @@ export function Review() {
           (row) => !graded.current.has(row.pullId) && !(queuedFor?.has(row.pullId) ?? false),
         );
         setDue(filtered);
-        setSessionTotal((prev) =>
-          prev === null ? filtered.length : Math.max(prev, filtered.length + answeredCount),
-        );
+        setSessionTotal((prev) => nextSessionTotal(prev, filtered.length));
         setOffline(false);
       })
       .catch((e: unknown) => {
@@ -560,13 +600,14 @@ export function Review() {
     return () => {
       cancelled = true;
     };
-  }, [reloads, answeredCount]);
+  }, [reloads]);
 
+  /* Try again fetches the next page; it does not start the session over. The error
+     screen is only reachable before the first page or at a boundary, so what was
+     answered is real progress and the count must survive the retry. */
   const retry = useCallback(() => {
     setError(null);
     setDue(null);
-    setAnsweredCount(0);
-    setSessionTotal(null);
     setReloads((n) => n + 1);
   }, []);
 
@@ -598,6 +639,22 @@ export function Review() {
               ? 'Something went wrong reaching your review schedule.'
               : 'Something went wrong reaching your review schedule. Nothing has been lost.'}
         </p>
+        {/* Only reachable at a page boundary now, so anything answered before it is
+            already saved or already queued -- and worth saying which, because the
+            screen above this sentence has just been replaced. */}
+        {offline && answeredCount > 0 && !lostGrade && !signedOut ? (
+          <p className="meta" role="status">
+            {/* Past tense on purpose (review finding): the feed stays mounted and
+                drains the queue whenever the connection returns, so by the time this
+                sentence shows some of what was queued may already have gone. What was
+                queued is a fact; where it is now is not one this screen knows. */}
+            {queuedCount === 0
+              ? `Everything you answered (${answeredCount}) was saved before the connection dropped.`
+              : queuedCount === answeredCount
+                ? `What you answered (${answeredCount}) was queued on this device to send when you are back.`
+                : `${answeredCount - queuedCount} of the ${answeredCount} you answered were saved; ${queuedCount} ${queuedCount === 1 ? 'was' : 'were'} queued on this device to send when you are back.`}
+          </p>
+        ) : null}
         <p className="meta">{error}</p>
         <button type="button" className="btn btn--primary" onClick={retry}>
           Try again
@@ -684,7 +741,9 @@ export function Review() {
           e,
         ));
 
-      if (!queued) {
+      if (queued) {
+        setQueuedCount((n) => n + 1);
+      } else {
         setLostGrade(true);
         if (userId === null) setSignedOut(true);
         console.error('Recall grade was not recorded', e);

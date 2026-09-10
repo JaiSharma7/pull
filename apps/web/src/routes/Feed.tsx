@@ -13,6 +13,7 @@ import {
   readCachedPulls,
 } from '../lib/offline.js';
 import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
+import { IN_VIEW_THRESHOLDS, isGenuinelyInView } from '../lib/in-view.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
@@ -999,10 +1000,19 @@ function PullCardInView({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let fired = false;
 
+    /*
+     * The same definition of "on screen" as the interrupt's clock (`lib/in-view.ts`),
+     * and for the same reason: a single threshold of 0.6 is unreachable for any card
+     * taller than 1.67x the viewport, so on a phone a long card scrolled through
+     * never started the dwell timer, never fired `onRead`, and left no history row
+     * and no knowledge state. Six tenths of the card, or six tenths of the viewport,
+     * whichever comes first; the dense threshold schedule is what makes the second
+     * rule observable.
+     */
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (e.isIntersecting) {
+          if (isGenuinelyInView(e, 0.6)) {
             if (!fired && timer === undefined) {
               timer = setTimeout(() => {
                 fired = true;
@@ -1017,7 +1027,7 @@ function PullCardInView({
           onVisible(e.isIntersecting);
         }
       },
-      { threshold: 0.6 },
+      { threshold: [...IN_VIEW_THRESHOLDS] },
     );
     io.observe(el);
     return () => {
