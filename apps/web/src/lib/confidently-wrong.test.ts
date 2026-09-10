@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dedupeConfidentlyWrong,
   formatAttemptDate,
+  newestFirst,
   parseConfidentlyWrongRows,
   type ConfidentlyWrongItem,
 } from './confidently-wrong.js';
@@ -112,6 +113,28 @@ describe('confidently-wrong', () => {
       expect(result).toHaveLength(1);
       expect(result[0]!.headline).toBe('A headline');
       expect(result[0]!.workTitle).toBe('Unknown source');
+    });
+  });
+
+  describe('newestFirst', () => {
+    it('orders by applied_at descending, then by id, whatever order the walk returned', () => {
+      const item = (id: string, appliedAt: string): ConfidentlyWrongItem => ({
+        id,
+        pullId: `pull-${id}`,
+        appliedAt,
+        headline: 'H',
+        workTitle: 'W',
+      });
+      const walked = [
+        item('b', '2026-09-07T00:00:00+00:00'),
+        item('c', '2026-09-08T00:00:00.5+00:00'),
+        item('a', '2026-09-08T00:00:00.5+00:00'),
+        item('d', '2026-09-08T00:00:00+00:00'),
+      ];
+
+      expect(newestFirst(walked).map((i) => i.id)).toEqual(['a', 'c', 'd', 'b']);
+      // And the input is left alone.
+      expect(walked.map((i) => i.id)).toEqual(['b', 'c', 'a', 'd']);
     });
   });
 

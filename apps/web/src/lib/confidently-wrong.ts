@@ -73,7 +73,19 @@ export function parseConfidentlyWrongRows(rows: unknown[]): ConfidentlyWrongItem
 }
 
 /**
- * Keeps the most recent event for each distinct pull_id.
+ * Newest first, then by id, so two events in the same instant keep a fixed order.
+ * Pure. The API walks `recall_events` keyed on `id`, which is a uuid and so in no
+ * useful order; this is where the list becomes a list.
+ */
+export function newestFirst(items: ConfidentlyWrongItem[]): ConfidentlyWrongItem[] {
+  return [...items].sort(
+    (a, b) => Date.parse(b.appliedAt) - Date.parse(a.appliedAt) || a.id.localeCompare(b.id),
+  );
+}
+
+/**
+ * Keeps the first event for each distinct pull_id -- the most recent, once the list
+ * has been through `newestFirst`.
  * Pure function.
  */
 export function dedupeConfidentlyWrong(items: ConfidentlyWrongItem[]): ConfidentlyWrongItem[] {
