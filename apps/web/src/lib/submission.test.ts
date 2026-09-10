@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mutationId, nextSubmissionStamp } from './submission.js';
+import { draftSubmissions, mutationId, nextSubmissionStamp } from './submission.js';
 
 describe('submission stamps', () => {
   it('never repeats, even when the clock does not move', () => {
@@ -82,5 +82,64 @@ describe('mutationId', () => {
     for (const value of [undefined, {}, { randomUUID: null }]) {
       expect(() => withCrypto(value, () => mutationId())).not.toThrow();
     }
+  });
+});
+
+describe('draftSubmissions', () => {
+  it('gives the same draft the same id and the same stamp on every attempt', () => {
+    let minted = 0;
+    let stamped = 0;
+    const submissionFor = draftSubmissions(
+      () => `id-${++minted}`,
+      () => 1_000 + ++stamped,
+    );
+
+    expect(submissionFor('step 2:agree')).toEqual({ mutationId: 'id-1', submittedAt: 1_001 });
+    // A retry after a lost response: same draft, same id, same stamp, nothing new
+    // minted. A fresh stamp here would tell the server the reader decided later than
+    // they did, and could supersede a newer stance from another tab.
+    expect(submissionFor('step 2:agree')).toEqual({ mutationId: 'id-1', submittedAt: 1_001 });
+    expect(minted).toBe(1);
+    expect(stamped).toBe(1);
+  });
+
+  it('gives an edited draft a fresh id and a fresh stamp', () => {
+    let minted = 0;
+    let stamped = 0;
+    const submissionFor = draftSubmissions(
+      () => `id-${++minted}`,
+      () => 1_000 + ++stamped,
+    );
+
+    expect(submissionFor('step 4:first wording').mutationId).toBe('id-1');
+    // An edit is a different submission. Under the old id the server would answer
+    // with the first wording and silently discard this one.
+    expect(submissionFor('step 4:second wording')).toEqual({
+      mutationId: 'id-2',
+      submittedAt: 1_002,
+    });
+  });
+
+  it('remembers a draft sent earlier, with other drafts in between', () => {
+    let minted = 0;
+    const submissionFor = draftSubmissions(
+      () => `id-${++minted}`,
+      () => 0,
+    );
+    const a = submissionFor('step 4:A');
+    submissionFor('step 4:B');
+    // A → B → A is A sent again. Holding only the last draft minted A a third id, and
+    // a second explanation row under it.
+    expect(submissionFor('step 4:A')).toBe(a);
+    expect(minted).toBe(2);
+  });
+
+  it('mints real uuids and real stamps by default', () => {
+    const submissionFor = draftSubmissions();
+    const s = submissionFor('x');
+    expect(s.mutationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(s.submittedAt).toBeGreaterThan(0);
   });
 });

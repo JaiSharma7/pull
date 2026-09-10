@@ -10,8 +10,9 @@ import {
   testOut,
 } from '../lib/paths-api.js';
 import { saveExplanation, setConviction } from '../lib/api.js';
-import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
-import { recognitionSupported, startRecognition } from '../lib/speech.js';
+import { draftSubmissions } from '../lib/submission.js';
+import { useDictation } from '../lib/use-dictation.js';
+import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
 export interface PathProps {
@@ -21,6 +22,9 @@ export interface PathProps {
   onTitle?: (title: string | null) => void;
   onGoToReview?: () => void;
 }
+
+const REFRESH_FAILED =
+  'That was saved, but the path could not be refreshed. Try again to carry on.';
 
 export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathProps) {
   const [path, setPath] = useState<PathDetail | null>(null);
@@ -38,12 +42,65 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const [predictRevealed, setPredictRevealed] = useState(false);
 
   const [compareStance, setCompareStance] = useState<'agree' | 'disagree' | 'unsure' | null>(null);
+  /*
+   * Which DECISION the stance is, not only which stance (review finding). A draft's
+   * submission stamp is fixed so a retry cannot claim the reader decided later than
+   * they did -- but a stance the reader comes BACK to after choosing another is a new
+   * decision, and `set_conviction` orders decisions by their stamps: sent under the
+   * first attempt's older stamp it would lose to the stance chosen in between, and the
+   * path would move on with the wrong one on record. Changing the selection bumps the
+   * epoch, so the same stance re-chosen is a fresh draft; a retry without changing it
+   * is not.
+   */
+  const [stanceEpoch, setStanceEpoch] = useState(0);
+  const chooseStance = (stance: 'agree' | 'disagree' | 'unsure') => {
+    if (stance !== compareStance) setStanceEpoch((epoch) => epoch + 1);
+    setCompareStance(stance);
+  };
 
   const [sayItBackText, setSayItBackText] = useState('');
-  const [sayItBackListening, setSayItBackListening] = useState(false);
-  const [sayItBackInterim, setSayItBackInterim] = useState('');
+  /*
+   * The microphone, the interim preview and the reason it stopped, from the one hook
+   * `Interrupt.tsx` also uses. The first version of this screen copied that file's
+   * apparatus by hand and got it wrong: it returned the engine's teardown from a click
+   * handler, which React discards, so Stop, advancing the step and leaving the route
+   * all left a continuous recognition session live. See `lib/use-dictation.ts`.
+   */
+  const dictation = useDictation((text) =>
+    setSayItBackText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim())),
+  );
 
   const [applyText, setApplyText] = useState('');
+  /* Per action, not per screen: a step that could not be saved says so under its own
+     button and leaves the rest of the path standing. */
+  const [stepError, setStepError] = useState<string | null>(null);
+  /*
+   * A step whose writes landed but whose refetch did not (review finding). "Try again"
+   * on that step must only refetch: re-sending would carry any edit the reader made in
+   * the meantime under a fresh draft, and `apply_path_step` would write a second note
+   * for a step that is already done.
+   */
+  const [landedOrdinal, setLandedOrdinal] = useState<number | null>(null);
+
+  /*
+   * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
+   *
+   * `completeStep` minted a fresh id inside the handler on every click, and its catch
+   * only logged -- so a lost response followed by a second click wrote a second
+   * conviction, a second explanation or a second note, each keyed on an id the server
+   * had never seen. `set_conviction`, `explanations` and `apply_path_step` all
+   * deduplicate on the id, which is only worth anything if a retry carries the same one.
+   *
+   * `draftSubmissions` keys the id AND the submission stamp by (path, step, content),
+   * so the same draft gets the same pair however many times it is sent and an edited
+   * one gets a fresh pair -- with nothing to clear, which is the shape that has gone
+   * wrong here before. The stamp rides with the id because `set_conviction` orders
+   * stances by it: a retry with a fresh stamp would claim the reader decided later
+   * than they did and could supersede a newer stance from another tab. Lazily
+   * initialised state rather than a ref so the closure is built once and never read
+   * off `.current` during render.
+   */
+  const [submissionFor] = useState(() => draftSubmissions());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,7 +129,13 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
     };
   }, [slug, attempt, onTitle]);
 
-  const reloadPath = async () => {
+  /*
+   * Whether the refetch landed. A caller that has just written something must know:
+   * the first version swallowed the failure here, so a step that was saved and then
+   * could not be re-read left the reader on the same step with the field already
+   * cleared, the button disabled and nothing said (review finding).
+   */
+  const reloadPath = async (): Promise<boolean> => {
     try {
       const refreshed = await fetchPath(slug);
       if (refreshed) {
@@ -80,23 +143,42 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         const next = nextUndone(refreshed.steps);
         setActiveOrdinal(next ? next.ordinal : null);
       }
+      return true;
     } catch (e) {
       console.error('Failed to refresh path', e);
+      return false;
     }
   };
+
+  /*
+   * Dictation ends when the active step changes, and only then. Stopping it on every
+   * refetch killed a live microphone under Pause, Resume and a Test out that tested
+   * nothing out -- none of which move the step, all of which left the field on screen
+   * with the button flipped back to Dictate and no explanation (review finding).
+   */
+  const { stop: stopDictation } = dictation;
+  useEffect(() => {
+    stopDictation();
+  }, [activeOrdinal, stopDictation]);
 
   const handlePauseToggle = async () => {
     if (!path || inFlight || !userId) return;
     setInFlight(true);
+    setStepError(null);
     try {
       if (path.pausedAt) {
         await resumePath(path.id);
       } else {
         await pausePath(path.id);
       }
-      await reloadPath();
+      if (!(await reloadPath())) setStepError(REFRESH_FAILED);
     } catch (e) {
       console.error('Failed to toggle path pause', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline; the path could not be paused or resumed.'
+          : 'The path could not be paused or resumed. Try again.',
+      );
     } finally {
       setInFlight(false);
     }
@@ -105,11 +187,17 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   const handleTestOut = async () => {
     if (!path || inFlight || !userId) return;
     setInFlight(true);
+    setStepError(null);
     try {
       await testOut(path.id);
-      await reloadPath();
+      if (!(await reloadPath())) setStepError(REFRESH_FAILED);
     } catch (e) {
       console.error('Failed to test out of path', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline; nothing could be tested out of.'
+          : 'Testing out did not go through. Try again.',
+      );
     } finally {
       setInFlight(false);
     }
@@ -121,29 +209,62 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       onNavigate('/');
       return;
     }
+    // A submission ends dictation before the text is read, so nothing heard after the
+    // click lands in what is sent.
+    dictation.stop();
     setInFlight(true);
+    setStepError(null);
+    const draftKey = (content: string) => `${path.id}:${step.ordinal}:${step.kind}:${content}`;
     try {
+      if (landedOrdinal === step.ordinal) {
+        // Already written; only the screen is behind.
+        if (!(await reloadPath())) {
+          setStepError(REFRESH_FAILED);
+          return;
+        }
+        setLandedOrdinal(null);
+        setPrediction('');
+        setPredictRevealed(false);
+        setCompareStance(null);
+        setSayItBackText('');
+        setApplyText('');
+        return;
+      }
+
       if (step.kind === 'read') {
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'predict') {
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'compare') {
         if (compareStance) {
-          const mId = mutationId();
-          const stamp = nextSubmissionStamp();
-          await setConviction(step.pull.id, compareStance, mId, stamp);
+          const { mutationId, submittedAt } = submissionFor(
+            draftKey(`${compareStance}#${stanceEpoch}`),
+          );
+          await setConviction(step.pull.id, compareStance, mutationId, submittedAt);
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'say_it_back') {
-        if (sayItBackText.trim()) {
-          const mId = mutationId();
-          await saveExplanation(userId, step.pull.id, sayItBackText.trim(), mId);
+        const text = sayItBackText.trim();
+        if (text) {
+          const { mutationId } = submissionFor(draftKey(text));
+          await saveExplanation(userId, step.pull.id, text, mutationId);
         }
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'apply') {
-        const mId = mutationId();
-        await applyStep(path.id, step.ordinal, applyText.trim(), mId);
+        const text = applyText.trim();
+        const { mutationId } = submissionFor(draftKey(text));
+        await applyStep(path.id, step.ordinal, text, mutationId);
       }
+
+      // The step is saved; the screen has to catch up before the draft goes. If the
+      // refetch fails the words stay in the field and the button stays live, and the
+      // retry refetches without re-sending.
+      setLandedOrdinal(step.ordinal);
+      if (!(await reloadPath())) {
+        setStepError(REFRESH_FAILED);
+        return;
+      }
+      setLandedOrdinal(null);
 
       // Reset step-local interaction state
       setPrediction('');
@@ -151,38 +272,16 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       setCompareStance(null);
       setSayItBackText('');
       setApplyText('');
-
-      await reloadPath();
     } catch (e) {
       console.error('Failed to advance step', e);
+      setStepError(
+        isOfflineFailure(e)
+          ? 'You appear to be offline. Your words are still here; try again when you are back.'
+          : 'That step could not be saved. Nothing was lost; try again.',
+      );
     } finally {
       setInFlight(false);
     }
-  };
-
-  const toggleSayItBackDictation = () => {
-    if (sayItBackListening) {
-      setSayItBackListening(false);
-      setSayItBackInterim('');
-      return;
-    }
-
-    const teardown = startRecognition({
-      onResult: (text) =>
-        setSayItBackText((prev) => (prev ? `${prev} ${text.trim()}` : text.trim())),
-      onInterim: setSayItBackInterim,
-      onEnd: () => {
-        setSayItBackListening(false);
-        setSayItBackInterim('');
-      },
-      onError: () => {
-        setSayItBackListening(false);
-        setSayItBackInterim('');
-      },
-    });
-
-    setSayItBackListening(true);
-    return teardown;
   };
 
   if (error) {
@@ -233,9 +332,41 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   }
 
   const totalSteps = path.steps.length;
+  // Ideas, not steps: a path may put one pull on two steps (predict, then compare), and
+  // the schedule holds the idea once.
+  const ideaCount = new Set(path.steps.map((s) => s.pull.id)).size;
+  const applied = path.steps.some((s) => s.kind === 'apply' && s.done && !s.testedOut);
   const isCompleted = path.completedAt !== null || activeOrdinal === null;
   const currentStep =
     activeOrdinal !== null ? (path.steps.find((s) => s.ordinal === activeOrdinal) ?? null) : null;
+
+  /*
+   * No readable step at all -- every step is behind a summary this reader cannot see,
+   * or a summary was withdrawn after publication. `get_path` withholds `completedAt`
+   * here on purpose, and `nextUndone([])` is null, so without this branch the
+   * completion screen rendered over zero ideas and said they were all in Review.
+   */
+  if (totalSteps === 0) {
+    return (
+      <section className="stack measure" style={{ padding: 'var(--space-6)' }}>
+        <div className="path__nav-bar">
+          <button
+            type="button"
+            className="btn btn--plain meta"
+            onClick={() => onNavigate('/paths')}
+          >
+            ← All paths
+          </button>
+        </div>
+        <p className="meta">Learning Path</p>
+        <h1 className="path__title">{path.title}</h1>
+        <p>
+          Nothing on this path is readable to you yet. Its steps point at sources that are not
+          published, or not published to you.
+        </p>
+      </section>
+    );
+  }
 
   // Render Completion Screen if path is completed or no active undone step
   if (isCompleted || !currentStep) {
@@ -256,14 +387,29 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         <h1 className="display">{path.title}</h1>
         <p className="path__question">{path.question}</p>
 
+        {/*
+          True since 20260909010000, and only as far as it says. Every step a reader
+          advances puts its idea into `knowledge_states`, and a step tested out of was
+          there already -- so "all N" holds. The three-day sentence is the apply step's
+          alone, and only when the reader actually applied it rather than testing out.
+        */}
         <div className="path__recap-card">
           <p className="meta" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-            Rotation updated
+            In your review schedule
           </p>
           <p>
-            All <strong>{totalSteps} ideas</strong> in this progression have been integrated into
-            your metacognitive review schedule. Ideas with applications will resurface within three
-            days to test your practical retention.
+            {ideaCount === 1 ? (
+              <>
+                The <strong>one idea</strong> on this path is in your review schedule now, and will
+                come round as it starts to fade.
+              </>
+            ) : (
+              <>
+                All <strong>{ideaCount} ideas</strong> on this path are in your review schedule now,
+                and will come round as they start to fade.
+              </>
+            )}
+            {applied ? ' The one you applied will come round within three days.' : ''}
           </p>
         </div>
 
@@ -448,21 +594,21 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               <button
                 type="button"
                 className={`btn ${compareStance === 'agree' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('agree')}
+                onClick={() => chooseStance('agree')}
               >
                 Agree
               </button>
               <button
                 type="button"
                 className={`btn ${compareStance === 'disagree' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('disagree')}
+                onClick={() => chooseStance('disagree')}
               >
                 Disagree
               </button>
               <button
                 type="button"
                 className={`btn ${compareStance === 'unsure' ? 'btn--primary' : ''}`}
-                onClick={() => setCompareStance('unsure')}
+                onClick={() => chooseStance('unsure')}
               >
                 Unsure
               </button>
@@ -495,14 +641,14 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               <label className="field__label" htmlFor="say-it-back-input">
                 In your own words
               </label>
-              {recognitionSupported() && (
+              {dictation.supported && (
                 <button
                   type="button"
                   className="btn btn--plain meta"
                   style={{ textDecoration: 'underline' }}
-                  onClick={toggleSayItBackDictation}
+                  onClick={dictation.toggle}
                 >
-                  {sayItBackListening ? 'Stop' : 'Dictate'}
+                  {dictation.listening ? 'Stop' : 'Dictate'}
                 </button>
               )}
             </div>
@@ -514,11 +660,17 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
               onChange={(e) => setSayItBackText(e.target.value)}
               placeholder="State the core insight and its boundaries in your own words..."
             />
-            {sayItBackInterim && (
-              <p className="meta" aria-live="polite">
-                {sayItBackInterim}
+            {/* Always mounted: a live region inserted at the same moment as its text is
+                usually not announced at all, because there was no region to observe. */}
+            <p className="meta" aria-live="polite">
+              {dictation.listening ? dictation.interim || 'Listening…' : ''}
+            </p>
+            {dictation.error ? (
+              <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
+                {dictation.error}
               </p>
-            )}
+            ) : null}
+            {dictation.supported ? <p className="meta">{DICTATION_DISCLOSURE}</p> : null}
           </div>
 
           <div className="path__step-actions">
@@ -547,6 +699,9 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
             <textarea
               id="apply-input"
               className="field__textarea"
+              // `notes_body_length` refuses more, and `apply_path_step` refuses it
+              // before writing; the field says so first.
+              maxLength={20000}
               value={applyText}
               onChange={(e) => setApplyText(e.target.value)}
               placeholder="Name a concrete situation, choice, or friction from your own week where this applies..."
@@ -569,6 +724,14 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
           </div>
         </div>
       )}
+
+      {/* Under whichever step is showing. The catch used to log and say nothing, so a
+          reader whose save failed watched the button re-enable and had to guess. */}
+      {stepError ? (
+        <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
+          {stepError}
+        </p>
+      ) : null}
     </main>
   );
 }
