@@ -15,11 +15,31 @@
 -- The subquery runs under the caller's own RLS on `pulls`, so a pull they cannot see
 -- yields no row and the check fails. `summary_id` gets the same leg against `summaries`
 -- for the same reason. Both are `is null or exists`, because a note may name either, or
--- neither -- a free-standing note is still a note.
+-- neither -- a free-standing note is still a note. The columns are written `notes.pull_id`
+-- rather than bare, so the leg cannot be captured by a column of the same name should
+-- one ever be added to the table it looks up.
 --
 -- THE UPDATE HALF TOO, for the reason 20260905110000 gave about questions: an insert
 -- guard alone is one statement from useless -- insert the note against a readable pull,
--- then move it. `notes_update_own` repeats both legs in its `with check`.
+-- then move it. But the update half cannot live in `notes_update_own`. A policy's
+-- `with check` sees only the row as it will be, so a readability leg there would refuse
+-- EVERY edit to a note whose pull has since stopped being readable -- the summary
+-- withdrawn, the import undone, a shared summary made private -- and a reader who can
+-- no longer read the idea could no longer fix a typo in, or unpublish, what they wrote
+-- about it. The note was true when it was written. What must not happen is its being
+-- MOVED onto something unreadable, and that is a comparison of old and new, which only
+-- a trigger can make. `notes_keep_readable` fires before an update of `pull_id` or
+-- `summary_id` and refuses -- 42501, the code the policy would have raised -- when the
+-- new target differs from the old and the caller cannot read it. Clearing either column
+-- is always allowed, and setting a column to the value it already has is not a move.
+--
+-- The trigger function is `security invoker`, so its subqueries run under the caller's
+-- own RLS on `pulls` and `summaries`, exactly as the insert policy's do, and it pins
+-- `search_path` for the reason every function here does. Its execute right is revoked
+-- as `set_updated_at`'s was in 20260829124835: a trigger fires without it, and nothing
+-- else should be able to call the function at all. `notes_update_own` itself keeps the
+-- shape 20260901190000 gave it -- owner and guest legs -- and only its comment changes,
+-- to say where the other half now lives.
 --
 -- `apply_path_step` is the other writer of `notes`, and it is `security definer`, so no
 -- policy applies to it. It selects the step's pull through `summary_is_readable` before
@@ -28,8 +48,14 @@
 -- rather than writes.
 --
 -- Invariant 5 (no two permissive policies overlapping on SELECT) is untouched: this
--- file redefines the INSERT and UPDATE policies only, and `notes_read` remains the one
--- SELECT policy on the table.
+-- file redefines the INSERT policy only, and `notes_read` remains the one SELECT policy
+-- on the table.
+--
+-- `highlights_own`, `saved_items_own` and `history_events_own` (20260829124730) have
+-- the same shape and the same hole, and are written by the client too. They are not
+-- fixed here: each is `for all`, so each needs the same split into an insert leg and a
+-- trigger, and `history_events` is written on every read, which makes the cost of the
+-- subquery on that path a decision of its own rather than a line in this file.
 -- -----------------------------------------------------------------------------
 
 drop policy if exists notes_insert_own on public.notes;
@@ -38,22 +64,46 @@ create policy notes_insert_own on public.notes
   with check (
     (select auth.uid()) = user_id
     and (visibility <> 'public' or not (select public.is_guest()))
-    and (pull_id is null or exists (select 1 from public.pulls p where p.id = pull_id))
-    and (summary_id is null
-         or exists (select 1 from public.summaries s where s.id = summary_id))
+    and (notes.pull_id is null
+         or exists (select 1 from public.pulls p where p.id = notes.pull_id))
+    and (notes.summary_id is null
+         or exists (select 1 from public.summaries s where s.id = notes.summary_id))
   );
 
-drop policy if exists notes_update_own on public.notes;
-create policy notes_update_own on public.notes
-  for update
-  using ((select auth.uid()) = user_id)
-  with check (
-    (select auth.uid()) = user_id
-    and (visibility <> 'public' or not (select public.is_guest()))
-    and (pull_id is null or exists (select 1 from public.pulls p where p.id = pull_id))
-    and (summary_id is null
-         or exists (select 1 from public.summaries s where s.id = summary_id))
-  );
+create or replace function public.notes_keep_readable()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.pull_id is not null
+     and new.pull_id is distinct from old.pull_id
+     and not exists (select 1 from public.pulls p where p.id = new.pull_id) then
+    raise insufficient_privilege using
+      message = 'A note can be moved only onto a pull you can read.';
+  end if;
+
+  if new.summary_id is not null
+     and new.summary_id is distinct from old.summary_id
+     and not exists (select 1 from public.summaries s where s.id = new.summary_id) then
+    raise insufficient_privilege using
+      message = 'A note can be moved only onto a summary you can read.';
+  end if;
+
+  return new;
+end $$;
+
+revoke all on function public.notes_keep_readable() from anon, authenticated, public;
+
+drop trigger if exists notes_keep_readable on public.notes;
+create trigger notes_keep_readable
+  before update of pull_id, summary_id on public.notes
+  for each row execute function public.notes_keep_readable();
+
+comment on function public.notes_keep_readable() is
+  'Before a note is moved: the new pull or summary must be readable by the caller under '
+  'their own RLS. Old and new are compared here because a policy cannot see both, and a '
+  'note whose pull has since become unreadable must stay editable. See 20260909020000.';
 
 comment on policy notes_insert_own on public.notes is
   'A reader may write their own note, against a pull or summary they can read. A guest '
@@ -61,5 +111,7 @@ comment on policy notes_insert_own on public.notes is
   'See 20260901190000 and 20260909020000.';
 
 comment on policy notes_update_own on public.notes is
-  'A reader may edit their own note, and may not move it onto a pull or summary they '
-  'cannot read, nor publish it as a guest. See 20260909020000.';
+  'A reader may edit their own note, and may not publish it as a guest. Moving it onto '
+  'a pull or summary they cannot read is refused by the notes_keep_readable trigger, '
+  'not here, so that a note outlives the readability of what it was written about. '
+  'See 20260901190000 and 20260909020000.';
