@@ -23,6 +23,9 @@ export interface PathProps {
   onGoToReview?: () => void;
 }
 
+const REFRESH_FAILED =
+  'That was saved, but the path could not be refreshed. Try again to carry on.';
+
 export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathProps) {
   const [path, setPath] = useState<PathDetail | null>(null);
   const [settled, setSettled] = useState(false);
@@ -71,6 +74,13 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
   /* Per action, not per screen: a step that could not be saved says so under its own
      button and leaves the rest of the path standing. */
   const [stepError, setStepError] = useState<string | null>(null);
+  /*
+   * A step whose writes landed but whose refetch did not (review finding). "Try again"
+   * on that step must only refetch: re-sending would carry any edit the reader made in
+   * the meantime under a fresh draft, and `apply_path_step` would write a second note
+   * for a step that is already done.
+   */
+  const [landedOrdinal, setLandedOrdinal] = useState<number | null>(null);
 
   /*
    * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
@@ -146,12 +156,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
    * nothing out -- none of which move the step, all of which left the field on screen
    * with the button flipped back to Dictate and no explanation (review finding).
    */
+  const { stop: stopDictation } = dictation;
   useEffect(() => {
-    dictation.stop();
-  }, [activeOrdinal, dictation.stop]);
-
-  const REFRESH_FAILED =
-    'That was saved, but the path could not be refreshed. Try again to carry on.';
+    stopDictation();
+  }, [activeOrdinal, stopDictation]);
 
   const handlePauseToggle = async () => {
     if (!path || inFlight || !userId) return;
@@ -208,6 +216,21 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
     setStepError(null);
     const draftKey = (content: string) => `${path.id}:${step.ordinal}:${step.kind}:${content}`;
     try {
+      if (landedOrdinal === step.ordinal) {
+        // Already written; only the screen is behind.
+        if (!(await reloadPath())) {
+          setStepError(REFRESH_FAILED);
+          return;
+        }
+        setLandedOrdinal(null);
+        setPrediction('');
+        setPredictRevealed(false);
+        setCompareStance(null);
+        setSayItBackText('');
+        setApplyText('');
+        return;
+      }
+
       if (step.kind === 'read') {
         await advanceStep(path.id, step.ordinal);
       } else if (step.kind === 'predict') {
@@ -235,11 +258,13 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
 
       // The step is saved; the screen has to catch up before the draft goes. If the
       // refetch fails the words stay in the field and the button stays live, and the
-      // retry replays every write under the same ids.
+      // retry refetches without re-sending.
+      setLandedOrdinal(step.ordinal);
       if (!(await reloadPath())) {
         setStepError(REFRESH_FAILED);
         return;
       }
+      setLandedOrdinal(null);
 
       // Reset step-local interaction state
       setPrediction('');

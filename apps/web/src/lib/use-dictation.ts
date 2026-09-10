@@ -37,6 +37,14 @@ export function useDictation(onText: (text: string) => void): Dictation {
   const [interim, setInterim] = useState('');
   const [error, setError] = useState<string | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
+  /*
+   * Which engine's events are current (review finding). An engine that has errored
+   * still delivers a trailing `end`, and a reader who clicks Dictate in that gap
+   * starts a second engine -- whose teardown the late `end` would then have cleared
+   * from the ref, leaving the microphone live with no Stop, submit or unmount able to
+   * reach it. Every start takes a new generation; an event from any other is ignored.
+   */
+  const generation = useRef(0);
   const onTextRef = useRef(onText);
 
   useEffect(() => {
@@ -50,6 +58,11 @@ export function useDictation(onText: (text: string) => void): Dictation {
   }, []);
 
   const stop = useCallback(() => {
+    generation.current += 1;
+    // A failure said under one field must not survive into the next: the path screen
+    // keeps one hook across its steps, and a stale role="alert" under a later step
+    // would announce a failure the reader never had there (review finding).
+    setError(null);
     if (stopRef.current === null) return;
     stopRef.current();
     stopRef.current = null;
@@ -64,21 +77,31 @@ export function useDictation(onText: (text: string) => void): Dictation {
     }
     let failed = false;
     setError(null);
-    const teardown = startRecognition({
-      onResult: (text) => onTextRef.current(text),
-      onInterim: setInterim,
-      onEnd: () => {
-        stopRef.current = null;
-        setListening(false);
-        setInterim('');
+    const mine = ++generation.current;
+    let teardown: (() => void) | null = null;
+    const ended = () => {
+      if (generation.current !== mine) return;
+      stopRef.current = null;
+      setListening(false);
+      setInterim('');
+    };
+    teardown = startRecognition({
+      onResult: (text) => {
+        if (generation.current === mine) onTextRef.current(text);
       },
+      onInterim: (text) => {
+        if (generation.current === mine) setInterim(text);
+      },
+      onEnd: ended,
       onError: (err) => {
         failed = true;
-        stopRef.current = null;
-        setListening(false);
-        setInterim('');
+        ended();
+        // Detach the failed engine's handlers now rather than at its trailing `end`,
+        // so nothing it says afterwards reaches this hook. Null on the synchronous
+        // path, where `start()` threw before a teardown existed.
+        teardown?.();
         const message = dictationFailure(err);
-        if (message) setError(message);
+        if (message && generation.current === mine) setError(message);
       },
     });
     if (failed) return;
