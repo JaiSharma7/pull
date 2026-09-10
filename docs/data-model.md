@@ -145,7 +145,10 @@ their whole history.
 
 **Lineage and counterpoints share one edge table.** `pull_relations.kind` covers
 `related`, `opposes`, `elaborates`, `ancestor`, `descendant` and `supports`. Counterpull
-reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`.
+reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`. A kind describes
+the `to` pull relative to the `from` pull, so the same edge reads differently from each
+end; `related_pulls` says which side the anchor is on (`direction`), and the client keeps
+one label map per side.
 
 The read path reads `opposes` too, and not as a feature — as a correction.
 Embeddings barely encode negation, so a claim and its contradiction sit closer
