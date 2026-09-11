@@ -9,10 +9,18 @@ import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
 /**
- * Highlights, over a table that has existed since round 1 with nothing writing
- * it. No migration: `highlights_own` is a single `for all` owner policy and
- * nothing here adds a second read path, so CI check 4's fifth invariant — no two
- * permissive SELECT policies for one role on one table — is untouched.
+ * Highlights, over a table that existed since round 1 with nothing writing it until
+ * `Source.tsx` did. Nothing here adds a read path, so CI check 4's fifth invariant — no two
+ * permissive SELECT policies for one role on one table — is untouched:
+ * `highlights_select_own` is the table's only one.
+ *
+ * The write policies are NOT simply "the owner". 20260910010000 split the old
+ * `highlights_own` (a single `for all` owner policy) into four, and the insert
+ * half also requires the caller to be able to READ `pull_id` — so `createHighlight`
+ * below can be refused with 42501 for a Pull whose summary has been withdrawn,
+ * where before it could not. Moving an existing highlight onto a Pull the reader
+ * cannot read is refused by a trigger; editing one in place, and deleting it, are
+ * untouched, so a highlight outlives the readability of what it marks.
  */
 
 export async function fetchHighlights(userId: string, pullIds: string[]): Promise<Highlight[]> {

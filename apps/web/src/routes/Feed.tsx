@@ -9,6 +9,7 @@ import {
   isOfflineFailure,
   onPendingQueued,
   onReconnect,
+  queueIfOffline,
   queueMutation,
   readCachedPulls,
 } from '../lib/offline.js';
@@ -437,6 +438,10 @@ export function Feed({
     async (row: FeedRow) => {
       if (!userId) return;
       const wasSaved = saved.has(row.id);
+      // Captured before the optimistic update, because a revert has to put this
+      // set back rather than mirror `wasSaved`: a Pull kept last week is saved
+      // but was never counted this session, and mirroring would count it now.
+      const wasCountedThisSession = savedThisSession.has(row.id);
       // Updated from the previous state, not from the set this render captured.
       // Two saves tapped before React commits would otherwise both start from
       // the same snapshot, and the second would drop the first — leaving a card
@@ -458,13 +463,74 @@ export function Feed({
       });
       try {
         await (wasSaved ? api.unsavePull(row.id, userId) : api.savePull(row.id, userId));
-      } catch {
-        // The write failed, but the reader's intent should survive a tunnel:
-        // keep the optimistic state and replay it on reconnect.
-        await queueMutation(userId, { kind: wasSaved ? 'unsave' : 'save', pullId: row.id });
+      } catch (e: unknown) {
+        /*
+         * The write failed, but the reader's intent should survive a tunnel: keep
+         * the optimistic state and replay it on reconnect.
+         *
+         * Only what the network lost, though. This used to queue on ANY failure,
+         * which is the confident wrong diagnosis the feed request above refuses to
+         * make about the cache, and `queueIfOffline` is the same judgement
+         * `Library.tsx` already makes for the same writes.
+         *
+         * It became load-bearing in 20260910010000. `saved_items_insert_own` now
+         * refuses a save against a Pull the reader cannot read, with 42501, and that
+         * refusal is PERMANENT -- where before this the only 42501 a save could get
+         * was a request that went out as `anon` because the session refresh had
+         * failed, which drains as soon as it succeeds. `isPermanentFailure` does not
+         * list 42501 and must not, for exactly that reason (rpc-error.ts says so at
+         * length), so a queued one is never dropped: it holds `hasPending` true and
+         * the retry timer alive for the life of the tab, it survives reload in
+         * IndexedDB, and -- because `runDrain` only drops a refused write on a pass
+         * where nothing was held back -- it also stops every genuinely permanent
+         * write queued behind it from ever being dropped. Queueing only transport
+         * failures keeps that whole class out of the queue instead of teaching the
+         * queue to recognise it -- FOR THE ONLINE HALF ONLY, which is all this call site
+         * can reach. A save queued in a tunnel and replayed after the withdrawal still
+         * enters the queue and is still kept there when the replay is refused, because
+         * `isPermanentFailure` cannot tell that refusal from a request that went out as
+         * `anon` after a failed token refresh -- and it is right not to guess.
+         *
+         * That remaining path is named in 20260910010000's "does not fix". Two attempts
+         * to close it from inside the drain were written and withdrawn during review:
+         * both inferred "the session was attached" from another write succeeding in the
+         * same pass, and the inference is false twice over. A token can expire midway
+         * through a pass whose first write landed; and `unsavePull`, `updateSavedItem`
+         * and `deleteStash` are bare DELETE/UPDATE with no `.select()`, so as `anon`
+         * they return 204 with zero rows -- a "success" with nothing attached at all.
+         * Measured, both of them. Closing it needs a real attachment signal at refusal
+         * time, which belongs with the queue rather than in a migration's PR.
+         */
+        if (await queueIfOffline(userId, e, { kind: wasSaved ? 'unsave' : 'save', pullId: row.id }))
+          return;
+
+        /*
+         * The server refused it, so the optimistic state above is now a lie and the
+         * card would read "Saved" until the next reload disagreed. Put both sets back
+         * the way the tap found them -- functionally, for the reason the optimistic
+         * update is functional: a second tap may have landed while this was in flight.
+         *
+         * The detail goes to the console rather than the screen, as every other
+         * failure on this route does: a reader who taps Save on an idea whose source
+         * has just been withdrawn needs the pill to tell the truth, not a sentence
+         * about row-level security.
+         */
+        console.error(wasSaved ? 'Could not unsave' : 'Could not save', e);
+        setSaved((prev) => {
+          const next = new Set(prev);
+          if (wasSaved) next.add(row.id);
+          else next.delete(row.id);
+          return next;
+        });
+        setSavedThisSession((prev) => {
+          const next = new Set(prev);
+          if (wasCountedThisSession) next.add(row.id);
+          else next.delete(row.id);
+          return next;
+        });
       }
     },
-    [saved, userId],
+    [saved, savedThisSession, userId],
   );
 
   /*
