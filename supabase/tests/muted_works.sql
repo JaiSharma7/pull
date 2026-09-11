@@ -14,6 +14,9 @@
 --     is rated below neutral -- a term at or under its neutral is never the reason
 --   * a reader who asked for a topic is told so, when nothing else about the card is
 --     measured
+--   * chance alone is never the reason: a card nothing lifted says nothing
+--   * the day's picks never include a muted work
+--   * the served score of one fully known card is 20260831210000's weighted sum
 --
 -- Every assertion runs as a real reader under RLS; the fixture, including the one
 -- edit to a work's scores, is the owner's. The whole file rolls back.
@@ -52,6 +55,15 @@ declare
   topic_w   double precision;  -- its weight on the philosophy topic
   other_work  uuid;   -- a second public work, which nobody has muted
   private_work uuid;
+  old_work    uuid;   -- public, published two years ago, scores at the default
+  old_pull    uuid;
+  chance_seed bigint; -- a seed under which the old pull's jitter sits above neutral
+  seed_i      int;
+  picked_work uuid;
+  daily       jsonb;
+  row_json    jsonb;
+  pub_at      timestamptz;
+  expected    double precision;
   feed      jsonb;
   labels    text[] := array['A topic you asked for', 'Close to what you have been reading',
                             'A well-regarded source', 'New to you', 'Recently added',
@@ -106,6 +118,32 @@ begin
   values (reader_a, jsonb_build_object('philosophy', 0.6 / topic_w))
   on conflict (user_id) do update set topic_weights = excluded.topic_weights;
 
+  -- A work nothing lifts for a reader with no history: published two years ago, so
+  -- recency is below neutral; quality and trust at the schema default; one pull.
+  insert into public.works (kind, title, slug, rights_status)
+  values ('essay', 'An old essay', 'muted-works-old-test', 'public_domain')
+  returning id into strict old_work;
+  insert into public.summaries (work_id, title, status, visibility, published_at)
+  values (old_work, 'An old essay', 'published', 'public', now() - interval '2 years');
+  insert into public.pulls (summary_id, ordinal, headline, body, estimated_read_seconds)
+  select s.id, 1, 'An old idea', 'Nothing about this reader lifts it.', 5
+  from public.summaries s where s.work_id = old_work
+  returning id into strict old_pull;
+
+  -- A seed under which that pull's jitter is above 0.5, so that chance alone WOULD
+  -- have a positive lift -- which is exactly what must not become the reason.
+  -- A FOR loop's control variable is its own, declared by the loop and gone after
+  -- it, so the seed is copied out explicitly rather than read off the loop.
+  for seed_i in 1..500 loop
+    if public.seeded_unit(seed_i, 0, 1, 'jitter') > 0.5 then
+      chance_seed := seed_i;
+      exit;
+    end if;
+  end loop;
+  if chance_seed is null then
+    raise exception 'fixture: no seed in 1..500 puts ordinal 1''s jitter above neutral';
+  end if;
+
   -- Another author's private work, which neither reader can see.
   insert into public.works (kind, title, slug, rights_status)
   values ('essay', 'A private essay', 'muted-works-private-test', 'public_domain')
@@ -135,6 +173,53 @@ begin
   ) then
     raise exception 'a muted work was still served. The pool is not consulting muted_works.';
   end if;
+
+  -- ---------------------------------------------------------------------------
+  -- 1b. The day's picks never include a muted work. Two clauses, each proven on its
+  --     own: with every work muted the day must CHOOSE nothing (the selection table
+  --     stays empty, not merely hidden), and a work muted after the day was chosen
+  --     must leave the read-back.
+  -- ---------------------------------------------------------------------------
+  insert into public.muted_works (user_id, work_id)
+  select reader_a, w.id
+  from public.works w
+  join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public'
+  where w.id <> target_work
+  on conflict do nothing;
+
+  daily := public.get_daily_pulls((now() at time zone 'UTC')::date);
+  if jsonb_array_length(daily -> 'pulls') <> 0 then
+    raise exception
+      'the day''s picks served % idea(s) from muted works.', jsonb_array_length(daily -> 'pulls');
+  end if;
+  select count(*) into n from public.daily_pull_selections d
+  where d.user_id = reader_a and d.day = (now() at time zone 'UTC')::date;
+  if n <> 0 then
+    raise exception
+      'the day chose % idea(s) from muted works and only hid them. The eligible set '
+      'in get_daily_pulls is not consulting muted_works.', n;
+  end if;
+
+  -- Unmute everything but the work under test; the day, still unchosen, now picks
+  -- from the rest. Then mute one of the picks and read the day back.
+  delete from public.muted_works where user_id = reader_a and work_id <> target_work;
+  daily := public.get_daily_pulls((now() at time zone 'UTC')::date);
+  if jsonb_array_length(daily -> 'pulls') < 2 then
+    raise exception 'fixture: the day picked % idea(s); the read-back check needs at least two',
+      jsonb_array_length(daily -> 'pulls');
+  end if;
+  picked_work := (daily -> 'pulls' -> 0 ->> 'workId')::uuid;
+  insert into public.muted_works (user_id, work_id) values (reader_a, picked_work);
+  daily := public.get_daily_pulls((now() at time zone 'UTC')::date);
+  if exists (
+    select 1 from jsonb_array_elements(daily -> 'pulls') r
+    where (r ->> 'workId')::uuid = picked_work
+  ) then
+    raise exception
+      'a work muted after the day was chosen was still read back. The read-back in '
+      'get_daily_pulls is not consulting muted_works.';
+  end if;
+  delete from public.muted_works where user_id = reader_a and work_id = picked_work;
 
   perform pg_temp.become(reader_b);
 
@@ -252,7 +337,54 @@ begin
       'below its neutral must not be the reason.';
   end if;
 
-  raise notice 'muted_works.sql: a muted work leaves the reader''s feed and nobody else''s, comes back when unmuted, cannot be set for a stranger or on a work the reader cannot read, and every row says why it is there in terms that were measured';
+  -- ---------------------------------------------------------------------------
+  -- 5b. Chance alone is never the reason
+  -- ---------------------------------------------------------------------------
+  feed := public.get_feed(50, chance_seed, 0);
+  select r into row_json
+  from jsonb_array_elements(feed -> 'rows') r
+  where (r ->> 'id')::uuid = old_pull;
+  if row_json is null then
+    raise exception 'fixture: the old pull is not on reader B''s page, so 5b proves nothing';
+  end if;
+  if row_json ->> 'reason' is not null then
+    raise exception
+      'a card nothing lifts for this reader was given the reason "%". Chance is a '
+      'candidate only beside a measured signal.', row_json ->> 'reason';
+  end if;
+
+  -- ---------------------------------------------------------------------------
+  -- 6. The served score is 20260831210000's weighted sum, computed here by hand for
+  --    a card whose eight terms are all known: reader B has no preferences (affinity
+  --    0), no dwell and no vector (both neutral, 0.5), knows nothing (novelty 1.0);
+  --    the work is rated 0.3 and 0.3; recency and jitter are computable.
+  -- ---------------------------------------------------------------------------
+  feed := public.get_feed(50, 7, 0);
+  select r into strict row_json
+  from jsonb_array_elements(feed -> 'rows') r
+  where (r -> 'work' ->> 'id')::uuid = target_work
+  order by (r ->> 'ordinal')::int
+  limit 1;
+  select s.published_at into strict pub_at
+  from public.pulls p join public.summaries s on s.id = p.summary_id
+  where p.id = (row_json ->> 'id')::uuid;
+  expected :=
+      0.20 * 0
+    + 0.08 * 0.5
+    + 0.18 * 0.5
+    + 0.16 * 0.3
+    + 0.12 * 1.0
+    + 0.08 * greatest(0.0, 1.0 - extract(epoch from (now() - pub_at)) / (86400.0 * 365.0))
+    + 0.08 * 0.3
+    + 0.10 * public.seeded_unit(7, 0, (row_json ->> 'ordinal')::int, 'jitter');
+  if abs((row_json ->> 'score')::double precision - expected) > 0.00011 then
+    raise exception
+      'the served score % is not the weighted sum % of the eight terms as '
+      '20260831210000 weights them. A weight has moved.',
+      row_json ->> 'score', round(expected::numeric, 4);
+  end if;
+
+  raise notice 'muted_works.sql: a muted work leaves the reader''s feed and the day''s picks and nobody else''s, comes back when unmuted, cannot be set for a stranger or on a work the reader cannot read, every row says why it is there in terms that lifted it or says nothing, and the score is the sum it always was';
 end $$;
 
 rollback;

@@ -19,14 +19,22 @@
 -- `affinity`) and `pool` (the same cheap score, the same cut), and drops a muted work
 -- beside the `feed_impressions` anti-join it copies; the `scored` CTE is split into
 -- `termed` (the eight terms, each measured once and named, `affinity` read off the
--- pool) and `scored` (the same weighted sum in the same order); after `final`, three
--- CTEs -- `lifted`, `eligible`, `reasoned` -- compute the reason for the rows that are
--- actually emitted, not the shortlist; and the row payload carries `reason`. The
--- weights, their order and every neutral are 20260831210000's; diff the two before
--- reviewing it, because that diff is the only thing that holds the weights.
+-- pool) and `scored` (the same weighted sum in the same order, its weights read from
+-- the one-row `weighting` CTE); after `final`, three CTEs -- `lifted`, `eligible`,
+-- `reasoned` -- compute the reason for the rows that are actually emitted, not the
+-- shortlist, from the same `weighting`; and the row payload carries `reason`. The
+-- weights, their order and every neutral are 20260831210000's. Two things hold them:
+-- the diff against that file, and muted_works.sql, which computes the sum by hand for
+-- one card whose eight terms are all known and pins the served score to it.
 -- delta_negation.sql holds something narrower and still worth having: that a reader
 -- who knows an opposed idea scores exactly as one who knows nothing, so a change that
 -- lets a contradiction back into the comparison fails there.
+--
+-- `get_daily_pulls` is restated from 20260907010000, its only definition, with the
+-- same anti-join in its `eligible` set and in its read-back. A muted work never earns
+-- a feed impression, which made every one of its pulls "unseen" and favoured them for
+-- the day's picks -- the source the reader asked to see less of, in the most prominent
+-- slot. Everything else in that body is verbatim; the ACL is untouched.
 --
 -- Law 2 holds: SQL, an average, and a distance. No model runs in the read path.
 
@@ -39,8 +47,8 @@ create table public.muted_works (
 
 comment on table public.muted_works is
   'Sources the reader asked to see less of. get_feed drops a muted work from the pool '
-  'before anything is scored; the reader can unmute by deleting the row. See '
-  '20260909050000.';
+  'before anything is scored and get_daily_pulls never picks one; the reader can '
+  'unmute by deleting the row. See 20260909050000.';
 
 -- Law 5: in the migration that creates it.
 alter table public.muted_works enable row level security;
@@ -56,6 +64,15 @@ create policy muted_works_insert_own on public.muted_works
 
 create policy muted_works_delete_own on public.muted_works
   for delete using ((select auth.uid()) = user_id);
+
+-- Nothing a reader would change on a row, but PostgREST's upsert is INSERT ... ON
+-- CONFLICT DO UPDATE, and with RLS on and no UPDATE policy the conflicting row is
+-- invisible to the update -- so muting a work twice, a double tap or a queued mute
+-- replayed after reconnecting, was refused with 42501. Re-muting is idempotent now.
+create policy muted_works_update_own on public.muted_works
+  for update
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 create index muted_works_work_idx on public.muted_works (work_id);
 
@@ -292,6 +309,19 @@ begin
    * is NULL here and takes its neutral 0.5 in the score, exactly as before -- the
    * weights and their order are 20260831210000's, and delta_negation.sql holds them.
    */
+  -- The eight weights, once. `scored` and `lifted` both read them, so the sum and the
+  -- lift cannot drift apart; muted_works.sql pins the sum to 20260831210000's value
+  -- for one fully known card.
+  weighting as (
+    select 0.20::double precision as affinity,
+           0.08::double precision as dwell,
+           0.18::double precision as closeness,
+           0.16::double precision as quality,
+           0.12::double precision as novelty,
+           0.08::double precision as recency,
+           0.08::double precision as trust,
+           0.10::double precision as chance
+  ),
   termed as (
     select mk.*,
       /*
@@ -328,16 +358,17 @@ begin
   ),
   scored as (
     select t.*,
-      (  0.20 * t.affinity
-       + 0.08 * coalesce(t.dwell_measured, 0.5)
-       + 0.18 * coalesce(t.closeness_measured, 0.5)
-       + 0.16 * t.quality_score
-       + 0.12 * least(1.0, t.novelty_distance)
-       + 0.08 * coalesce(t.recency_measured, 0.5)
-       + 0.08 * t.trust_score
-       + 0.10 * t.jitter
+      (  w.affinity  * t.affinity
+       + w.dwell     * coalesce(t.dwell_measured, 0.5)
+       + w.closeness * coalesce(t.closeness_measured, 0.5)
+       + w.quality   * t.quality_score
+       + w.novelty   * least(1.0, t.novelty_distance)
+       + w.recency   * coalesce(t.recency_measured, 0.5)
+       + w.trust     * t.trust_score
+       + w.chance    * t.jitter
       ) as score
     from termed t
+    cross join weighting w
   ),
   diversified as (
     select s.*, row_number() over (partition by s.work_id order by s.score desc) as per_work
@@ -369,15 +400,16 @@ begin
    */
   lifted as (
     select f.*,
-      (0.20 * f.affinity)::double precision as affinity_lift,
-      (  0.18 * (coalesce(f.closeness_measured, 0.5) - 0.5)
-       + 0.08 * (coalesce(f.dwell_measured, 0.5) - 0.5))::double precision as close_lift,
-      (  0.16 * (f.quality_score - 0.5)
-       + 0.08 * (f.trust_score - 0.5))::double precision as regarded_lift,
-      (0.12 * (least(1.0, f.novelty_distance) - 0.5))::double precision as new_lift,
-      (0.08 * (coalesce(f.recency_measured, 0.5) - 0.5))::double precision as recent_lift,
-      (0.10 * (f.jitter - 0.5))::double precision as chance_lift
+      (w.affinity * f.affinity)::double precision as affinity_lift,
+      (  w.closeness * (coalesce(f.closeness_measured, 0.5) - 0.5)
+       + w.dwell     * (coalesce(f.dwell_measured, 0.5) - 0.5))::double precision as close_lift,
+      (  w.quality * (f.quality_score - 0.5)
+       + w.trust   * (f.trust_score - 0.5))::double precision as regarded_lift,
+      (w.novelty * (least(1.0, f.novelty_distance) - 0.5))::double precision as new_lift,
+      (w.recency * (coalesce(f.recency_measured, 0.5) - 0.5))::double precision as recent_lift,
+      (w.chance * (f.jitter - 0.5))::double precision as chance_lift
     from final f
+    cross join weighting w
   ),
   -- Each rule once. Novelty lifts only when it was measured: with nothing known the
   -- distance defaults to 1.0, which is the absence of a comparison, not a finding.
@@ -442,6 +474,102 @@ begin
     'page',              p_page
   ) into result;
 
+  return result;
+end;
+$$;
+
+-- The day's picks, restated from 20260907010000 with the mute (see the header).
+create or replace function public.get_daily_pulls(p_day date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  uid uuid := auth.uid();
+  utc_day date := (now() at time zone 'UTC')::date;
+  result jsonb;
+begin
+  if uid is null then
+    raise exception 'Sign in or start a guest session' using errcode = '42501';
+  end if;
+  -- Cover every real timezone, but never let a caller fill arbitrary dates.
+  if p_day is null or p_day < utc_day - 1 or p_day > utc_day + 1 then
+    raise exception 'Daily Pull requires your current calendar day' using errcode = '22023';
+  end if;
+
+  -- Account-wide: concurrent requests for adjacent local days must also see
+  -- each other's selections before choosing. A day-scoped lock would not do so.
+  perform pg_advisory_xact_lock(hashtextextended('daily:' || uid::text, 0));
+
+  if not exists (
+    select 1 from public.daily_pull_selections d where d.user_id = uid and d.day = p_day
+  ) then
+    with eligible as (
+      select p.id,
+        case when ks.pull_id is not null then 'fading' else 'unseen' end as reason
+      from public.pulls p
+      join public.summaries s on s.id = p.summary_id
+      join public.works w on w.id = s.work_id
+      left join public.knowledge_states ks on ks.pull_id = p.id and ks.user_id = uid
+      where s.status = 'published' and s.visibility = 'public'
+        and w.rights_status in ('public_domain', 'licensed')
+        -- Less like this reaches the day's picks too (20260909050000).
+        and not exists (
+          select 1 from public.muted_works mw where mw.user_id = uid and mw.work_id = w.id
+        )
+        and (
+          (ks.pull_id is not null and public.retrievability(ks.stability, ks.last_seen_at) < 0.6)
+          or (ks.pull_id is null and not exists (
+            select 1 from public.feed_impressions f where f.user_id = uid and f.pull_id = p.id
+          ))
+        )
+        -- No repeats within a fortnight, including across a timezone change.
+        and not exists (
+          select 1 from public.daily_pull_selections d
+          where d.user_id = uid and d.pull_id = p.id
+            and d.day between p_day - 14 and p_day + 1
+        )
+    ), ranked as (
+      select *, row_number() over (
+        partition by reason order by md5(uid::text || p_day::text || id::text), id
+      ) as bucket_rank from eligible
+    ), chosen as (
+      -- Reserve two fading and three unseen slots; fill missing slots from
+      -- whichever pool has more. Never pad the set with well-known ideas.
+      select *, case when reason = 'fading' and bucket_rank <= 2 then 0
+                     when reason = 'unseen' and bucket_rank <= 3 then 0 else 1 end as overflow
+      from ranked
+      order by overflow, bucket_rank, reason, id
+      limit 5
+    )
+    insert into public.daily_pull_selections(user_id, day, ordinal, pull_id, reason)
+    select uid, p_day, row_number() over (order by overflow, bucket_rank, reason, id)::int,
+           id, reason from chosen;
+  end if;
+
+  -- Recheck visibility every time: a saved selection cannot preserve access
+  -- to an idea after its author withdraws it or its rights status changes.
+  select jsonb_build_object('day', p_day, 'pulls', coalesce(jsonb_agg(
+    jsonb_build_object(
+      'pullId', p.id, 'ordinal', d.ordinal, 'reason', d.reason,
+      'headline', p.headline, 'body', p.body, 'whyItMatters', p.why_it_matters,
+      'workId', w.id, 'workTitle', w.title, 'workKind', w.kind,
+      'workYear', w.year, 'summaryTitle', s.title
+    ) order by d.ordinal
+  ), '[]'::jsonb)) into result
+  from public.daily_pull_selections d
+  join public.pulls p on p.id = d.pull_id
+  join public.summaries s on s.id = p.summary_id
+  join public.works w on w.id = s.work_id
+  where d.user_id = uid and d.day = p_day
+    and s.status = 'published' and s.visibility = 'public'
+    and w.rights_status in ('public_domain', 'licensed')
+    -- And a work muted after today's set was chosen leaves it, the way a withdrawn
+    -- one does: the selection is kept, the row is not shown.
+    and not exists (
+      select 1 from public.muted_works mw where mw.user_id = uid and mw.work_id = w.id
+    );
   return result;
 end;
 $$;
