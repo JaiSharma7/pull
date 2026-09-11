@@ -53,6 +53,14 @@
 -- in depth rather than the closing of an open door. It is kept for consistency with
 -- every other trigger function here, which is worth more than the one line it costs.
 --
+-- THE PIN IS ASSERTED BY THE TEST FILES, not by `db:lint`: invariant 4 filters on
+-- `prosecdef`, and these are `security invoker` deliberately, so the lint structurally
+-- cannot see them. Dropping the pin from all three survived the whole suite until
+-- section 7 of each file started checking `proconfig`. It is defence in depth rather
+-- than a live hole -- `authenticated` holds CREATE on neither the database nor `public`,
+-- and every reference in these bodies is schema-qualified -- but a promise nothing keeps
+-- is the thing this file has spent twelve review rounds learning not to make.
+--
 -- Splitting `for all` into four is not cosmetic. `for all` covers SELECT, so a
 -- second SELECT policy beside it is what `db:lint` invariant 5 exists to catch;
 -- after the split each table has exactly one SELECT policy and the write commands
@@ -149,7 +157,13 @@
 --     output query; `test_out` (20260909010000) joins it, and scopes to
 --     `ks.user_id = auth.uid()` through `readable_path_steps`, which re-filters
 --     readability -- so a forged row naming an unreadable pull can only yield an
---     ordinal for a step the reader could already open. The other four only write it.
+--     ordinal for a step the reader could already open. Of the other four,
+--     `commit_import` and `complete_path_step` write it; `apply_path_step` writes it
+--     but READS the column in its SET expression; and `undo_import` never touches it at
+--     all -- it names it only in a comment about a rejected design, and reaches its rows
+--     solely through the cascade behind `delete from public.pulls`. (Match that set with
+--     `strpos`, not `ilike '%knowledge_states%'`: `_` is a LIKE wildcard and pulls in
+--     `sweep_guest_accounts`, whose prose says "knowledge states".)
 --   * The TRIGGER revoke in section 4 covers the five tables that carry a
 --     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`.
 --     Almost every other table in `public` still hands `authenticated` that privilege
@@ -179,7 +193,7 @@
 --     suite -- `x <> null` is null, the leg never fires from a null start, and a note
 --     lands on a pull its writer cannot read. A third: `notes.sql` clears `pull_id` but
 --     never `summary_id` alone, so that leg's `is not null` arm is unpinned too, and
--- dropping it refuses a legitimate clear (both notes columns are nullable). Its
+--     dropping it refuses a legitimate clear (both notes columns are nullable). Its
 --     EXECUTE revoke, and `user_questions_keep_readable`'s,
 --     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
 --     are tests that do not pin what they cover. Editing another change's test file for a

@@ -627,6 +627,23 @@ begin
     end if;
   end loop;
 
+  -- And the `search_path` pin on the guard function, which nothing else asserts:
+  -- `db:lint`'s invariant 4 filters on `prosecdef`, and these are `security invoker`
+  -- deliberately, so it never sees them. Dropping the pin from all three guards survives
+  -- the whole suite. It is defence in depth rather than a live hole -- `authenticated`
+  -- holds CREATE on neither the database nor `public`, and every reference in the bodies
+  -- is schema-qualified -- but an unpinned pin is a promise nothing keeps.
+  if not exists (
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+    where p.proname = 'saved_items_keep_readable'
+      and coalesce(array_to_string(p.proconfig, ','), '') like '%search_path=%'
+  ) then
+    raise exception
+      'saved_items_keep_readable has lost its search_path pin, and db:lint cannot see it: '
+      'invariant 4 looks only at security definer functions and this one is invoker.';
+  end if;
+
   raise notice 'saved_items.sql: a save needs a readable pull or summary on the way in, '
     'cannot be moved onto one its owner cannot read by either column, and stays filable, '
     'annotatable and deletable after what it holds is withdrawn';
