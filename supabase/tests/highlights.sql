@@ -23,8 +23,9 @@
 -- withdraws a summary from under a highlight, are the owner's acts. The whole file rolls back.
 --
 -- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
--- section 5's "still refused from an unreadable start", and section 7's trigger revoke.
--- Sections 2, 3 and 6, and the nonexistent-target check (which accepts the foreign key's
+-- section 5's "still refused from an unreadable start", section 6's EXECUTE-revoke check
+-- (the function does not exist without it) and section 7's trigger revoke.
+-- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
 -- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
 -- owner leg on every command, so section 6 is a regression guard on what the split must
 -- not cost rather than evidence for the guard. That is exactly why section 6 exists: the

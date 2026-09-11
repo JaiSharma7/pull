@@ -131,7 +131,7 @@
 -- stash marked public is readable by everyone), and
 -- guarding it belongs with the stash policies rather than here.
 --
--- Three more, found by the security review of this change and left deliberately:
+-- Four more, found by the review rounds on this change and left deliberately:
 --
 --   * `knowledge_states` and `feed_impressions` take an unreadable pull from
 --     `record_read`, as measured above, and accept one by direct insert too --
@@ -144,11 +144,15 @@
 --     reader of `knowledge_states` and re-filters `published`/`public` on both its
 --     candidate and its output query.
 --   * The TRIGGER revoke in section 4 covers the five tables that carry a
---     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`. Every
---     OTHER table in `public` still hands `authenticated` that privilege. None of them
---     has a trigger to walk around, so nothing there is defeatable the way this was;
---     revoking it everywhere is still the tidier end state and still a change to every
---     table's grants, which belongs in a migration whose subject that is.
+--     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`.
+--     Almost every other table in `public` still hands `authenticated` that privilege
+--     (`daily_pull_selections` is the exception: 20260907010000 revoked all and granted
+--     back select alone). Eleven of them do carry triggers -- nine `set_updated_at`, plus
+--     `rights_requests_rate_limit` -- but NONE of those gates on a column's value:
+--     `set_updated_at` stamps a timestamp and the rate limiter never reads `new`, so
+--     there is nothing there for a later-sorting trigger to rewrite. Revoking it
+--     everywhere is still the tidier end state and still a change to every table's
+--     grants, which belongs in a migration whose subject that is.
 --   * `authenticated` also holds TRUNCATE on these tables, which bypasses RLS
 --     entirely. Same door (a direct connection), same systemic answer, and not what
 --     this file is about: truncation destroys rows, it does not forge a claim that a
@@ -513,9 +517,12 @@ comment on policy history_events_delete_own on public.history_events is
 -- invariant-that-holds-everywhere-but-here this file's own header argues against, and it
 -- costs two identifiers.
 --
--- Every other table in `public` keeps the privilege. None of them has a trigger to walk
--- around, so this is the whole of the reachable class; taking it away everywhere is a
--- change to every table's grants and belongs in a migration that says so.
+-- Every other table in `public` keeps the privilege (bar `daily_pull_selections`, which
+-- never had it). Eleven carry triggers, but none of those gates on a column's value --
+-- `set_updated_at` stamps a timestamp, and `rights_requests_rate_limit` never reads
+-- `new` -- so there is nothing for a later-sorting trigger to rewrite and this is the
+-- whole of the reachable class. Taking the privilege away everywhere is a change to
+-- every table's grants and belongs in a migration that says so.
 
 revoke trigger on public.highlights, public.saved_items, public.history_events,
                   public.notes, public.user_questions

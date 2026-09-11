@@ -26,8 +26,9 @@
 -- withdraws a summary from under a save, are the owner's acts. The whole file rolls back.
 --
 -- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
--- section 5's "still refused from an unreadable start", and section 7's trigger revoke.
--- Sections 2, 3 and 6, and the nonexistent-target check (which accepts the foreign key's
+-- section 5's "still refused from an unreadable start", section 6's EXECUTE-revoke check
+-- (the function does not exist without it) and section 7's trigger revoke.
+-- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
 -- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
 -- owner leg on every command, so section 6 is a regression guard on what the split must
 -- not cost rather than evidence for the guard. That is exactly why section 6 exists: the
@@ -82,6 +83,7 @@ declare
   stash_b     uuid;
   save_b      uuid;
   save_shared uuid;
+  save_shared_summary uuid;
   save_keep   uuid;
   save_summary_b uuid;
   code        text;
@@ -213,12 +215,18 @@ begin
   insert into public.saved_items (user_id, pull_id) values (reader_b, shared_pull)
   returning id into strict save_shared;
 
+  -- A save on the summary A is about to withdraw, so section 5 can re-set summary_id to
+  -- a value that is no longer readable. Without one, the only summary available there is
+  -- a public one, and the probe passes whether or not the trigger compares old and new.
+  insert into public.saved_items (user_id, summary_id) values (reader_b, shared_summary)
+  returning id into strict save_shared_summary;
+
   insert into public.saved_items (user_id, pull_id) values (reader_b, public_pull_2)
   returning id into strict save_keep;
 
   select count(*) into n from public.saved_items where user_id = reader_b;
-  if n <> 4 then
-    raise exception 'reader B expected 4 saves of their own, has %', n;
+  if n <> 5 then
+    raise exception 'reader B expected 5 saves of their own, has %', n;
   end if;
 
   perform pg_temp.become(reader_a);
@@ -244,8 +252,8 @@ begin
   perform pg_temp.become(reader_b);
 
   select count(*) into n from public.saved_items;
-  if n <> 4 then
-    raise exception 'reader B sees % saves rather than their own 4', n;
+  if n <> 5 then
+    raise exception 'reader B sees % saves rather than their own 5', n;
   end if;
 
   insert into public.stashes (user_id, name) values (reader_b, 'Later')
@@ -359,6 +367,24 @@ begin
       'trigger is not comparing old and new.', code;
   end if;
 
+  -- The same, for the OTHER guarded column. The trigger body compares old and new per
+  -- column, so `is distinct from old` has to be asserted per column too -- dropping it
+  -- from the summary_id leg alone survived this file while the pull_id twin above
+  -- passed. It over-fires rather than letting anything through, which is why it is a
+  -- cheap probe and not a defect, but the enumeration is the point: every leg of every
+  -- guard wants a statement that fails when that leg alone is broken.
+  code := null;
+  begin
+    update public.saved_items set summary_id = shared_summary where id = save_shared_summary;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'reader B could not save a summary-save that stays on its WITHDRAWN summary '
+      '(got %). The trigger is not comparing old and new on summary_id.', code;
+  end if;
+
   select count(*) into n from public.saved_items
   where id = save_shared and pull_id = shared_pull and archived
     and note = 'Withdrawn, but mine';
@@ -396,7 +422,7 @@ begin
   -- And a reader may always unsave, whatever became of what they had kept.
   delete from public.saved_items where id = save_shared;
   select count(*) into n from public.saved_items where user_id = reader_b;
-  if n <> 3 then
+  if n <> 4 then
     raise exception
       'reader B could not unsave a withdrawn pull (% rows left)', n;
   end if;
