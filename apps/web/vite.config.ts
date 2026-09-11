@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+      includeAssets: ['favicon-hat.png', 'favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'What a Pull',
         short_name: 'What a Pull',
