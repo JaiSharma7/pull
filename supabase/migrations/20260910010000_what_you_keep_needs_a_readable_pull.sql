@@ -196,8 +196,11 @@
 --     lands on a pull its writer cannot read. A third: `notes.sql` clears `pull_id` but
 --     never `summary_id` alone, so that leg's `is not null` arm is unpinned too, and
 --     dropping it refuses a legitimate clear (both notes columns are nullable). Its
---     EXECUTE revoke, and `user_questions_keep_readable`'s,
---     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
+--     EXECUTE revoke, `user_questions_keep_readable`'s, and the `search_path` pin on
+--     both, are likewise asserted by nothing -- invariant 4 filters on `prosecdef` and
+--     both are `security invoker`, so the lint is as blind to them as it is to the three
+--     added here, whose pin section 7 of each new test file does assert. The SHIPPED
+--     code is correct in every case; these
 --     are tests that do not pin what they cover. Editing another change's test file for a
 --     hole that does not exist is not this one's to do, so it is written down here.
 --   * THE OFFLINE QUEUE, which is this migration's own blast radius rather than an
