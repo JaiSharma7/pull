@@ -108,11 +108,14 @@
 -- with, one sorting after it cannot mutate the row (its return is ignored), and no grant
 -- can undo that. It is not a one-word change, though -- `after update OF <cols>` has the
 -- same SET-list semantics as `before`, so the column list would have to go too, which
--- costs the saving the section-4 note describes. The revoke is what is done here: it
+-- costs the saving the comment on history_events_keep_readable describes. The revoke
+-- is what is done here: it
 -- closes the reachable class, costs nothing, and is honestly a MITIGATION rather than
 -- the structural fix. If a later migration re-grants TRIGGER the hole reopens, which is
--- why every table carrying one of these guards now asserts the revoke in its test file. `authenticated` keeps SELECT,
--- INSERT, UPDATE and DELETE -- everything the app uses -- and `create trigger` becomes
+-- why every table carrying one of these guards now asserts the revoke in its test file.
+--
+-- `authenticated` keeps SELECT, INSERT, UPDATE and DELETE -- everything the app uses,
+-- since nothing in the product issues DDL -- and `create trigger` becomes
 -- 42501. It needs a direct database connection to exploit (PostgREST issues no DDL),
 -- so this is defence in depth rather than a live hole, which is also why it is one
 -- line rather than a redesign.
@@ -150,6 +153,21 @@
 --     entirely. Same door (a direct connection), same systemic answer, and not what
 --     this file is about: truncation destroys rows, it does not forge a claim that a
 --     pull was readable.
+--   * THE OFFLINE QUEUE, which is this migration's own blast radius rather than an
+--     older table's. A save made in a tunnel is queued, and replayed on reconnect; if
+--     the summary was withdrawn in between, the leg above refuses the replay with
+--     42501 -- permanently, where before this file that code on a save could only ever
+--     mean a token refresh had failed. `isPermanentFailure` does not list 42501 and
+--     must not, so the entry is kept and retried for the life of the tab, and through
+--     `runDrain`'s `blocked.size === 0` gate it stops other permanent writes being
+--     dropped. `Feed.tsx` keeps such a refusal OUT of the queue when the reader is
+--     online; the queued-offline case stays open. Two attempts to close it from inside
+--     the drain were written and withdrawn during review, both inferring "a session was
+--     attached" from another write succeeding in the same pass, which is false twice
+--     over: a token can expire mid-pass, and `unsavePull`, `updateSavedItem` and
+--     `deleteStash` are bare DELETE/UPDATE with no `.select()`, so as `anon` they
+--     return success with zero rows. Measured both. Closing it needs the access token
+--     compared around the write, which is a queue change, not a migration's.
 --
 -- -----------------------------------------------------------------------------
 -- THE COST ON THE READ PATH, MEASURED
@@ -220,7 +238,7 @@
 -- claim, expressed as three interlocking conditions that a reviewer has to hold in
 -- their head at once. The plain `is null or exists` leg is the one 20260909020000
 -- established, reads the same on all four tables, and is obviously right at a
--- glance. 125 us is not worth making an RLS policy harder to check.
+-- glance. 67 us is not worth making an RLS policy harder to check.
 -- -----------------------------------------------------------------------------
 
 

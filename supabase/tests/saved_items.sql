@@ -31,8 +31,9 @@
 -- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
 -- owner leg on every command, so section 6 is a regression guard on what the split must
 -- not cost rather than evidence for the guard. That is exactly why section 6 exists: the
--- split retypes that leg into five places, and a mutant dropping it from any one of them
--- passed every assertion in this file before those probes were written.
+-- split retypes that leg into five places, and a mutant dropping it from any one of the
+-- four WRITE ones passed every assertion in this file before those probes were written.
+-- The fifth, `select/using`, has been covered by section 3 since this file was written.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
@@ -82,6 +83,7 @@ declare
   save_b      uuid;
   save_shared uuid;
   save_keep   uuid;
+  save_summary_b uuid;
   code        text;
   n           int;
 begin
@@ -205,7 +207,8 @@ begin
   insert into public.saved_items (user_id, pull_id) values (reader_b, public_pull)
   returning id into strict save_b;
 
-  insert into public.saved_items (user_id, summary_id) values (reader_b, public_summary);
+  insert into public.saved_items (user_id, summary_id) values (reader_b, public_summary)
+  returning id into strict save_summary_b;
 
   insert into public.saved_items (user_id, pull_id) values (reader_b, shared_pull)
   returning id into strict save_shared;
@@ -293,6 +296,25 @@ begin
   where id = save_b and pull_id = public_pull and summary_id is null;
   if n <> 1 then
     raise exception 'reader B''s save is no longer on the pull it was made against';
+  end if;
+
+  -- The same move written as ONE column, which is the only statement that exercises
+  -- `summary_id` in the trigger's column list: every other summary probe here names
+  -- `pull_id` too, and `saved_items_one_target` means only a save that already holds a
+  -- summary can name `summary_id` alone. Narrowing the list to `of pull_id` -- which
+  -- UNDER-fires, where dropping it entirely over-fires and is harmless -- passed this
+  -- whole file before this probe, while moving a save onto a summary its owner cannot
+  -- read.
+  code := null;
+  begin
+    update public.saved_items set summary_id = priv_summary where id = save_summary_b;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B moved a summary-save onto reader A''s private summary (got %). The '
+      'trigger''s column list has lost summary_id.', coalesce(code, 'no error');
   end if;
 
   -- -------------------------------------------------------------------------
@@ -427,8 +449,10 @@ begin
   -- Unqualified again, and here it is the whole point. `update ... where id = ...` reads
   -- a column, so Postgres adds the SELECT policy as a check and refuses the handover even
   -- under the mutant; unqualified, nothing is read and only `with check` stands between
-  -- reader B and giving their rows away. This probe must also run BEFORE the delete
-  -- below, or B owns nothing by the time it fires and it passes on an empty set.
+  -- reader B and giving their rows away. It runs BEFORE the delete below, where B still
+  -- owns rows: against an empty set the update touches nothing and raises nothing, so
+  -- the probe would fail loudly with "got no error" rather than pass -- the count guard
+  -- is there to say which of the two went wrong, not to stop a false pass.
   select count(*) into n from public.saved_items;
   if n = 0 then
     raise exception
