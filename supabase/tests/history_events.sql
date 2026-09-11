@@ -438,18 +438,28 @@ begin
   -- survived this file while making every clear raise 42501 -- refusing what the
   -- migration header promises. It over-fires rather than letting anything through, but
   -- an unkept promise is still a defect. saved_items.sql and notes.sql both clear.
+  -- On `event_b`, which holds all THREE columns. `event_null_pull` carries only a
+  -- summary, so clearing pull_id or work_id on it is null -> null -- not distinct with
+  -- or without the `is not null` arm -- and only the summary leg would be reached.
+  -- Dropping that arm from the pull or work leg alone then survives the whole suite
+  -- while an owner can no longer clear those columns off their own event.
   code := null;
   begin
-    update public.history_events set summary_id = null, work_id = null
-     where id = event_null_pull;
+    update public.history_events set pull_id = null, summary_id = null, work_id = null
+     where id = event_b;
   exception when others then
     code := sqlstate;
   end;
   if code is not null then
     raise exception
-      'reader B could not clear the summary and work off their own event (got %). The '
-      'trigger is judging the row rather than the move.', code;
+      'reader B could not clear the pull, summary and work off their own event (got %). '
+      'A leg is judging the row rather than the move.', code;
   end if;
+
+  -- Put it back: the assertion below expects `event_b` on its original triple.
+  update public.history_events
+     set pull_id = public_pull, summary_id = public_summary, work_id = public_work
+   where id = event_b;
 
   delete from public.history_events where id = event_null_pull;
 

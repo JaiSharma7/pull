@@ -160,7 +160,11 @@
 --   * `notes_keep_readable` (20260909020000) keeps a NULL-comparison coverage gap on ONE
 --     of its two legs, the kind the three files here now close on the five of their six
 --     that can have one -- `highlights.pull_id` is `not null` (20260829124532), so no
---     move on it ever starts from null and `<>` there is an equivalent, not a gap.
+--     move on it ever starts from null and `<>` there cannot let anything through. Not
+--     strictly an EQUIVALENT mutant: a BEFORE ROW trigger fires before the NOT NULL
+--     constraint is checked, so clearing that column reaches the guard and the two
+--     spellings differ in which code refuses it -- 42501 against 23502 -- but nothing
+--     lands either way, so there is no hole to pin.
 --     `notes.sql` does move `summary_id` from a null start, so that leg's operator is
 --     pinned; `pull_id` is moved from a null start only onto a pull the reader CAN read
 --     (notes.sql:332-333), so nothing there tells the two operators apart. Writing that
