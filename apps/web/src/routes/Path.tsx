@@ -109,6 +109,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
         if (controller.signal.aborted) return;
         setPath(detail);
         setSettled(true);
+        // A load that worked ends the failure before it (review finding): with
+        // `userId` in the deps, signing in from the error screen refetches through
+        // here, and nothing else clears `error`.
+        setError(null);
         if (detail) {
           onTitle?.(detail.title);
           const next = nextUndone(detail.steps);
@@ -127,7 +131,10 @@ export function Path({ slug, userId, onNavigate, onTitle, onGoToReview }: PathPr
       controller.abort();
       onTitle?.(null);
     };
-  }, [slug, attempt, onTitle]);
+    // `userId` for the same reason `Paths.tsx` gives: `get_path` answers for the
+    // session. The `key={slug}` in `App` remounts this screen on navigation, not on
+    // signing in, so without it a reader who signed in here kept the visitor's view.
+  }, [slug, userId, attempt, onTitle]);
 
   /*
    * Whether the refetch landed. A caller that has just written something must know:
