@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dedupeConfidentlyWrong,
   formatAttemptDate,
+  newestFirst,
   parseConfidentlyWrongRows,
   type ConfidentlyWrongItem,
 } from './confidently-wrong.js';
@@ -42,7 +43,6 @@ describe('confidently-wrong', () => {
         appliedAt: '2026-09-08T00:00:00.000Z',
         headline: 'Some things are up to us and some things are not.',
         workTitle: 'The Enchiridion',
-        workSlug: 'the-enchiridion',
       });
     });
 
@@ -75,10 +75,12 @@ describe('confidently-wrong', () => {
       const result = parseConfidentlyWrongRows(rows);
       expect(result).toHaveLength(1);
       expect(result[0]!.workTitle).toBe('Meditations');
-      expect(result[0]!.workSlug).toBe('meditations');
     });
 
-    it('falls back gracefully when headline or title is missing', () => {
+    it('drops a row whose pull the reader can no longer read', () => {
+      // The event is theirs; the embed is read under RLS on `pulls`, and an empty one
+      // is an idea that is no longer theirs to open. An "Untitled idea" linking to Not
+      // found is not a repair anyone can make.
       const rows = [
         {
           id: 'ev-3',
@@ -86,13 +88,53 @@ describe('confidently-wrong', () => {
           applied_at: '2026-09-06T00:00:00.000Z',
           pulls: null,
         },
+        {
+          id: 'ev-4',
+          pull_id: 'pull-4',
+          applied_at: '2026-09-06T00:00:00.000Z',
+          pulls: [],
+        },
+      ];
+
+      expect(parseConfidentlyWrongRows(rows)).toEqual([]);
+    });
+
+    it('keeps a readable pull whose source did not come back, under a plain label', () => {
+      const rows = [
+        {
+          id: 'ev-5',
+          pull_id: 'pull-5',
+          applied_at: '2026-09-06T00:00:00.000Z',
+          pulls: { id: 'pull-5', headline: 'A headline', summaries: null },
+        },
       ];
 
       const result = parseConfidentlyWrongRows(rows);
       expect(result).toHaveLength(1);
-      expect(result[0]!.headline).toBe('Untitled idea');
+      expect(result[0]!.headline).toBe('A headline');
       expect(result[0]!.workTitle).toBe('Unknown source');
-      expect(result[0]!.workSlug).toBeNull();
+    });
+  });
+
+  describe('newestFirst', () => {
+    it('orders by applied_at descending, then by id, whatever order the walk returned', () => {
+      const item = (id: string, appliedAt: string): ConfidentlyWrongItem => ({
+        id,
+        pullId: `pull-${id}`,
+        appliedAt,
+        headline: 'H',
+        workTitle: 'W',
+      });
+      const walked = [
+        item('b', '2026-09-07T00:00:00+00:00'),
+        item('c', '2026-09-08T00:00:00.5+00:00'),
+        item('a', '2026-09-08T00:00:00.5+00:00'),
+        item('d', '2026-09-08T00:00:00+00:00'),
+      ];
+
+      expect(newestFirst(walked).map((i) => i.id)).toEqual(['a', 'c', 'd', 'b']);
+      // And the input is left alone.
+      expect(walked.map((i) => i.id)).toEqual(['b', 'c', 'a', 'd']);
     });
   });
 
@@ -105,7 +147,6 @@ describe('confidently-wrong', () => {
           appliedAt: '2026-09-08T00:00:00.000Z',
           headline: 'A headline newer',
           workTitle: 'Work A',
-          workSlug: 'work-a',
         },
         {
           id: 'ev-2',
@@ -113,7 +154,6 @@ describe('confidently-wrong', () => {
           appliedAt: '2026-09-07T00:00:00.000Z',
           headline: 'B headline',
           workTitle: 'Work B',
-          workSlug: 'work-b',
         },
         {
           id: 'ev-3',
@@ -121,7 +161,6 @@ describe('confidently-wrong', () => {
           appliedAt: '2026-09-05T00:00:00.000Z',
           headline: 'A headline older',
           workTitle: 'Work A',
-          workSlug: 'work-a',
         },
       ];
 
