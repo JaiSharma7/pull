@@ -60,6 +60,7 @@ for (const [name, size, fraction] of [
   ['apple-touch-icon.png', 180, 0.84],
 ])
   await writeFile(new URL(name, output), await icon(size, fraction));
+await writeFile(new URL('favicon-hat.png', output), await icon(64));
 const favicon = Array.from(await icon(64), (byte) => '%' + byte.toString(16).padStart(2, '0')).join(
   '',
 );
