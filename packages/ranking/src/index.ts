@@ -4,4 +4,6 @@
 //
 // 2: the feed scorer stopped comparing a candidate against ideas it contradicts,
 // so `covered` and the novelty term changed meaning for opposed pairs.
-export const RANKING_VERSION = 2;
+// 3: a muted work leaves the pool before scoring, and every row carries the reason
+// it was served -- the term that contributed most, with neutral defaults excluded.
+export const RANKING_VERSION = 3;
