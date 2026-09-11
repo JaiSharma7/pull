@@ -26,9 +26,9 @@
 -- section 5's "still refused from an unreadable start", section 6's EXECUTE-revoke check
 -- (the function does not exist without it) and section 7's trigger revoke.
 -- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
--- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
--- owner leg on every command, so section 6 is a regression guard on what the split must
--- not cost rather than evidence for the guard. That is exactly why section 6 exists: the
+-- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried
+-- the owner leg on every command, so section 6's owner-leg probes are a regression
+-- guard on what the split must not cost rather than evidence for the guard. That is exactly why section 6 exists: the
 -- split retypes that leg into five places, and a mutant dropping it from any one of the
 -- four WRITE ones passed every assertion in this file before those probes were written.
 -- The fifth, `select/using`, has been covered by section 3 since this file was written.
@@ -80,6 +80,7 @@ declare
   mark_shared   uuid;
   mark_shared_2 uuid;
   code        text;
+  probe_role  text;
   n           int;
 begin
   if (select count(*) from public.pulls) > 500 then
@@ -419,11 +420,8 @@ begin
   -- what makes section 7 work -- that probe never names this function, and it is
   -- refused identically with EXECUTE granted (measured) -- so this stands on its own:
   -- a trigger function reachable as an RPC endpoint is a door nobody meant to open.
-  if has_function_privilege('authenticated', 'public.highlights_keep_readable()', 'execute') then
-    raise exception
-      'authenticated holds EXECUTE on highlights_keep_readable; the revoke in '
-      '20260910010000 was undone';
-  end if;
+  -- (The EXECUTE revoke is asserted for BOTH roles in section 7, beside the TRIGGER
+  -- revoke it belongs with.)
 
   -- -------------------------------------------------------------------------
   -- 7. Nobody may put a trigger beside the guard
@@ -453,19 +451,35 @@ begin
       'the next assertion would pass for the wrong reason', code;
   end if;
 
-  code := null;
-  begin
-    execute 'create trigger zz_beside_the_guard before update on public.highlights '
-            'for each row execute function pg_temp.zz_beside_the_guard()';
-  exception when others then
-    code := sqlstate;
-  end;
-  if code is distinct from '42501' then
-    raise exception
-      'a reader created a trigger on public.highlights (got %). TRIGGER is still '
-      'granted, so the guard can be walked around by one that sorts after it.',
-      coalesce(code, 'no error');
-  end if;
+  -- Both roles, because the revoke names both and they are equally reachable: `anon`
+  -- and `authenticated` are NOLOGIN and are both arrived at the same way, by
+  -- `authenticator` and SET ROLE. A trigger `anon` plants fires on other readers'
+  -- updates just as well. Probing only one left half of the revoke unasserted.
+  foreach probe_role in array array['anon', 'authenticated'] loop
+    perform set_config('role', probe_role, true);
+    perform set_config('request.jwt.claims',
+      json_build_object('role', probe_role)::text, true);
+
+    code := null;
+    begin
+      execute 'create trigger zz_beside_the_guard before update on public.highlights '
+              'for each row execute function pg_temp.zz_beside_the_guard()';
+    exception when others then
+      code := sqlstate;
+    end;
+    if code is distinct from '42501' then
+      raise exception
+        '% created a trigger on public.highlights (got %). TRIGGER is still granted to '
+        'that role, so the guard can be walked around by one that sorts after it.',
+        probe_role, coalesce(code, 'no error');
+    end if;
+
+    if has_function_privilege(probe_role, 'public.highlights_keep_readable()', 'execute') then
+      raise exception
+        '% holds EXECUTE on highlights_keep_readable; the revoke in 20260910010000 was undone',
+        probe_role;
+    end if;
+  end loop;
 
   raise notice 'highlights.sql: a highlight needs a readable pull on the way in, cannot be '
     'moved onto one its owner cannot read, and outlives the readability of the pull it '

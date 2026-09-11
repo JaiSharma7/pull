@@ -147,7 +147,7 @@
 --     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`.
 --     Almost every other table in `public` still hands `authenticated` that privilege
 --     (`daily_pull_selections` is the exception: 20260907010000 revoked all and granted
---     back select alone). Eleven of them do carry triggers -- nine `set_updated_at`, plus
+--     back select alone). Eleven of them do carry triggers -- ten `set_updated_at`, plus
 --     `rights_requests_rate_limit` -- but NONE of those gates on a column's value:
 --     `set_updated_at` stamps a timestamp and the rate limiter never reads `new`, so
 --     there is nothing there for a later-sorting trigger to rewrite. Revoking it
@@ -157,6 +157,13 @@
 --     entirely. Same door (a direct connection), same systemic answer, and not what
 --     this file is about: truncation destroys rows, it does not forge a claim that a
 --     pull was readable.
+--   * `notes_keep_readable` (20260909020000) has the same NULL-comparison coverage gap
+--     these three just closed: `notes.sql` only ever moves a column that already held a
+--     value, so writing that guard's comparison as `<>` instead of `is distinct from`
+--     survives its file -- `x <> null` is null, so the leg never fires from a null start
+--     and a note lands on an unreadable summary. The SHIPPED code is correct; it is the
+--     test that does not pin the operator. Fixing it means editing another change's test
+--     file for a hole that does not exist, so it is written here instead.
 --   * THE OFFLINE QUEUE, which is this migration's own blast radius rather than an
 --     older table's. A save made in a tunnel is queued, and replayed on reconnect; if
 --     the summary was withdrawn in between, the leg above refuses the replay with
@@ -517,8 +524,8 @@ comment on policy history_events_delete_own on public.history_events is
 -- invariant-that-holds-everywhere-but-here this file's own header argues against, and it
 -- costs two identifiers.
 --
--- Every other table in `public` keeps the privilege (bar `daily_pull_selections`, which
--- never had it). Eleven carry triggers, but none of those gates on a column's value --
+-- Every other table in `public` keeps the privilege (bar `daily_pull_selections`,
+-- which 20260907010000 revoked it from). Eleven carry triggers, but none of those gates on a column's value --
 -- `set_updated_at` stamps a timestamp, and `rights_requests_rate_limit` never reads
 -- `new` -- so there is nothing for a later-sorting trigger to rewrite and this is the
 -- whole of the reachable class. Taking the privilege away everywhere is a change to

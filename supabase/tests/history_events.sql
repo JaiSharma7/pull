@@ -42,9 +42,9 @@
 -- section 5's "still refused from an unreadable start", section 6's EXECUTE-revoke check
 -- (the function does not exist without it) and section 7's trigger revoke.
 -- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
--- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
--- owner leg on every command, so section 6 is a regression guard on what the split must
--- not cost rather than evidence for the guard. That is exactly why section 6 exists: the
+-- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried
+-- the owner leg on every command, so section 6's owner-leg probes are a regression
+-- guard on what the split must not cost rather than evidence for the guard. That is exactly why section 6 exists: the
 -- split retypes that leg into five places, and a mutant dropping it from any one of the
 -- four WRITE ones passed every assertion in this file before those probes were written.
 -- The fifth, `select/using`, has been covered by section 3 since this file was written.
@@ -92,11 +92,14 @@ declare
   shared_pull    uuid;
   public_pull    uuid;
   public_pull_2  uuid;
+  public_pull_3  uuid;
   public_summary uuid;
   public_work    uuid;
   event_b      bigint;
   event_shared bigint;
+  event_null   bigint;
   code  text;
+  probe_role  text;
   n     int;
   dwell int;
 begin
@@ -160,6 +163,22 @@ begin
   if public_pull is null or public_pull_2 is null then
     raise exception 'fixture: the seed has fewer than two public pulls';
   end if;
+
+  -- A third public pull, for the probes that need a target reader B does not already
+  -- hold a row against: both unique indexes here are per (user_id, target), so reusing
+  -- one of the two above collides with 23505 before the guard is reached.
+  select p.id into public_pull_3
+  from public.pulls p
+  join public.summaries s on s.id = p.summary_id
+   and s.visibility = 'public' and s.status = 'published'
+  where s.id <> shared_summary and p.id <> public_pull and p.id <> public_pull_2
+  order by p.id
+  limit 1;
+
+  if public_pull_3 is null then
+    raise exception 'fixture: the seed has fewer than three public pulls';
+  end if;
+
 
   -- -------------------------------------------------------------------------
   -- 1. B cannot see it, and cannot claim to have read it either
@@ -360,6 +379,51 @@ begin
       'no work_id leg.', coalesce(code, 'no error');
   end if;
 
+  -- The same moves, but from a column that starts NULL -- the case `<>` gets wrong and
+  -- `is distinct from` gets right, since `x <> null` is null and a leg written that way
+  -- never fires. Every move above starts from a column that already held a value, so
+  -- nothing pinned the operator.
+  insert into public.history_events (user_id, kind, pull_id)
+  values (reader_b, 'read', public_pull_3)
+  returning id into strict event_null;
+
+  code := null;
+  begin
+    update public.history_events set summary_id = priv_summary where id = event_null;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B set summary_id to A''s private summary from null (got %). The trigger '
+      'compares with <> rather than IS DISTINCT FROM.', coalesce(code, 'no error');
+  end if;
+
+  code := null;
+  begin
+    update public.history_events set work_id = priv_work where id = event_null;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B set work_id to A''s private work from null (got %). The trigger '
+      'compares with <> rather than IS DISTINCT FROM.', coalesce(code, 'no error');
+  end if;
+
+  -- And a move onto something READABLE still works, or a guard that refuses EVERY move
+  -- passes this file.
+  update public.history_events
+     set summary_id = (select p.summary_id from public.pulls p where p.id = public_pull_3)
+   where id = event_null;
+  select count(*) into n from public.history_events
+  where id = event_null and summary_id is not null;
+  if n <> 1 then
+    raise exception 'reader B could not set a readable summary on their own event';
+  end if;
+
+  delete from public.history_events where id = event_null;
+
   select count(*) into n from public.history_events
   where id = event_b and pull_id = public_pull and summary_id = public_summary
     and work_id = public_work;
@@ -519,11 +583,8 @@ begin
   -- what makes section 7 work -- that probe never names this function, and it is
   -- refused identically with EXECUTE granted (measured) -- so this stands on its own:
   -- a trigger function reachable as an RPC endpoint is a door nobody meant to open.
-  if has_function_privilege('authenticated', 'public.history_events_keep_readable()', 'execute') then
-    raise exception
-      'authenticated holds EXECUTE on history_events_keep_readable; the revoke in '
-      '20260910010000 was undone';
-  end if;
+  -- (The EXECUTE revoke is asserted for BOTH roles in section 7, beside the TRIGGER
+  -- revoke it belongs with.)
 
   -- -------------------------------------------------------------------------
   -- 7. Nobody may put a trigger beside the guard
@@ -553,19 +614,35 @@ begin
       'the next assertion would pass for the wrong reason', code;
   end if;
 
-  code := null;
-  begin
-    execute 'create trigger zz_beside_the_guard before update on public.history_events '
-            'for each row execute function pg_temp.zz_beside_the_guard()';
-  exception when others then
-    code := sqlstate;
-  end;
-  if code is distinct from '42501' then
-    raise exception
-      'a reader created a trigger on public.history_events (got %). TRIGGER is still '
-      'granted, so the guard can be walked around by one that sorts after it.',
-      coalesce(code, 'no error');
-  end if;
+  -- Both roles, because the revoke names both and they are equally reachable: `anon`
+  -- and `authenticated` are NOLOGIN and are both arrived at the same way, by
+  -- `authenticator` and SET ROLE. A trigger `anon` plants fires on other readers'
+  -- updates just as well. Probing only one left half of the revoke unasserted.
+  foreach probe_role in array array['anon', 'authenticated'] loop
+    perform set_config('role', probe_role, true);
+    perform set_config('request.jwt.claims',
+      json_build_object('role', probe_role)::text, true);
+
+    code := null;
+    begin
+      execute 'create trigger zz_beside_the_guard before update on public.history_events '
+              'for each row execute function pg_temp.zz_beside_the_guard()';
+    exception when others then
+      code := sqlstate;
+    end;
+    if code is distinct from '42501' then
+      raise exception
+        '% created a trigger on public.history_events (got %). TRIGGER is still granted to '
+        'that role, so the guard can be walked around by one that sorts after it.',
+        probe_role, coalesce(code, 'no error');
+    end if;
+
+    if has_function_privilege(probe_role, 'public.history_events_keep_readable()', 'execute') then
+      raise exception
+        '% holds EXECUTE on history_events_keep_readable; the revoke in 20260910010000 was undone',
+        probe_role;
+    end if;
+  end loop;
 
   raise notice 'history_events.sql: a read needs a readable pull, summary and work on the '
     'way in, record_read still writes nothing for a pull the caller cannot read and still '
