@@ -37,8 +37,11 @@
 --      trigger can make. Each `*_keep_readable` fires `before update of` its target
 --      columns and refuses -- 42501, the code the policy would have raised -- when
 --      the new target differs from the old and the caller cannot read it. Clearing a
---      column is always allowed; setting one to the value it already holds is not a
---      move.
+--      column is always allowed WHERE IT CAN BE NULL -- `highlights.pull_id` cannot, so
+--      that guard has no `is not null` arm and a clear there is refused by the guard
+--      itself, 42501, before the NOT NULL constraint sees it (see the note below on why
+--      that is not a hole). Setting a column to the value it already holds is not a
+--      move, on any of them.
 --
 -- The trigger functions are `security invoker` (the default, stated by omission as
 -- everywhere else here), so their subqueries run under the caller's own RLS exactly
@@ -170,7 +173,9 @@
 --     (notes.sql:332-333), so nothing there tells the two operators apart. Writing that
 --     comparison as `<>` rather than `is distinct from` therefore survives the whole
 --     suite -- `x <> null` is null, the leg never fires from a null start, and a note
---     lands on a pull its writer cannot read. Its EXECUTE revoke, and `user_questions_keep_readable`'s,
+--     lands on a pull its writer cannot read. A third: `notes.sql` clears `pull_id` but
+--     never `summary_id` alone, so that leg's `is not null` arm is unpinned too, and
+--     dropping it refuses a legitimate clear (both notes columns are nullable). Its EXECUTE revoke, and `user_questions_keep_readable`'s,
 --     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
 --     are tests that do not pin what they cover. Editing another change's test file for a
 --     hole that does not exist is not this one's to do, so it is written down here.
