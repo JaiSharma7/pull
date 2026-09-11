@@ -23,8 +23,8 @@
 -- withdraws a summary from under a highlight, are the owner's acts. The whole file rolls back.
 --
 -- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
--- section 5's "still refused from an unreadable start", and section 7's TRIGGER- and
--- EXECUTE-revoke checks (the guard function does not exist without it).
+-- section 5's "still refused from an unreadable start", and section 7's TRIGGER-,
+-- EXECUTE- and `search_path`-pin checks (the guard function does not exist without it).
 -- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
 -- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried
 -- the owner leg on every command, so section 6's owner-leg probes are a regression
@@ -423,7 +423,7 @@ begin
   -- reachable as an RPC endpoint, which is a door nobody meant to open.)
 
   -- -------------------------------------------------------------------------
-  -- 7. Nobody may put a trigger beside the guard
+  -- 7. Nobody may walk around the guard, and the guard keeps its pin
   --
   -- `before update of <cols>` fires on the SET list and BEFORE triggers run in name
   -- order, so a trigger sorting after `highlights_keep_readable` could set the column the
@@ -486,11 +486,20 @@ begin
   -- the whole suite. It is defence in depth rather than a live hole -- `authenticated`
   -- holds CREATE on neither the database nor `public`, and every reference in the bodies
   -- is schema-qualified -- but an unpinned pin is a promise nothing keeps.
+  -- Matched per ELEMENT, as `lint.sql` does, and on the value rather than the key.
+  -- The first version of this joined proconfig with commas and substring-matched
+  -- `search_path=`, which a function with NO pin satisfies if any other setting's value
+  -- contains that text -- `set application_name = 'search_path=elsewhere'` passed it.
+  -- That is the gap this assertion exists to close, reopened by the assertion itself.
   if not exists (
     select 1 from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
     where p.proname = 'highlights_keep_readable'
-      and coalesce(array_to_string(p.proconfig, ','), '') like '%search_path=%'
+      and p.prorettype = 'pg_catalog.trigger'::regtype
+      and exists (
+        select 1 from unnest(coalesce(p.proconfig, '{}')) cfg
+        where cfg = 'search_path=""'
+      )
   ) then
     raise exception
       'highlights_keep_readable has lost its search_path pin, and db:lint cannot see it: '

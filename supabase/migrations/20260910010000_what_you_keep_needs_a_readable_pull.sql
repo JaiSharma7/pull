@@ -152,14 +152,16 @@
 --     measurement rather than being appended to this file. `convictions`,
 --     `explanations`, `progress`, `interrupt_events` and `recall_events` are the same
 --     shape again. Nothing leaks, but not for the reason an earlier draft gave: six
---     `security definer` functions name `knowledge_states` and TWO of them read it.
+--     `security definer` functions name `knowledge_states` and TWO of them RETURN ROWS
+--     FROM it -- which is the property the leak argument turns on, not reading as such.
 --     `get_daily_pulls` re-filters `published`/`public` on both its candidate and its
 --     output query; `test_out` (20260909010000) joins it, and scopes to
 --     `ks.user_id = auth.uid()` through `readable_path_steps`, which re-filters
 --     readability -- so a forged row naming an unreadable pull can only yield an
 --     ordinal for a step the reader could already open. Of the other four,
 --     `commit_import` and `complete_path_step` write it; `apply_path_step` writes it
---     but READS the column in its SET expression; and `undo_import` never touches it at
+--     but reads the column in its SET expression, which never leaves the row it updates;
+--     and `undo_import` never touches it at
 --     all -- it names it only in a comment about a rejected design, and reaches its rows
 --     solely through the cascade behind `delete from public.pulls`. (Match that set with
 --     `strpos`, not `ilike '%knowledge_states%'`: `_` is a LIKE wildcard and pulls in
