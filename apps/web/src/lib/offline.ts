@@ -916,6 +916,27 @@ async function runDrain(
 ): Promise<number> {
   let drained = 0;
   const blocked = new Set<string>();
+  /*
+   * Writes this pass refused with 42501, held for a verdict at the end.
+   *
+   * 42501 carries two meanings and the SQLSTATE cannot separate them (`rpc-error.ts`
+   * declines to call it permanent for exactly that reason, and should keep declining):
+   * the account may never do this, or the account was not attached because a token
+   * refresh had failed. Since 20260910010000 the first meaning is reachable for a save
+   * -- the pull it names has stopped being readable -- and such a write can never
+   * succeed, so keeping it holds `hasPending` true and the retry timer alive for the
+   * life of the tab, survives reload in IndexedDB, and (via the `blocked.size === 0`
+   * gate below) stops every genuinely permanent write queued behind it from ever being
+   * dropped. `writeScope` is `pull:<id>` for save, unsave, read, recall, explain and
+   * conviction alike, so it freezes that pull's other queued writes too.
+   *
+   * What separates the two meanings is evidence, not a code: ONE write that succeeds in
+   * this same pass proves the session is attached, which leaves refusal as the only
+   * explanation for the others. That verdict can only be reached at the end of the pass,
+   * because the queue drains oldest-first and the refused write is usually seen before
+   * any successful one.
+   */
+  const refusedPermissions: { id: number; kind: string; scope: string; message: string }[] = [];
   try {
     const database = await db();
     if (!database) return drained;
@@ -963,11 +984,36 @@ async function runDrain(
           if (item.id !== undefined) await database.delete('pending', item.id);
           continue;
         }
+        // Held, not judged: see `refusedPermissions` above. Still blocks the scope, so
+        // this pull's later writes keep their order if the refusal turns out transient.
+        if (sqlState(error) === '42501' && item.id !== undefined) {
+          refusedPermissions.push({
+            id: item.id,
+            kind: write.kind,
+            scope,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
         blocked.add(scope);
         continue;
       }
       if (item.id !== undefined) await forget(database, item.id);
       drained += 1;
+    }
+
+    // The verdict. Nothing succeeded, so the refusals are still ambiguous and every
+    // one of them waits for the session to come back -- which is the behaviour
+    // `offline.test.ts` pins, and it is the right one while that is all we know.
+    if (drained > 0) {
+      for (const refused of refusedPermissions) {
+        console.warn('[offline] dropping a queued write the server refused for good', {
+          kind: refused.kind,
+          scope: refused.scope,
+          error: refused.message,
+          reason: 'another write succeeded in this pass, so the session was attached',
+        });
+        await database.delete('pending', refused.id);
+      }
     }
   } catch {
     /* IndexedDB itself is unavailable — nothing to drain */

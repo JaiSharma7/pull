@@ -582,6 +582,44 @@ describe('a write the server refused for good', () => {
     await drainPending(USER_A, async () => undefined);
   });
 
+  it('drops a write RLS refused once another write in the same pass has succeeded', async () => {
+    // The other half of the pair above. A save queued in a tunnel and replayed after
+    // its summary was withdrawn is refused 42501 for good (20260910010000 added the
+    // readability leg that does it), and the code alone cannot say so. One write that
+    // SUCCEEDS in the same pass can: it proves the session is attached, which leaves
+    // refusal as the only reading of the other. Kept, it would hold `hasPending` true
+    // and the retry timer alive for the life of the tab, survive reload, and -- through
+    // the `blocked.size === 0` gate -- stop every genuinely permanent write behind it
+    // from ever being dropped.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'withdrawn' });
+    await queueMutation(USER_A, { kind: 'save', pullId: 'fine' });
+    const denied = new Error('new row violates row-level security policy for table "saved_items"');
+    denied.name = 'PostgrestError 42501';
+
+    await drainPending(USER_A, async (write) => {
+      if (write.kind === 'save' && write.pullId === 'withdrawn') throw denied;
+    });
+
+    // Both gone: one applied, one judged.
+    expect(await hasPending(USER_A)).toBe(false);
+  });
+
+  it('keeps every RLS-refused write when nothing in the pass succeeded', async () => {
+    // The ambiguity is only resolved by evidence. With no successful write there is
+    // none, so a whole queue drained during a failing token refresh still waits rather
+    // than being emptied for good -- the failure the classification exists to avoid.
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p1' });
+    await queueMutation(USER_A, { kind: 'save', pullId: 'p2' });
+    const denied = new Error('permission denied for table saved_items');
+    denied.name = 'PostgrestError 42501';
+
+    await drainPending(USER_A, async () => {
+      throw denied;
+    });
+    expect(await hasPending(USER_A)).toBe(true);
+    await drainPending(USER_A, async () => undefined);
+  });
+
   it('keeps a collection write whose target is a collection still in the queue', async () => {
     // Offline, the reader creates "Stoics", then "Marcus" inside it, then moves a
     // save in. The parent fails transiently on the first pass; only its scope is

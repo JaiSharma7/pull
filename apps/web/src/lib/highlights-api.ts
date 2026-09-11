@@ -9,8 +9,8 @@ import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
 /**
- * Highlights, over a table that has existed since round 1 with nothing writing
- * it. Nothing here adds a read path, so CI check 4's fifth invariant — no two
+ * Highlights, over a table that existed since round 1 with nothing writing it until
+ * `Source.tsx` did. Nothing here adds a read path, so CI check 4's fifth invariant — no two
  * permissive SELECT policies for one role on one table — is untouched:
  * `highlights_select_own` is the table's only one.
  *

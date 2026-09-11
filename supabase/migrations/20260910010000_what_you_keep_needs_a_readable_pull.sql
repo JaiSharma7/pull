@@ -76,13 +76,15 @@
 --     trigger's old/new comparison finds no move (asserted in history_events.sql).
 --   * `remember_pull` (20260905110000) is `security invoker` and inserts into
 --     `saved_items`. It writes `user_questions` first, and `user_questions_insert_own`
---     has carried the readability leg since 20260905110000 -- so on a first call the
---     pull is already known readable by the time the save is written. A REPLAY is the
---     exception worth naming: its question insert is `on conflict do nothing`, so no
---     `with check` runs, and if the save row was deleted meanwhile and the pull has
---     since stopped being readable, the new leg refuses a replay whose first call was
---     accepted. That is the guard working, not a regression -- but it is not the
---     blanket "cannot refuse what that policy accepted" an earlier draft claimed.
+--     has carried the readability leg since 20260905110000, so the pull is known
+--     readable by the time the save is written and this file's leg cannot refuse a
+--     call that got that far. That holds on a REPLAY too, and two earlier drafts of
+--     this paragraph got the mechanism wrong in opposite directions. Measured:
+--     `insert ... on conflict do nothing` DOES evaluate the INSERT `with check` --
+--     Postgres checks the PROPOSED row before conflict arbitration, on `do nothing`
+--     and `do update` alike -- so a replay against a since-withdrawn pull is refused
+--     42501 by `user_questions_insert_own`, first, whether or not the save row
+--     survived. This file is never reached.
 --   * `commit_import` and `undo_import` (same file) are `security definer`, so no
 --     policy applies to them. `commit_import` writes `saved_items` against pulls it
 --     has just created under a summary the caller authors.
@@ -131,11 +133,12 @@
 --     shape again. Nothing leaks: `get_daily_pulls` is the only `security definer`
 --     reader of `knowledge_states` and re-filters `published`/`public` on both its
 --     candidate and its output query.
---   * The TRIGGER revoke above is scoped to the three tables this file makes a claim
---     about. Every other table in `public` still hands `authenticated` that privilege,
---     `notes` and `user_questions` (20260909020000) included, and they carry triggers
---     of exactly this design. Revoking it everywhere is one statement and no risk, but
---     it is a change to every table's grants and belongs in a migration that says so.
+--   * The TRIGGER revoke in section 4 covers the five tables that carry a
+--     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`. Every
+--     OTHER table in `public` still hands `authenticated` that privilege. None of them
+--     has a trigger to walk around, so nothing there is defeatable the way this was;
+--     revoking it everywhere is still the tidier end state and still a change to every
+--     table's grants, which belongs in a migration whose subject that is.
 --   * `authenticated` also holds TRUNCATE on these tables, which bypasses RLS
 --     entirely. Same door (a direct connection), same systemic answer, and not what
 --     this file is about: truncation destroys rows, it does not forge a claim that a
@@ -162,20 +165,39 @@
 --     split, work leg only                            459 us/call
 --     split, all three legs (this migration)          626 us/call     42 buffers
 --
--- The split alone is free. Read as increments over the split baseline of 324: the pull
--- leg and the work leg each cost about 135 us on their own, the summary leg a further
--- 41 on top of the pull leg, and the third leg 126 on top of those -- +302 in total, or
--- +273 over today's `for all`. So they are additive rather than dominated by one, which
--- is what `pulls_read_via_summary` and `works_read_readable` each resolving through
--- `summaries` predicts: every leg is an index lookup plus a policy evaluation. (There is
--- no summary-leg-alone configuration in the harness, so its 41 is measured only on top
--- of the pull leg.) Buffers per insert, which is the capacity number and far less noisy
+-- READ THE FIRST TWO ROWS AS INDISTINGUISHABLE. Interleaved on one loaded database over
+-- eight rounds, `for all` and the bare split come out 337.8 us and 334.5 us, three
+-- microseconds apart, while individual runs swing about ten per cent either way. "The
+-- split alone is free" is the honest reading; "324 vs 353" is not a measurement, and no
+-- arithmetic should be built on the difference. An earlier draft decomposed the guard
+-- into per-leg costs anchored on that number and got 135/135/41/126 us; anchored on the
+-- other run of the same configuration it gets 89/88, which is how you can tell the
+-- decomposition was noise rather than structure. What survives is the direction and the
+-- rough size: three legs, each an index lookup plus a policy evaluation through
+-- `summaries`, and no one of them dominating.
+--
+-- WHAT A REQUEST ACTUALLY PAYS, which the loop above does not show. The harness runs
+-- 2,800 calls inside one transaction and rolls back: no commit, no WAL flush, no
+-- per-request snapshot, so its denominator is smaller than any real request's. Measured
+-- again with pgbench, one client over a local socket, one `record_read` per transaction
+-- with the role and claims set as PostgREST sets them:
+--
+--     empty-transaction floor                     0.211 ms
+--     the `for all` policy, as it is today   1.47-1.56 ms     ~661 tps
+--     split + all three legs (this file)     1.83-1.92 ms     ~534 tps
+--
+-- So +0.36 ms of latency per read, and about a fifth of this path's write throughput.
+-- The latency is reader-invisible against an HTTP round trip -- more clearly so than the
+-- in-transaction +91% suggests -- and the throughput is the number a future reader will
+-- actually want, on free-tier Postgres, so it is stated here rather than left to be
+-- rediscovered. Buffers per insert, which is the capacity number and far less noisy
 -- than wall time, go from 27 to 42 -- +15 shared hits, all cache hits on primary
 -- keys and `summaries_work_idx`.
 --
--- So the guard costs +273 us and +15 buffer hits per read: about +77% of the
--- database time `record_read` already spends, and reader-invisible against an HTTP
--- round trip measured in milliseconds. It is paid, and it is worth paying, because
+-- So the guard costs roughly +300 us of database time and +15 buffer hits per read --
+-- +307 us and +91% on the interleaved medians above, +273 and +77% on the first
+-- non-interleaved run, which is the spread you should read it with -- and +0.36 ms of
+-- real request latency. It is paid, and it is worth paying, because
 -- the alternative is that the one table the app writes most is the one place the
 -- invariant does not hold -- and it is the table a future feature is likeliest to
 -- trust, since `history_events` is what the dwell signal in `get_feed`
@@ -184,7 +206,10 @@
 -- A cheaper form was considered and rejected: require the triple to be internally
 -- consistent (`summary_id` = the pull's summary, `work_id` = that summary's work)
 -- rather than independently readable, which short-circuits the third subquery and
--- lands near the 500 us row. It is stronger AND cheaper, and it is also a different
+-- lands near the 500 us row -- measured at 564 us against this guard's 631 on the same
+-- harness, so it saves about 67 us and not the 125 an earlier draft credited it with,
+-- which makes its case weaker than this file first stated. It is stronger AND cheaper
+-- for that price, and it is also a different
 -- claim, expressed as three interlocking conditions that a reviewer has to hold in
 -- their head at once. The plain `is null or exists` leg is the one 20260909020000
 -- established, reads the same on all four tables, and is obviously right at a
@@ -197,7 +222,7 @@
 -- `highlights.pull_id` is `not null` (20260829124532), so there is no `is null` arm
 -- here and none in the trigger: a highlight always names a pull.
 
-drop policy if exists highlights_own on public.highlights;
+drop policy highlights_own on public.highlights;
 
 create policy highlights_select_own on public.highlights
   for select using ((select auth.uid()) = user_id);
@@ -268,7 +293,7 @@ comment on policy highlights_delete_own on public.highlights is
 -- legs are written `is null or exists` anyway, because a policy that depends on a
 -- check constraint for its correctness is one `alter table` away from being wrong.
 
-drop policy if exists saved_items_own on public.saved_items;
+drop policy saved_items_own on public.saved_items;
 
 create policy saved_items_select_own on public.saved_items
   for select using ((select auth.uid()) = user_id);
@@ -351,7 +376,7 @@ comment on policy saved_items_delete_own on public.saved_items is
 -- is readable when a readable summary sits behind it (works_read_readable,
 -- 20260905101000), so naming one a reader cannot see is the same false claim.
 
-drop policy if exists history_events_own on public.history_events;
+drop policy history_events_own on public.history_events;
 
 create policy history_events_select_own on public.history_events
   for select using ((select auth.uid()) = user_id);
@@ -454,10 +479,19 @@ comment on policy history_events_delete_own on public.history_events is
 -- privilege the app actually uses -- and loses only the one that lets it rewrite a row
 -- behind the guard's back.
 --
--- Scoped to these three tables on purpose: they are the ones this file makes a claim
--- about. The same privilege is still held on every other table, `notes` and
--- `user_questions` among them, and taking it away everywhere belongs in a migration
--- whose subject that is. See the header's "does not fix".
+-- Scoped to the five tables that carry a `*_keep_readable` trigger: these three, and
+-- `notes` and `user_questions` from 20260905110000 and 20260909020000. Those two are the
+-- precedent this file extends, and the review reproduced the same walk-around against
+-- them on `main` -- a trigger sorting after `notes_keep_readable`, an update naming only
+-- `body`, and the note lands on a pull its writer cannot read. Shipping the guard on
+-- three tables while two carrying the identical guard stayed bypassable would be the
+-- invariant-that-holds-everywhere-but-here this file's own header argues against, and it
+-- costs two identifiers.
+--
+-- Every other table in `public` keeps the privilege. None of them has a trigger to walk
+-- around, so this is the whole of the reachable class; taking it away everywhere is a
+-- change to every table's grants and belongs in a migration that says so.
 
-revoke trigger on public.highlights, public.saved_items, public.history_events
+revoke trigger on public.highlights, public.saved_items, public.history_events,
+                  public.notes, public.user_questions
   from anon, authenticated;

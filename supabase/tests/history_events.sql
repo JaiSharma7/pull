@@ -430,7 +430,64 @@ begin
   end if;
 
   -- -------------------------------------------------------------------------
-  -- 6. Nobody may put a trigger beside the guard
+  -- 6. The split kept the owner leg on the WRITE halves, not just SELECT
+  --
+  -- Section 3 proves the owner scope survived on SELECT. These three prove it on
+  -- INSERT, UPDATE and DELETE, which nothing here used to check -- and the gap was
+  -- not theoretical: dropping `(select auth.uid()) = user_id` from the INSERT policy
+  -- alone, the most plausible slip when hand-expanding one `for all` into four,
+  -- passed every assertion in this file while letting a reader write rows into a
+  -- stranger's account.
+  --
+  -- The UPDATE and DELETE probes carry NO `where`, deliberately. A `where id = ...`
+  -- is filtered by the SELECT policy first, so it passes even against a write policy
+  -- of `using (true)`; unqualified, each reaches every row its policy admits.
+  -- -------------------------------------------------------------------------
+  code := null;
+  begin
+    insert into public.history_events (user_id, kind, pull_id)
+    values (reader_a, 'read', public_pull);
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B wrote a read into reader A''s account (got %). The INSERT policy '
+      'lost its owner leg in the split.', coalesce(code, 'no error');
+  end if;
+
+  -- Counted as the OWNER, not as reader B. Under B's own SELECT policy A's rows are
+  -- invisible, so `count(*) where user_id = reader_a` is 0 whether or not the write
+  -- landed -- which would make both of these pass for the wrong reason.
+  update public.history_events set dwell_ms = 424242;
+  perform pg_temp.as_owner();
+  select count(*) into n from public.history_events where user_id = reader_a and dwell_ms = 424242;
+  if n <> 0 then
+    raise exception
+      'reader B amended % of reader A''s history_events rows through the update policy', n;
+  end if;
+  perform pg_temp.become(reader_b);
+
+  delete from public.history_events;
+  perform pg_temp.as_owner();
+  select count(*) into n from public.history_events where user_id = reader_a;
+  if n <> 1 then
+    raise exception
+      'reader B deleted reader A''s history_events rows through the delete policy '
+      '(1 expected, % left)', n;
+  end if;
+  perform pg_temp.become(reader_b);
+
+  -- Section 7 uses a pg_temp function precisely because EXECUTE on this one is
+  -- revoked. Assert that, or section 7 could start passing for the wrong reason.
+  if has_function_privilege('authenticated', 'public.history_events_keep_readable()', 'execute') then
+    raise exception
+      'authenticated holds EXECUTE on history_events_keep_readable; 20260829124835''s '
+      'revoke was undone and section 7 no longer tests what it says it tests';
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- 7. Nobody may put a trigger beside the guard
   --
   -- `before update of <cols>` fires on the SET list and BEFORE triggers run in name
   -- order, so a trigger sorting after `history_events_keep_readable` could set the column the

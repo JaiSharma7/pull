@@ -485,7 +485,10 @@ export function Feed({
          * where nothing was held back -- it also stops every genuinely permanent
          * write queued behind it from ever being dropped. Queueing only transport
          * failures keeps that whole class out of the queue instead of teaching the
-         * queue to recognise it.
+         * queue to recognise it -- for the ONLINE half. A save queued in a tunnel and
+         * replayed after the withdrawal still enters the queue, and cannot be kept out
+         * of it from here; `runDrain` judges that one on the way out, once a write that
+         * succeeds in the same pass has proved the session was attached.
          */
         if (await queueIfOffline(userId, e, { kind: wasSaved ? 'unsave' : 'save', pullId: row.id }))
           return;

@@ -66,7 +66,7 @@ interface HistoryRow {
 /**
  * A reader's own history, newest first.
  *
- * No `user_id` filter: `history_events_own` already scopes this to `auth.uid()`, and
+ * No `user_id` filter: `history_events_select_own` already scopes this to `auth.uid()`, and
  * a second client-side filter would be a claim about correctness that RLS is the only
  * thing actually enforcing. Filtering here would also hide the failure if the policy
  * were ever wrong, which is the opposite of useful.
