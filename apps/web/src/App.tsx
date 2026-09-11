@@ -994,7 +994,7 @@ export function App() {
               />
             )}
             {exploreOpen && <Explore onNavigate={navigate} />}
-            {pathsOpen && <Paths onNavigate={navigate} />}
+            {pathsOpen && <Paths userId={session?.user.id ?? null} onNavigate={navigate} />}
             {pathSlug !== null && (
               <Path
                 key={pathSlug}
