@@ -421,6 +421,7 @@ end $$;
 do $$
 declare
   code text;
+  probe_role text;
 begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claims',
@@ -439,19 +440,29 @@ begin
       'next assertion would pass for the wrong reason', code;
   end if;
 
-  code := null;
-  begin
-    execute 'create trigger zz_beside_the_guard before update on public.notes '
-            'for each row execute function pg_temp.zz_beside_notes()';
-  exception when others then
-    code := sqlstate;
-  end;
-  if code is distinct from '42501' then
-    raise exception
-      'a reader created a trigger on public.notes (got %). TRIGGER is granted again, '
-      'so `notes_keep_readable` can be walked around by one that sorts after it.',
-      coalesce(code, 'no error');
-  end if;
+  -- Both roles, because the revoke names both and they are equally reachable: `anon`
+  -- and `authenticated` are NOLOGIN and are both arrived at the same way, by
+  -- `authenticator` and SET ROLE. A trigger `anon` plants fires on other readers'
+  -- updates just as well, so probing one leaves half the revoke unasserted.
+  foreach probe_role in array array['anon', 'authenticated'] loop
+    perform set_config('role', probe_role, true);
+    perform set_config('request.jwt.claims',
+      json_build_object('role', probe_role)::text, true);
+
+    code := null;
+    begin
+      execute 'create trigger zz_beside_the_guard before update on public.notes '
+              'for each row execute function pg_temp.zz_beside_notes()';
+    exception when others then
+      code := sqlstate;
+    end;
+    if code is distinct from '42501' then
+      raise exception
+        '% created a trigger on public.notes (got %). TRIGGER is granted again to '
+        'that role, so `notes_keep_readable` can be walked around by one that sorts after it.',
+        probe_role, coalesce(code, 'no error');
+    end if;
+  end loop;
 
   perform set_config('role', 'postgres', true);
   perform set_config('request.jwt.claims', '', true);

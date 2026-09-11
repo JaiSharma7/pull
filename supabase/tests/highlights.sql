@@ -23,8 +23,8 @@
 -- withdraws a summary from under a highlight, are the owner's acts. The whole file rolls back.
 --
 -- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
--- section 5's "still refused from an unreadable start", section 6's EXECUTE-revoke check
--- (the function does not exist without it) and section 7's trigger revoke.
+-- section 5's "still refused from an unreadable start", and section 7's TRIGGER- and
+-- EXECUTE-revoke checks (the guard function does not exist without it).
 -- Sections 2 and 3, section 6's OWNER-LEG probes, and the nonexistent-target check (which accepts the foreign key's
 -- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried
 -- the owner leg on every command, so section 6's owner-leg probes are a regression
@@ -416,12 +416,11 @@ begin
   end if;
   perform pg_temp.become(reader_b);
 
-  -- The trigger function's own EXECUTE revoke, which nothing else asserts. It is NOT
-  -- what makes section 7 work -- that probe never names this function, and it is
-  -- refused identically with EXECUTE granted (measured) -- so this stands on its own:
-  -- a trigger function reachable as an RPC endpoint is a door nobody meant to open.
-  -- (The EXECUTE revoke is asserted for BOTH roles in section 7, beside the TRIGGER
-  -- revoke it belongs with.)
+  -- (The trigger function's own EXECUTE revoke is asserted in section 7, for both
+  -- roles, beside the TRIGGER revoke it belongs with. It stands on its own rather than
+  -- propping section 7 up: that probe never names this function, and is refused
+  -- identically with EXECUTE granted -- measured. What it guards is a trigger function
+  -- reachable as an RPC endpoint, which is a door nobody meant to open.)
 
   -- -------------------------------------------------------------------------
   -- 7. Nobody may put a trigger beside the guard

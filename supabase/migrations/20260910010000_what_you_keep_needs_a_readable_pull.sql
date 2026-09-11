@@ -157,13 +157,16 @@
 --     entirely. Same door (a direct connection), same systemic answer, and not what
 --     this file is about: truncation destroys rows, it does not forge a claim that a
 --     pull was readable.
---   * `notes_keep_readable` (20260909020000) has the same NULL-comparison coverage gap
---     these three just closed: `notes.sql` only ever moves a column that already held a
---     value, so writing that guard's comparison as `<>` instead of `is distinct from`
---     survives its file -- `x <> null` is null, so the leg never fires from a null start
---     and a note lands on an unreadable summary. The SHIPPED code is correct; it is the
---     test that does not pin the operator. Fixing it means editing another change's test
---     file for a hole that does not exist, so it is written here instead.
+--   * `notes_keep_readable` (20260909020000) keeps a NULL-comparison coverage gap on ONE
+--     of its two legs, the kind the three files here now close on all six of theirs.
+--     `notes.sql` does move `summary_id` from a null start, so that leg's operator is
+--     pinned; `pull_id` is only ever moved from a value it already held, so writing that
+--     comparison as `<>` rather than `is distinct from` survives the whole suite -- `x <>
+--     null` is null, the leg never fires from a null start, and a note lands on a pull
+--     its writer cannot read. Its EXECUTE revoke, and `user_questions_keep_readable`'s,
+--     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
+--     are tests that do not pin what they cover. Editing another change's test file for a
+--     hole that does not exist is not this one's to do, so it is written down here.
 --   * THE OFFLINE QUEUE, which is this migration's own blast radius rather than an
 --     older table's. A save made in a tunnel is queued, and replayed on reconnect; if
 --     the summary was withdrawn in between, the leg above refuses the replay with
