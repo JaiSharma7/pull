@@ -158,12 +158,15 @@
 --     this file is about: truncation destroys rows, it does not forge a claim that a
 --     pull was readable.
 --   * `notes_keep_readable` (20260909020000) keeps a NULL-comparison coverage gap on ONE
---     of its two legs, the kind the three files here now close on all six of theirs.
+--     of its two legs, the kind the three files here now close on the five of their six
+--     that can have one -- `highlights.pull_id` is `not null` (20260829124532), so no
+--     move on it ever starts from null and `<>` there is an equivalent, not a gap.
 --     `notes.sql` does move `summary_id` from a null start, so that leg's operator is
---     pinned; `pull_id` is only ever moved from a value it already held, so writing that
---     comparison as `<>` rather than `is distinct from` survives the whole suite -- `x <>
---     null` is null, the leg never fires from a null start, and a note lands on a pull
---     its writer cannot read. Its EXECUTE revoke, and `user_questions_keep_readable`'s,
+--     pinned; `pull_id` is moved from a null start only onto a pull the reader CAN read
+--     (notes.sql:332-333), so nothing there tells the two operators apart. Writing that
+--     comparison as `<>` rather than `is distinct from` therefore survives the whole
+--     suite -- `x <> null` is null, the leg never fires from a null start, and a note
+--     lands on a pull its writer cannot read. Its EXECUTE revoke, and `user_questions_keep_readable`'s,
 --     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
 --     are tests that do not pin what they cover. Editing another change's test file for a
 --     hole that does not exist is not this one's to do, so it is written down here.

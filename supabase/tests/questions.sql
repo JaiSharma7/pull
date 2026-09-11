@@ -1511,7 +1511,7 @@ end $$;
 -- something its owner cannot read. Reproduced against this table before 20260910010000
 -- revoked TRIGGER from anon and authenticated on it.
 --
--- The guard here predates that migration (20260905110000); the revoke that makes it
+-- The guard here predates that migration (20260909020000); the revoke that makes it
 -- unwalkable does not, which is exactly why the assertion belongs in this file rather
 -- than only beside the three tables 20260910010000 is otherwise about. A later migration
 -- re-granting TRIGGER would reopen the hole, and nothing else in the suite would notice.

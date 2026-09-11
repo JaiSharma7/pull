@@ -433,6 +433,24 @@ begin
       'compares with <> rather than IS DISTINCT FROM.', coalesce(code, 'no error');
   end if;
 
+  -- Clearing a guarded column is always allowed, which is what `new.<col> is not null`
+  -- on each leg buys. Nothing here cleared one, so dropping that arm from all three legs
+  -- survived this file while making every clear raise 42501 -- refusing what the
+  -- migration header promises. It over-fires rather than letting anything through, but
+  -- an unkept promise is still a defect. saved_items.sql and notes.sql both clear.
+  code := null;
+  begin
+    update public.history_events set summary_id = null, work_id = null
+     where id = event_null_pull;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'reader B could not clear the summary and work off their own event (got %). The '
+      'trigger is judging the row rather than the move.', code;
+  end if;
+
   delete from public.history_events where id = event_null_pull;
 
   -- And a move onto something READABLE still works, or a guard that refuses EVERY move
