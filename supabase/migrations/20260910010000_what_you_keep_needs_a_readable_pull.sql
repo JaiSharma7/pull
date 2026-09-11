@@ -143,9 +143,13 @@
 --     the same cost question `history_events` carried here, and it deserves the same
 --     measurement rather than being appended to this file. `convictions`,
 --     `explanations`, `progress`, `interrupt_events` and `recall_events` are the same
---     shape again. Nothing leaks: `get_daily_pulls` is the only `security definer`
---     reader of `knowledge_states` and re-filters `published`/`public` on both its
---     candidate and its output query.
+--     shape again. Nothing leaks, but not for the reason an earlier draft gave: six
+--     `security definer` functions name `knowledge_states` and TWO of them read it.
+--     `get_daily_pulls` re-filters `published`/`public` on both its candidate and its
+--     output query; `test_out` (20260909010000) joins it, and scopes to
+--     `ks.user_id = auth.uid()` through `readable_path_steps`, which re-filters
+--     readability -- so a forged row naming an unreadable pull can only yield an
+--     ordinal for a step the reader could already open. The other four only write it.
 --   * The TRIGGER revoke in section 4 covers the five tables that carry a
 --     `*_keep_readable` trigger -- these three, plus `notes` and `user_questions`.
 --     Almost every other table in `public` still hands `authenticated` that privilege
@@ -175,7 +179,8 @@
 --     suite -- `x <> null` is null, the leg never fires from a null start, and a note
 --     lands on a pull its writer cannot read. A third: `notes.sql` clears `pull_id` but
 --     never `summary_id` alone, so that leg's `is not null` arm is unpinned too, and
---     dropping it refuses a legitimate clear (both notes columns are nullable). Its EXECUTE revoke, and `user_questions_keep_readable`'s,
+-- dropping it refuses a legitimate clear (both notes columns are nullable). Its
+--     EXECUTE revoke, and `user_questions_keep_readable`'s,
 --     are likewise asserted by nothing. The SHIPPED code is correct in every case; these
 --     are tests that do not pin what they cover. Editing another change's test file for a
 --     hole that does not exist is not this one's to do, so it is written down here.
@@ -540,7 +545,8 @@ comment on policy history_events_delete_own on public.history_events is
 -- costs two identifiers.
 --
 -- Every other table in `public` keeps the privilege (bar `daily_pull_selections`,
--- which 20260907010000 revoked it from). Eleven carry triggers, but none of those gates on a column's value --
+-- which 20260907010000 revoked it from). Eleven carry triggers, but none of those
+-- gates on a column's value --
 -- `set_updated_at` stamps a timestamp, and `rights_requests_rate_limit` never reads
 -- `new` -- so there is nothing for a later-sorting trigger to rewrite and this is the
 -- whole of the reachable class. Taking the privilege away everywhere is a change to
