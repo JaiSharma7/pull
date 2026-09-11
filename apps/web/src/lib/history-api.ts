@@ -11,8 +11,11 @@ import { supabase } from './supabase.js';
  * is a claim, not a feature.
  *
  * Affordable by design rather than by subsidy: these are rows in Postgres under an
- * owner-only RLS policy (`history_events_own`), so "unlimited" costs what storage
- * costs. No model runs here (law 2).
+ * owner-only RLS policy (`history_events_select_own`, split out of `history_events_own`
+ * by 20260910010000), so "unlimited" costs what storage costs. No model runs here
+ * (law 2). Nothing on this screen writes; `record_read` is still the only writer, and
+ * the readability legs that migration added to the insert half cannot refuse it,
+ * because it already selects through the caller's own RLS.
  */
 
 /**
@@ -63,7 +66,7 @@ interface HistoryRow {
 /**
  * A reader's own history, newest first.
  *
- * No `user_id` filter: `history_events_own` already scopes this to `auth.uid()`, and
+ * No `user_id` filter: `history_events_select_own` already scopes this to `auth.uid()`, and
  * a second client-side filter would be a claim about correctness that RLS is the only
  * thing actually enforcing. Filtering here would also hide the failure if the policy
  * were ever wrong, which is the opposite of useful.

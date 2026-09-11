@@ -14,6 +14,13 @@ export interface FeedRow {
   summaryTitle: string;
   work: { id: string; title: string; slug: string; kind: string; year: number | null };
   score: number;
+  /**
+   * Why this card, in the reader's terms: the scoring term that contributed most,
+   * as one of six sentences, or null when nothing about this reader or this card was
+   * measured. Since 20260909050000. Optional because a row cached in IndexedDB can
+   * predate it; read it as `row.reason ?? null`.
+   */
+  reason?: string | null;
 }
 
 export interface InterleaveSlot {

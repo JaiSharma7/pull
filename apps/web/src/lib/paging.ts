@@ -1,3 +1,5 @@
+import { rpcError } from './rpc-error.js';
+
 /**
  * Walk a PostgREST range until it runs out.
  *
@@ -36,6 +38,14 @@
  */
 const MAX_ROWS = 100;
 
+/*
+ * `throw rpcError(error)`, not `throw error`. supabase-js resolves with a plain error
+ * object, and a plain object thrown here reaches a screen as "[object Object]" -- the
+ * dashboard's failed state rendered exactly that (review finding). Normalised at the
+ * throw site, as `rpc-error.ts` says, so every caller of either walk gets an Error
+ * whose name still carries the SQLSTATE for `isSchemaMismatch` and `isOfflineFailure`.
+ */
+
 /**
  * A page bigger than the server will send is a bug in the caller, not a slow path.
  *
@@ -62,7 +72,7 @@ export async function pageAll<T>(
 
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await fetchRange(from, from + pageSize - 1);
-    if (error) throw error;
+    if (error) throw rpcError(error);
 
     const rows = data ?? [];
     all.push(...rows);
@@ -104,7 +114,7 @@ export async function pageAfter<T extends object>(
 
   for (;;) {
     const { data, error } = await fetchAfter(after, pageSize);
-    if (error) throw error;
+    if (error) throw rpcError(error);
 
     const rows = data ?? [];
     all.push(...rows);

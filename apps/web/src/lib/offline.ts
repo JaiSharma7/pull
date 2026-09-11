@@ -1132,8 +1132,9 @@ export async function queueIfOffline(
    * The two functions answer different questions. `queueMutation` says whether the write
    * is on disk, which is what a caller telling the reader "recorded" needs. This says
    * whether the failure was an offline one that has been taken off the caller's hands —
-   * which is what its callers actually branch on, and all three of them reload the screen
-   * when it is false.
+   * which is what its callers actually branch on: the three in `Library.tsx` reload the
+   * screen when it is false, and `Feed`'s save handler reverts its optimistic state
+   * instead.
    *
    * Propagating persistence collapsed those into one value, and a dead IndexedDB then
    * read as "the server refused this". A reader with site data blocked, moving a kept

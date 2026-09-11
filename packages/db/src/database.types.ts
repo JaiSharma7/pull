@@ -1118,6 +1118,32 @@ export type Database = {
           },
         ]
       }
+      muted_works: {
+        Row: {
+          muted_at: string
+          user_id: string
+          work_id: string
+        }
+        Insert: {
+          muted_at?: string
+          user_id: string
+          work_id: string
+        }
+        Update: {
+          muted_at?: string
+          user_id?: string
+          work_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "muted_works_work_id_fkey"
+            columns: ["work_id"]
+            isOneToOne: false
+            referencedRelation: "works"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notes: {
         Row: {
           body: string

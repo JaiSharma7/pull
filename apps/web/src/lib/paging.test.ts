@@ -61,6 +61,18 @@ describe('pageAll', () => {
     await expect(pageAll(fetchRange)).rejects.toBe(boom);
   });
 
+  it("throws a real Error for PostgREST's plain error object, keeping its code", async () => {
+    // supabase-js resolves with `{ error: { message, code, ... } }`; thrown as is, a
+    // screen renders "[object Object]" where the message should be.
+    const refused = { message: 'permission denied for table notes', code: '42501' };
+    const fetchRange = vi.fn(async () => ({ data: null, error: refused }));
+    await expect(pageAll(fetchRange)).rejects.toMatchObject({
+      message: 'permission denied for table notes',
+      name: 'PostgrestError 42501',
+    });
+    await expect(pageAll(fetchRange)).rejects.toBeInstanceOf(Error);
+  });
+
   it('treats a null data with no error as the end', async () => {
     const fetchRange = vi.fn(async () => ({ data: null, error: null }));
     expect(await pageAll(fetchRange)).toEqual([]);
