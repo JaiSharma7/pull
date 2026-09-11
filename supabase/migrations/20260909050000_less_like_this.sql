@@ -14,14 +14,19 @@
 -- foreign key indexed on its leading column.
 --
 -- `get_feed` is restated from 20260831210000, its current definition; nothing later
--- touched it. The body differs in exactly these places: the `pool` CTE drops a muted
--- work beside the `feed_impressions` anti-join it copies; the `scored` CTE is split
--- into `termed` (the eight terms, each measured once and named), `scored` (the same
--- weighted sum in the same order) and `reasoned` (the reason, read off the named
--- terms); `diversified` reads from `reasoned`; and the row payload carries `reason`.
--- The weights, their order and every neutral are 20260831210000's, and
--- delta_negation.sql asserts the score for a reader who knows an opposed idea equals
--- the score for a reader who knows nothing, so a slip in any weight fails there.
+-- touched it. The body differs in exactly these places: the `pool` CTE is split into
+-- `candidates` (the cheap columns, with `topic_affinity` computed once and carried as
+-- `affinity`) and `pool` (the same cheap score, the same cut), and drops a muted work
+-- beside the `feed_impressions` anti-join it copies; the `scored` CTE is split into
+-- `termed` (the eight terms, each measured once and named, `affinity` read off the
+-- pool) and `scored` (the same weighted sum in the same order); after `final`, three
+-- CTEs -- `lifted`, `eligible`, `reasoned` -- compute the reason for the rows that are
+-- actually emitted, not the shortlist; and the row payload carries `reason`. The
+-- weights, their order and every neutral are 20260831210000's; diff the two before
+-- reviewing it, because that diff is the only thing that holds the weights.
+-- delta_negation.sql holds something narrower and still worth having: that a reader
+-- who knows an opposed idea scores exactly as one who knows nothing, so a change that
+-- lets a contradiction back into the comparison fails there.
 --
 -- Law 2 holds: SQL, an average, and a distance. No model runs in the read path.
 
@@ -190,16 +195,18 @@ begin
   dwell_baseline as (select avg(mean_ms) as base from dwell_by_topic),
   -- Cheap signals only: no knowledge lookup and no vector maths, so this is the
   -- one stage that may touch the whole catalogue.
-  pool as (
+  -- Stated preference, computed once per candidate and carried: the cheap score
+  -- below and the full score in `termed` both read it, where the old body called
+  -- `topic_affinity` a second time per shortlist row.
+  candidates as (
     select p.id, p.summary_id, p.ordinal, p.headline, p.body, p.explanation,
            p.example, p.why_it_matters, p.estimated_read_seconds, p.embedding,
            s.id as sum_id, s.title as summary_title, s.published_at,
            w.id as work_id, w.title as work_title, w.slug as work_slug,
            w.kind as work_kind, w.year as work_year,
            w.quality_score, w.trust_score,
-           (  0.6 * public.topic_affinity(w.id, weights)
-            + 0.3 * w.quality_score
-            + 0.1 * public.seeded_unit(p_seed, p_page, p.ordinal, 'shortlist')) as cheap_score
+           public.topic_affinity(w.id, weights) as affinity,
+           public.seeded_unit(p_seed, p_page, p.ordinal, 'shortlist') as shortlist_unit
     from public.pulls p
     join public.summaries s on s.id = p.summary_id
     join public.works w on w.id = s.work_id
@@ -222,6 +229,13 @@ begin
         select 1 from public.muted_works mw
         where mw.user_id = uid and mw.work_id = w.id
       ))
+  ),
+  pool as (
+    select c.*,
+           (  0.6 * c.affinity
+            + 0.3 * c.quality_score
+            + 0.1 * c.shortlist_unit) as cheap_score
+    from candidates c
     order by cheap_score desc
     limit pool_size
   ),
@@ -280,7 +294,6 @@ begin
    */
   termed as (
     select mk.*,
-      public.topic_affinity(mk.work_id, weights) as affinity,
       /*
        * Revealed preference, capped at 0.08 and taken out of stated preference's
        * share rather than added on top — the weights sum to 1.0 and a term that
@@ -326,69 +339,74 @@ begin
       ) as score
     from termed t
   ),
-  /*
-   * WHY THIS CARD, in the reader's terms: the term that contributed most to its
-   * score. Contributions -- weight times value -- are compared, not raw values, and
-   * a term sitting at its neutral default is not a candidate at all. Both matter for
-   * the same reader: someone new, with no preferences and no knowledge vector, has
-   * affinity 0.20 * 0 = 0 and closeness 0.18 * 0.5 = 0.09, so a naive max would tell
-   * a reader who has read nothing that this is close to what they have been reading.
-   * Dwell folds into closeness and trust into quality, as the plan names them.
-   * "A little chance" -- the jitter -- is a candidate only beside a measured signal:
-   * on its own it would be every card's reason for every new reader, and a reason
-   * exists so the reader can act on it. NULL when nothing about this reader or this
-   * card was measured.
-   *
-   * On a corpus where every work is rated well -- the seed is -- "A well-regarded
-   * source" will be the reason often. That is true of the corpus, not a defect of
-   * the rule; a work at the schema default of 0.5 is neutral and says nothing.
-   */
-  reasoned as (
-    select s.*,
-      case
-        when s.affinity > 0
-          or s.closeness_measured is not null or s.dwell_measured is not null
-          or s.quality_score <> 0.5 or s.trust_score <> 0.5
-          or s.nearest is not null
-          or coalesce(s.recency_measured, 0) > 0
-        then (
-          select r.label
-          from (values
-            ('A topic you asked for',
-             (0.20 * s.affinity)::double precision,
-             s.affinity > 0),
-            ('Close to what you have been reading',
-             (0.18 * coalesce(s.closeness_measured, 0)
-              + 0.08 * coalesce(s.dwell_measured, 0))::double precision,
-             s.closeness_measured is not null or s.dwell_measured is not null),
-            ('A well-regarded source',
-             (case when s.quality_score <> 0.5 then 0.16 * s.quality_score else 0 end
-              + case when s.trust_score <> 0.5 then 0.08 * s.trust_score else 0 end
-             )::double precision,
-             s.quality_score <> 0.5 or s.trust_score <> 0.5),
-            ('New to you',
-             (0.12 * least(1.0, s.novelty_distance))::double precision,
-             s.nearest is not null),
-            ('Recently added',
-             (0.08 * coalesce(s.recency_measured, 0))::double precision,
-             coalesce(s.recency_measured, 0) > 0),
-            ('A little chance',
-             (0.10 * s.jitter)::double precision,
-             true)
-          ) as r(label, contribution, eligible)
-          where r.eligible
-          order by r.contribution desc, r.label
-          limit 1)
-      end as reason
-    from scored s
-  ),
   diversified as (
     select s.*, row_number() over (partition by s.work_id order by s.score desc) as per_work
-    from reasoned s
+    from scored s
     where not s.covered
   ),
   final as (
     select * from diversified where per_work <= 2 order by score desc limit p_limit
+  ),
+  /*
+   * WHY THIS CARD, in the reader's terms: the term that lifted its score furthest
+   * above what a card with nothing measured would get. Each term's LIFT is its weight
+   * times its distance above its neutral -- 0 for affinity, 0.5 for everything else --
+   * and only a positive lift can be the reason. Two traps this shape closes. Comparing
+   * raw values or raw contributions lets a term at its neutral win: a new reader has
+   * affinity 0.20 * 0 = 0 and closeness 0.18 * 0.5 = 0.09, so a naive max tells someone
+   * who has read nothing that a card is close to what they have been reading. And a
+   * term BELOW its neutral must not be the reason either: a source rated 0.3 still
+   * contributes 0.16 * 0.3 to the score, but "A well-regarded source" over it is a
+   * lie, and a candidate 0.15 from a known idea -- just past the covered line -- is
+   * not "New to you". Dwell folds into closeness and trust into quality, as the plan
+   * names them; a term with nothing measured sits at its neutral and lifts nothing.
+   * "A little chance" -- the jitter -- is a candidate only beside a measured signal:
+   * on its own it would be every card's reason for every new reader, and a reason
+   * exists so the reader can act on it. NULL when nothing lifted the card.
+   *
+   * Computed here, after the cut, for the rows the reader will see -- not in the
+   * shortlist, where it would run four hundred times to serve twenty.
+   */
+  lifted as (
+    select f.*,
+      (0.20 * f.affinity)::double precision as affinity_lift,
+      (  0.18 * (coalesce(f.closeness_measured, 0.5) - 0.5)
+       + 0.08 * (coalesce(f.dwell_measured, 0.5) - 0.5))::double precision as close_lift,
+      (  0.16 * (f.quality_score - 0.5)
+       + 0.08 * (f.trust_score - 0.5))::double precision as regarded_lift,
+      (0.12 * (least(1.0, f.novelty_distance) - 0.5))::double precision as new_lift,
+      (0.08 * (coalesce(f.recency_measured, 0.5) - 0.5))::double precision as recent_lift,
+      (0.10 * (f.jitter - 0.5))::double precision as chance_lift
+    from final f
+  ),
+  -- Each rule once. Novelty lifts only when it was measured: with nothing known the
+  -- distance defaults to 1.0, which is the absence of a comparison, not a finding.
+  eligible as (
+    select l.*,
+      l.affinity_lift > 0                             as affinity_ok,
+      l.close_lift > 0                                as close_ok,
+      l.regarded_lift > 0                             as regarded_ok,
+      (l.nearest is not null and l.new_lift > 0)      as new_ok,
+      l.recent_lift > 0                               as recent_ok
+    from lifted l
+  ),
+  reasoned as (
+    select e.*,
+      (select r.label
+         from (values
+           ('A topic you asked for',               e.affinity_lift, e.affinity_ok),
+           ('Close to what you have been reading', e.close_lift,    e.close_ok),
+           ('A well-regarded source',              e.regarded_lift, e.regarded_ok),
+           ('New to you',                          e.new_lift,      e.new_ok),
+           ('Recently added',                      e.recent_lift,   e.recent_ok),
+           ('A little chance',                     e.chance_lift,
+            e.chance_lift > 0
+              and (e.affinity_ok or e.close_ok or e.regarded_ok or e.new_ok or e.recent_ok))
+         ) as r(label, lift, eligible)
+        where r.eligible
+        order by r.lift desc, r.label
+        limit 1) as reason
+    from eligible e
   ),
   rows_json as (
     select coalesce(jsonb_agg(jsonb_build_object(
@@ -403,7 +421,7 @@ begin
       'score', round(f.score::numeric, 4),
       'reason', f.reason
     ) order by f.score desc), '[]'::jsonb) as v
-    from final f
+    from reasoned f
   ),
   covered_delta as (
     select count(*) as n, coalesce(sum(estimated_read_seconds), 0) as secs

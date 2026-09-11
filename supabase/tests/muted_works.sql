@@ -11,12 +11,12 @@
 --   * every reason is one of the six sentences or nothing
 --   * a reader who has read nothing is never told a card is close to what they have
 --     been reading, or new to them, or from a well-regarded source when the source
---     sits at the schema default -- the neutral-default trap
+--     is rated below neutral -- a term at or under its neutral is never the reason
 --   * a reader who asked for a topic is told so, when nothing else about the card is
 --     measured
 --
--- Every assertion runs as a real reader under RLS; the fixture and the one edit to
--- a work's scores are the owner's. The whole file rolls back.
+-- Every assertion runs as a real reader under RLS; the fixture, including the one
+-- edit to a work's scores, is the owner's. The whole file rolls back.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
@@ -42,21 +42,15 @@ begin
   perform pg_temp.assert_is_reader();
 end $fn$;
 
-create or replace function pg_temp.as_owner() returns void
-language plpgsql as $fn$
-begin
-  perform set_config('role', 'postgres', true);
-  perform set_config('request.jwt.claims', '', true);
-end $fn$;
-
 do $$
 declare
   reader_a  uuid := extensions.gen_random_uuid();  -- asked for philosophy
   reader_b  uuid := extensions.gen_random_uuid();  -- has read nothing, asked nothing
   author_c  uuid := extensions.gen_random_uuid();  -- owns a private summary
   signup_id uuid;
-  target_work uuid;   -- a public philosophy work, scores set to the schema default
+  target_work uuid;   -- a public philosophy work, rated below neutral for the test
   topic_w   double precision;  -- its weight on the philosophy topic
+  other_work  uuid;   -- a second public work, which nobody has muted
   private_work uuid;
   feed      jsonb;
   labels    text[] := array['A topic you asked for', 'Close to what you have been reading',
@@ -81,8 +75,9 @@ begin
   end loop;
 
   -- A public philosophy work, chosen by slug order so the fixture is stable, with
-  -- its quality and trust set to the schema default: neutral, so that for a reader
-  -- who asked for philosophy the topic is the only measured thing about it.
+  -- its quality and trust set BELOW neutral: they still count in the score, and must
+  -- never be the reason -- so for a reader who asked for philosophy the topic is the
+  -- only thing that lifts it.
   select w.id, wt.weight into strict target_work, topic_w
   from public.works w
   join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public'
@@ -91,13 +86,19 @@ begin
   order by w.slug
   limit 1;
 
-  update public.works set quality_score = 0.5, trust_score = 0.5 where id = target_work;
+  update public.works set quality_score = 0.3, trust_score = 0.3 where id = target_work;
 
-  -- Reader A's weight is set so that the affinity TERM is 0.6: a contribution of
-  -- 0.20 * 0.6 = 0.12, above recency's 0.08 and chance's ceiling of 0.10 -- while the
-  -- raw value, 0.6, sits below both. A reason picked by comparing raw terms rather
-  -- than contributions says "Recently added" or "A little chance" here; section 4
-  -- asks for the topic.
+  select w.id into strict other_work
+  from public.works w
+  join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public'
+  where w.id <> target_work
+  order by w.slug
+  limit 1;
+
+  -- Reader A's weight is set so that the affinity TERM is 0.6: a lift of
+  -- 0.20 * 0.6 = 0.12, above recency's at most 0.04 and chance's at most 0.05 --
+  -- while the raw value, 0.6, sits below a fresh work's recency. A reason picked by
+  -- comparing raw terms says "Recently added" here; section 4 asks for the topic.
   if topic_w is null or topic_w < 0.6 then
     raise exception 'fixture: the work''s philosophy weight (%) cannot carry a 0.6 affinity', topic_w;
   end if;
@@ -153,9 +154,11 @@ begin
   -- ---------------------------------------------------------------------------
   -- 2. A mute is the reader's own, on a work they can read
   -- ---------------------------------------------------------------------------
+  -- On a work B can read and A has not muted, so that only the ownership leg can
+  -- refuse it -- not readability, and not the primary key.
   code := null;
   begin
-    insert into public.muted_works (user_id, work_id) values (reader_a, private_work);
+    insert into public.muted_works (user_id, work_id) values (reader_a, other_work);
   exception when others then
     code := sqlstate;
   end;
@@ -215,9 +218,8 @@ begin
       and r ->> 'reason' = 'A topic you asked for'
   ) then
     raise exception
-      'reader A asked for philosophy and was told % for a philosophy work whose other '
-      'terms sit at their defaults. Contributions are not being compared, or the '
-      'affinity term is not a candidate.',
+      'reader A asked for philosophy and was told % for a philosophy work that nothing '
+      'else lifts. Lifts are not being compared, or the affinity term is not a candidate.',
       (select coalesce(r ->> 'reason', 'nothing')
          from jsonb_array_elements(feed -> 'rows') r
         where (r -> 'work' ->> 'id')::uuid = target_work limit 1);
@@ -246,8 +248,8 @@ begin
       and r ->> 'reason' = 'A well-regarded source'
   ) then
     raise exception
-      'a work at the schema default of 0.5 for quality and trust was called well '
-      'regarded. The default is neutral and must not be a reason.';
+      'a work rated 0.3 for quality and trust was called well regarded. A term at or '
+      'below its neutral must not be the reason.';
   end if;
 
   raise notice 'muted_works.sql: a muted work leaves the reader''s feed and nobody else''s, comes back when unmuted, cannot be set for a stranger or on a work the reader cannot read, and every row says why it is there in terms that were measured';
