@@ -485,10 +485,21 @@ export function Feed({
          * where nothing was held back -- it also stops every genuinely permanent
          * write queued behind it from ever being dropped. Queueing only transport
          * failures keeps that whole class out of the queue instead of teaching the
-         * queue to recognise it -- for the ONLINE half. A save queued in a tunnel and
-         * replayed after the withdrawal still enters the queue, and cannot be kept out
-         * of it from here; `runDrain` judges that one on the way out, once a write that
-         * succeeds in the same pass has proved the session was attached.
+         * queue to recognise it -- FOR THE ONLINE HALF ONLY, which is all this call site
+         * can reach. A save queued in a tunnel and replayed after the withdrawal still
+         * enters the queue and is still kept there when the replay is refused, because
+         * `isPermanentFailure` cannot tell that refusal from a request that went out as
+         * `anon` after a failed token refresh -- and it is right not to guess.
+         *
+         * That remaining path is named in 20260910010000's "does not fix". Two attempts
+         * to close it from inside the drain were written and withdrawn during review:
+         * both inferred "the session was attached" from another write succeeding in the
+         * same pass, and the inference is false twice over. A token can expire midway
+         * through a pass whose first write landed; and `unsavePull`, `updateSavedItem`
+         * and `deleteStash` are bare DELETE/UPDATE with no `.select()`, so as `anon`
+         * they return 204 with zero rows -- a "success" with nothing attached at all.
+         * Measured, both of them. Closing it needs a real attachment signal at refusal
+         * time, which belongs with the queue rather than in a migration's PR.
          */
         if (await queueIfOffline(userId, e, { kind: wasSaved ? 'unsave' : 'save', pullId: row.id }))
           return;

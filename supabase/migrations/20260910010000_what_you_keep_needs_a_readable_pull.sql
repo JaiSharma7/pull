@@ -103,8 +103,15 @@
 --     update highlights set text = 'laundered'   -> ACCEPTED, and the row now names
 --                                                   the private pull
 --
--- Moving the guard to `after update` fixes the instance; revoking the privilege fixes
--- the class, costs nothing, and is what is done here. `authenticated` keeps SELECT,
+-- Moving the guard to `after update` would fix this BY CONSTRUCTION, and is the better
+-- answer of the two: an AFTER trigger sees the row every BEFORE trigger has finished
+-- with, one sorting after it cannot mutate the row (its return is ignored), and no grant
+-- can undo that. It is not a one-word change, though -- `after update OF <cols>` has the
+-- same SET-list semantics as `before`, so the column list would have to go too, which
+-- costs the saving the section-4 note describes. The revoke is what is done here: it
+-- closes the reachable class, costs nothing, and is honestly a MITIGATION rather than
+-- the structural fix. If a later migration re-grants TRIGGER the hole reopens, which is
+-- why every table carrying one of these guards now asserts the revoke in its test file. `authenticated` keeps SELECT,
 -- INSERT, UPDATE and DELETE -- everything the app uses -- and `create trigger` becomes
 -- 42501. It needs a direct database connection to exploit (PostgREST issues no DDL),
 -- so this is defence in depth rather than a live hole, which is also why it is one
@@ -209,7 +216,7 @@
 -- lands near the 500 us row -- measured at 564 us against this guard's 631 on the same
 -- harness, so it saves about 67 us and not the 125 an earlier draft credited it with,
 -- which makes its case weaker than this file first stated. It is stronger AND cheaper
--- for that price, and it is also a different
+-- for that 67, and it is also a different
 -- claim, expressed as three interlocking conditions that a reviewer has to hold in
 -- their head at once. The plain `is null or exists` leg is the one 20260909020000
 -- established, reads the same on all four tables, and is obviously right at a

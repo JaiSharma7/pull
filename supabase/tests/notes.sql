@@ -399,4 +399,63 @@ begin
   raise notice 'notes.sql: a note needs a readable pull on the way in, cannot be moved onto one it cannot read, and outlives the readability of the one it was written about -- and so does a question the reader wrote';
 end $$;
 
+
+-- ---------------------------------------------------------------------------
+-- Nobody may put a trigger beside `notes_keep_readable`.
+--
+-- `before update of <cols>` fires on the SET list, not on whether the column changed,
+-- and BEFORE triggers run in name order -- so a trigger sorting after the guard can set
+-- the column it watches on a statement that never names it, and the row lands on
+-- something its owner cannot read. Reproduced against this table before 20260910010000
+-- revoked TRIGGER from anon and authenticated on it.
+--
+-- The guard here predates that migration (20260909020000); the revoke that makes it
+-- unwalkable does not, which is exactly why the assertion belongs in this file rather
+-- than only beside the three tables 20260910010000 is otherwise about. A later migration
+-- re-granting TRIGGER would reopen the hole, and nothing else in the suite would notice.
+--
+-- The function is the reader's own, in pg_temp, which they may always create and
+-- execute: pointing at a `public` trigger function would prove nothing, since Postgres
+-- checks EXECUTE at CREATE TRIGGER time and that is revoked too.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  code text;
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', extensions.gen_random_uuid(), 'role', 'authenticated')::text, true);
+
+  code := null;
+  begin
+    execute 'create function pg_temp.zz_beside_notes() returns trigger '
+            'language plpgsql as $q$ begin return new; end $q$';
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is not null then
+    raise exception
+      'fixture: the reader could not create their own pg_temp function (got %), so the '
+      'next assertion would pass for the wrong reason', code;
+  end if;
+
+  code := null;
+  begin
+    execute 'create trigger zz_beside_the_guard before update on public.notes '
+            'for each row execute function pg_temp.zz_beside_notes()';
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'a reader created a trigger on public.notes (got %). TRIGGER is granted again, '
+      'so `notes_keep_readable` can be walked around by one that sorts after it.',
+      coalesce(code, 'no error');
+  end if;
+
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+  raise notice 'notes: the guard cannot be walked around by a competing trigger';
+end $$;
+
 rollback;

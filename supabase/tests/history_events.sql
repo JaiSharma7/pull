@@ -39,10 +39,13 @@
 -- withdraws a summary from under an event, are the owner's acts. The whole file rolls back.
 --
 -- What FAILS without 20260910010000: section 1's insert legs, section 4's move checks,
--- and section 5's "still refused from an unreadable start". Sections 2 and 3, and the
--- nonexistent-target check (which accepts the foreign key's 23503 as readily as 42501),
--- pass against the old `for all` policy too -- they are regression guards on what the
--- split must not cost, not evidence for the guard.
+-- section 5's "still refused from an unreadable start", and section 7's trigger revoke.
+-- Sections 2, 3 and 6, and the nonexistent-target check (which accepts the foreign key's
+-- 23503 as readily as 42501), pass against the old `for all` policy too -- it carried the
+-- owner leg on every command, so section 6 is a regression guard on what the split must
+-- not cost rather than evidence for the guard. That is exactly why section 6 exists: the
+-- split retypes that leg into five places, and a mutant dropping it from any one of them
+-- passed every assertion in this file before those probes were written.
 -- ---------------------------------------------------------------------------
 
 \set ON_ERROR_STOP on
@@ -468,6 +471,36 @@ begin
   end if;
   perform pg_temp.become(reader_b);
 
+
+  -- The fifth place the owner leg is retyped, and the one nothing probed until now.
+  -- The split expands one `for all` into select/using, insert/with-check, update/using,
+  -- update/WITH-CHECK and delete/using. Dropping it from the update `with check` alone
+  -- leaves `using` intact -- so a reader still reaches only their own rows, and can hand
+  -- them to anyone. Measured: that mutant passed every assertion in this file.
+  --
+  -- Unqualified again, and here it is the whole point. `update ... where id = ...` reads
+  -- a column, so Postgres adds the SELECT policy as a check and refuses the handover even
+  -- under the mutant; unqualified, nothing is read and only `with check` stands between
+  -- reader B and giving their rows away. This probe must also run BEFORE the delete
+  -- below, or B owns nothing by the time it fires and it passes on an empty set.
+  select count(*) into n from public.history_events;
+  if n = 0 then
+    raise exception
+      'fixture: reader B owns no history_events rows here, so the handover probe would pass '
+      'against an empty set and prove nothing';
+  end if;
+  code := null;
+  begin
+    update public.history_events set user_id = reader_a;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader B handed their own history_events rows to reader A (got %). The UPDATE policy '
+      'lost its owner leg from `with check`.', coalesce(code, 'no error');
+  end if;
+
   delete from public.history_events;
   perform pg_temp.as_owner();
   select count(*) into n from public.history_events where user_id = reader_a;
@@ -478,12 +511,14 @@ begin
   end if;
   perform pg_temp.become(reader_b);
 
-  -- Section 7 uses a pg_temp function precisely because EXECUTE on this one is
-  -- revoked. Assert that, or section 7 could start passing for the wrong reason.
+  -- The trigger function's own EXECUTE revoke, which nothing else asserts. It is NOT
+  -- what makes section 7 work -- that probe never names this function, and it is
+  -- refused identically with EXECUTE granted (measured) -- so this stands on its own:
+  -- a trigger function reachable as an RPC endpoint is a door nobody meant to open.
   if has_function_privilege('authenticated', 'public.history_events_keep_readable()', 'execute') then
     raise exception
-      'authenticated holds EXECUTE on history_events_keep_readable; 20260829124835''s '
-      'revoke was undone and section 7 no longer tests what it says it tests';
+      'authenticated holds EXECUTE on history_events_keep_readable; the revoke in '
+      '20260910010000 was undone';
   end if;
 
   -- -------------------------------------------------------------------------
@@ -497,8 +532,9 @@ begin
   --
   -- The function is the reader's own, in pg_temp, which they may always create and
   -- execute. Pointing at a `public` trigger function instead would prove nothing:
-  -- Postgres checks EXECUTE at CREATE TRIGGER time, and 20260829124835 revoked that
-  -- from these roles, so the refusal would be the function's rather than the table's.
+  -- Postgres checks EXECUTE at CREATE TRIGGER time, and this table's guard has that
+  -- revoked (in 20260910010000 -- 20260829124835 covers set_updated_at and its
+  -- neighbours, not these), so the refusal would be the function's, not the table's.
   -- -------------------------------------------------------------------------
   code := null;
   begin
