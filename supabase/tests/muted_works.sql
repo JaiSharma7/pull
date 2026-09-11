@@ -13,7 +13,9 @@
 --     been reading, or new to them, or from a well-regarded source when the source
 --     is rated below neutral -- a term at or under its neutral is never the reason
 --   * a reader who asked for a topic is told so, when nothing else about the card is
---     measured
+--     measured -- and told so over a well-regarded source too, because a reason is
+--     about the reader before it is about the source
+--   * a mute cannot be moved onto a work the reader cannot read
 --   * chance alone is never the reason: a card nothing lifted says nothing
 --   * the day's picks never include a muted work
 --   * the served score of one fully known card is 20260831210000's weighted sum
@@ -49,6 +51,10 @@ do $$
 declare
   reader_a  uuid := extensions.gen_random_uuid();  -- asked for philosophy
   reader_b  uuid := extensions.gen_random_uuid();  -- has read nothing, asked nothing
+  reader_c  uuid := extensions.gen_random_uuid();  -- asked for philosophy, mildly
+  page_size int;      -- two rows per public work, so every work is on the page
+  rated_work uuid;    -- a second philosophy work, left at its seeded, high scores
+  rated_w   double precision;
   author_c  uuid := extensions.gen_random_uuid();  -- owns a private summary
   signup_id uuid;
   target_work uuid;   -- a public philosophy work, rated below neutral for the test
@@ -75,7 +81,7 @@ begin
     raise exception 'refusing to run: % pulls is not a seed corpus', (select count(*) from public.pulls);
   end if;
 
-  foreach signup_id in array array[reader_a, reader_b, author_c] loop
+  foreach signup_id in array array[reader_a, reader_b, reader_c, author_c] loop
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                             email_confirmed_at, created_at, updated_at,
                             raw_app_meta_data, raw_user_meta_data)
@@ -90,6 +96,12 @@ begin
   -- its quality and trust set BELOW neutral: they still count in the score, and must
   -- never be the reason -- so for a reader who asked for philosophy the topic is the
   -- only thing that lifts it.
+  -- Every public work is served at two rows each, so no assertion below depends on
+  -- where a work ranks (review finding): the page is the whole ranked set.
+  select 2 * count(*) + 5 into page_size
+  from public.works w
+  join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public';
+
   select w.id, wt.weight into strict target_work, topic_w
   from public.works w
   join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public'
@@ -116,6 +128,24 @@ begin
   end if;
   insert into public.preference_profiles (user_id, topic_weights)
   values (reader_a, jsonb_build_object('philosophy', 0.6 / topic_w))
+  on conflict (user_id) do update set topic_weights = excluded.topic_weights;
+
+  -- Reader C asked for philosophy mildly -- an affinity term of 0.3, a lift of 0.06 --
+  -- and meets a second philosophy work at its seeded scores, whose "well-regarded"
+  -- lift is larger. A reason is about the reader first, so the topic still wins.
+  select w.id, wt.weight into strict rated_work, rated_w
+  from public.works w
+  join public.summaries s on s.work_id = w.id and s.status = 'published' and s.visibility = 'public'
+  join public.work_topics wt on wt.work_id = w.id
+  join public.topics t on t.id = wt.topic_id and t.slug::text = 'philosophy'
+  where w.id <> target_work and w.quality_score > 0.8 and w.trust_score > 0.8
+  order by w.slug
+  limit 1;
+  if rated_w is null or rated_w < 0.3 then
+    raise exception 'fixture: no second well-rated philosophy work can carry a 0.3 affinity';
+  end if;
+  insert into public.preference_profiles (user_id, topic_weights)
+  values (reader_c, jsonb_build_object('philosophy', 0.3 / rated_w))
   on conflict (user_id) do update set topic_weights = excluded.topic_weights;
 
   -- A work nothing lifts for a reader with no history: published two years ago, so
@@ -156,7 +186,7 @@ begin
   -- ---------------------------------------------------------------------------
   perform pg_temp.become(reader_a);
 
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
   if not exists (
     select 1 from jsonb_array_elements(feed -> 'rows') r
     where (r -> 'work' ->> 'id')::uuid = target_work
@@ -166,7 +196,7 @@ begin
 
   insert into public.muted_works (user_id, work_id) values (reader_a, target_work);
 
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
   if exists (
     select 1 from jsonb_array_elements(feed -> 'rows') r
     where (r -> 'work' ->> 'id')::uuid = target_work
@@ -228,7 +258,7 @@ begin
     raise exception 'reader B can see reader A''s mutes (% rows)', n;
   end if;
 
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
   if not exists (
     select 1 from jsonb_array_elements(feed -> 'rows') r
     where (r -> 'work' ->> 'id')::uuid = target_work
@@ -263,6 +293,22 @@ begin
       'readability leg.', coalesce(code, 'no error');
   end if;
 
+  -- Nor moved onto one: reader A holds a mute and may not point it at a private work.
+  perform pg_temp.become(reader_a);
+  code := null;
+  begin
+    update public.muted_works set work_id = private_work where work_id = target_work;
+  exception when others then
+    code := sqlstate;
+  end;
+  if code is distinct from '42501' then
+    raise exception
+      'reader A moved a mute onto a work they cannot read (got %). The update policy '
+      'has no readability leg, and the foreign key would tell them which private ids '
+      'are real.', coalesce(code, 'no error');
+  end if;
+  perform pg_temp.become(reader_b);
+
   -- ---------------------------------------------------------------------------
   -- 3. Deleting the row brings the work back
   -- ---------------------------------------------------------------------------
@@ -274,7 +320,7 @@ begin
     raise exception 'reader A could not delete their own mute';
   end if;
 
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
   if not exists (
     select 1 from jsonb_array_elements(feed -> 'rows') r
     where (r -> 'work' ->> 'id')::uuid = target_work
@@ -311,10 +357,34 @@ begin
   end if;
 
   -- ---------------------------------------------------------------------------
+  -- 4b. A reason is about the reader before it is about the source
+  -- ---------------------------------------------------------------------------
+  perform pg_temp.become(reader_c);
+  feed := public.get_feed(page_size, 7, 0);
+  if not exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r -> 'work' ->> 'id')::uuid = rated_work
+  ) then
+    raise exception 'fixture: the well-rated philosophy work is not on reader C''s page';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(feed -> 'rows') r
+    where (r -> 'work' ->> 'id')::uuid = rated_work
+      and r ->> 'reason' is distinct from 'A topic you asked for'
+  ) then
+    raise exception
+      'reader C asked for philosophy and was told "%" about a well-rated philosophy '
+      'work. A lift about the reader is the reason before a lift about the source, '
+      'however large the source''s.',
+      (select coalesce(r ->> 'reason', 'nothing') from jsonb_array_elements(feed -> 'rows') r
+        where (r -> 'work' ->> 'id')::uuid = rated_work limit 1);
+  end if;
+
+  -- ---------------------------------------------------------------------------
   -- 5. The neutral-default trap: a reader who has read nothing
   -- ---------------------------------------------------------------------------
   perform pg_temp.become(reader_b);
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
 
   if exists (
     select 1 from jsonb_array_elements(feed -> 'rows') r
@@ -340,7 +410,7 @@ begin
   -- ---------------------------------------------------------------------------
   -- 5b. Chance alone is never the reason
   -- ---------------------------------------------------------------------------
-  feed := public.get_feed(50, chance_seed, 0);
+  feed := public.get_feed(page_size, chance_seed, 0);
   select r into row_json
   from jsonb_array_elements(feed -> 'rows') r
   where (r ->> 'id')::uuid = old_pull;
@@ -359,7 +429,7 @@ begin
   --    0), no dwell and no vector (both neutral, 0.5), knows nothing (novelty 1.0);
   --    the work is rated 0.3 and 0.3; recency and jitter are computable.
   -- ---------------------------------------------------------------------------
-  feed := public.get_feed(50, 7, 0);
+  feed := public.get_feed(page_size, 7, 0);
   select r into strict row_json
   from jsonb_array_elements(feed -> 'rows') r
   where (r -> 'work' ->> 'id')::uuid = target_work

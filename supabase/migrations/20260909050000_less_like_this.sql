@@ -69,10 +69,19 @@ create policy muted_works_delete_own on public.muted_works
 -- CONFLICT DO UPDATE, and with RLS on and no UPDATE policy the conflicting row is
 -- invisible to the update -- so muting a work twice, a double tap or a queued mute
 -- replayed after reconnecting, was refused with 42501. Re-muting is idempotent now.
+-- The readability leg is repeated here (review finding): without it an UPDATE could
+-- move a mute onto a work the reader cannot read, which the insert leg forbids, and
+-- the foreign key's 23503 against a made-up id would then say which private ids are
+-- real. A mute is a preference on a work the reader can see, on the way in and on the
+-- way through; there is no "moved after the work went private" case worth a trigger,
+-- because re-muting a work that has vanished is not something a reader can do.
 create policy muted_works_update_own on public.muted_works
   for update
   using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+  with check (
+    (select auth.uid()) = user_id
+    and exists (select 1 from public.works w where w.id = muted_works.work_id)
+  );
 
 create index muted_works_work_idx on public.muted_works (work_id);
 
@@ -395,6 +404,15 @@ begin
    * on its own it would be every card's reason for every new reader, and a reason
    * exists so the reader can act on it. NULL when nothing lifted the card.
    *
+   * IN TIERS, reader first (review finding). A source's rating is the same for
+   * everyone, and on a corpus rated well throughout -- the seed is 0.82 to 0.96 --
+   * its lift outruns every reader-measured lift on every card, so a flat comparison
+   * says "A well-regarded source" to everyone about everything and tells the reader
+   * nothing about themselves. So a lift that is ABOUT THE READER -- what they asked
+   * for, what they have been reading, what they do not yet know -- is the reason
+   * whenever there is one; the source's own qualities speak only when nothing about
+   * the reader lifted the card; and chance comes last. Within a tier, the larger lift.
+   *
    * Computed here, after the cut, for the rows the reader will see -- not in the
    * shortlist, where it would run four hundred times to serve twenty.
    */
@@ -426,17 +444,17 @@ begin
     select e.*,
       (select r.label
          from (values
-           ('A topic you asked for',               e.affinity_lift, e.affinity_ok),
-           ('Close to what you have been reading', e.close_lift,    e.close_ok),
-           ('A well-regarded source',              e.regarded_lift, e.regarded_ok),
-           ('New to you',                          e.new_lift,      e.new_ok),
-           ('Recently added',                      e.recent_lift,   e.recent_ok),
-           ('A little chance',                     e.chance_lift,
+           (0, 'A topic you asked for',               e.affinity_lift, e.affinity_ok),
+           (0, 'Close to what you have been reading', e.close_lift,    e.close_ok),
+           (0, 'New to you',                          e.new_lift,      e.new_ok),
+           (1, 'A well-regarded source',              e.regarded_lift, e.regarded_ok),
+           (1, 'Recently added',                      e.recent_lift,   e.recent_ok),
+           (2, 'A little chance',                     e.chance_lift,
             e.chance_lift > 0
               and (e.affinity_ok or e.close_ok or e.regarded_ok or e.new_ok or e.recent_ok))
-         ) as r(label, lift, eligible)
+         ) as r(tier, label, lift, eligible)
         where r.eligible
-        order by r.lift desc, r.label
+        order by r.tier, r.lift desc, r.label
         limit 1) as reason
     from eligible e
   ),
