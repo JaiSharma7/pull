@@ -145,10 +145,14 @@ export function Feed({
    * withdrawn, and a column of "you muted this" notices for cards nobody had
    * reached yet would be the app arguing with itself.
    */
-  const [muted, setMuted] = useState<{ works: Set<string>; from: string | null }>({
-    works: new Set(),
-    from: null,
-  });
+  /*
+   * Keyed by WORK, both halves. `from` was one card id for the whole feed, so muting a
+   * second source silently replaced the first source's notice: its cards stayed hidden
+   * and its Undo went with the notice, leaving no way back from a mute the reader had
+   * just made. A map from work id to the card that was pressed on is what "the card
+   * that was pressed on becomes the notice" actually requires.
+   */
+  const [muted, setMuted] = useState<Map<string, string>>(new Map());
   const [muteError, setMuteError] = useState<string | null>(null);
 
   /*
@@ -699,32 +703,50 @@ export function Feed({
    * control that does not work. A signed-out visitor has no row to write, so the
    * control is not offered to one.
    */
+  /*
+   * ROLLED BACK FUNCTIONALLY, undoing one work rather than restoring a snapshot.
+   *
+   * Both handlers used to close over `muted` and write that object back on failure,
+   * which discards everything that happened while the request was in flight: mute A,
+   * mute B successfully, A fails, and B's mute is wiped from the screen while its row
+   * sits on the server -- so the feed disagrees with itself until the next page, which
+   * will not carry B. Touching only the work this call is about cannot do that.
+   */
   const onMute = useCallback(
     async (row: FeedRow) => {
       if (!userId) return;
       setMuteError(null);
-      setMuted({ works: new Set(muted.works).add(row.work.id), from: row.id });
+      setMuted((prev) => new Map(prev).set(row.work.id, row.id));
       try {
         await api.muteWork(row.work.id, row.id, userId);
-      } catch {
-        setMuted(muted);
+      } catch (e: unknown) {
+        console.error('Could not mute the source', e);
+        setMuted((prev) => {
+          const next = new Map(prev);
+          next.delete(row.work.id);
+          return next;
+        });
         setMuteError('Could not mute that source just now. It is still in your feed.');
       }
     },
-    [muted, userId],
+    [userId],
   );
 
   const onUnmute = useCallback(
     async (row: FeedRow) => {
       if (!userId) return;
       setMuteError(null);
-      const restored = new Set(muted.works);
-      restored.delete(row.work.id);
-      setMuted({ works: restored, from: null });
+      const shown = muted.get(row.work.id) ?? row.id;
+      setMuted((prev) => {
+        const next = new Map(prev);
+        next.delete(row.work.id);
+        return next;
+      });
       try {
         await api.unmuteWork(row.work.id, userId);
-      } catch {
-        setMuted(muted);
+      } catch (e: unknown) {
+        console.error('Could not unmute the source', e);
+        setMuted((prev) => new Map(prev).set(row.work.id, shown));
         setMuteError('Could not undo that just now.');
       }
     },
@@ -1023,13 +1045,14 @@ export function Feed({
         )}
 
       {items.map((item) =>
-        muted.works.has(item.row.work.id) ? (
+        muted.has(item.row.work.id) ? (
           /*
-            The card that was pressed on becomes the notice; every other card of
-            the same source goes. `item.row.id === muted.from` is true for exactly
-            one item, so the feed loses a column of cards and gains one line.
+            The card that was pressed on becomes the notice; every other card of the
+            same source goes. One entry per muted work, so a reader who mutes three
+            sources keeps three notices and three ways back — which a single `from`
+            could not do, and did not.
           */
-          item.type === 'pull' && item.row.id === muted.from ? (
+          item.type === 'pull' && muted.get(item.row.work.id) === item.row.id ? (
             <p key={item.row.id} className="meta feed__muted" role="status">
               You will see less of {item.row.work.title}.{' '}
               <button

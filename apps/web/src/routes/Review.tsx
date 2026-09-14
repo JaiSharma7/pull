@@ -693,6 +693,37 @@ export function Review() {
     return onReconnect(() => setReloads((n) => n + 1));
   }, [stranded]);
 
+  /*
+   * What is already on the device, read once, independently of the fetch.
+   *
+   * `pack` used to be set only by a successful fetch, the offline fallback, or an
+   * explicit download — so a reader with twenty cards downloaded who opened Review to a
+   * 500 or an expired token was told "Nothing downloaded yet", on the one screen where
+   * knowing the copy exists is the thing that matters. This does not change the
+   * deliberate refusal to fall back on a non-network error; it changes what the label
+   * is allowed to claim.
+   */
+  useEffect(() => {
+    const owner = getCurrentUserId();
+    if (owner === null) return;
+    let live = true;
+    readReviewPack(owner)
+      .then((downloaded) => {
+        if (!live || downloaded === null) return;
+        // Only as a floor. A fetch that has already answered knows better than a
+        // read that started before it.
+        setPack(
+          (current) => current ?? { count: downloaded.items.length, syncedAt: downloaded.syncedAt },
+        );
+      })
+      .catch(() => {
+        // A pack that cannot be read is a pack the label should not describe.
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   /** Take today's practice with you, deliberately, before the signal goes. */
   const download = useCallback(() => {
     const userId = getCurrentUserId();

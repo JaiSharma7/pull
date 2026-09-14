@@ -25,7 +25,7 @@
  * model provider.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   budgetLine,
   buildImportSource,
@@ -35,7 +35,7 @@ import {
   fetchImportedItemsForStudio,
   fetchMyJobs,
   fetchSpendToday,
-  isRunning,
+  isWorthPolling,
   MAX_TEXT_CHARS,
   MIN_TEXT_CHARS,
   requestPrivateSummary,
@@ -98,11 +98,16 @@ export function Studio({
    *
    * Ten seconds, from the plan: a generation takes minutes, so a faster poll buys
    * nothing and a slower one leaves the reader watching a stale line. The effect
-   * is armed on whether anything is actually running, so a screen with nothing in
-   * flight sends no requests at all — which is most of the time, on a screen a
-   * reader opens once and leaves open.
+   * is armed on whether anything is actually worth asking about, so a screen with
+   * nothing in flight sends no requests at all — which is most of the time, on a
+   * screen a reader opens once and leaves open.
+   *
+   * `isWorthPolling` rather than `isRunning`, which is not the same question: a job
+   * parked on the day's spent budget is unfinished and is also not going to change
+   * in the next ten seconds, and the two were conflated into a 10 s poll that could
+   * run for twenty-four hours.
    */
-  const running = jobs.some(isRunning);
+  const running = jobs.some((j) => isWorthPolling(j));
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(reloadJobs, POLL_MS);
@@ -111,12 +116,23 @@ export function Studio({
 
   const picked = source === 'paste' ? null : (books.find((b) => b.workId === source) ?? null);
 
+  /*
+   * Built once per selection, not once per render and again on submit.
+   *
+   * A 400-highlight book is a few hundred kilobytes of joined string, and it was being
+   * rebuilt on every `setNote`, every `setBudget` and every 10 s poll tick purely to
+   * read `.length` for the character count — then discarded and built a second time
+   * inside `submit`. Two independently computed copies of the thing whose bytes decide
+   * `works.content_hash` is also one more than there should be.
+   */
+  const importedText = useMemo(() => (picked ? buildImportSource(picked.items) : ''), [picked]);
+
   async function submit() {
     if (sending) return;
     setError(null);
     setNote(null);
 
-    const body = picked ? buildImportSource(picked.items) : text;
+    const body = picked ? importedText : text;
     const named = picked ? picked.title : title;
     const check = checkSubmission({ title: named, text: body });
     if (!check.ok) {
@@ -159,7 +175,7 @@ export function Studio({
     }
   }
 
-  const chars = picked ? buildImportSource(picked.items).length : text.trim().length;
+  const chars = picked ? importedText.length : text.trim().length;
 
   return (
     <section className="stack measure">

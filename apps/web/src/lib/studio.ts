@@ -107,9 +107,23 @@ export interface StudioJob {
   createdAt: string;
 }
 
-/** Whether this job is still going, and therefore still worth asking about. */
+/** Whether this job has not finished. */
 export function isRunning(job: StudioJob): boolean {
   return job.status === 'queued' || job.status === 'running';
+}
+
+/**
+ * Whether this job is worth asking about again soon.
+ *
+ * Not the same question as `isRunning`, and conflating them had Studio polling every
+ * ten seconds for up to twenty-four hours: a job parked on the day's budget is not
+ * finished and is also not going to change in the next ten seconds. Polling stops once
+ * a job has been running long enough to be waiting rather than working; the reader
+ * sees the state on their next visit, which is when the answer will have changed.
+ */
+export function isWorthPolling(job: StudioJob, now: number = Date.now()): boolean {
+  if (!isRunning(job)) return false;
+  return job.status === 'queued' || now - Date.parse(job.createdAt) <= STALLED_AFTER_MS;
 }
 
 /**
@@ -120,20 +134,44 @@ export function isRunning(job: StudioJob): boolean {
  * whether it is nearly done, and whether it went wrong — so the steps are folded
  * into three sentences and a failure quotes its own reason.
  *
- * A job that is waiting on the day's budget is NOT a failure and does not read as
- * one: it stays `queued` while the worker re-sends its step, so it is described as
- * waiting, which is what it is.
+ * WHAT THIS CANNOT TELL, said here because the first version claimed it could: a job
+ * parked on the day's spent budget is indistinguishable from one that is working.
+ * `dispatch_generation_step` sets `status = 'running'` on every hop, so a job waiting
+ * at `synthesize` is `running` and the worker never touches its status while it
+ * re-sends the step — for up to 24 hours. Telling that reader "Writing the summary."
+ * for a day would be a screen lying at length, so a provider step that has been sitting
+ * long enough to be implausible says it is waiting instead. That threshold is a guess
+ * about elapsed time, which is the honest shape of it; the alternative is a new column
+ * the worker writes, and that is a migration rather than a sentence.
  */
-export function describeJob(job: StudioJob): string {
+export function describeJob(job: StudioJob, now: number = Date.now()): string {
   if (job.status === 'succeeded') return 'Done.';
   if (job.status === 'failed') {
     return job.error ? `That did not finish: ${job.error}` : 'That did not finish.';
   }
   if (job.status === 'queued') return 'Waiting its turn.';
+
+  // Past this, no generation is still genuinely mid-call: the worker holds a message
+  // for 180 s and a whole run is minutes. A job still `running` after it is waiting on
+  // something — the day's budget, most likely — and saying so is the one description
+  // that is true in both cases.
+  if (now - Date.parse(job.createdAt) > STALLED_AFTER_MS) {
+    return 'Waiting — the day’s generation budget may be spent. It will start again on its own.';
+  }
+
   if (EARLY_STEPS.has(job.currentStep)) return 'Reading the text.';
   if (job.currentStep === 'synthesize') return 'Writing the summary.';
   return 'Finishing up.';
 }
+
+/**
+ * How long a job can plausibly be running before "running" stops being the honest word.
+ *
+ * Twenty minutes. A full walk is twelve steps of seconds-to-a-minute each plus queue
+ * hops; the per-requester stagger can delay a START by hours, but that job is `queued`,
+ * not `running`, so it never reaches this branch.
+ */
+export const STALLED_AFTER_MS = 20 * 60 * 1000;
 
 const EARLY_STEPS = new Set(['resolve_identity', 'acquire', 'chunk']);
 

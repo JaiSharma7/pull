@@ -11,8 +11,17 @@
 -- reader generate a private summary of their own text, so the number of people who can
 -- spend goes from "whoever asks for a canonical work" to "everyone". So this adds the
 -- bound the per-requester quotas cannot express -- a GLOBAL ceiling on what the product
--- spends in a UTC day -- and the two compose: a reader is still bounded by their own
--- quota, and the product is bounded by the cap whatever the quotas allow.
+-- spends in a UTC day.
+--
+-- WHAT IT DOES NOT DO, stated because the first draft of this comment claimed it did:
+-- the two bounds do not compose into "no one reader can exhaust the budget". The
+-- per-requester ceiling is 50 jobs and a job reserves 7 cents across `synthesize` and
+-- `embed`, so roughly 28 jobs fill a 200-cent cap -- the ceiling never binds before the
+-- shared cap does, and one account with a mailbox can spend the day's budget and have
+-- every other reader refused with 53400 until 00:00 UTC. The cap bounds the PRODUCT's
+-- spend, which is what it is for; it is not a fairness mechanism and there is no
+-- per-requester share of it. Adding one is a product decision rather than a patch, so it
+-- is named here rather than invented.
 --
 -- CHECKING A NUMBER BEFORE SPENDING IS NOT A CAP, and this is the whole design. Two
 -- workers reading `spend_today()` at the same moment both see the same figure, both

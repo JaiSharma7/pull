@@ -8,6 +8,7 @@ export {
   checkSubmission,
   describeJob,
   isRunning,
+  isWorthPolling,
   MAX_TEXT_CHARS,
   MAX_TITLE_CHARS,
   MIN_TEXT_CHARS,

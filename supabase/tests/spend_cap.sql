@@ -40,6 +40,7 @@ declare
   job_b       uuid;
   job_c       uuid;
   job_d       uuid;
+  job_e       uuid;
   some_work   uuid;
   other_work  uuid;
   cap         numeric := public.daily_spend_cap_cents();
@@ -200,6 +201,44 @@ begin
       public.spend_today() - 10;
   end if;
 
+  -- --------------------------- 5b. a terminal job holds nothing, however it ended
+  --
+  -- The sweep used to settle only the jobs IT failed, which misses the commonest
+  -- terminal failure the pipeline has: the worker exhausting a step's retries and
+  -- marking the job failed itself. That job is no longer `queued` or `running`, so the
+  -- sweep's own selection can never reach it, and nothing else would until the TTL.
+  insert into public.generation_jobs (requester_id, target, status)
+  values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job_e;
+  perform public.reserve_budget(job_e, 'synthesize', 40);
+  update public.generation_jobs set status = 'failed', finished_at = now() where id = job_e;
+  if public.spend_today() <> 50 then
+    raise exception 'the fixture for the terminal sweep did not take; spend_today() is %',
+      public.spend_today();
+  end if;
+  perform public.sweep_stranded_generation_jobs(interval '10 minutes');
+  if public.spend_today() <> 10 then
+    raise exception
+      'a job that failed outside the sweep kept % cents held. During a provider outage '
+      'that is how a cap nobody spent closes for an hour.', public.spend_today() - 10;
+  end if;
+
+  -- ------------------------------------ 5c. and one call releases a whole job
+  --
+  -- `settle_job_budget` is what the worker calls on the two failure paths that never
+  -- reach `record_failed_job_step`. By job rather than by step, because the caller
+  -- failing a job does not always know which steps reserved.
+  perform public.reserve_budget(job_a, 'embed', 20);
+  perform public.reserve_budget(job_a, 'artwork', 30);
+  if public.spend_today() <> 60 then
+    raise exception 'two holds on one job came to %', public.spend_today() - 10;
+  end if;
+  if public.settle_job_budget(job_a) <> 2 then
+    raise exception 'settle_job_budget did not close both of one job''s holds';
+  end if;
+  if public.spend_today() <> 10 then
+    raise exception 'settle_job_budget left % cents held', public.spend_today() - 10;
+  end if;
+
   -- ------------------------------------------------ 6. and the TTL is the backstop
   --
   -- If the sweep never runs, an ancient hold is ignored rather than believed for ever.
@@ -269,6 +308,17 @@ begin
   end;
   if not refused then
     raise exception 'a reader could settle a reservation, and so release a hold at will.';
+  end if;
+
+  refused := false;
+  begin
+    perform public.settle_job_budget(extensions.gen_random_uuid());
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'a reader could settle a whole job''s holds. Same authority as taking one.';
   end if;
 
   refused := false;

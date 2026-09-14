@@ -691,6 +691,17 @@ export function Library({ userId }: { userId: string }) {
             </button>
           </p>
         ) : null}
+
+        {/*
+          Reachable from the empty screen too, which it was not.
+          `commit_import` saves each highlight, so the usual importer never sees this
+          branch — but a reader who unsaves their imported highlights, or who undoes a
+          batch (`undo_import` deletes the pulls, cascading `saved_items` while the
+          `import_items` tombstones survive), lands here with their whole import
+          history and its Undo controls behind an early return.
+          `emptyLibraryScreen` counts the `highlights` table and cannot see imports.
+        */}
+        <Imported userId={userId} />
       </div>
     );
   }

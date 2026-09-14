@@ -282,12 +282,19 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
    * `sleepUntil` is an absolute deadline, so setting it at mount would count an
    * hour of reading against a queue that had not started. "Thirty minutes, most
    * nights" means thirty minutes from the moment the voice starts.
+   *
+   * KEYED ON `playing`, NOT ON "NOT IDLE", which is the same mistake one step
+   * smaller and is what the first version did. `hydrate` returns `paused` for any
+   * restored queue, so a reader reloading with something queued mounted at
+   * `paused` -- not idle -- and armed the timer against a voice that had not said
+   * a word. Leave the tab for forty minutes, press Play, and the player paused
+   * itself at the end of the first track on a deadline already spent.
    */
-  const wasIdle = useRef(true);
+  const wasPlaying = useRef(false);
   useEffect(() => {
-    const idle = state.status === 'idle';
-    const starting = wasIdle.current && !idle;
-    wasIdle.current = idle;
+    const playing = state.status === 'playing';
+    const starting = !wasPlaying.current && playing;
+    wasPlaying.current = playing;
     if (!starting || state.sleepUntil !== null) return;
     const minutes = sleepMinutes(prefs.sleep);
     if (minutes === null) return;

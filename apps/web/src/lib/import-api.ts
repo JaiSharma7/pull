@@ -186,6 +186,21 @@ export async function fetchImportedItems(userId: string): Promise<ImportedItem[]
     return q;
   }, 'id');
 
+  /*
+   * WALKED BY `id`, ORDERED BY `created_at`, and the two cannot be the same column.
+   *
+   * `import_items.id` is a random uuid, so the keyset walk that pages correctly puts
+   * the rows in no useful order at all -- and `groupImported` deliberately does not
+   * re-sort within a book, so a shuffled fetch reached the screen as a shuffled book.
+   * Worse, `buildImportSource` joins them in that order to send to the model, so a
+   * reader's four hundred Kindle highlights were summarised out of sequence.
+   *
+   * `fetchImports` does the same thing for the same reason: walk on the key that
+   * partitions the set, sort once the rows are all in hand. The tiebreak on `id` keeps
+   * the order total, so two highlights kept in the same millisecond do not swap
+   * between two renders -- which would change the content hash and buy a second
+   * summary of one book.
+   */
   return rows
     .map((r): ImportedItem | null => {
       if (!r.pull_id || !r.pulls || !r.works) return null;
@@ -202,7 +217,12 @@ export async function fetchImportedItems(userId: string): Promise<ImportedItem[]
         createdAt: r.created_at,
       };
     })
-    .filter((r): r is ImportedItem => r !== null);
+    .filter((r): r is ImportedItem => r !== null)
+    .sort(
+      (a, b) =>
+        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
 }
 
 interface EmbeddedImportItem {

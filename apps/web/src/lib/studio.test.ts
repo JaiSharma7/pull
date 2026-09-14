@@ -5,8 +5,10 @@ import {
   checkSubmission,
   describeJob,
   isRunning,
+  isWorthPolling,
   MAX_TEXT_CHARS,
   MIN_TEXT_CHARS,
+  STALLED_AFTER_MS,
   type StudioJob,
 } from './studio.js';
 import type { ImportedItem } from './imports.js';
@@ -40,6 +42,9 @@ function job(over: Partial<StudioJob> = {}): StudioJob {
     ...over,
   };
 }
+
+/** A fixed clock, so "how long has this been running" is not the wall clock's opinion. */
+const NOW = Date.parse('2026-09-01T00:05:00Z');
 
 describe('checkSubmission', () => {
   const long = 'x'.repeat(MIN_TEXT_CHARS);
@@ -114,28 +119,75 @@ describe('describeJob', () => {
   it('says waiting for a queued job, which is what a budget wait looks like', () => {
     // A job waiting on the day's cap stays `queued` while the worker re-sends its
     // step. It is early, not broken, and must not read as a failure.
-    expect(describeJob(job())).toBe('Waiting its turn.');
+    expect(describeJob(job(), NOW)).toBe('Waiting its turn.');
   });
 
   it('names the phase rather than the DAG node', () => {
-    expect(describeJob(job({ status: 'running', currentStep: 'acquire' }))).toBe(
+    expect(describeJob(job({ status: 'running', currentStep: 'acquire' }), NOW)).toBe(
       'Reading the text.',
     );
-    expect(describeJob(job({ status: 'running', currentStep: 'synthesize' }))).toBe(
+    expect(describeJob(job({ status: 'running', currentStep: 'synthesize' }), NOW)).toBe(
       'Writing the summary.',
     );
-    expect(describeJob(job({ status: 'running', currentStep: 'publish' }))).toBe('Finishing up.');
+    expect(describeJob(job({ status: 'running', currentStep: 'publish' }), NOW)).toBe(
+      'Finishing up.',
+    );
+  });
+
+  /*
+   * The correction this file first got wrong.
+   *
+   * `dispatch_generation_step` sets `status = 'running'` on every hop, so a job parked
+   * on the day's spent budget is `running`, not `queued` — and the worker re-sends its
+   * step for up to 24 hours without touching the status. Saying "Writing the summary."
+   * for a day is a screen lying at length, so a provider step that has been running
+   * past any plausible duration says it is waiting instead.
+   */
+  it('stops claiming a summary is being written once that is implausible', () => {
+    const stalled = job({ status: 'running', currentStep: 'synthesize' });
+    const late = Date.parse(stalled.createdAt) + STALLED_AFTER_MS + 1;
+    expect(describeJob(stalled, late)).toContain('budget may be spent');
+    expect(describeJob(stalled, late)).not.toContain('Writing');
+  });
+
+  it('does not call a job stalled while it is still plausibly working', () => {
+    const fresh = job({ status: 'running', currentStep: 'synthesize' });
+    const soon = Date.parse(fresh.createdAt) + STALLED_AFTER_MS - 1;
+    expect(describeJob(fresh, soon)).toBe('Writing the summary.');
   });
 
   it('quotes the reason a failure gives, and copes when it gives none', () => {
-    expect(describeJob(job({ status: 'failed', error: 'the source is held' }))).toContain(
+    expect(describeJob(job({ status: 'failed', error: 'the source is held' }), NOW)).toContain(
       'the source is held',
     );
-    expect(describeJob(job({ status: 'failed' }))).toBe('That did not finish.');
+    expect(describeJob(job({ status: 'failed' }), NOW)).toBe('That did not finish.');
   });
 
   it('says done when it is done', () => {
-    expect(describeJob(job({ status: 'succeeded' }))).toBe('Done.');
+    expect(describeJob(job({ status: 'succeeded' }), NOW)).toBe('Done.');
+  });
+});
+
+describe('isWorthPolling', () => {
+  it('keeps asking about a job that is queued, however long it waits for its turn', () => {
+    // The per-requester stagger can delay a START by hours, and that job is `queued`.
+    const queued = job({ status: 'queued' });
+    expect(isWorthPolling(queued, Date.parse(queued.createdAt) + 6 * 60 * 60 * 1000)).toBe(true);
+  });
+
+  it('stops asking about a job that has been running past any plausible duration', () => {
+    // Not the same question as `isRunning`, and conflating them had the screen polling
+    // every ten seconds for up to twenty-four hours against a job parked on the budget.
+    const stalled = job({ status: 'running', currentStep: 'synthesize' });
+    expect(isWorthPolling(stalled, Date.parse(stalled.createdAt) + STALLED_AFTER_MS + 1)).toBe(
+      false,
+    );
+    expect(isWorthPolling(stalled, Date.parse(stalled.createdAt) + 1000)).toBe(true);
+  });
+
+  it('never asks about a job that has finished', () => {
+    expect(isWorthPolling(job({ status: 'succeeded' }), NOW)).toBe(false);
+    expect(isWorthPolling(job({ status: 'failed' }), NOW)).toBe(false);
   });
 });
 

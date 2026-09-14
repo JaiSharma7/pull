@@ -2659,6 +2659,7 @@ export type Database = {
         Args: { p_job_id: string; p_step: string }
         Returns: undefined
       }
+      settle_job_budget: { Args: { p_job_id: string }; Returns: number }
       settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
       spend_today: { Args: never; Returns: number }
       summary_is_readable: {

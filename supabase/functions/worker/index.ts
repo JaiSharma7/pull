@@ -91,6 +91,43 @@ const supabase = createClient(
   { auth: { persistSession: false } },
 );
 
+/**
+ * Record a failure that cost nothing, and let go of what it was holding.
+ *
+ * The billed path goes through `record_failed_job_step`, which writes the step, the
+ * ledger row and the settlement in one transaction. An UNBILLED failure has no ledger
+ * row to write, so it used to insert the `job_steps` row directly and call nothing --
+ * and a step that had already reserved against the daily cap (every provider step
+ * reserves immediately before the call) left its hold open for the full TTL.
+ *
+ * That is the failure a provider outage produces in bulk: ~34 unbilled failures inside
+ * an hour fill a 200-cent cap with holds for charges that never happened, and every
+ * reader is then told the day's budget is spent. So the settle rides with the insert
+ * here, the same way it rides with the ledger row there.
+ *
+ * Settled FIRST. If the insert collides on 23505 -- the expected case where a
+ * `succeeded` row already exists for this attempt -- the money should still be
+ * released, and the caller treats that collision as success.
+ */
+async function failUnbilled(
+  jobId: string,
+  step: Step,
+  attempt: number,
+  message: string,
+  durationMs: number,
+) {
+  await supabase.rpc('settle_job_budget', { p_job_id: jobId });
+  return supabase.from('job_steps').insert({
+    job_id: jobId,
+    step,
+    attempt,
+    status: 'failed',
+    error: message,
+    duration_ms: durationMs,
+    finished_at: new Date().toISOString(),
+  });
+}
+
 interface QueueMessage {
   msg_id: number;
   message: { jobId: string; step: Step; waits?: number; budgetWaits?: number };
@@ -444,6 +481,19 @@ Deno.serve(async (req) => {
       // update be followed by an archive that removes the only queue message,
       // leaving the job stuck in `running` with nothing to retry it.
       try {
+        /*
+         * The holds first, then the status.
+         *
+         * This path fails the job itself and archives the message, so nothing
+         * downstream will ever record a step for it -- and `record_failed_job_step`,
+         * which is what normally settles, is never called. Left open, a reservation
+         * taken by `synthesize` stands against the global cap until the one-hour TTL,
+         * and the sweep cannot help: it selects `queued`/`running`, and this row is
+         * about to stop being either. Before the update, so a throw below leaves the
+         * money released rather than the job un-failed AND the money held.
+         */
+        await supabase.rpc('settle_job_budget', { p_job_id: jobId });
+
         must(
           await supabase
             .from('generation_jobs')
@@ -608,15 +658,7 @@ Deno.serve(async (req) => {
             p_cost_cents: billed.usage.costCents,
             p_billable: PROVIDER_STEPS.has(step),
           })
-        : await supabase.from('job_steps').insert({
-            job_id: jobId,
-            step,
-            attempt,
-            status: 'failed',
-            error: message,
-            duration_ms: Date.now() - started,
-            finished_at: new Date().toISOString(),
-          });
+        : await failUnbilled(jobId, step, attempt, message, Date.now() - started);
       // A duplicate key means `record_job_step` already wrote a *succeeded* row
       // for this attempt and only the transition after it failed. There is
       // nothing to mark failed in that case — the resume path picks it up on
