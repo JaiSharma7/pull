@@ -247,7 +247,7 @@ export async function unsavePull(pullId: string, userId: string) {
  * A failed impression never fails the mute. The reader asked for less of a
  * source, and they have it.
  */
-export async function muteWork(workId: string, pullId: string, userId: string) {
+export async function muteWork(workId: string, pullId: string, userId: string, position = 0) {
   const { error } = await supabase.from('muted_works').insert({ user_id: userId, work_id: workId });
   if (error && error.code !== '23505') throw rpcError(error);
 
@@ -263,6 +263,7 @@ export async function muteWork(workId: string, pullId: string, userId: string) {
    */
   const { error: noted } = await supabase.rpc('record_mute_impression', {
     p_pull_id: pullId,
+    p_position: position,
   });
   // Telemetry, and the mute itself is already recorded. Logged rather than thrown,
   // and not swallowed silently — a `try {}` around this would never have fired anyway,

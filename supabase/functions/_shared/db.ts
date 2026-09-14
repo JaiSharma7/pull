@@ -349,7 +349,6 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       sections,
       visibility,
       authorId,
-      version = SUMMARY_VERSION,
     }) {
       /*
        * `template` must be safe to run twice, and it was not.
@@ -364,18 +363,22 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * synthesise.
        *
        * Adopting on collision fixes both, because in both cases the existing row
-       * is exactly the row this step was trying to create. `version` is part of
-       * the key, so it is sent and then matched on THE VALUE THAT WAS SENT rather
-       * than on a constant — which is what makes adopting an owned work safe. A
-       * generated summary on an imported book is `GENERATED_VERSION`, and matching
-       * a hardcoded 1 there would adopt the IMPORT's summary and let `cards`
-       * overwrite the reader's own highlights at the colliding ordinals.
+       * is exactly the row this step was trying to create.
+       *
+       * Version 1, always, and this is the CANONICAL path only. A summary on a work the
+       * requester already owns is the other case, where version 1 is the reader's
+       * import and adopting it would let `cards` overwrite their own highlights at
+       * every colliding ordinal — and that path does not come through here at all. It
+       * goes through `attachGeneratedSummary`, which chooses a version under a lock,
+       * for the reason a caller-supplied version could never be right: it made this
+       * function's collision handling depend on a number computed from rows an earlier
+       * attempt had written.
        */
       const insert = await supabase
         .from('summaries')
         .insert({
           work_id: workId,
-          version,
+          version: SUMMARY_VERSION,
           title,
           elevator_pitch: elevatorPitch,
           why_it_matters: whyItMatters,
@@ -405,7 +408,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           .from('summaries')
           .select('id')
           .eq('work_id', workId)
-          .eq('version', version);
+          .eq('version', SUMMARY_VERSION);
         // `.eq` on a null author_id would render as `author_id=eq.null` and match
         // nothing; the unique constraint treats nulls as distinct anyway, so a
         // collision here can only be a row that shares this author.
@@ -585,18 +588,15 @@ export function createPipelineDb(supabase: Db): PipelineDb {
     },
 
     /**
-     * The next version this requester may write on a work they already have one on.
+     * A generated summary on a work the requester owns, and the job's reference to it.
      *
-     * `summaries` is unique on `(work_id, version, author_id)`, and an imported book
-     * already carries the reader's version 1 — the summary `commit_import` created to
-     * hang the highlights from. A generated summary on the same work has to be its
-     * own row, or `createSummary` collides, adopts the import, and `cards` upserts
-     * model output over the reader's highlights at every colliding ordinal.
-     *
-     * Racy by construction, and safely so: two concurrent jobs can both read 1 and
-     * both try 2, and the loser's 23505 adopts the winner's row — which is a
-     * generated summary, not the import, and is the case `createSummary`'s own
-     * comment already reasons about.
+     * Everything this used to reason about — which version is free, what a collision
+     * means, who wins a race — moved into `attach_generated_summary`, because none of
+     * it can be decided correctly from out here. `summaries` is unique on
+     * `(work_id, version, author_id)` and an imported book already carries the reader's
+     * version 1, so a generated summary has to be its own row; the version is chosen,
+     * the row written and the job pointed at it inside one transaction holding a lock,
+     * which is the only arrangement where a lost response cannot leave an orphan.
      */
     async attachGeneratedSummary({
       jobId,

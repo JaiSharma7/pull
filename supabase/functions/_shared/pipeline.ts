@@ -352,16 +352,6 @@ export interface PipelineDb {
      * it is not decoration — see `createSummary` in `db.ts`.
      */
     authorId: string | null;
-    /**
-     * Which version of this work's summary this is. Defaults to 1, which is right
-     * for every canonical generation and for the first private one.
-     *
-     * Sent only when adopting a work the requester already has a summary on — an
-     * imported book, whose version 1 is the row `commit_import` hangs the
-     * highlights from. Writing a second summary at version 1 collides, adopts the
-     * import, and lets `cards` overwrite the reader's own highlights.
-     */
-    version?: number;
   }): Promise<string>;
   /**
    * Returns each Pull with the ordinal it was written at.
@@ -1583,19 +1573,41 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
 
       const { vectors, usage } = await deps.embedding.embed(pairs.map((p) => p.text));
 
+      /*
+       * PAST THIS LINE THE PROVIDER HAS BEEN BILLED, and law 2 says every call reaches
+       * the ledger — not every successful one.
+       *
+       * Both failures below happen after the embedding was metered: a short vector
+       * list, and a write of the vectors that does not land. Thrown plainly, the worker
+       * routes them to `failUnbilled`, which writes a `job_steps` row with no usage and
+       * settles the hold — so a real charge is replaced by nothing at all, and each
+       * retry buys another one that `spend_today()` cannot see. `BilledStepError`
+       * carries the usage through the failure, which is what `synthesize` does with
+       * exactly this situation directly above.
+       */
+      const billed = { usage, model: deps.embedding.name, provider: deps.embedding.name };
+
       // A short vector list means some Pulls would publish unembedded — invisible
       // to ranking and to the Delta. Fail the step instead: a retry costs one
       // embedding call, and the alternative is a summary that is quietly missing
       // from search with nothing recording why.
       if (vectors.length !== pairs.length) {
-        throw new Error(
+        throw new BilledStepError(
           `embed: provider returned ${vectors.length} vectors for ${pairs.length} pulls`,
+          billed,
         );
       }
 
-      await db.setPullEmbeddings(
-        pairs.map((p, i) => ({ id: p.id, embedding: vectors[i] as number[] })),
-      );
+      try {
+        await db.setPullEmbeddings(
+          pairs.map((p, i) => ({ id: p.id, embedding: vectors[i] as number[] })),
+        );
+      } catch (e) {
+        throw new BilledStepError(
+          `embed: could not store vectors: ${e instanceof Error ? e.message : String(e)}`,
+          billed,
+        );
+      }
 
       return {
         output: { embedded: pairs.length },

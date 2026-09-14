@@ -557,11 +557,17 @@ export function Library({ userId }: { userId: string }) {
      * Through `claimBusy` rather than a bare `if (busy)`, which is what made the guard
      * real: the second keystroke arrives before the render that would have set it.
      */
-    if (!claimBusy()) return;
     // Bounded to `stashes_name_length`: an over-long name queued offline would be
     // refused for good on drain, not shown back.
+    //
+    // BEFORE the latch, and that ordering is the whole of it: an empty name returns
+    // here, and a return between claiming the latch and the `finally` that releases it
+    // never gives it back. Pressing Enter on the empty field — which is where the
+    // cursor already is, since the field mounts focused — wedged every guarded control
+    // on the screen until the Library remounted.
     const name = typed.slice(0, 200);
     if (!name.trim()) return;
+    if (!claimBusy()) return;
     setNaming(false);
     setNewStashName('');
     // The id is minted here rather than by the database, so a retry after a lost
@@ -622,6 +628,11 @@ export function Library({ userId }: { userId: string }) {
       setArmedStash(node.id);
       return;
     }
+    // The latch before the disarm, for the same reason in reverse: taking the
+    // confirmation down and then bailing because another write is in flight tells the
+    // reader their delete was cancelled when nothing was even attempted. Either this
+    // deletes, or the × stays armed and they can press it again.
+    if (!claimBusy()) return;
     setArmedStash(null);
 
     // Every collection in `doomed` goes, not only the one named — so a selection
@@ -631,7 +642,6 @@ export function Library({ userId }: { userId: string }) {
       if (stashId !== null && doomed.has(stashId)) setStashId(null);
     };
 
-    if (!claimBusy()) return;
     try {
       await stashApi.deleteStash(node.id);
       clearSelection();
@@ -1334,7 +1344,13 @@ function Imported({ userId }: { userId: string }) {
    */
   const [itemsFailed, setItemsFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /*
+   * Two counters, for the reason `Studio.tsx` gives at its own two: one drove both
+   * effects, so Try again under a failed book re-ran the batch list, the shelf and the
+   * count — three requests that had just succeeded — to retry a fourth.
+   */
   const [reloads, setReloads] = useState(0);
+  const [itemReloads, setItemReloads] = useState(0);
 
   /*
    * Loaded when the section is opened, not with the screen.
@@ -1366,15 +1382,20 @@ function Imported({ userId }: { userId: string }) {
   }, [open, userId, reloads]);
 
   /** The highlight fetch currently in flight, or the one that would be. */
-  const itemsAttempt = openWork === null ? null : `${openWork}#${reloads}`;
+  const itemsAttempt = openWork === null ? null : `${openWork}#${itemReloads}`;
 
   useEffect(() => {
     if (openWork === null || items?.workId === openWork) return;
     let live = true;
-    const attempt = `${openWork}#${reloads}`;
+    const attempt = `${openWork}#${itemReloads}`;
     fetchImportedItems(userId, openWork)
       .then((rows) => {
-        if (live) setItems({ workId: openWork, rows });
+        if (!live) return;
+        setItems({ workId: openWork, rows });
+        // Cleared on success, for the reason `Studio.tsx` gives at its own: the attempt
+        // key records which fetch failed and nothing retires it, so re-opening a book
+        // that failed once drew the alert over rows the refetch had just loaded.
+        setItemsFailed(null);
       })
       .catch((e: unknown) => {
         console.error('Could not read that book’s highlights', e);
@@ -1383,7 +1404,7 @@ function Imported({ userId }: { userId: string }) {
     return () => {
       live = false;
     };
-  }, [openWork, items?.workId, userId, reloads]);
+  }, [openWork, items?.workId, userId, itemReloads]);
 
   const loaded = state !== null && state !== 'failed' ? state : null;
 
@@ -1510,7 +1531,7 @@ function Imported({ userId }: { userId: string }) {
                       <button
                         type="button"
                         className="btn btn--plain"
-                        onClick={() => setReloads((n) => n + 1)}
+                        onClick={() => setItemReloads((n) => n + 1)}
                       >
                         Try again
                       </button>

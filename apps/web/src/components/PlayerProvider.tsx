@@ -51,6 +51,7 @@ import {
 } from '../lib/player.js';
 import {
   clearStoredPlayer,
+  DEFAULT_AUDIO_PREFS,
   readStoredAudioPrefs,
   readStoredPlayer,
   sleepMinutes,
@@ -174,8 +175,11 @@ export function PlayerProvider({ userId, durable, children }: ProviderProps) {
 }
 
 function PlayerEngine({ userId, durable, children }: ProviderProps) {
+  // `DEFAULT_AUDIO_PREFS`, not a second copy of it: `lib/audio-prefs.ts` owns what a
+  // default is, and a literal here would apply a changed default to every reader whose
+  // browser can speak and to none of the rest, with nothing to catch the divergence.
   const [prefs, setPrefs] = useState<AudioPrefs>(() =>
-    CAN_SPEAK ? readStoredAudioPrefs() : { rate: 1, voiceURI: null, sleep: 'off' },
+    CAN_SPEAK ? readStoredAudioPrefs() : DEFAULT_AUDIO_PREFS,
   );
 
   /*

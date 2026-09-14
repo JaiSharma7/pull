@@ -713,12 +713,17 @@ export function Feed({
    * will not carry B. Touching only the work this call is about cannot do that.
    */
   const onMute = useCallback(
-    async (row: FeedRow) => {
+    async (row: FeedRow, position: number) => {
       if (!userId) return;
       setMuteError(null);
       setMuted((prev) => new Map(prev).set(row.work.id, row.id));
       try {
-        await api.muteWork(row.work.id, row.id, userId);
+        // The position travels with the pull, as it does for `onRead`. The impression
+        // a mute leaves is the whole point of writing one — which card was in front of
+        // the reader when they asked for less of this source — and half of that answer
+        // is where in the feed it was. `record_mute_impression` takes it and was being
+        // sent nothing, so every mute recorded position 0.
+        await api.muteWork(row.work.id, row.id, userId, position);
       } catch (e: unknown) {
         console.error('Could not mute the source', e);
         setMuted((prev) => {
@@ -1090,7 +1095,7 @@ export function Feed({
             queued={isQueued(player.state, item.row.id)}
             onQueue={CAN_SPEAK ? () => onQueue(item.row) : undefined}
             reason={item.row.reason ?? null}
-            onMute={userId ? () => void onMute(item.row) : undefined}
+            onMute={userId ? () => void onMute(item.row, item.index) : undefined}
             onShare={() => void share(item.row)}
             shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}

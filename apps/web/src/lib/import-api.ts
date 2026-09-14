@@ -139,17 +139,32 @@ export async function fetchImports(userId: string): Promise<ImportBatch[]> {
     return q;
   }, 'id');
 
-  return rows
-    .map((r) => ({
-      id: r.id,
-      sourceKind: narrowSourceKind(r.source_kind),
-      itemCount: r.item_count,
-      duplicateCount: r.duplicate_count,
-      workCount: r.work_count,
-      createdAt: r.created_at,
-      undoneAt: r.undone_at,
-    }))
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? 1 : -1));
+  return (
+    rows
+      .map((r) => ({
+        id: r.id,
+        sourceKind: narrowSourceKind(r.source_kind),
+        itemCount: r.item_count,
+        duplicateCount: r.duplicate_count,
+        workCount: r.work_count,
+        createdAt: r.created_at,
+        undoneAt: r.undone_at,
+      }))
+      /*
+       * Newest first, and the tiebreak is a REAL three-way compare.
+       *
+       * `(a.id < b.id ? 1 : -1)` never answers 0, so it is not a total order — a value
+       * compared with itself came back -1 — and it ordered equal timestamps by id
+       * descending while `fetchImportedItems` forty lines below orders its own tiebreak
+       * ascending, for the same stated reason. Two batches committed in the same
+       * millisecond could therefore sort one way here and the other way there.
+       */
+      .sort(
+        (a, b) =>
+          Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+  );
 }
 
 /**

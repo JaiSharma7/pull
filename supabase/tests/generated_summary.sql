@@ -114,6 +114,16 @@ begin
       second ->> 'version', first ->> 'version';
   end if;
 
+  /*
+   * What this file CANNOT assert, said rather than implied: that two jobs running at
+   * the same instant take two versions. The mutual exclusion is a `for update` on the
+   * reader's existing summary for the work (20260914060000), and proving a lock needs
+   * two sessions, which a single psql transaction that rolls back does not have. What
+   * is asserted here is the answer the lock produces -- a second generation is a second
+   * row at a higher version -- and the lock is what makes it hold when the two overlap
+   * rather than follow one another.
+   */
+
   -- ------------------------------------ 4. and never a work the requester owns nothing on
   update public.generation_jobs set requester_id = other, summary_id = null where id = job_two;
   begin

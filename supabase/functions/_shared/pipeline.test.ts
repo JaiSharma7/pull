@@ -421,7 +421,7 @@ describe('reuse skips the paid work', () => {
         qualityScore: number | null;
         trustScore: number | null;
       };
-      createSummary?: { authorId: string | null; visibility: string; version?: number };
+      createSummary?: { authorId: string | null; visibility: string };
       attachGenerated?: { jobId: string; workId: string; visibility: string; title: string };
       insertQuizQuestions?: readonly QuizQuestionRow[];
     } = {};
@@ -481,11 +481,7 @@ describe('reuse skips the paid work', () => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
         },
-        createSummary: async (input: {
-          authorId: string | null;
-          visibility: string;
-          version?: number;
-        }) => {
+        createSummary: async (input: { authorId: string | null; visibility: string }) => {
           calls.createSummary++;
           received.createSummary = input;
           return 's1';
@@ -1651,6 +1647,66 @@ describe('embed', () => {
     };
 
     await expect(runPipelineStep('embed', deps as never)).rejects.toThrow(/1 vectors for 2 pulls/);
+  });
+
+  /*
+   * Both failures here happen AFTER the provider has answered, which means after it has
+   * metered the call. Thrown plainly they reach `failUnbilled`, which writes a step row
+   * with no usage and settles the hold -- a real charge replaced by nothing, and another
+   * on every retry, none of which `spend_today()` can see. Law 2 is that every call
+   * writes to the ledger, not every successful one.
+   */
+  it.each([
+    [
+      'the provider returns too few vectors',
+      {
+        embed: async (texts: string[]) => ({
+          vectors: texts.slice(0, -1).map(() => [1]),
+          usage: { inputTokens: 40, outputTokens: 0, costCents: 3 },
+        }),
+        setPullEmbeddings: async () => undefined,
+      },
+    ],
+    [
+      'the vectors cannot be stored',
+      {
+        embed: async (texts: string[]) => ({
+          vectors: texts.map(() => [1]),
+          usage: { inputTokens: 40, outputTokens: 0, costCents: 3 },
+        }),
+        setPullEmbeddings: async () => {
+          throw new Error('pgvector said no');
+        },
+      },
+    ],
+  ])('carries the embedding charge when %s', async (_label, fakes) => {
+    const deps = {
+      embedding: { name: 'fake-embedder', embed: fakes.embed },
+      db: { setPullEmbeddings: fakes.setPullEmbeddings, reserveBudget: async () => undefined },
+      job: { visibility: 'private' },
+      priorOutputs: {
+        cards: {
+          pulls: [
+            { ordinal: 0, id: 'p0' },
+            { ordinal: 1, id: 'p1' },
+          ],
+        },
+        synthesize: {
+          pulls: [
+            { headline: 'a', body: 'a' },
+            { headline: 'b', body: 'b' },
+          ],
+        },
+      },
+    };
+
+    const thrown = await runPipelineStep('embed', deps as never).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(BilledStepError);
+    const billed = thrown as InstanceType<typeof BilledStepError>;
+    expect(billed.usage.costCents).toBe(3);
+    expect(billed.model).toBe('fake-embedder');
+    expect(billed.provider).toBe('fake-embedder');
   });
 
   it('pairs each vector with the Pull ordinal it belongs to, not its position', async () => {

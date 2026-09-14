@@ -175,7 +175,13 @@ export function Studio({
     const attempt = `${picked.workId}#${itemReloads}`;
     fetchImportedItemsForStudio(userId, picked.workId)
       .then((rows) => {
-        if (live) setItems({ workId: picked.workId, rows });
+        if (!live) return;
+        setItems({ workId: picked.workId, rows });
+        // Cleared on success, because the key alone does not expire. Book A fails, book
+        // B is picked and succeeds, and picking A again matches `A#0` against a failure
+        // recorded before the refetch that is about to succeed — so the alert rendered
+        // over highlights that were in memory, and only Try again could clear it.
+        setItemsFailed(null);
       })
       .catch((e: unknown) => {
         console.error('Could not read that book’s highlights', e);
