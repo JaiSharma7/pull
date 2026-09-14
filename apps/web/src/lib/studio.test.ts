@@ -159,6 +159,29 @@ describe('fitImportSource', () => {
     expect(fitImportSource(items, 110).text).toBe(fitImportSource(items, 110).text);
   });
 
+  /*
+   * The prefix this returns has to be what `buildImportSource` would have produced for
+   * the same prefix, byte for byte — the pipeline hashes it, and a text assembled by a
+   * second code path that drifts is a second summary bought for one book.
+   */
+  it('produces exactly what buildImportSource would for the highlights it kept', () => {
+    const items = [
+      highlight(long(50), 'Location 1'),
+      highlight('   '),
+      highlight(long(50), 'Location 3'),
+      highlight(long(50)),
+    ];
+    const fitted = fitImportSource(items, 140);
+    expect(fitted.text).toBe(buildImportSource(items.slice(0, fitted.used)));
+  });
+
+  it('counts the empty highlights it skipped as used, since they were considered', () => {
+    const items = [highlight('One.'), highlight('   '), highlight('Two.')];
+    const fitted = fitImportSource(items, 1000);
+    expect(fitted.used).toBe(3);
+    expect(fitted.text).toBe('One.\n\nTwo.');
+  });
+
   it('reports nothing usable when the first highlight alone is over the bound', () => {
     const fitted = fitImportSource([highlight(long(400))], 100);
     expect(fitted.used).toBe(0);

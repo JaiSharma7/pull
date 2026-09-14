@@ -112,8 +112,10 @@ shadow to lift it, and never a scrubber** — `speechSynthesis` has no timeline,
 progress bar would be a control that lies about what it can do. It tracks the reading
 column rather than the window, it says where the reader is in the queue in words
 ("Listening · 2 of 5 · Meditations"), it rises once and does not under
-`prefers-reduced-motion`, and the shell reserves room at its foot so `Enough` and the
-Colophon — the two visible edges of a session — are never underneath it.
+`prefers-reduced-motion`, and the page reserves room at its foot so `Enough` and the
+Colophon — the two visible edges of a session — are never underneath it. The room is
+reserved on `body` rather than on the shell, because the bar is drawn beside every
+screen the app can return, and the sign-in page and the 404 have no shell to pad.
 
 A useful test: if a screenshot of this app could be mistaken for a video feed with the
 sound off, the layout is wrong.

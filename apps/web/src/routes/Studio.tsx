@@ -71,6 +71,18 @@ export function Studio({
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   /*
+   * The same flag, readable in the same tick.
+   *
+   * `if (sending) return` reads the value THIS render captured, and the button carries
+   * `aria-disabled` rather than `disabled` — it stays clickable on purpose — so two
+   * presses before React commits both passed. With a mutation id on the call that is no
+   * longer merely a wasted request: both transactions miss the replay row and the second
+   * insert hits `generation_jobs_client_mutation_key`, putting a raw constraint violation
+   * under the form while a job really did start. `Library.tsx` takes the same answer for
+   * the same reason.
+   */
+  const sendingRef = useRef(false);
+  /*
    * ONE ID PER SUBMISSION, kept across the reader's retries of it.
    *
    * Minted when a submission is first sent and cleared only when one succeeds, so the
@@ -81,6 +93,20 @@ export function Studio({
    * new one.
    */
   const submission = useRef<string | null>(null);
+
+  /**
+   * Anything that changes WHAT would be sent retires the id.
+   *
+   * An id that outlived an edit is worse than a fresh one: the replay branch in
+   * `enqueue_generation_job` answers with the job the id already names, BEFORE it looks
+   * at the target — so a reader who was told "that has not reached your account",
+   * changed their text and pressed again would be shown "Started." for a job
+   * summarising what they replaced. `RememberThis` clears its own id on every edit for
+   * exactly this reason.
+   */
+  function editing() {
+    submission.current = null;
+  }
 
   const [budget, setBudget] = useState<BudgetState | null>(null);
   const [books, setBooks] = useState<{ workId: string; title: string; kind: string | null }[]>([]);
@@ -120,12 +146,14 @@ export function Studio({
   const [booksAnswered, setBooksAnswered] = useState<number | null>(null);
   const [itemsFailed, setItemsFailed] = useState<string | null>(null);
   /*
-   * TWO COUNTERS, because there are two things that can fail independently.
+   * TWO COUNTERS AND THREE EFFECTS, because three things fail independently.
    *
-   * One counter drove both retries, and it was in the deps of both effects: pressing
-   * Try again under a failed highlight fetch re-ran the budget state, the book list and
-   * the job list as well — three round trips to retry a fourth, unrelated one, on a
-   * screen whose whole argument is that generation is metered.
+   * One counter drove everything, in the deps of one effect that fetched all of it:
+   * pressing Try again under a failed highlight fetch re-ran the budget state, the book
+   * list and the job list as well — three round trips to retry a fourth, unrelated one,
+   * on a screen whose whole argument is that generation is metered. `reloads` now
+   * retries the book list and nothing else, `itemReloads` the open book's highlights,
+   * and the budget and the job list have no retry to be caught up in.
    */
   const [reloads, setReloads] = useState(0);
   const [itemReloads, setItemReloads] = useState(0);
@@ -137,6 +165,14 @@ export function Studio({
       .catch((e: unknown) => console.error('Could not read your generations', e));
   }, [userId]);
 
+  /*
+   * The two that have no retry of their own, and no `reloads` in their deps.
+   *
+   * The counter split was only half done: `itemReloads` came out for the highlights and
+   * `reloads` was left driving this effect, so Try again under a failed BOOK LIST still
+   * re-issued `generation_budget_state` and `fetchMyJobs` beside it — two requests that
+   * had just succeeded, on a screen whose premise is that every request is metered.
+   */
   useEffect(() => {
     let live = true;
     fetchBudgetState()
@@ -153,6 +189,15 @@ export function Studio({
         console.error('Could not read the budget', e);
         if (live) setBudget('open');
       });
+    reloadJobs();
+    return () => {
+      live = false;
+    };
+  }, [userId, reloadJobs]);
+
+  /** The book list, which is what `reloads` retries and the only thing it retries. */
+  useEffect(() => {
+    let live = true;
     const attempt = reloads;
     fetchImportedWorks(userId)
       .then((found) => {
@@ -166,11 +211,10 @@ export function Studio({
         setBooksFailed(attempt);
         setBooksAnswered(attempt);
       });
-    reloadJobs();
     return () => {
       live = false;
     };
-  }, [userId, reloadJobs, reloads]);
+  }, [userId, reloads]);
 
   /*
    * Polled while something is running, and not otherwise.
@@ -250,7 +294,7 @@ export function Studio({
   const shortened = truncationNote(imported.used, imported.total);
 
   async function submit() {
-    if (sending) return;
+    if (sendingRef.current) return;
     setError(null);
     setNote(null);
 
@@ -284,6 +328,7 @@ export function Studio({
       return;
     }
 
+    sendingRef.current = true;
     setSending(true);
     try {
       const queued = await requestPrivateSummary({
@@ -322,6 +367,7 @@ export function Studio({
             : 'That could not be started just now.',
       );
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }
@@ -359,7 +405,10 @@ export function Studio({
             type="button"
             className="btn btn--plain library__filter"
             aria-pressed={source === 'paste'}
-            onClick={() => setSource('paste')}
+            onClick={() => {
+              editing();
+              setSource('paste');
+            }}
           >
             Something I paste
           </button>
@@ -369,7 +418,10 @@ export function Studio({
               type="button"
               className="btn btn--plain library__filter"
               aria-pressed={source === book.workId}
-              onClick={() => setSource(book.workId)}
+              onClick={() => {
+                editing();
+                setSource(book.workId);
+              }}
             >
               {book.title}
             </button>
@@ -436,7 +488,10 @@ export function Studio({
             className="field__input"
             value={author}
             maxLength={MAX_TITLE_CHARS}
-            onChange={(e) => setAuthor(e.target.value)}
+            onChange={(e) => {
+              editing();
+              setAuthor(e.target.value);
+            }}
             placeholder="Optional"
           />
 
@@ -447,7 +502,10 @@ export function Studio({
             id="studio-kind"
             className="field__input"
             value={kind}
-            onChange={(e) => setKind(e.target.value as StudioKind)}
+            onChange={(e) => {
+              editing();
+              setKind(e.target.value as StudioKind);
+            }}
           >
             {STUDIO_KINDS.map((k) => (
               <option key={k} value={k}>
@@ -466,7 +524,10 @@ export function Studio({
             value={text}
             maxLength={MAX_TEXT_CHARS}
             aria-describedby="studio-text-count"
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              editing();
+              setText(e.target.value);
+            }}
           />
           {/*
             Counted against the floor as well as the ceiling. `acquire` refuses
@@ -496,7 +557,10 @@ export function Studio({
         className="field__input"
         value={title}
         maxLength={MAX_TITLE_CHARS}
-        onChange={(e) => setTitle(e.target.value)}
+        onChange={(e) => {
+          editing();
+          setTitle(e.target.value);
+        }}
         placeholder={picked ? picked.title : 'What this is called'}
       />
 

@@ -75,15 +75,21 @@
 }
 
 /*
- * Room for the bar at the foot of the shell.
+ * Room for the bar at the foot of the page.
  *
  * Set on the root by the player engine while a queue exists, in the same shape
  * focus mode uses, because the shell cannot see the player from where it is
  * mounted. Without it `Enough` and the Colophon — the two places law 7 puts a
  * visible edge on the session — end up underneath the one piece of chrome that
  * is deliberately always on top.
+ *
+ * ON `body`, NOT ON `.shell`, because the bar outlives the shell. It is drawn beside
+ * every screen the app can return — the 404, the sign-in page, the loading states —
+ * and none of those renders a `.shell`, so a rule scoped to one reserved nothing on
+ * exactly the pages where a button sitting in the last three rems (Sign in; Browse
+ * everything) becomes unreachable on a short viewport.
  */
-:root[data-listening='on'] .shell {
+:root[data-listening='on'] body {
   padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom));
 }
 

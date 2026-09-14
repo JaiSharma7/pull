@@ -559,6 +559,47 @@ begin
     raise exception 'a replay was not reported as one, so the screen cannot tell';
   end if;
 
+  /*
+   * And it says where that job actually is. The first version answered `fast` / 0 for
+   * every replay, and the Studio prints "Started." on exactly that — so a reader
+   * replaying a staggered job was told a summary had begun that would not start for
+   * another hour and a half.
+   */
+  declare
+    staggered jsonb;
+    late      uuid := extensions.gen_random_uuid();
+  begin
+    -- Past the free allowance, so the next job is genuinely delayed.
+    for i in 1..4 loop
+      perform public.enqueue_generation_job(
+        jsonb_build_object('title', 'Filler ' || i, 'text', 'x'));
+    end loop;
+
+    -- Backdated, because `now()` is the TRANSACTION's clock: every row inserted in this
+    -- block shares one `created_at`, and the placement is read from which jobs came
+    -- before. A minute apart is what production gets for free.
+    perform set_config('role', 'postgres', true);
+    update public.generation_jobs set created_at = now() - interval '1 minute'
+     where requester_id = reader;
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claims',
+      json_build_object('sub', reader, 'role', 'authenticated')::text, true);
+
+    staggered := public.enqueue_generation_job(
+      jsonb_build_object('title', 'Late', 'text', 'x'), late);
+    if (staggered ->> 'queue') <> 'normal' or (staggered ->> 'delaySeconds')::int <= 0 then
+      raise exception 'the fixture did not produce a staggered job: %', staggered;
+    end if;
+
+    staggered := public.enqueue_generation_job(
+      jsonb_build_object('title', 'Late', 'text', 'x'), late);
+    if (staggered ->> 'queue') <> 'normal' or (staggered ->> 'delaySeconds')::int <= 0 then
+      raise exception
+        'a replay of a staggered job reported %, so the screen says "Started." for a job '
+        'that has not.', staggered;
+    end if;
+  end;
+
   select count(*) into jobs
   from public.generation_jobs gj
   where gj.requester_id = reader and gj.client_mutation_id = mut;

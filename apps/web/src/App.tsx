@@ -807,14 +807,26 @@ export function App() {
    * (a recovery code) lives on the gate itself rather than in settings the locked-out
    * reader cannot reach.
    */
+  /*
+   * NO PLAYER BEHIND THIS GATE, unlike every other early return above.
+   *
+   * `withPlayer` passes the reader's own id, `PlayerEngine` keys on it and restores
+   * their stored queue, and `PlayerBar` then draws "Paused · 2 of 5 · Meditations" with
+   * a Play button that speaks the body of the ideas aloud. The comment above is that a
+   * factor-owing session must not reach anything a signed-in reader can reach, and their
+   * last listening session is exactly that — on a shared machine it is the previous
+   * reader's, read out by anyone who has the password and not the factor. So these two
+   * returns are bare, the engine unmounts, and the queue is still in storage when the
+   * factor is passed.
+   */
   if (session && owesFactor === null)
-    return withPlayer(
+    return (
       <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
         Loading…
-      </p>,
+      </p>
     );
   if (session && owesFactor)
-    return withPlayer(<SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />);
+    return <SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />;
 
   /*
    * The player and its bar are wrapped around this by `withPlayer` at the end, along

@@ -185,17 +185,35 @@ export function fitImportSource(
   const whole = buildImportSource(items);
   if (whole.length <= max) return { text: whole, used: items.length, total: items.length };
 
-  // Grown one highlight at a time rather than sliced at a character, because half a
-  // passage sent to a model is a passage that says something its author did not.
+  /*
+   * Grown one highlight at a time rather than sliced at a character, because half a
+   * passage sent to a model is a passage that says something its author did not.
+   *
+   * ONE PASS, accumulating parts and a running length. The first version called
+   * `buildImportSource(items.slice(0, i))` per prefix, which rebuilds and re-joins the
+   * whole string every time — quadratic in characters, on the render path, for exactly
+   * the four-thousand-highlight book this function exists to handle. The parts are what
+   * `buildImportSource` would produce, joined the same way, so the text is byte-identical
+   * and the hash is the same.
+   */
+  const parts: string[] = [];
+  let length = 0;
   let used = 0;
-  let text = '';
-  for (let i = 1; i <= items.length; i += 1) {
-    const next = buildImportSource(items.slice(0, i));
-    if (next.length > max) break;
-    text = next;
-    used = i;
+  for (const item of items) {
+    used += 1;
+    const body = item.body.trim();
+    if (body === '') continue;
+    const locator = item.locator?.trim();
+    const part = locator ? `${locator}\n${body}` : body;
+    const added = parts.length === 0 ? part.length : part.length + 2;
+    if (length + added > max) {
+      used -= 1;
+      break;
+    }
+    parts.push(part);
+    length += added;
   }
-  return { text, used, total: items.length };
+  return { text: parts.join('\n\n'), used, total: items.length };
 }
 
 /** What to say when a book was too long to send whole. */
