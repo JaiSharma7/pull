@@ -54,31 +54,21 @@
 }
 
 /*
- * The ordinal sits in the margin where there is room for it and inline where there
- * is not. It is reading order rather than rank, so it is set in the metadata face
- * and kept faint: useful for finding your place, never the loudest thing in the row.
+ * The ordinal, on the card's own headline.
+ *
+ * It used to hang off `.source__pull-headline`, a heading this page drew itself.
+ * The page now renders the same `PullCard` the feed does, so the counter moves
+ * onto the card's headline — scoped to a source list item, so no card anywhere
+ * else acquires a number.
+ *
+ * It is reading order rather than rank, so it is set in the metadata face and kept
+ * faint: useful for finding your place, never the loudest thing in the row.
  */
-.source__pull-headline {
-  font-family: var(--font-display);
-  font-size: var(--step-1);
-  margin: 0 0 var(--space-2);
-}
-
-.source__pull-headline::before {
+.source__pull .pull-card__headline::before {
   content: counter(pull) '. ';
   font-family: var(--font-mono);
   font-size: var(--step--1);
   color: var(--text-faint);
-}
-
-.source__pull-body {
-  margin: 0 0 var(--space-2);
-}
-
-.source__pull-more,
-.source__pull-why {
-  color: var(--text-soft);
-  margin: 0 0 var(--space-2);
 }
 
 .source__foot {

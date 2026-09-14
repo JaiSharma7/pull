@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { fetchSourceDelta } from '../lib/api.js';
+import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
+import { fetchSavedPullIds, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
+import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import type { Track } from '../lib/player.js';
+import { speechSupported } from '../lib/speech.js';
 import { anchoredPullId } from '../lib/routes.js';
 import { isSchemaMismatch, TRANSPORT_ERROR } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
@@ -65,11 +69,29 @@ function selectionOffsetsIn(
   return { start, end: start + text.length, text };
 }
 
-/** Minutes, from the estimate the pipeline stored per Pull. */
-function readingMinutes(seconds: number | null): number | null {
-  if (seconds === null || seconds <= 0) return null;
-  return Math.max(1, Math.round(seconds / 60));
-}
+/**
+ * Whether this browser can speak, decided once — as `Feed` and `Library` decide
+ * it. A control that cannot work is withheld rather than drawn dead.
+ */
+const CAN_SPEAK = speechSupported();
+
+/**
+ * How deep a source page opens.
+ *
+ * The feed opens at the claim, because a feed of full arguments is not a feed.
+ * A reader who has navigated to a source has already said they want the long
+ * version, so this opens at the deepest stop the card has; `clampDepth` inside
+ * `PullCard` brings it in for a Pull with fewer.
+ *
+ * The stored `estimated_read_seconds` is no longer printed beside the idea. The
+ * dial's labels are computed from the words actually on screen at 210wpm, which
+ * `packages/ui/src/depth.ts` raises to a law precisely so that two durations
+ * cannot disagree in front of a reader.
+ */
+const READING_DEPTH = 3;
+
+/** Shared, because a new Set every render would be a new identity every render. */
+const EMPTY_SAVED: ReadonlySet<string> = new Set();
 
 /**
  * The way out of this page, which is not the same door for everyone.
@@ -207,7 +229,59 @@ export function Source({
    * FIRST question and silently discard the new wording.
    */
   const askMutations = useRef<Record<string, string>>({});
-  const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
+  /*
+   * The element a selection is measured against, per idea.
+   *
+   * It used to be the page's own `<p class="source__pull-body">`. The body now
+   * lives inside `PullCard`, which owns that paragraph, so the mark-bearing span
+   * `renderBody` returns is what carries the ref instead. `selectionOffsetsIn`
+   * measures against `textContent` from the element it is handed, so a span
+   * wrapping exactly the body text gives exactly the same offsets the paragraph
+   * did — and a Pull whose dial is turned below the claim has no such element,
+   * which is why the highlight control checks for one before offering itself.
+   */
+  const bodyRefs = useRef<Map<string, HTMLElement>>(new Map());
+
+  /*
+   * A source page is a reading view, so it reads at the deepest stop and keeps one
+   * depth for the screen — the reasoning `Feed` and `Library` give for keeping one:
+   * it is a preference about how to read, not a property of any single idea.
+   */
+  const [depth, setDepth] = useState(READING_DEPTH);
+
+  /** The listening queue, which lives above the shell and outlives this page. */
+  const player = usePlayer();
+
+  /*
+   * What this reader has already kept, so the card's Save control says which way
+   * it points. Fetched once per reader rather than per idea; a failure is silent
+   * and leaves every card unsaved, which is recoverable in one press and is the
+   * right way for a non-essential decoration to fail.
+   */
+  const [savedIds, setSaved] = useState<Set<string>>(new Set());
+  /*
+   * Read through the signed-in check rather than cleared on sign-out. Emptying it
+   * in the effect would be a `setState` synchronously inside one — a cascading
+   * render the lint rule refuses, and for good reason — and there is nothing to
+   * clear: a visitor is offered no Save control at all, so a set left over from a
+   * previous session is never consulted.
+   */
+  const saved = userId ? savedIds : EMPTY_SAVED;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    fetchSavedPullIds(userId)
+      .then((ids) => {
+        if (!cancelled) setSaved(ids);
+      })
+      .catch(() => {
+        // A Save control that opens unpressed is wrong about a kept idea until the
+        // next press, and pressing it is idempotent (`savePull` swallows 23505).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
    * from `fetchSource` is a work that does not exist; an error is an error. Review
@@ -524,6 +598,36 @@ export function Source({
     setShareStatus(note ? { pullId, note } : null);
   }
 
+  /*
+   * Keep an idea, or stop keeping it.
+   *
+   * Optimistic, and rolled back on failure, for the reason a highlight is: the
+   * reader is looking at the control they just pressed. `savePull` treats a
+   * duplicate as success, so a Save that raced a stale `saved` set still ends in
+   * the state the press asked for.
+   */
+  async function onSave(pullId: string) {
+    if (!userId) return;
+    const wasSaved = saved.has(pullId);
+    setSaved((prev) => {
+      const next = new Set(prev);
+      if (wasSaved) next.delete(pullId);
+      else next.add(pullId);
+      return next;
+    });
+    try {
+      if (wasSaved) await unsavePull(pullId, userId);
+      else await savePull(pullId, userId);
+    } catch {
+      setSaved((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.add(pullId);
+        else next.delete(pullId);
+        return next;
+      });
+    }
+  }
+
   if (missing) {
     return (
       <section className="measure">
@@ -656,7 +760,6 @@ export function Source({
       ) : (
         <ol className="source__pulls">
           {pulls.map((p) => {
-            const minutes = readingMinutes(p.estimatedReadSeconds);
             // Filtered once. This used to be a `.some()` guard followed by a `.filter()`
             // inside an immediately-invoked function -- and that IIFE runs during render,
             // so `react-hooks/refs` traced the ticket ref `reloadQuestions` now touches
@@ -667,45 +770,105 @@ export function Source({
               myQuestions.userId === userId
                 ? myQuestions.rows.filter((q) => q.pullId === p.id)
                 : [];
+            /*
+             * Whether the claim is on screen at the current depth.
+             *
+             * Highlighting measures a selection against the body, and the dial can
+             * now turn the body off — the shortest stop is the headline alone. The
+             * control is withheld there rather than left to fail silently on a
+             * missing ref, which is what it would have done.
+             */
+            const levels = depthLevels({ ...p, hasSource: false });
+            const bodyShown = levels
+              .slice(0, clampDepth(depth, levels) + 1)
+              .some((l) => l.key === 'claim');
+            const track = (): Track => ({
+              id: p.id,
+              title: work.title,
+              text: textAtDepth({ ...p, hasSource: false }, depth),
+            });
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
-                <h3 className="source__pull-headline">{p.headline}</h3>
                 {/*
-                  Re-anchored on every render rather than trusting the stored
-                  offsets: a highlight whose text has moved follows its words,
-                  and one whose text is gone is dropped rather than drawn over
-                  whatever now occupies those characters.
+                  The same card the feed draws, because this is the same idea.
+
+                  The page used to render its own headline and paragraphs, so a
+                  reader who arrived from a shared link met a different object from
+                  the one they had been reading a moment earlier — no dial, no
+                  Listen, no Save, and a body they could highlight but not keep.
+
+                  `onOpenSource` is deliberately absent: the reader is already on
+                  the source, so the dial stops at the full argument rather than
+                  offering a door to the page it is on.
                 */}
-                <p
-                  className="source__pull-body"
-                  ref={(el) => {
-                    if (el) bodyRefs.current.set(p.id, el);
-                    else bodyRefs.current.delete(p.id);
-                  }}
-                >
-                  {splitByRanges(
-                    p.body,
-                    highlights
-                      .filter((h) => h.pullId === p.id && h.field === 'body')
-                      .map((h) => anchor(p.body, h))
-                      .filter((r): r is { start: number; end: number } => r !== null),
-                  ).map((seg, i) =>
-                    seg.marked ? (
-                      <mark key={i} className="source__mark">
-                        {seg.text}
-                      </mark>
+                <PullCard
+                  source={{ title: work.title, kind: work.kind, year: work.year }}
+                  headline={p.headline}
+                  body={p.body}
+                  whyItMatters={p.whyItMatters}
+                  explanation={p.explanation}
+                  sourceTrail={detail.summaryTitle}
+                  depth={depth}
+                  onDepthChange={setDepth}
+                  saved={saved.has(p.id)}
+                  onSave={userId ? () => void onSave(p.id) : undefined}
+                  listening={isPlaying(player.state, p.id)}
+                  onListen={
+                    CAN_SPEAK
+                      ? () => {
+                          if (isPlaying(player.state, p.id)) player.stop();
+                          else player.playNow(track());
+                        }
+                      : undefined
+                  }
+                  queued={isQueued(player.state, p.id)}
+                  onQueue={
+                    CAN_SPEAK
+                      ? () => {
+                          if (isQueued(player.state, p.id)) player.remove(p.id);
+                          else player.enqueue([track()]);
+                        }
+                      : undefined
+                  }
+                  /*
+                    Re-anchored on every render rather than trusting the stored
+                    offsets: a highlight whose text has moved follows its words,
+                    and one whose text is gone is dropped rather than drawn over
+                    whatever now occupies those characters.
+
+                    Inline content only — this is rendered inside the card's own
+                    paragraph — so the marks come back wrapped in a span, which is
+                    also what carries the ref the selection is measured against.
+                  */
+                  renderBody={(text, field) =>
+                    field === 'body' ? (
+                      <span
+                        ref={(el) => {
+                          if (el) bodyRefs.current.set(p.id, el);
+                          else bodyRefs.current.delete(p.id);
+                        }}
+                      >
+                        {splitByRanges(
+                          text,
+                          highlights
+                            .filter((h) => h.pullId === p.id && h.field === 'body')
+                            .map((h) => anchor(text, h))
+                            .filter((r): r is { start: number; end: number } => r !== null),
+                        ).map((seg, i) =>
+                          seg.marked ? (
+                            <mark key={i} className="source__mark">
+                              {seg.text}
+                            </mark>
+                          ) : (
+                            <span key={i}>{seg.text}</span>
+                          ),
+                        )}
+                      </span>
                     ) : (
-                      <span key={i}>{seg.text}</span>
-                    ),
-                  )}
-                </p>
-                {p.explanation ? <p className="source__pull-more">{p.explanation}</p> : null}
-                {p.whyItMatters ? (
-                  <p className="source__pull-why">
-                    <span className="meta">Why it matters</span> {p.whyItMatters}
-                  </p>
-                ) : null}
-                {minutes ? <p className="meta">{minutes} min</p> : null}
+                      text
+                    )
+                  }
+                />
 
                 <p className="source__pull-actions">
                   {/*
@@ -731,7 +894,7 @@ export function Source({
                   ) : null}
                 </p>
 
-                {userId && (
+                {userId && bodyShown && (
                   <p className="source__pull-actions">
                     <button
                       type="button"
