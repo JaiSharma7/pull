@@ -12,6 +12,7 @@ import {
   POLL_FOR_MS,
   STALLED_AFTER_MS,
   truncationNote,
+  waitMinutes,
   type StudioJob,
 } from './studio.js';
 import type { ImportedItem } from './imports.js';
@@ -42,6 +43,7 @@ function job(over: Partial<StudioJob> = {}): StudioJob {
     summaryId: null,
     error: null,
     createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
     ...over,
   };
 }
@@ -205,6 +207,23 @@ describe('truncationNote', () => {
   });
 });
 
+describe('waitMinutes', () => {
+  /*
+   * The replay branch returns the stagger LESS the wait already served, so a replay near
+   * the end of one comes back with seconds — and `Math.round(seconds / 60)` printed
+   * "starting in about 0 minutes" on the arm whose whole purpose is saying it has not
+   * started.
+   */
+  it('never says nought minutes', () => {
+    expect(waitMinutes(12)).toBe('a minute');
+    expect(waitMinutes(89)).toBe('a minute');
+  });
+
+  it('rounds to whole minutes above that', () => {
+    expect(waitMinutes(5400)).toBe('90 minutes');
+  });
+});
+
 describe('describeJob', () => {
   it('says waiting for a queued job, which is what a budget wait looks like', () => {
     // A job waiting on the day's cap stays `queued` while the worker re-sends its
@@ -242,9 +261,25 @@ describe('describeJob', () => {
    * for a day is a screen lying at length, so a provider step that has been running
    * past any plausible duration says it is waiting instead.
    */
+  /*
+   * And it is measured from `updatedAt`, not from creation: the stagger delays the Nth
+   * job of a day by `(N - 3 + 1) * 300` seconds, so a job created 25 minutes before it
+   * was dispatched arrived at this branch having "run" for the whole wait and told the
+   * reader it was taking longer than usual at the moment it started.
+   */
+  it('counts from when the job last moved, not from when it was queued', () => {
+    const staggered = job({
+      status: 'running',
+      currentStep: 'synthesize',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:25:00Z',
+    });
+    expect(describeJob(staggered, Date.parse('2026-09-01T00:27:00Z'))).toBe('Writing the summary.');
+  });
+
   it('stops claiming a summary is being written once that is implausible', () => {
     const stalled = job({ status: 'running', currentStep: 'synthesize' });
-    const late = Date.parse(stalled.createdAt) + STALLED_AFTER_MS + 1;
+    const late = Date.parse(stalled.updatedAt) + STALLED_AFTER_MS + 1;
     expect(describeJob(stalled, late)).toContain('Taking longer');
     expect(describeJob(stalled, late)).not.toContain('Writing');
     // And it does not guess WHY. Naming the budget mislabels a genuinely slow source.

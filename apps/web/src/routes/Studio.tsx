@@ -44,12 +44,14 @@ import {
   STUDIO_KIND_LABEL,
   STUDIO_KINDS,
   studioKindFor,
+  waitMinutes,
   type BudgetState,
   type StudioJob,
   type StudioKind,
 } from '../lib/studio-api.js';
 import type { ImportedItem } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
+import { sqlState } from '../lib/rpc-error.js';
 import { mutationId } from '../lib/submission.js';
 
 /** How often a running job is asked about. */
@@ -303,7 +305,18 @@ export function Studio({
     // which is a confusing thing to tell somebody who picked a four-hundred-highlight
     // book a second ago.
     if (picked && pickedItems === null) {
-      setError('Still reading that book’s highlights — try again in a moment.');
+      /*
+       * Two different states, and only one of them gets better by waiting. A fetch that
+       * FAILED leaves `pickedItems` null for ever as far as this button is concerned —
+       * nothing on this path re-issues it — so "try again in a moment" was a sentence
+       * that could never come true, which is the dead end this screen's own comment
+       * above `booksFailed` describes fixing on the render path.
+       */
+      setError(
+        itemsFailed === itemsAttempt
+          ? 'Could not read that book’s highlights. Use Try again above, then submit.'
+          : 'Still reading that book’s highlights — try again in a moment.',
+      );
       return;
     }
 
@@ -353,7 +366,7 @@ export function Studio({
       setNote(
         queued.queue === 'fast'
           ? `Started. ${queued.remainingToday} more today.`
-          : `Queued, starting in about ${Math.round(queued.delaySeconds / 60)} minutes. ${queued.remainingToday} more today.`,
+          : `Queued, starting in about ${waitMinutes(queued.delaySeconds)}. ${queued.remainingToday} more today.`,
       );
       if (!picked) setText('');
       reloadJobs();
@@ -366,6 +379,20 @@ export function Studio({
             ? e.message
             : 'That could not be started just now.',
       );
+      /*
+       * And the budget line catches up with the refusal.
+       *
+       * `budget` is read once on mount and otherwise only replaced by a SUCCESSFUL
+       * submit, so a day that filled between the two left the screen printing "There is
+       * room in today's shared generation budget." immediately above an error saying it
+       * is spent. `53400` is the code both the door and `reserve_budget` raise for
+       * exactly this, so the screen does not have to parse the sentence.
+       */
+      // `53400` is `configuration_limit_exceeded`, which is what both the door check in
+      // `enqueue_generation_job` and `reserve_budget` raise, and `sqlState` reads it back
+      // off the name `rpcError` gave the error — so the screen updates the line without
+      // parsing the sentence.
+      if (sqlState(e) === '53400') setBudget('spent');
     } finally {
       sendingRef.current = false;
       setSending(false);

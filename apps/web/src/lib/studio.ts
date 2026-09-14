@@ -234,6 +234,17 @@ export interface StudioJob {
   summaryId: string | null;
   error: string | null;
   createdAt: string;
+  /**
+   * Last touched, which is the only clock this screen has for "how long has it been
+   * RUNNING".
+   *
+   * `dispatch_generation_step` writes on every hop and `set_updated_at` keeps it, so for
+   * a running job this is when its current step started. `created_at` is not that: the
+   * per-requester stagger can queue a job for hours before it begins, and measuring the
+   * stall threshold from it told the 7th job of a day that it was taking longer than
+   * usual at the instant it started.
+   */
+  updatedAt: string;
 }
 
 /** Whether this job has not finished. */
@@ -316,7 +327,11 @@ export function describeJob(job: StudioJob, now: number = Date.now()): string {
   // Past this, no generation is still plausibly mid-call: the worker holds a message
   // for 180 s and a whole run is minutes. What it is waiting on is not something this
   // screen can see, so it does not say.
-  if (now - Date.parse(job.createdAt) > STALLED_AFTER_MS) {
+  //
+  // FROM `updatedAt`, not from when the job was created. The stagger delays the Nth job
+  // of a day by `(N - 3 + 1) * 300` seconds, and measuring from creation meant every
+  // staggered job crossed this threshold before it had run for a second.
+  if (now - Date.parse(job.updatedAt) > STALLED_AFTER_MS) {
     return 'Taking longer than usual. It will finish on its own — you can close this.';
   }
 
@@ -329,12 +344,30 @@ export function describeJob(job: StudioJob, now: number = Date.now()): string {
  * How long a job can plausibly be running before "running" stops being the honest word.
  *
  * Twenty minutes. A full walk is twelve steps of seconds-to-a-minute each plus queue
- * hops; the per-requester stagger can delay a START by hours, but that job is `queued`,
- * not `running`, so it never reaches this branch.
+ * hops; the per-requester stagger can delay a START by hours, and it is measured against
+ * `updated_at` rather than `created_at` so that wait is not counted as running time.
+ * The first version reasoned that a staggered job is `queued` and never reaches this
+ * branch, which is true right up until it starts — and then it arrives having already
+ * "run" for the whole stagger.
  */
 export const STALLED_AFTER_MS = 20 * 60 * 1000;
 
 const EARLY_STEPS = new Set(['resolve_identity', 'acquire', 'chunk']);
+
+/**
+ * How long a queued job has to wait, in words a screen can print.
+ *
+ * `Math.round(seconds / 60)` alone says "about 0 minutes" for anything under half a
+ * minute, which the replay branch of `enqueue_generation_job` can now return: it reports
+ * the stagger LESS the wait already served, so a replay near the end of one comes back
+ * with a handful of seconds and the screen took the staggered arm to say the job starts
+ * in no time at all.
+ */
+export function waitMinutes(seconds: number): string {
+  if (seconds <= 90) return 'a minute';
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} minutes`;
+}
 
 /** What a reader may be told about the day's budget: whether there is room, not how much. */
 export type BudgetState = 'open' | 'low' | 'spent';

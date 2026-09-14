@@ -604,6 +604,15 @@ export function Review() {
     let cancelled = false;
     const userId = getCurrentUserId();
 
+    /*
+     * `.catch` on the IIFE, because a rejection nobody handles is a screen that never
+     * leaves "Loading…". The `try` below starts at the page fetch, so anything thrown
+     * before it — `pendingRecallPullIds` reads IndexedDB and currently swallows its own
+     * failures, which is a contract and not a guarantee — escaped into an unhandled
+     * promise: no `setDue`, no `setError`, no Try again. The replaced `Promise.all(…)
+     * .catch(…)` covered both halves; this restores that without giving up the ordering
+     * the offline branch needs.
+     */
     void (async () => {
       /*
        * Fetched before the page rather than beside it, which is what makes the
@@ -689,12 +698,36 @@ export function Review() {
             setOffline(true);
             return;
           }
+
+          /*
+           * AND THE PACK THAT IS FINISHED IS NOT A FAILURE.
+           *
+           * Answering the last downloaded card bumps `reloads`; the refetch fails
+           * because there is still no signal; `removeFromPack` has emptied the pack, so
+           * neither of the branches above fires and control fell through to the red
+           * "Could not check what is fading." with a Try again that cannot work until
+           * the reader has a connection. That is the screen telling somebody who did
+           * exactly what it asked that something went wrong. An empty pack offline is an
+           * empty session, which the `due.length === 0` branch already has copy for.
+           *
+           * Gated on having answered something in this session, so a reader who opens
+           * Review offline with nothing downloaded still gets the error they should.
+           */
+          if (graded.current.size > 0) {
+            setDue([]);
+            setOffline(true);
+            return;
+          }
         }
 
         setOffline(wasOffline);
         setError(e instanceof Error ? e.message : String(e));
       }
-    })();
+    })().catch((e: unknown) => {
+      if (cancelled) return;
+      console.error('Due reviews could not be prepared', e);
+      setError(e instanceof Error ? e.message : String(e));
+    });
 
     return () => {
       cancelled = true;

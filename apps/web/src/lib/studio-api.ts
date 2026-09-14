@@ -8,6 +8,7 @@ export {
   buildImportSource,
   fitImportSource,
   truncationNote,
+  waitMinutes,
   checkSubmission,
   describeJob,
   isRunning,
@@ -137,7 +138,7 @@ export async function fetchBudgetState(): Promise<BudgetState> {
 export async function fetchMyJobs(userId: string, limit = 12): Promise<StudioJob[]> {
   const { data, error } = await supabase
     .from('generation_jobs')
-    .select('id, status, current_step, work_id, summary_id, error, created_at')
+    .select('id, status, current_step, work_id, summary_id, error, created_at, updated_at')
     .eq('requester_id', userId)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -151,5 +152,6 @@ export async function fetchMyJobs(userId: string, limit = 12): Promise<StudioJob
     summaryId: row.summary_id,
     error: row.error,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }));
 }

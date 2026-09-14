@@ -2613,6 +2613,10 @@ export type Database = {
         }
         Returns: Json
       }
+      renew_source_claim: {
+        Args: { p_job_id: string; p_lease?: string }
+        Returns: boolean
+      }
       requeue_generation_message: {
         Args: {
           p_budget_waits?: number

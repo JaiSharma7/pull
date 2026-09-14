@@ -82,14 +82,17 @@ export class BudgetExhaustedError extends Error {
  * the exact hole the reservation exists to close. Overshooting the other way
  * costs a little unused headroom for the seconds a call takes.
  *
- * `artwork` is here for completeness and is not reserved today — no step calls an
- * image provider yet — so it is the one number that will need checking against a
- * real invoice when it does.
+ * The two steps that call a provider, and no more than that. `artwork` was here for
+ * completeness, at 5 — a number nobody had checked against an invoice, for a step that
+ * returns `{ generated: false }` without calling anything. `enqueue_generation_job`'s
+ * door check states the worst case a job can cost as 7 = 6 + 1, deliberately excluding
+ * it, so a third entry here was an invitation to read the worst case as 12 and to widen
+ * the door for money no step spends. When an image provider is switched on it arrives
+ * with a price somebody has seen.
  */
 export const RESERVE_CENTS = {
   synthesize: 6,
   embed: 1,
-  artwork: 5,
 } as const satisfies Record<string, number>;
 
 /**
@@ -415,6 +418,14 @@ export interface PipelineDb {
    * hostage -- see 20260902200000.
    */
   claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
+  /**
+   * Extend the lease on whatever source this job already claimed.
+   *
+   * For the job parked on the day's budget with its text already synthesised and paid
+   * for: `claimSourceHash` needs a hash, which the step that waits does not have and
+   * should not be handed. Answers false when there was nothing of this job's to renew.
+   */
+  renewSourceClaim(jobId: string): Promise<boolean>;
   releaseSourceHash(jobId: string): Promise<void>;
   /**
    * Hold `cents` against the day's cap for this step, or refuse.
@@ -1572,17 +1583,24 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       try {
         await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
       } catch (e) {
-        // Swallowed for the reason `synthesize` gives at its own recovery: a re-claim
-        // that fails transiently must not take the place of the refusal, or the worker
-        // stops seeing a budget wait and starts seeing a failed attempt.
+        /*
+         * BY JOB, because this step does not have the hash and should not be given it.
+         *
+         * The first version read `priorOutputs.acquire.hash` and therefore did nothing at
+         * all: `NEEDS.embed` is `['cards', 'synthesize']`, and 20260902160000 hands a
+         * step only what it declares it reads — precisely so the source text is not
+         * shipped to steps that have no use for it. Widening that declaration to reach
+         * one string would undo the change it was made by. `renew_source_claim` takes
+         * the job id, which the claim row already carries an index on.
+         *
+         * Swallowed for the reason `synthesize` gives at its own recovery: a renewal
+         * that fails transiently must not take the place of the refusal, or the worker
+         * stops seeing a budget wait and starts seeing a failed attempt.
+         */
         if (e instanceof BudgetExhaustedError) {
-          const held = priorOutputs.acquire as { hash?: unknown } | undefined;
-          const hash = asString(held?.hash);
-          if (hash) {
-            await db.claimSourceHash(job.id, hash).catch((renew: unknown) => {
-              console.error('embed: could not renew the source claim', renew);
-            });
-          }
+          await db.renewSourceClaim(job.id).catch((renew: unknown) => {
+            console.error('embed: could not renew the source claim', renew);
+          });
         }
         throw e;
       }
