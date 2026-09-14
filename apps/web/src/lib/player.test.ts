@@ -69,6 +69,23 @@ describe('enqueue', () => {
     expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
   });
 
+  /*
+   * The same failure `playNow` was corrected for, on the other path. A Track carries the
+   * text to speak at the reader's current depth, so "Listen to this source" pressed at
+   * the claim and again at the full argument hands over the same ids with different
+   * words — and dropping them kept the short ones while the screen showed the long ones.
+   */
+  it('refreshes a queued track rather than dropping the press', () => {
+    const claim = { id: 'a', title: 'Meditations', text: 'The claim.' };
+    const argument = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+    const s = run([
+      { type: 'enqueue', tracks: [claim, track('b')] },
+      { type: 'enqueue', tracks: [argument, track('b')] },
+    ]);
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(s.queue[0]!.text).toBe(argument.text);
+  });
+
   it('returns the same state when nothing new arrives', () => {
     const before = run([{ type: 'enqueue', tracks: [track('a')] }]);
     expect(playerReducer(before, { type: 'enqueue', tracks: [track('a')] })).toBe(before);

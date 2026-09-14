@@ -93,6 +93,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       trustScore,
       sourceUrl,
       author,
+      visibility,
     }) {
       /*
        * File a newly created work under its topics.
@@ -270,11 +271,31 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         );
       };
 
+      /*
+       * WHAT A PRIVATE JOB MAY DO TO A ROW IT DID NOT CREATE: nothing but read it.
+       *
+       * `rescore` was already gated on the scores being present, which the pipeline
+       * passes as null for a private job — and `creditAuthor` and `backfillSourceUrl`
+       * were not, on the reasoning that a missing credit is worth adding. That was
+       * written when only canonical jobs reached here with a caller-supplied author.
+       * The Studio put that field in front of every signed-in reader: paste the text of
+       * a work already in `works`, type any name, and `attribute_work` — `security
+       * definer`, no ownership test — files that name as the author of a shared
+       * catalogue row. `template`'s own adopt branch states the rule this follows:
+       * nothing about a private generation should re-score or re-attribute a row.
+       *
+       * A NEW work is a different matter and keeps its credit: it is the reader's own
+       * row, made from their own text, and nobody else's page changes.
+       */
+      const mayAmendShared = visibility === 'public';
+
       const found = existing?.[0];
       if (found) {
         await fileUnderTopics(found.id, { onlyIfUnclassified: true });
-        await creditAuthor(found.id);
-        await backfillSourceUrl(found.id);
+        if (mayAmendShared) {
+          await creditAuthor(found.id);
+          await backfillSourceUrl(found.id);
+        }
         await rescore(found.id);
         return { workId: found.id, existing: true };
       }
@@ -329,8 +350,10 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           'adopt concurrently created work',
         ) as { id: string };
         await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
-        await creditAuthor(raced.id);
-        await backfillSourceUrl(raced.id);
+        if (mayAmendShared) {
+          await creditAuthor(raced.id);
+          await backfillSourceUrl(raced.id);
+        }
         await rescore(raced.id);
         return { workId: raced.id, existing: true };
       }
@@ -585,6 +608,16 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         );
       }
       return (count ?? 0) > 0;
+    },
+
+    async renewSourceClaim(jobId) {
+      const { data, error } = await supabase.rpc('renew_source_claim', { p_job_id: jobId });
+      if (error) {
+        throw new Error(
+          `renew source claim: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      return data === true;
     },
 
     /**

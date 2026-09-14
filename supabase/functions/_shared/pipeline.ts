@@ -293,6 +293,13 @@ export interface PipelineDb {
     contentHash: string;
     rightsStatus: RightsStatus;
     /**
+     * The JOB's visibility, which decides what this call may do to a row it did not
+     * create. A private generation may adopt an existing `works` row and must not
+     * re-attribute or re-score it: the Studio puts an Author field in front of every
+     * signed-in reader, and `attribute_work` has no ownership test of its own.
+     */
+    visibility: string;
+    /**
      * Already narrowed by `narrowTopics`. Written to `work_topics` only for a work
      * this call actually creates: an existing work has been classified once already,
      * and re-filing it on every reuse would let one job's classification overwrite
@@ -418,6 +425,15 @@ export interface PipelineDb {
    * hostage -- see 20260902200000.
    */
   claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
+  /**
+   * Extend the lease on whatever source this job already claimed.
+   *
+   * For the job parked on the day's budget with its summary already written: releasing
+   * the claim there lets a second job overwrite or duplicate that summary, and
+   * `claimSourceHash` needs a hash the waiting step does not have. Answers false when
+   * there was nothing of this job's to renew.
+   */
+  renewSourceClaim(jobId: string): Promise<boolean>;
   releaseSourceHash(jobId: string): Promise<void>;
   /**
    * Hold `cents` against the day's cap for this step, or refuse.
@@ -1406,6 +1422,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
         kind: acquired.kind,
+        visibility: job.visibility,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
         sourceUrl,
@@ -1561,37 +1578,45 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        * A cap that only bounded the expensive step would be a cap on synthesis
        * rather than on spend.
        *
-       * AND THE CLAIM GOES BACK IF THE BUDGET REFUSES, as it does in `synthesize`.
-       * The catch below is where that decision is argued, including the answer this
-       * header used to give -- that a job whose text is already synthesised should hold
-       * the source so nobody pays for it twice -- and why it was wrong.
+       * AND THE CLAIM IS KEPT IF THE BUDGET REFUSES, which is the opposite of what
+       * `synthesize` does with the same refusal. The catch below is where that is
+       * argued, all three ways it has been argued.
        */
       try {
         await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
       } catch (e) {
         /*
-         * RELEASED, exactly as `synthesize` does with the same refusal — and this is the
-         * second reversal of this line, so both answers are written down.
+         * THE CLAIM IS KEPT, and this line has now been argued three ways. The decision
+         * of record, with the evidence, so it stops being re-litigated:
          *
-         * Holding the claim was meant to stop a second job paying to synthesise text
-         * this job has already synthesised and paid for. It does, and it does something
-         * worse: this wait is re-sent every 900 s for up to 24 hours, and each pass
-         * renewed the 30-minute lease, so the claim could be held until midnight. A
-         * second job on the same text gets `held` from `claim_source_hash`, waits its
-         * own bounded 30 minutes, and then fails TERMINALLY for doing nothing wrong.
-         * Paying twice costs money once; starving every other job on that text is the
-         * failure the claim's own comment in `synthesize` calls out by name.
+         *   RELEASE (what `synthesize` does). There, nothing has been written yet, so a
+         *   job that is merely early has no business holding a source. HERE the summary
+         *   exists: a draft, with its Pulls. Giving the claim back lets a second job
+         *   synthesise the same text — `findPublishedSummaryByHash` cannot offer a draft
+         *   — and then either publish a SECOND public summary of one work (two rows,
+         *   `get_feed` serving the same ideas twice, `get_source_delta` over-counting),
+         *   or, for the same requester, collide into this job's draft and have `cards`
+         *   upsert over its Pull bodies at `(summary_id, ordinal)` while this job is
+         *   still parked — after which this job's `embed` writes vectors computed from
+         *   ITS text onto rows now holding the other one's.
          *
-         * So the source goes back. This job has its draft and needs nothing from the
-         * claim; whoever takes it can finish sooner than this job will.
+         *   RENEW, on every pass of the wait. A second job on the same text gets `held`,
+         *   waits its own bounded thirty minutes, and fails terminally for doing nothing
+         *   wrong. That is a bad outcome for that reader and it is LOUD, bounded, and
+         *   destroys nothing.
          *
-         * Swallowed for the reason `synthesize` gives at its own recovery: a release
+         * Between corrupting one work and failing one job, the job fails. The wait
+         * re-sends this step every 900 s and the lease is 30 minutes, so renewing on
+         * each refusal is what holds the source across a wait that may last until
+         * midnight.
+         *
+         * Swallowed for the reason `synthesize` gives at its own recovery: a renewal
          * that fails transiently must not take the place of the refusal, or the worker
          * stops seeing a budget wait and starts seeing a failed attempt.
          */
         if (e instanceof BudgetExhaustedError) {
-          await db.releaseSourceHash(job.id).catch((release: unknown) => {
-            console.error('embed: could not release the source claim', release);
+          await db.renewSourceClaim(job.id).catch((renew: unknown) => {
+            console.error('embed: could not renew the source claim', renew);
           });
         }
         throw e;

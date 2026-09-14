@@ -430,7 +430,11 @@ export function Studio({
     }
   }
 
-  const chars = picked ? importedText.length : text.trim().length;
+  // The paste branch's counter, and only the paste branch's: the picked branch has no
+  // count on screen — it says how many highlights are going in, and `shortened` says so
+  // in words when some are not — so computing one for it was half a line of dead work on
+  // every render, and read as if there were a count to find.
+  const chars = text.trim().length;
 
   return (
     <section className="stack measure">

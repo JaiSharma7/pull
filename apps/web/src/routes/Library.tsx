@@ -759,101 +759,100 @@ export function Library({ userId }: { userId: string }) {
    * The offer is made only when there is something in it: with no saves there
    * are no notes either, so the highlight count is the whole of the export.
    */
-  if (items.length === 0) {
-    const empty = emptyLibraryScreen(highlightCount);
-    return (
-      <div className="stack measure">
-        <p className="meta">Library</p>
-        <h1>{empty.heading}</h1>
-        <p>{empty.body}</p>
-        {empty.exportable ? (
-          <p>
-            <button
-              type="button"
-              className="btn btn--plain"
-              onClick={() => void exportHighlights()}
-              disabled={busy}
-            >
-              Export highlights
-            </button>
-          </p>
-        ) : null}
-
-        {/*
-          Reachable from the empty screen too, which it was not.
-          `commit_import` saves each highlight, so the usual importer never sees this
-          branch — but a reader who unsaves their imported highlights, or who undoes a
-          batch (`undo_import` deletes the pulls, cascading `saved_items` while the
-          `import_items` tombstones survive), lands here with their whole import
-          history and its Undo controls behind an early return.
-          `emptyLibraryScreen` counts the `highlights` table and cannot see imports.
-        */}
-        <Imported userId={userId} />
-      </div>
-    );
-  }
+  /*
+   * The empty screen is a BRANCH, not a second return, so that `<Imported />` below
+   * keeps its place in the tree.
+   *
+   * It used to be rendered from both returns, which is two positions as far as React is
+   * concerned: a reader on the empty screen who opened Imported (three requests), opened
+   * a book (a fourth), then saved their first Pull had the component unmounted and
+   * mounted again — disclosure closed, every fetch to pay for a second time. One mount,
+   * below whichever body is drawn.
+   */
+  const empty = items.length === 0 ? emptyLibraryScreen(highlightCount) : null;
+  const emptyBody = empty && (
+    <>
+      <p className="meta">Library</p>
+      <h1>{empty.heading}</h1>
+      <p>{empty.body}</p>
+      {empty.exportable ? (
+        <p>
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => void exportHighlights()}
+            disabled={busy}
+          >
+            Export highlights
+          </button>
+        </p>
+      ) : null}
+    </>
+  );
 
   return (
-    <div className="stack">
-      <p className="meta">
-        Library · {items.length} kept
-        {visible.length !== items.length ? ` · ${visible.length} shown` : ''}
-      </p>
+    <div className={empty ? 'stack measure' : 'stack'}>
+      {emptyBody ?? (
+        <>
+          <p className="meta">
+            Library · {items.length} kept
+            {visible.length !== items.length ? ` · ${visible.length} shown` : ''}
+          </p>
 
-      <div className="library__controls">
-        {/*
+          <div className="library__controls">
+            {/*
           Filters as text, not as colour. Design law 5, and it is also the only
           way "Archived" reads as a place rather than as a state of the button.
         */}
-        <div className="library__filters" role="group" aria-label="Filter">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className="btn btn--plain library__filter"
-              aria-pressed={filter === f.id}
-              onClick={() => setFilter(f.id)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+            <div className="library__filters" role="group" aria-label="Filter">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="btn btn--plain library__filter"
+                  aria-pressed={filter === f.id}
+                  onClick={() => setFilter(f.id)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
 
-        <div className="library__collections">
-          <span className="meta">Collections</span>
-          <button
-            type="button"
-            className="btn btn--plain library__filter"
-            aria-pressed={stashId === null}
-            onClick={() => setStashId(null)}
-          >
-            Everything
-          </button>
-          {flat.map((node) => (
-            <span key={node.id} className="library__collection">
+            <div className="library__collections">
+              <span className="meta">Collections</span>
               <button
                 type="button"
                 className="btn btn--plain library__filter"
-                aria-pressed={stashId === node.id}
-                style={{ marginLeft: `calc(${node.depth} * var(--space-3))` }}
-                onClick={() => setStashId(node.id)}
+                aria-pressed={stashId === null}
+                onClick={() => setStashId(null)}
               >
-                {node.name}
+                Everything
               </button>
-              <button
-                type="button"
-                className="btn btn--plain library__remove"
-                onClick={() => void removeStash(node)}
-                aria-label={
-                  armedStash === node.id
-                    ? `Confirm deleting the collection ${node.name}`
-                    : `Delete the collection ${node.name}`
-                }
-                disabled={busy}
-              >
-                {armedStash === node.id ? 'Delete' : '×'}
-              </button>
-              {/*
+              {flat.map((node) => (
+                <span key={node.id} className="library__collection">
+                  <button
+                    type="button"
+                    className="btn btn--plain library__filter"
+                    aria-pressed={stashId === node.id}
+                    style={{ marginLeft: `calc(${node.depth} * var(--space-3))` }}
+                    onClick={() => setStashId(node.id)}
+                  >
+                    {node.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--plain library__remove"
+                    onClick={() => void removeStash(node)}
+                    aria-label={
+                      armedStash === node.id
+                        ? `Confirm deleting the collection ${node.name}`
+                        : `Delete the collection ${node.name}`
+                    }
+                    disabled={busy}
+                  >
+                    {armedStash === node.id ? 'Delete' : '×'}
+                  </button>
+                  {/*
                 The consequence, beside the control, only once it has been asked
                 for. Said in what it costs the reader rather than in what it does
                 to the database: `stashes.parent_id` is `on delete cascade` while
@@ -861,39 +860,39 @@ export function Library({ userId }: { userId: string }) {
                 the same migration, opposite consequences — so the children go and
                 the saves stay.
               */}
-              {armedStash === node.id ? (
-                <span className="meta" role="status">
-                  {/*
+                  {armedStash === node.id ? (
+                    <span className="meta" role="status">
+                      {/*
                     One walk, hoisted. It was called twice here — once for the test and
                     once for the number — and a third time in `removeStash`, so the
                     count the sentence quotes and the set the delete acts on were
                     computed separately from the same tree.
                   */}
-                  {armedCount > 0
-                    ? `Deletes “${node.name}” and ${armedCount} inside it. Nothing you have kept is deleted.`
-                    : `Deletes “${node.name}”. Nothing you have kept is deleted.`}{' '}
-                  <button
-                    type="button"
-                    className="btn btn--plain"
-                    onClick={() => setArmedStash(null)}
-                  >
-                    Never mind
-                  </button>
+                      {armedCount > 0
+                        ? `Deletes “${node.name}” and ${armedCount} inside it. Nothing you have kept is deleted.`
+                        : `Deletes “${node.name}”. Nothing you have kept is deleted.`}{' '}
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => setArmedStash(null)}
+                      >
+                        Never mind
+                      </button>
+                    </span>
+                  ) : null}
                 </span>
-              ) : null}
-            </span>
-          ))}
-          {naming ? (
-            <span className="library__collection">
-              <label className="meta" htmlFor="new-stash-name">
-                Name it
-              </label>{' '}
-              <input
-                id="new-stash-name"
-                className="field__input library__name"
-                value={newStashName}
-                maxLength={200}
-                /*
+              ))}
+              {naming ? (
+                <span className="library__collection">
+                  <label className="meta" htmlFor="new-stash-name">
+                    Name it
+                  </label>{' '}
+                  <input
+                    id="new-stash-name"
+                    className="field__input library__name"
+                    value={newStashName}
+                    maxLength={200}
+                    /*
                   Focused when it appears, through a ref rather than `autoFocus`.
                   The rule that forbids the prop is about a control that steals
                   focus on page load; this one exists because the reader has just
@@ -903,240 +902,241 @@ export function Library({ userId }: { userId: string }) {
                   this replacement worse for exactly the keyboard readers the
                   replacement is for.
                 */
-                ref={focusOnMount}
-                onChange={(e) => setNewStashName(e.target.value)}
-                onKeyDown={(e) => {
-                  // Enter keeps it and Escape abandons it, because a field that can
-                  // only be committed with the pointer is worse than the prompt it
-                  // replaced for exactly the readers the prompt was worst for.
-                  if (e.key === 'Enter') void addStash(newStashName);
-                  if (e.key === 'Escape') {
-                    setNaming(false);
-                    setNewStashName('');
-                  }
-                }}
-              />{' '}
-              <button
-                type="button"
-                className="btn"
-                disabled={busy || !newStashName.trim()}
-                onClick={() => void addStash(newStashName)}
-              >
-                Keep it
-              </button>{' '}
-              <button
-                type="button"
-                className="btn btn--plain"
-                onClick={() => {
-                  setNaming(false);
-                  setNewStashName('');
-                }}
-              >
-                Never mind
-              </button>
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--plain"
-              onClick={() => setNaming(true)}
-              disabled={busy}
-            >
-              New collection{nestTarget ? ` inside ${nestTarget.name}` : ''}
-            </button>
-          )}
-          {/*
+                    ref={focusOnMount}
+                    onChange={(e) => setNewStashName(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Enter keeps it and Escape abandons it, because a field that can
+                      // only be committed with the pointer is worse than the prompt it
+                      // replaced for exactly the readers the prompt was worst for.
+                      if (e.key === 'Enter') void addStash(newStashName);
+                      if (e.key === 'Escape') {
+                        setNaming(false);
+                        setNewStashName('');
+                      }
+                    }}
+                  />{' '}
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy || !newStashName.trim()}
+                    onClick={() => void addStash(newStashName)}
+                  >
+                    Keep it
+                  </button>{' '}
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => {
+                      setNaming(false);
+                      setNewStashName('');
+                    }}
+                  >
+                    Never mind
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => setNaming(true)}
+                  disabled={busy}
+                >
+                  New collection{nestTarget ? ` inside ${nestTarget.name}` : ''}
+                </button>
+              )}
+              {/*
             Told, not silently corrected. The alternative was to disable this
             button, which would mean a reader who has selected their deepest
             collection cannot create any collection at all — so it stays live and
             names where the new one will land.
           */}
-          {activeStash && !nestTarget ? (
-            <span className="meta">
-              Collections go {MAX_DEPTH} deep. A new one inside “{activeStash.name}” would start at
-              the top instead.
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() => void exportHighlights()}
-            disabled={busy}
-          >
-            Export highlights
-          </button>
-          {/*
+              {activeStash && !nestTarget ? (
+                <span className="meta">
+                  Collections go {MAX_DEPTH} deep. A new one inside “{activeStash.name}” would start
+                  at the top instead.
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void exportHighlights()}
+                disabled={busy}
+              >
+                Export highlights
+              </button>
+              {/*
             Offered only with a collection selected, because that is the only
             state in which "this collection" names anything. Nothing here is
             gated: every reader who can make a collection can take it away
             again, on every plan, which is the whole of law 3's "unlimited
             history" being a fact rather than a claim.
           */}
-          {activeStash ? (
-            <span className="library__collection">
-              {/*
+              {activeStash ? (
+                <span className="library__collection">
+                  {/*
                 `aria-disabled` rather than `disabled`, on both. A disabled element is not
                 focusable, so the browser blurs it the moment `busy` flips — a keyboard
                 reader who just pressed Export is returned to the top of the document and
                 has to tab the whole page back to find out what happened. The handler's
                 own `if (busy) return` is what actually refuses the second press.
               */}
-              <button
-                type="button"
-                className="btn btn--plain"
-                onClick={() => void exportStash('markdown')}
-                aria-disabled={busy}
-              >
-                Export “{activeStash.name}”
-              </button>
-              {/*
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => void exportStash('markdown')}
+                    aria-disabled={busy}
+                  >
+                    Export “{activeStash.name}”
+                  </button>
+                  {/*
                 An accessible name that says what it exports and from where. "as CSV" is
                 the whole of it by rotor or tab otherwise, which passes `jsx-a11y` because
                 it is *a* name — the delete button forty lines up already solves this.
               */}
-              <button
-                type="button"
-                className="btn btn--plain"
-                onClick={() => void exportStash('csv')}
-                aria-disabled={busy}
-                aria-label={`Export “${activeStash.name}” as CSV`}
-              >
-                as CSV
-              </button>
-            </span>
-          ) : null}
-          <p className="meta" role="status">
-            {exportNote ?? ''}
-          </p>
-          {/*
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => void exportStash('csv')}
+                    aria-disabled={busy}
+                    aria-label={`Export “${activeStash.name}” as CSV`}
+                  >
+                    as CSV
+                  </button>
+                </span>
+              ) : null}
+              <p className="meta" role="status">
+                {exportNote ?? ''}
+              </p>
+              {/*
             Said before the download rather than discovered from the file. The
             count is the collection's, not the list's, and the two differ the
             moment a filter is on — which is precisely when a reader would
             otherwise assume the file matches what they are looking at.
           */}
-          {activeStash ? (
-            <span className="meta">
-              Markdown carries all {stashItems.length} {stashItems.length === 1 ? 'save' : 'saves'}{' '}
-              filed here, archived included. CSV carries one row per passage you marked, so an idea
-              you never highlighted or noted is not in it.
-            </span>
-          ) : null}
-        </div>
+              {activeStash ? (
+                <span className="meta">
+                  Markdown carries all {stashItems.length}{' '}
+                  {stashItems.length === 1 ? 'save' : 'saves'} filed here, archived included. CSV
+                  carries one row per passage you marked, so an idea you never highlighted or noted
+                  is not in it.
+                </span>
+              ) : null}
+            </div>
 
-        <div className="library__filters" role="group" aria-label="View mode">
-          <button
-            type="button"
-            className="btn btn--plain library__filter"
-            aria-pressed={viewMode === 'list'}
-            onClick={() => setViewMode('list')}
-          >
-            List
-          </button>
-          <button
-            type="button"
-            className="btn btn--plain library__filter"
-            aria-pressed={viewMode === 'graph'}
-            onClick={() => setViewMode('graph')}
-          >
-            Graph
-          </button>
-        </div>
-      </div>
+            <div className="library__filters" role="group" aria-label="View mode">
+              <button
+                type="button"
+                className="btn btn--plain library__filter"
+                aria-pressed={viewMode === 'list'}
+                onClick={() => setViewMode('list')}
+              >
+                List
+              </button>
+              <button
+                type="button"
+                className="btn btn--plain library__filter"
+                aria-pressed={viewMode === 'graph'}
+                onClick={() => setViewMode('graph')}
+              >
+                Graph
+              </button>
+            </div>
+          </div>
 
-      {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
+          {emptyMessage ? <p className="measure">{emptyMessage}</p> : null}
 
-      {viewMode === 'graph' ? (
-        graphLoading ? (
-          <p className="measure">Reading your knowledge graph…</p>
-        ) : graphAbsence(graph) === 'unreachable' ? (
-          <p className="measure">
-            Could not reach your reading history just now, so there is nothing to plot. This view is
-            built from it.
-          </p>
-        ) : graphNodes.length === 0 ? (
-          <p className="measure">
-            Nothing to plot yet. This view maps saved ideas you have read against how well you are
-            holding on to them, so an idea appears here once you have read it at least once.
-          </p>
-        ) : (
-          <>
-            <SynapseMap
-              nodes={graphNodes}
-              edges={graphEdges}
-              height="540px"
-              filter={graphFilter}
-              onFilterChange={setGraphFilter}
-              selectedNodeId={selectedPullId}
-              onSelectNode={(n) => setSelectedPullId(n ? n.pullId : null)}
-            />
-            {/* A click on a node used to set `openWork`, which is only read inside the
+          {viewMode === 'graph' ? (
+            graphLoading ? (
+              <p className="measure">Reading your knowledge graph…</p>
+            ) : graphAbsence(graph) === 'unreachable' ? (
+              <p className="measure">
+                Could not reach your reading history just now, so there is nothing to plot. This
+                view is built from it.
+              </p>
+            ) : graphNodes.length === 0 ? (
+              <p className="measure">
+                Nothing to plot yet. This view maps saved ideas you have read against how well you
+                are holding on to them, so an idea appears here once you have read it at least once.
+              </p>
+            ) : (
+              <>
+                <SynapseMap
+                  nodes={graphNodes}
+                  edges={graphEdges}
+                  height="540px"
+                  filter={graphFilter}
+                  onFilterChange={setGraphFilter}
+                  selectedNodeId={selectedPullId}
+                  onSelectNode={(n) => setSelectedPullId(n ? n.pullId : null)}
+                />
+                {/* A click on a node used to set `openWork`, which is only read inside the
                 list branch — so in graph mode it produced nothing visible at all. The
                 selection is shown here, next to the graph the reader clicked in. */}
-            {selectedNode ? (
-              <div className="measure" style={{ marginTop: 'var(--space-3)' }}>
-                <p className="meta">
-                  {selectedNode.workTitle} · {selectedNode.status} ·{' '}
-                  {Math.round(selectedNode.retrievability * 100)}% retrievable
-                </p>
-                <p>{selectedNode.headline}</p>
-                <button
-                  type="button"
-                  className="btn btn--plain"
-                  onClick={() => {
-                    // A graph node always carries a real `workId` — `get_user_knowledge_graph`
-                    // inner-joins `works` — and `groupByWork` keys a group by that id when
-                    // it has one, falling back to `orphan:<pull id>` when it does not. So
-                    // this opens the right group. Opening it is only half of it, though:
-                    // the Delta has to be asked for too, which `toggle` does and this
-                    // used not to.
-                    setOpenWork(selectedNode.workId);
-                    ensureDelta(selectedNode.workId);
-                    setViewMode('list');
-                  }}
-                >
-                  Open in list
-                </button>
-              </div>
-            ) : null}
-            {graphMissing > 0 ? (
-              <p className="measure meta">
-                {graphMissing} more saved {graphMissing === 1 ? 'idea is' : 'ideas are'} not plotted
-                — either not read yet, or beyond the most recent ideas this map covers.
-              </p>
-            ) : null}
-          </>
-        )
-      ) : (
-        groups.map((group) => {
-          const open = openWork === group.key;
-          const d = group.workId ? delta[group.workId] : undefined;
-          return (
-            <section key={group.key} className="stack">
-              <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
-                <button
-                  type="button"
-                  className="btn btn--plain"
-                  aria-expanded={open}
-                  onClick={() => toggle(group)}
-                  style={{ textAlign: 'left' }}
-                >
-                  {group.title}
-                </button>
-              </h2>
+                {selectedNode ? (
+                  <div className="measure" style={{ marginTop: 'var(--space-3)' }}>
+                    <p className="meta">
+                      {selectedNode.workTitle} · {selectedNode.status} ·{' '}
+                      {Math.round(selectedNode.retrievability * 100)}% retrievable
+                    </p>
+                    <p>{selectedNode.headline}</p>
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      onClick={() => {
+                        // A graph node always carries a real `workId` — `get_user_knowledge_graph`
+                        // inner-joins `works` — and `groupByWork` keys a group by that id when
+                        // it has one, falling back to `orphan:<pull id>` when it does not. So
+                        // this opens the right group. Opening it is only half of it, though:
+                        // the Delta has to be asked for too, which `toggle` does and this
+                        // used not to.
+                        setOpenWork(selectedNode.workId);
+                        ensureDelta(selectedNode.workId);
+                        setViewMode('list');
+                      }}
+                    >
+                      Open in list
+                    </button>
+                  </div>
+                ) : null}
+                {graphMissing > 0 ? (
+                  <p className="measure meta">
+                    {graphMissing} more saved {graphMissing === 1 ? 'idea is' : 'ideas are'} not
+                    plotted — either not read yet, or beyond the most recent ideas this map covers.
+                  </p>
+                ) : null}
+              </>
+            )
+          ) : (
+            groups.map((group) => {
+              const open = openWork === group.key;
+              const d = group.workId ? delta[group.workId] : undefined;
+              return (
+                <section key={group.key} className="stack">
+                  <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      aria-expanded={open}
+                      onClick={() => toggle(group)}
+                      style={{ textAlign: 'left' }}
+                    >
+                      {group.title}
+                    </button>
+                  </h2>
 
-              <p className="meta">
-                {group.items.length} kept
-                {d && (
-                  <>
-                    {' · '}
-                    <span style={{ color: 'var(--accent)' }}>
-                      {d.new} of {d.total} still new to you
-                    </span>
-                  </>
-                )}
-              </p>
+                  <p className="meta">
+                    {group.items.length} kept
+                    {d && (
+                      <>
+                        {' · '}
+                        <span style={{ color: 'var(--accent)' }}>
+                          {d.new} of {d.total} still new to you
+                        </span>
+                      </>
+                    )}
+                  </p>
 
-              {/*
+                  {/*
                 A source is a listening session.
                 `enqueue` de-duplicates on the Pull's id, so pressing this twice adds
                 nothing the second time and pressing it after queueing two cards by hand
@@ -1149,166 +1149,179 @@ export function Library({ userId }: { userId: string }) {
                 above makes and the filter row selects. A reader who has filed their
                 saves into collections read that label as the one they had picked.
               */}
-              {CAN_SPEAK && group.items.length > 0 && (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    player.enqueue(group.items.map((item) => trackFor(item, group.title)))
-                  }
-                >
-                  Listen to this source
-                </button>
-              )}
-
-              {open &&
-                group.items.map((item) => (
-                  <div key={item.id} className="library__item">
-                    <PullCard
-                      source={{ title: group.title, kind: group.kind }}
-                      headline={item.headline}
-                      body={item.body}
-                      whyItMatters={item.whyItMatters}
-                      example={item.example}
-                      explanation={item.explanation}
-                      sourceTrail={group.title}
-                      saved
-                      depth={depth}
-                      onDepthChange={setDepth}
-                      listening={isPlaying(listening, item.id)}
-                      onListen={
-                        CAN_SPEAK
-                          ? () => {
-                              if (isPlaying(listening, item.id)) player.stop();
-                              else player.playNow(trackFor(item, group.title));
-                            }
-                          : undefined
+                  {CAN_SPEAK && group.items.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() =>
+                        player.enqueue(group.items.map((item) => trackFor(item, group.title)))
                       }
-                      queued={isQueued(listening, item.id)}
-                      onQueue={
-                        CAN_SPEAK
-                          ? () => {
-                              if (isQueued(listening, item.id)) player.remove(item.id);
-                              else player.enqueue([trackFor(item, group.title)]);
-                            }
-                          : undefined
-                      }
-                      onShare={() => void share(item, group.title)}
-                      shareLabel={shareLabel(shareCapability(navigator))}
-                    />
+                    >
+                      Listen to this source
+                    </button>
+                  )}
 
-                    {shareStatus?.saveId === item.saveId ? (
-                      <p className="meta" role="status">
-                        {shareStatus.note}
-                      </p>
-                    ) : null}
+                  {open &&
+                    group.items.map((item) => (
+                      <div key={item.id} className="library__item">
+                        <PullCard
+                          source={{ title: group.title, kind: group.kind }}
+                          headline={item.headline}
+                          body={item.body}
+                          whyItMatters={item.whyItMatters}
+                          example={item.example}
+                          explanation={item.explanation}
+                          sourceTrail={group.title}
+                          saved
+                          depth={depth}
+                          onDepthChange={setDepth}
+                          listening={isPlaying(listening, item.id)}
+                          onListen={
+                            CAN_SPEAK
+                              ? () => {
+                                  if (isPlaying(listening, item.id)) player.stop();
+                                  else player.playNow(trackFor(item, group.title));
+                                }
+                              : undefined
+                          }
+                          queued={isQueued(listening, item.id)}
+                          onQueue={
+                            CAN_SPEAK
+                              ? () => {
+                                  if (isQueued(listening, item.id)) player.remove(item.id);
+                                  else player.enqueue([trackFor(item, group.title)]);
+                                }
+                              : undefined
+                          }
+                          onShare={() => void share(item, group.title)}
+                          shareLabel={shareLabel(shareCapability(navigator))}
+                        />
 
-                    <div className="library__actions">
-                      <label className="library__assign">
-                        <span className="meta">Collection</span>{' '}
-                        <select
-                          className="field__input library__select"
-                          value={item.stashId ?? ''}
-                          onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
-                        >
-                          <option value="">None</option>
-                          {flat.map((n) => (
-                            <option key={n.id} value={n.id}>
-                              {'— '.repeat(n.depth)}
-                              {n.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                        {shareStatus?.saveId === item.saveId ? (
+                          <p className="meta" role="status">
+                            {shareStatus.note}
+                          </p>
+                        ) : null}
 
-                      <button
-                        type="button"
-                        className="btn btn--plain library__filter"
-                        aria-pressed={item.readLater}
-                        onClick={() => patchSave(item, { readLater: !item.readLater })}
-                      >
-                        {item.readLater ? 'For later ✓' : 'Read later'}
-                      </button>
+                        <div className="library__actions">
+                          <label className="library__assign">
+                            <span className="meta">Collection</span>{' '}
+                            <select
+                              className="field__input library__select"
+                              value={item.stashId ?? ''}
+                              onChange={(e) => patchSave(item, { stashId: e.target.value || null })}
+                            >
+                              <option value="">None</option>
+                              {flat.map((n) => (
+                                <option key={n.id} value={n.id}>
+                                  {'— '.repeat(n.depth)}
+                                  {n.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
 
-                      <button
-                        type="button"
-                        className="btn btn--plain library__filter"
-                        aria-pressed={item.archived}
-                        onClick={() => patchSave(item, { archived: !item.archived })}
-                      >
-                        {item.archived ? 'Archived ✓' : 'Archive'}
-                      </button>
+                          <button
+                            type="button"
+                            className="btn btn--plain library__filter"
+                            aria-pressed={item.readLater}
+                            onClick={() => patchSave(item, { readLater: !item.readLater })}
+                          >
+                            {item.readLater ? 'For later ✓' : 'Read later'}
+                          </button>
 
-                      {/*
+                          <button
+                            type="button"
+                            className="btn btn--plain library__filter"
+                            aria-pressed={item.archived}
+                            onClick={() => patchSave(item, { archived: !item.archived })}
+                          >
+                            {item.archived ? 'Archived ✓' : 'Archive'}
+                          </button>
+
+                          {/*
                         The last of the five, and the worst of them: a note is up to
                         20,000 characters and `window.prompt` offered a single-line box
                         with no wrapping, no newlines and no way to see what was already
                         there. A textarea is what the field always needed.
                       */}
-                      <button
-                        type="button"
-                        className="btn btn--plain"
-                        aria-expanded={noting?.saveId === item.saveId}
-                        onClick={() =>
-                          setNoting(
-                            noting?.saveId === item.saveId
-                              ? null
-                              : { saveId: item.saveId, text: item.note ?? '' },
-                          )
-                        }
-                      >
-                        {item.note ? 'Edit note' : 'Add note'}
-                      </button>
-                    </div>
-
-                    {noting?.saveId === item.saveId ? (
-                      <div className="stack">
-                        <label className="field__label" htmlFor={`note-${item.saveId}`}>
-                          A note on this idea
-                        </label>
-                        <textarea
-                          id={`note-${item.saveId}`}
-                          className="field__textarea"
-                          rows={3}
-                          maxLength={20000}
-                          value={noting.text}
-                          ref={focusOnMount}
-                          onChange={(e) => setNoting({ saveId: item.saveId, text: e.target.value })}
-                        />
-                        <p>
-                          <button
-                            type="button"
-                            className="btn"
-                            disabled={busy}
-                            onClick={() => {
-                              const text = noting.text.trim();
-                              setNoting(null);
-                              // An emptied note is a removed note, which is what the
-                              // prompt did when the reader cleared it and pressed OK.
-                              patchSave(item, { note: text || null });
-                            }}
-                          >
-                            Keep the note
-                          </button>{' '}
                           <button
                             type="button"
                             className="btn btn--plain"
-                            onClick={() => setNoting(null)}
+                            aria-expanded={noting?.saveId === item.saveId}
+                            onClick={() =>
+                              setNoting(
+                                noting?.saveId === item.saveId
+                                  ? null
+                                  : { saveId: item.saveId, text: item.note ?? '' },
+                              )
+                            }
                           >
-                            Never mind
+                            {item.note ? 'Edit note' : 'Add note'}
                           </button>
-                        </p>
+                        </div>
+
+                        {noting?.saveId === item.saveId ? (
+                          <div className="stack">
+                            <label className="field__label" htmlFor={`note-${item.saveId}`}>
+                              A note on this idea
+                            </label>
+                            <textarea
+                              id={`note-${item.saveId}`}
+                              className="field__textarea"
+                              rows={3}
+                              maxLength={20000}
+                              value={noting.text}
+                              ref={focusOnMount}
+                              onChange={(e) =>
+                                setNoting({ saveId: item.saveId, text: e.target.value })
+                              }
+                            />
+                            <p>
+                              <button
+                                type="button"
+                                className="btn"
+                                disabled={busy}
+                                onClick={() => {
+                                  const text = noting.text.trim();
+                                  setNoting(null);
+                                  // An emptied note is a removed note, which is what the
+                                  // prompt did when the reader cleared it and pressed OK.
+                                  patchSave(item, { note: text || null });
+                                }}
+                              >
+                                Keep the note
+                              </button>{' '}
+                              <button
+                                type="button"
+                                className="btn btn--plain"
+                                onClick={() => setNoting(null)}
+                              >
+                                Never mind
+                              </button>
+                            </p>
+                          </div>
+                        ) : item.note ? (
+                          <p className="library__note">{item.note}</p>
+                        ) : null}
                       </div>
-                    ) : item.note ? (
-                      <p className="library__note">{item.note}</p>
-                    ) : null}
-                  </div>
-                ))}
-            </section>
-          );
-        })
+                    ))}
+                </section>
+              );
+            })
+          )}
+        </>
       )}
 
+      {/*
+        Reachable from the empty screen too, which it was not.
+        `commit_import` saves each highlight, so the usual importer never sees that
+        branch — but a reader who unsaves their imported highlights, or who undoes a
+        batch (`undo_import` deletes the pulls, cascading `saved_items` while the
+        `import_items` tombstones survive), lands there with their whole import history
+        and its Undo controls behind it. `emptyLibraryScreen` counts the `highlights`
+        table and cannot see imports.
+      */}
       <Imported userId={userId} />
     </div>
   );

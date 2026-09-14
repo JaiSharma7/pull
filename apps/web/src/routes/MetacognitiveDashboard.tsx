@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { PROGRESS_COPY } from '../lib/progress.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
@@ -581,13 +581,34 @@ function BeliefRow({ belief, onNavigate }: { belief: Belief; onNavigate: (path: 
    */
   const [against, setAgainst] = useState<'asking' | RelatedPull | 'none' | 'failed' | null>(null);
 
+  /*
+   * One answer at a time, and none after this row is gone.
+   *
+   * Every other fetch on this screen carries a `live`/`cancelled` flag; this one had
+   * none, so a row unmounted mid-request — signing out re-runs `fetchBeliefs` and
+   * replaces the whole list — set state on a dead component, and a second press could
+   * land the older answer last, showing "Nobody has written one down yet." over a belief
+   * whose opposing edge had just been found.
+   */
+  const asking = useRef(0);
+  useEffect(
+    () => () => {
+      asking.current = -1;
+    },
+    [],
+  );
+
   function ask() {
+    const attempt = asking.current + 1;
+    asking.current = attempt;
     setAgainst('asking');
     fetchCaseAgainst(belief.pullId)
-      .then((found) => setAgainst(found ?? 'none'))
+      .then((found) => {
+        if (asking.current === attempt) setAgainst(found ?? 'none');
+      })
       .catch((e: unknown) => {
         console.error('Could not look for the case against', e);
-        setAgainst('failed');
+        if (asking.current === attempt) setAgainst('failed');
       });
   }
   const moved = changeLine(belief);

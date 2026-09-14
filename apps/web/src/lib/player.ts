@@ -188,16 +188,42 @@ function advance(state: PlayerState, now: number | undefined): PlayerState {
 export function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
   switch (action.type) {
     case 'enqueue': {
-      const seen = new Set(state.queue.map((t) => t.id));
+      /*
+       * A track already queued is REFRESHED, not dropped.
+       *
+       * A Track carries the text to speak, and every caller builds one from the reader's
+       * current depth at the moment of the press — so pressing "Listen to this source"
+       * at the claim and again at the full argument hands over the same fourteen ids
+       * with different text. Skipping them kept the claim-length copies and the player
+       * read the short version while the screen showed the long one, which is the
+       * failure `playNow` below was corrected for and the reason it takes
+       * `action.track` over the queued copy. The COUNT and the ORDER do not move —
+       * that is the idempotence the Library's button promises — only the words.
+       */
+      const queue = [...state.queue];
+      const at = new Map(queue.map((t, i) => [t.id, i]));
+      let replaced = false;
       const fresh: Track[] = [];
       for (const track of action.tracks) {
-        if (seen.has(track.id)) continue;
-        seen.add(track.id);
+        const already = at.get(track.id);
+        if (already !== undefined) {
+          // In the queue, or earlier in this same batch: one entry either way, and the
+          // newest text wins. Changed only when it actually differs, so an enqueue that
+          // alters nothing still returns the same state object.
+          const current = queue[already] ?? fresh[already - queue.length];
+          if (current && (current.text !== track.text || current.title !== track.title)) {
+            replaced = true;
+            if (already < queue.length) queue[already] = track;
+            else fresh[already - queue.length] = track;
+          }
+          continue;
+        }
+        at.set(track.id, queue.length + fresh.length);
         fresh.push(track);
       }
-      if (fresh.length === 0) return state;
+      if (fresh.length === 0) return replaced ? { ...state, queue } : state;
 
-      const queue = [...state.queue, ...fresh];
+      queue.push(...fresh);
       // Queueing onto silence is "listen, then keep going". Queueing onto a
       // paused player is just queueing — the reader paused for a reason.
       //

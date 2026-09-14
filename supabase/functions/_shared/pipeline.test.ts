@@ -420,6 +420,7 @@ describe('reuse skips the paid work', () => {
         topics: string[];
         qualityScore: number | null;
         trustScore: number | null;
+        visibility: string;
       };
       createSummary?: { authorId: string | null; visibility: string };
       attachGenerated?: { jobId: string; workId: string; visibility: string; title: string };
@@ -477,6 +478,7 @@ describe('reuse skips the paid work', () => {
           topics: string[];
           qualityScore: number | null;
           trustScore: number | null;
+          visibility: string;
         }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
@@ -536,6 +538,7 @@ describe('reuse skips the paid work', () => {
           attached.set(input.jobId, made);
           return { ...made, created: true };
         },
+        renewSourceClaim: async () => true,
         claimSourceHash: async () => {
           calls.claim++;
           return claim;
@@ -1280,6 +1283,7 @@ describe('reuse skips the paid work', () => {
           attached.push({ jobId, summaryId, workId });
         },
         claimSourceHash: async () => 'claimed' as const,
+        renewSourceClaim: async () => true,
         releaseSourceHash: async () => undefined,
         reserveBudget: async () => undefined,
         requesterOwnsWork: async () => false,

@@ -623,11 +623,23 @@ export function Review() {
        */
       const queuedFor = userId === null ? null : await pendingRecallPullIds(userId);
       if (cancelled) return;
-      const answered = new Set([...graded.current, ...(queuedFor ?? [])]);
 
       try {
         const rows = await api.fetchDueReviews();
         if (cancelled) return;
+        /*
+         * Built AFTER the page lands, not before it.
+         *
+         * `graded.current` is a ref, and `grade()` adds to it in its `finally` — so a
+         * card answered while this request was in flight was not in a set snapshotted
+         * before it, and came back on screen to be asked a second time, which
+         * `mergePack` calls the one thing offline practice must not do. The queued half
+         * has to be read before the fetch, because the offline branch needs it when the
+         * fetch never lands; it is re-read here so anything queued meanwhile counts too.
+         */
+        const queuedNow = userId === null ? null : await pendingRecallPullIds(userId);
+        if (cancelled) return;
+        const answered = new Set([...graded.current, ...(queuedNow ?? queuedFor ?? [])]);
         const filtered = rows.filter((row) => !answered.has(row.pullId));
         setDue(filtered);
         setSessionTotal((prev) => nextSessionTotal(prev, filtered.length));
@@ -674,7 +686,9 @@ export function Review() {
         if (wasOffline && userId !== null) {
           const downloaded = await readReviewPack(userId);
           if (cancelled) return;
-          const left = downloaded ? mergePack(downloaded.items, answered) : [];
+          const left = downloaded
+            ? mergePack(downloaded.items, new Set([...graded.current, ...(queuedFor ?? [])]))
+            : [];
 
           /*
            * `pack` is what is ON THE DEVICE; `left` is what is left of this session.

@@ -131,15 +131,13 @@ async function failUnbilled(
    * scope on the unbilled one, and so is the exhausted-retries path below -- a job
    * being failed is not the same moment as every one of its steps being over.
    *
-   * RECORDED FIRST, AND SETTLED ONLY IF THE RECORD WAS NEW. The order used to be the
-   * other way round, on the reasoning that a 23505 collision -- a `succeeded` row
-   * already written for this attempt, with only the transition after it failing --
-   * should still release the money. That is exactly backwards now that a hold counts
-   * its calls: the collision means `record_job_step` ALREADY settled this step, so a
-   * second settle takes a share belonging to a concurrently redelivered call still
-   * inside its provider, and the cap is short by the money that call is about to spend.
-   * A settle for a step that never held anything is a harmless no-op; a settle for a
-   * step that has already settled is the overshoot this whole mechanism exists to stop.
+   * RECORDED FIRST, AND SETTLED UNLESS THE STEP ALREADY SUCCEEDED. The order used to be
+   * the other way round, on the reasoning that a 23505 collision should still release
+   * the money. That is backwards now that a hold counts its calls: a collision with a
+   * SUCCEEDED row means `record_job_step` already settled this step, so a second settle
+   * takes a share belonging to a concurrently redelivered call still inside its
+   * provider. A settle for a step that never held anything is a harmless no-op; a settle
+   * for a step that has already settled is the overshoot this mechanism exists to stop.
    *
    * Checked, not a bare await: supabase-js resolves rather than throws on a Postgres
    * error, so an unchecked settle is a hold left open by exactly the transient
@@ -157,8 +155,35 @@ async function failUnbilled(
     finished_at: new Date().toISOString(),
   });
 
+  /*
+   * A collision is not proof that the money was released.
+   *
+   * 23505 means a `job_steps` row for `(job, step, attempt)` already exists, and there
+   * are two ways to get one. If it is a SUCCEEDED row, `record_job_step` wrote it and
+   * settled this step in the same transaction, and settling again would take a share
+   * belonging to a concurrently redelivered call. If it is a FAILED row -- two
+   * deliveries that both read the same `attempt` before either wrote, which is exactly
+   * what a redelivery storm produces -- then this call's own share has never been
+   * released, and skipping the settle strands it against the cap until the sweep or the
+   * TTL. So the row is read rather than assumed.
+   *
+   * A read that itself fails settles: an extra settle costs a share of one hold, a
+   * missed one costs the same share for an hour.
+   */
   const collided = (recorded.error as { code?: string } | null)?.code === '23505';
-  if (!collided) {
+  let alreadySettled = false;
+  if (collided) {
+    const { data } = await supabase
+      .from('job_steps')
+      .select('status')
+      .eq('job_id', jobId)
+      .eq('step', step)
+      .eq('attempt', attempt)
+      .maybeSingle();
+    alreadySettled = (data as { status?: string } | null)?.status === 'succeeded';
+  }
+
+  if (!alreadySettled) {
     const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
     if (settled.error) console.error('could not settle budget for', jobId, step, settled.error);
   }
