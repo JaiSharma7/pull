@@ -72,11 +72,6 @@ be told "skipped 240 ideas you already know" above twenty. It is a true statemen
 what the ranker considered and a false one about the page. A counting-scope decision
 rather than a bug, and it needs a product answer before a patch.
 
-**The Conviction Ledger has no read surface.** Stances are recorded by `Interrupt.tsx`
-and read back by nothing, so the README feature — "you agreed with this in March; here
-is the strongest case against it" — has data and no screen. `docs/roadmap.md` puts
-resurfacing in round 3.
-
 ## What not to send
 
 `CONTRIBUTING.md` has the full policy. The short version: no bulk PRs, no drive-by

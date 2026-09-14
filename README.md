@@ -37,10 +37,10 @@ Built, and working today:
 Designed, with the data being collected and no screen yet. Named here because a
 half-built feature is easier to trust when it says so:
 
-|                       |                                                                                                                                                                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Conviction Ledger** | You can mark what you _believe_, not just what you saved, and `convictions` records it. Nothing reads it back yet — _"you agreed with this in March, here is the case against it"_ is round 3.                                                              |
-| **Idea Lineage**      | `pull_relations` carries ancestor, descendant and opposing edges, and a source page shows one hop of them. Tracing a chain across centuries needs the relation-extraction step, which is unwritten — so today only the hand-seeded works have edges at all. |
+|                       |                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Conviction Ledger** | You can mark what you _believe_, not just what you saved; `convictions` records it and **Your progress** reads it back — every stance, what it used to be, and how many times it moved. _"You agreed with this in March, here is the case against it"_ works where somebody has written an opposing edge, which today means the hand-seeded works. |
+| **Idea Lineage**      | `pull_relations` carries ancestor, descendant and opposing edges, and a source page shows one hop of them. Tracing a chain across centuries needs the relation-extraction step, which is unwritten — so today only the hand-seeded works have edges at all.                                                                                        |
 
 ## Stack
 
