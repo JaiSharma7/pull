@@ -4,6 +4,7 @@ import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
   BilledStepError,
+  BudgetExhaustedError,
   jumpFor,
   runPipelineStep,
   SourceHeldError,
@@ -65,6 +66,22 @@ const VISIBILITY_SECONDS = 180;
  */
 const WAIT_SECONDS = 60;
 const MAX_WAITS = 30;
+/**
+ * How a job waits on the day's generation budget.
+ *
+ * The same mechanism as a held source and a completely different timescale, which
+ * is why it has its own count rather than sharing one. A source claim is held for
+ * minutes, so thirty minutes of waiting means something is genuinely wrong; the
+ * daily cap (20260914010000) refills at 00:00 UTC, so a job arriving at 08:00 on a
+ * day that filled early waits sixteen hours and is still perfectly healthy.
+ *
+ * Fifteen minutes between asks, for twenty-four hours: long enough that a hundred
+ * waiting jobs are not a load, short enough that the first one through after
+ * midnight is through within the quarter hour. A wait that runs out really is a
+ * failure -- a day whose budget never reopened is not a queueing problem.
+ */
+const BUDGET_WAIT_SECONDS = 900;
+const MAX_BUDGET_WAITS = 96;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -76,7 +93,7 @@ const supabase = createClient(
 
 interface QueueMessage {
   msg_id: number;
-  message: { jobId: string; step: Step; waits?: number };
+  message: { jobId: string; step: Step; waits?: number; budgetWaits?: number };
   /** pgmq's delivery count, incremented on every read of this message. */
   read_ct: number;
 }
@@ -509,11 +526,24 @@ Deno.serve(async (req) => {
 
       const message = e instanceof Error ? e.message : String(e);
 
-      // A wait, not a failure -- unless it has waited long enough that something
-      // is wrong, in which case it falls through and is recorded like any other.
-      if (e instanceof SourceHeldError) {
-        const waits = (msg.message.waits ?? 0) + 1;
-        if (waits <= MAX_WAITS) {
+      /*
+       * A wait, not a failure -- unless it has waited long enough that something
+       * is wrong, in which case it falls through and is recorded like any other.
+       *
+       * Two kinds of waiting, each with its own count and its own bound. Both go
+       * through the same requeue, which carries both counts forward: a step that
+       * waited on a held source and later waits on the budget must not spend the
+       * source's allowance on the budget's problem, or vice versa.
+       */
+      const held = e instanceof SourceHeldError;
+      const broke = e instanceof BudgetExhaustedError;
+      if (held || broke) {
+        const waits = (msg.message.waits ?? 0) + (held ? 1 : 0);
+        const budgetWaits = (msg.message.budgetWaits ?? 0) + (broke ? 1 : 0);
+        const within = held ? waits <= MAX_WAITS : budgetWaits <= MAX_BUDGET_WAITS;
+        const delay = held ? WAIT_SECONDS : BUDGET_WAIT_SECONDS;
+
+        if (within) {
           try {
             // Null means the message was already gone: a delivery that outlived
             // its visibility timeout was redelivered, and the other delivery has
@@ -523,21 +553,28 @@ Deno.serve(async (req) => {
                 p_msg_id: msg.msg_id,
                 p_job_id: jobId,
                 p_step: step,
-                p_delay_seconds: WAIT_SECONDS,
+                p_delay_seconds: delay,
                 p_waits: waits,
+                p_budget_waits: budgetWaits,
               }),
               'requeue waiting step',
             ) as number | null;
             processed.push({
               jobId,
               step,
-              waiting: waits,
+              waiting: held ? waits : budgetWaits,
+              ...(broke ? { reason: 'budget' as const } : {}),
               ...(requeued === null ? { alreadyQueued: true } : {}),
             });
           } catch (requeueError) {
             // The message was left unarchived, so the visibility timeout redelivers
             // it; that costs a read_ct, which is the lesser evil next to losing it.
-            processed.push({ jobId, step, waiting: waits, error: String(requeueError) });
+            processed.push({
+              jobId,
+              step,
+              waiting: held ? waits : budgetWaits,
+              error: String(requeueError),
+            });
           }
           continue;
         }

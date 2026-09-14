@@ -53,6 +53,46 @@ export class SourceHeldError extends Error {
 }
 
 /**
+ * The day's generation budget is spent; ask again later.
+ *
+ * A sibling of `SourceHeldError`, and for the same reason: nothing has been sent
+ * to a provider, so this is not a failure and must not count against
+ * `MAX_ATTEMPTS`. The difference is the timescale. A source claim is held for
+ * minutes, so thirty minutes of waiting means something really is wrong; the
+ * daily cap refills at 00:00 UTC, so a job that arrives at 08:00 on a day that
+ * filled early is waiting sixteen hours and is still perfectly healthy.
+ *
+ * The message deliberately says the budget rather than the amount. It lands in
+ * `job_steps.error` when the wait runs out, which the requester can read, and how
+ * close the product is to its own ceiling is not a number to publish per job.
+ */
+export class BudgetExhaustedError extends Error {
+  constructor(step: string) {
+    super(`${step}: the day's generation budget is spent; will ask again`);
+    this.name = 'BudgetExhaustedError';
+  }
+}
+
+/**
+ * What each provider step holds against the cap before it calls anything.
+ *
+ * WORST CASE, not expected case, and rounded up from the table in
+ * `docs/generation.md`: a reservation smaller than the charge that replaces it
+ * lets the cap be overshot by the difference, once per step in flight, which is
+ * the exact hole the reservation exists to close. Overshooting the other way
+ * costs a little unused headroom for the seconds a call takes.
+ *
+ * `artwork` is here for completeness and is not reserved today — no step calls an
+ * image provider yet — so it is the one number that will need checking against a
+ * real invoice when it does.
+ */
+export const RESERVE_CENTS = {
+  synthesize: 6,
+  embed: 1,
+  artwork: 5,
+} as const satisfies Record<string, number>;
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -357,6 +397,31 @@ export interface PipelineDb {
    */
   claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
   releaseSourceHash(jobId: string): Promise<void>;
+  /**
+   * Hold `cents` against the day's cap for this step, or refuse.
+   *
+   * Throws `BudgetExhaustedError` when the day is spent -- the implementation
+   * translates Postgres's 53400 -- and returns normally otherwise. Every other
+   * failure is a real failure and propagates: a reservation that cannot be
+   * written is not a reservation, and calling a provider anyway would be spending
+   * money with nothing counting it.
+   *
+   * Called immediately before the provider, not at the top of the step. The gap
+   * between the hold and the call is the window in which the hold is wrong about
+   * the future, and it should be as small as the code can make it.
+   */
+  reserveBudget(jobId: string, step: string, cents: number): Promise<void>;
+  /**
+   * Whether this requester has authored a summary on that work.
+   *
+   * The one question that decides whether `template` may adopt `target.work_id`
+   * rather than keying a work off the content hash. `enqueue_generation_job`
+   * already strips a `work_id` the caller has no summary on, so this is the
+   * second of two checks -- and it is the one that runs against the row at the
+   * moment of the write rather than at the moment of the request, which is the
+   * gap a summary deleted in between would otherwise leave open.
+   */
+  requesterOwnsWork(requesterId: string | null, workId: string): Promise<boolean>;
 }
 
 /**
@@ -1113,6 +1178,13 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         throw new SourceHeldError();
       }
 
+      // The day's budget, held immediately before the call and settled by the
+      // ledger row `record_job_step` writes for it. After the claim, so a job that
+      // is only ever going to wait on a held source does not take a hold it will
+      // not use -- and before the provider, because a reservation taken afterwards
+      // would be a receipt rather than a cap.
+      await db.reserveBudget(job.id, 'synthesize', RESERVE_CENTS.synthesize);
+
       /*
        * Two ways to be billed and get nothing, and both have to reach the ledger.
        *
@@ -1209,6 +1281,40 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       // Both `sourceUrl` and the trust score below read this one value, so the
       // work is linked to and scored on the same URL.
       const sourceUrl = (acquired.url ?? asString(job.target.url)) || null;
+
+      /*
+       * An imported book gains a summary rather than a second `works` row.
+       *
+       * `upsertWork` keys on `content_hash`, which is the right identity for a
+       * canonical source and the wrong one for an import: a reader's imported
+       * highlights already have a work of their own, created per reader by
+       * `commit_import`, and the text they later send to Studio is not the text
+       * that work was hashed from. Keyed on the hash, the same book would acquire
+       * a second row and the reader would find their highlights under one title
+       * and their summary under another.
+       *
+       * Adopted only where the requester has authored a summary on it, checked
+       * here against the row rather than trusted from the target --
+       * `enqueue_generation_job` strips a `work_id` that fails the same test, and
+       * this is the check that runs at the moment of the write. The work's own
+       * `rights_status`, `owner_id` and `byline` are left exactly as the import
+       * wrote them: nothing about a private generation should re-score or
+       * re-attribute a row the reader owns.
+       */
+      const adopting = asString(job.target.work_id) || null;
+      if (adopting && (await db.requesterOwnsWork(job.requester_id, adopting))) {
+        const summaryId = await db.createSummary({
+          workId: adopting,
+          title: summary.title,
+          elevatorPitch: summary.elevatorPitch,
+          whyItMatters: summary.whyItMatters,
+          sections: { elevatorPitch: summary.elevatorPitch, whyItMatters: summary.whyItMatters },
+          visibility: job.visibility,
+          authorId: job.requester_id,
+        });
+        await db.attachSummaryToJob(job.id, summaryId, adopting);
+        return { output: { workId: adopting, summaryId, reused: false, adopted: true } };
+      }
 
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
@@ -1362,6 +1468,11 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         if (!p) throw new Error(`embed: no generated pull at ordinal ${row.ordinal}`);
         return { id: row.id, text: `${p.headline}\n\n${p.body}` };
       });
+
+      // Embedding is cheap and is still a provider call, so it is still counted.
+      // A cap that only bounded the expensive step would be a cap on synthesis
+      // rather than on spend.
+      await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
 
       const { vectors, usage } = await deps.embedding.embed(pairs.map((p) => p.text));
 

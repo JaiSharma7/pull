@@ -3,11 +3,13 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  BudgetExhaustedError,
   jumpFor,
   narrowTopics,
   SourceHeldError,
   NO_USAGE,
   type QuizQuestionRow,
+  RESERVE_CENTS,
   RIGHTS_STATUSES,
   runPipelineStep,
   WORK_KINDS,
@@ -394,6 +396,8 @@ describe('reuse skips the paid work', () => {
   function harness(
     reuse: { workId: string; summaryId: string } | null,
     claim: 'claimed' | 'held' = 'claimed',
+    budget: 'available' | 'spent' = 'available',
+    ownsWork = false,
   ) {
     const calls = {
       summary: 0,
@@ -403,6 +407,8 @@ describe('reuse skips the paid work', () => {
       insertQuizQuestions: 0,
       claim: 0,
       release: 0,
+      /** Every hold taken, in order, so a test can assert what was reserved and when. */
+      reserved: [] as { step: string; cents: number }[],
     };
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
@@ -511,6 +517,11 @@ describe('reuse skips the paid work', () => {
         releaseSourceHash: async () => {
           calls.release++;
         },
+        reserveBudget: async (_jobId: string, step: string, cents: number) => {
+          calls.reserved.push({ step, cents });
+          if (budget === 'spent') throw new BudgetExhaustedError(step);
+        },
+        requesterOwnsWork: async () => ownsWork,
       },
     };
     return { deps, calls, received };
@@ -609,6 +620,112 @@ describe('reuse skips the paid work', () => {
     expect(err).not.toBeInstanceOf(BilledStepError);
     expect(calls.claim).toBe(1);
     expect(calls.summary).toBe(0);
+  });
+
+  /*
+   * The daily cap, from the pipeline's side.
+   *
+   * What matters here is ORDER and COST. The hold is taken after the source claim
+   * -- a job that is only going to wait on a held source should not take a hold it
+   * will not use -- and before the provider, because a reservation taken afterwards
+   * is a receipt rather than a cap. And a refusal is a wait: nothing was sent, so
+   * it is neither a billed failure nor an attempt the worker should record.
+   */
+  it('holds the budget before it calls the provider, and after the claim', async () => {
+    const { deps, calls } = harness(null);
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    expect(calls.reserved).toEqual([{ step: 'synthesize', cents: RESERVE_CENTS.synthesize }]);
+    expect(calls.claim).toBe(1);
+    expect(calls.summary).toBe(1);
+  });
+
+  it('takes no hold for a source it is only going to wait on', async () => {
+    const { deps, calls } = harness(null, 'held');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never).catch(() => undefined);
+    expect(calls.reserved).toEqual([]);
+  });
+
+  it('waits rather than fails when the day is spent, and calls nothing', async () => {
+    const { deps, calls } = harness(null, 'claimed', 'spent');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    const err = await attempt.catch((e) => e);
+    expect(err).toBeInstanceOf(BudgetExhaustedError);
+    // Not a billed failure: nothing was sent, so nothing is owed and the worker
+    // must not spend an attempt on it.
+    expect(err).not.toBeInstanceOf(BilledStepError);
+    expect(calls.summary).toBe(0);
+  });
+
+  it('holds against the cap for embedding too, since a cheap call is still a call', async () => {
+    const { deps, calls } = harness(null);
+
+    await runPipelineStep('embed', {
+      ...deps,
+      priorOutputs: {
+        cards: { pulls: [{ ordinal: 0, id: 'p0' }] },
+        synthesize: SYNTHESIZED,
+      },
+    } as never);
+
+    expect(calls.reserved).toEqual([{ step: 'embed', cents: RESERVE_CENTS.embed }]);
+    expect(calls.embedding).toBe(1);
+  });
+
+  /*
+   * An imported book gains a summary, not a second `works` row.
+   *
+   * `upsertWork` keys on the content hash, which is the right identity for a
+   * canonical source and the wrong one for an import: the reader's work already
+   * exists, created per reader by `commit_import`, and the text they send to
+   * Studio is not what that row was hashed from. Adopted only where they authored
+   * a summary on it -- and the negative case matters at least as much, because
+   * adopting somebody else's work would attach a private generation to a row the
+   * requester has nothing to do with.
+   */
+  it('adopts a work the requester authored a summary on rather than keying on the hash', async () => {
+    const { deps, calls } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-imported' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { workId: string; adopted?: boolean } };
+
+    expect(out.output.workId).toBe('w-imported');
+    expect(out.output.adopted).toBe(true);
+    expect(calls.createSummary).toBe(1);
+  });
+
+  it('keys on the hash when the work belongs to somebody else', async () => {
+    const { deps } = harness(null, 'claimed', 'available', false);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-theirs' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { workId: string; adopted?: boolean } };
+
+    expect(out.output.workId).not.toBe('w-theirs');
+    expect(out.output.adopted).toBeUndefined();
   });
 
   it('renews the claim once the summary is committed', async () => {
@@ -1033,6 +1150,8 @@ describe('reuse skips the paid work', () => {
         },
         claimSourceHash: async () => 'claimed' as const,
         releaseSourceHash: async () => undefined,
+        reserveBudget: async () => undefined,
+        requesterOwnsWork: async () => false,
       },
     };
     return { deps, calls, attached };
@@ -1378,7 +1497,7 @@ describe('embed', () => {
           usage: { inputTokens: 0, outputTokens: 0, costCents: 0 },
         }),
       },
-      db: { setPullEmbeddings: async () => undefined },
+      db: { setPullEmbeddings: async () => undefined, reserveBudget: async () => undefined },
       job: { visibility: 'private' },
       priorOutputs: {
         cards: {
@@ -1413,6 +1532,7 @@ describe('embed', () => {
         setPullEmbeddings: async (rows: { id: string; embedding: number[] }[]) => {
           stored.push(...rows);
         },
+        reserveBudget: async () => undefined,
       },
       job: { visibility: 'private' },
       priorOutputs: {

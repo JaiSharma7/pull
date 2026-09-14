@@ -2589,6 +2589,7 @@ export type Database = {
       }
       requeue_generation_message: {
         Args: {
+          p_budget_waits?: number
           p_delay_seconds: number
           p_job_id: string
           p_msg_id: number

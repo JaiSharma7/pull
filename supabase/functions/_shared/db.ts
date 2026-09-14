@@ -1,5 +1,5 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
-import type { PipelineDb } from './pipeline.ts';
+import { BudgetExhaustedError, type PipelineDb } from './pipeline.ts';
 
 /**
  * The pipeline's database side, against a real Supabase client.
@@ -521,6 +521,62 @@ export function createPipelineDb(supabase: Db): PipelineDb {
 
     async releaseSourceHash(jobId) {
       must(await supabase.rpc('release_source_hash', { p_job_id: jobId }), 'release source hash');
+    },
+
+    /**
+     * Hold part of the day's budget, translating Postgres's refusal.
+     *
+     * `must` is deliberately not used: the one error code this has to recognise
+     * would arrive as a generic transport failure through it, and a budget
+     * refusal the worker cannot tell from a broken database is a job that fails
+     * terminally for being early. Everything that is NOT 53400 still throws, and
+     * throws with the message it came with.
+     *
+     * 53400 is `configuration_limit_exceeded`, which is what `reserve_budget`
+     * raises. Matched on the code rather than on the text, because the text names
+     * the amounts and those change.
+     */
+    async reserveBudget(jobId, step, cents) {
+      const { error } = await supabase.rpc('reserve_budget', {
+        p_job_id: jobId,
+        p_step: step,
+        p_cents: cents,
+      });
+      if (!error) return;
+      if ((error as { code?: string }).code === '53400') {
+        throw new BudgetExhaustedError(step);
+      }
+      throw new Error(`reserve budget: ${error.message ?? JSON.stringify(error)}`);
+    },
+
+    /**
+     * Whether the requester authored a summary on that work.
+     *
+     * `head: true` with an exact count rather than selecting a row: the question
+     * is existence, and the service role reads every summary there is, so pulling
+     * one back would be fetching a private row to learn a boolean about it.
+     *
+     * A null requester is never an owner. Canonical jobs have no requester, and
+     * `author_id is null` rows are exactly the canonical summaries a private job
+     * must not be able to attach itself to.
+     */
+    async requesterOwnsWork(requesterId, workId) {
+      if (!requesterId) return false;
+      const { count, error } = await supabase
+        .from('summaries')
+        .select('id', { count: 'exact', head: true })
+        .eq('work_id', workId)
+        .eq('author_id', requesterId);
+      // Thrown rather than answered `false`. A failed lookup is not evidence that
+      // the reader does not own the work, and answering false would silently key
+      // the work off the content hash instead -- giving an imported book a second
+      // `works` row because one query failed.
+      if (error) {
+        throw new Error(
+          `check work ownership: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      return (count ?? 0) > 0;
     },
 
     async attachSummaryToJob(jobId, summaryId, workId) {

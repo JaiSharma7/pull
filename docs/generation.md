@@ -156,8 +156,24 @@ it — a cap of $1 that claims to be $2, which is worse than either.
 | `embed`      |               1 cent |
 | `artwork`    |              5 cents |
 
-Those are the constants `8b` reserves with, rounded up from the cost shape above so a
-reservation is never smaller than the charge that replaces it.
+Those are the constants the pipeline reserves with, rounded up from the cost shape above
+so a reservation is never smaller than the charge that replaces it. The hold is taken
+**after** the source claim — a job that is only ever going to wait on a source another job
+is synthesising should not take a hold it will not use — and **immediately before** the
+provider, because a reservation taken afterwards is a receipt rather than a cap.
+
+A step that cannot reserve **waits**, it does not fail. Nothing was sent, so nothing is
+owed and the attempt must not count against `MAX_ATTEMPTS`: the worker re-sends the step
+with a delay, exactly as it does for a held source, and bounds the waiting itself. The two
+kinds of waiting carry separate counts, because they are bounded by different facts — a
+source claim survives minutes, so thirty minutes of waiting means something is wrong,
+while the daily cap refills at 00:00 UTC, so a job arriving at 08:00 on a day that filled
+early waits sixteen hours and is perfectly healthy.
+
+| Waiting on    | Between asks | For up to |
+| ------------- | -----------: | --------: |
+| A held source |         60 s |    30 min |
+| The daily cap |        900 s |      24 h |
 
 ### The private tier
 
@@ -174,3 +190,14 @@ now writes it, narrowed to two values:
 
 A private summary is the one place a reader's own content reaches a model provider, and
 it happens because they asked. `docs/privacy.md` says so in the reader's words.
+
+**An imported book gains a summary, not a second `works` row.** `upsertWork` keys on
+`content_hash`, which is the right identity for a canonical source and the wrong one for
+an import: a reader's imported highlights already have a work of their own, created per
+reader by `commit_import`, and the text they later send to Studio is not the text that row
+was hashed from. So `template` adopts `target.work_id` instead — but only where the
+requester has authored a summary on it, checked against the row at the moment of the
+write. `enqueue_generation_job` strips a `work_id` that fails the same test at the moment
+of the request; the two together are what stop a private generation attaching itself to a
+work its requester has nothing to do with. The adopted row's `rights_status`, `owner_id`
+and `byline` are left exactly as the import wrote them.
