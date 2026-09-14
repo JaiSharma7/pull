@@ -217,9 +217,43 @@ export async function fetchExportData(userId: string): Promise<ExportSource[]> {
     return idea;
   };
 
+  /*
+   * The third source, and the reason it belongs here.
+   *
+   * An imported highlight is not a `highlights` row marking part of a Pull — it IS
+   * the Pull, whose `body` is the text the reader marked in their own book. So an
+   * export built from `highlights` alone silently omitted every Kindle and
+   * Readwise highlight a reader had kept, which is the largest thing most readers
+   * will have. This file's own docstring calls that "the kind of quiet
+   * incompleteness that makes an export untrustworthy", about a smaller omission.
+   *
+   * `pull_id` is `on delete set null`, so an undone batch leaves rows with nothing
+   * attached; those are history rather than library and are filtered out.
+   */
+  const imported = await pageAll<ExportRow & { pulls: { headline: string; body: string } | null }>(
+    (from, to) =>
+      supabase
+        .from('import_items')
+        .select('pull_id, pulls(headline, body, summaries(works(id, title)))')
+        .eq('user_id', userId)
+        .not('pull_id', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+  ).catch((e: unknown) => {
+    throw rpcError(e);
+  });
+
   for (const r of (hi ?? []) as unknown as (Row & { text: string })[]) {
     const idea = slot(r);
     if (idea) idea.highlights.push(r.text);
+  }
+  for (const r of (imported ?? []) as unknown as (Row & {
+    pulls: { headline: string; body: string } | null;
+  })[]) {
+    const idea = slot(r);
+    // The body IS the highlight. Pushed rather than assigned, so an imported Pull
+    // the reader has also marked up inside the app keeps both.
+    if (idea && r.pulls?.body) idea.highlights.push(r.pulls.body);
   }
   for (const r of (saves ?? []) as unknown as (Row & { note: string | null })[]) {
     const idea = slot(r);

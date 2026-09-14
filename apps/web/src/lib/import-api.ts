@@ -16,7 +16,9 @@ import {
   type ImportSourceKind,
   type UndoResult,
 } from './import-fold.js';
+import type { ImportBatch, ImportedItem } from './imports.js';
 import type { ImportItem } from './ingestion.js';
+import { pageAfter } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -32,6 +34,14 @@ import { supabase } from './supabase.js';
  */
 export type { ImportResult, ImportSourceKind, UndoResult } from './import-fold.js';
 export { hashFile, mergeAttempts, PartialImportError } from './import-fold.js';
+export type { ImportBatch, ImportedItem, ImportedWorkGroup } from './imports.js';
+export {
+  groupImported,
+  importBatchLabel,
+  importedSummary,
+  isUndoable,
+  SOURCE_KIND_LABEL,
+} from './imports.js';
 
 /**
  * Keep a batch of highlights.
@@ -99,4 +109,114 @@ export async function undoImport(importId: string): Promise<UndoResult> {
   if (error) throw rpcError(error);
   if (!data) throw new Error('The undo returned nothing, so nothing can be said about it.');
   return data as unknown as UndoResult;
+}
+
+/* --- Reading back what was kept ------------------------------------------ */
+
+/**
+ * The reader's import batches, newest first.
+ *
+ * Paged, because `max_rows` is 100 and law 3 promises unlimited stashing: a
+ * reader who has imported a hundred and one files must not be shown a hundred
+ * with nothing saying the list is partial. Keyed on `id` rather than offset, for
+ * the reason `paging.ts` sets out — an offset shifts under a concurrent write,
+ * and this reader's other tab can be committing an import while this walk runs.
+ *
+ * `id` order is not `created_at` order (it is a uuid), so the walk is unordered
+ * and the sort happens here, over rows that are all in hand.
+ */
+export async function fetchImports(userId: string): Promise<ImportBatch[]> {
+  const rows = await pageAfter<{
+    id: string;
+    source_kind: string;
+    item_count: number;
+    duplicate_count: number;
+    work_count: number;
+    created_at: string;
+    undone_at: string | null;
+  }>((after, limit) => {
+    let q = supabase
+      .from('imports')
+      .select('id, source_kind, item_count, duplicate_count, work_count, created_at, undone_at')
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id');
+
+  return rows
+    .map((r) => ({
+      id: r.id,
+      sourceKind: narrowSourceKind(r.source_kind),
+      itemCount: r.item_count,
+      duplicateCount: r.duplicate_count,
+      workCount: r.work_count,
+      createdAt: r.created_at,
+      undoneAt: r.undone_at,
+    }))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? 1 : -1));
+}
+
+/**
+ * Every highlight this reader still has from an import, with the book it came
+ * from.
+ *
+ * `pull_id` is `on delete set null`, so an undone batch leaves its `import_items`
+ * rows behind with nothing attached — those are history, not library, and are
+ * filtered out here rather than rendered as blanks.
+ *
+ * The work and the pull ride on the row as embeds. A row whose pull or work has
+ * gone is dropped for the reason `fetchBeliefs` drops one: an entry the reader
+ * cannot open is not something they can do anything with, and "(unavailable)" is
+ * worse than its absence.
+ */
+export async function fetchImportedItems(userId: string): Promise<ImportedItem[]> {
+  const rows = await pageAfter<EmbeddedImportItem>((after, limit) => {
+    let q = supabase
+      .from('import_items')
+      .select(
+        'id, import_id, pull_id, locator, created_at, pulls(headline, body), works(id, title, kind)',
+      )
+      .eq('user_id', userId)
+      .not('pull_id', 'is', null)
+      .order('id', { ascending: true })
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id');
+
+  return rows
+    .map((r): ImportedItem | null => {
+      if (!r.pull_id || !r.pulls || !r.works) return null;
+      return {
+        id: r.id,
+        importId: r.import_id,
+        pullId: r.pull_id,
+        headline: r.pulls.headline,
+        body: r.pulls.body,
+        locator: r.locator,
+        workId: r.works.id,
+        workTitle: r.works.title,
+        workKind: r.works.kind,
+        createdAt: r.created_at,
+      };
+    })
+    .filter((r): r is ImportedItem => r !== null);
+}
+
+interface EmbeddedImportItem {
+  id: string;
+  import_id: string;
+  pull_id: string | null;
+  locator: string | null;
+  created_at: string;
+  pulls: { headline: string; body: string } | null;
+  works: { id: string; title: string; kind: string | null } | null;
+}
+
+function narrowSourceKind(value: string): ImportSourceKind {
+  return value === 'kindle' || value === 'readwise' || value === 'csv' || value === 'paste'
+    ? value
+    : 'csv';
 }

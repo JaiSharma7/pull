@@ -18,6 +18,18 @@ import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
 import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import { RememberThis } from '../components/RememberThis.js';
+import {
+  fetchImportedItems,
+  fetchImports,
+  groupImported,
+  importBatchLabel,
+  importedSummary,
+  isUndoable,
+  undoImport,
+  type ImportBatch,
+  type ImportedItem,
+} from '../lib/import-api.js';
 import type { Track } from '../lib/player.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speechSupported } from '../lib/speech.js';
@@ -96,6 +108,14 @@ export function Library({ userId }: { userId: string }) {
   const [naming, setNaming] = useState(false);
   const [newStashName, setNewStashName] = useState('');
   const [armedStash, setArmedStash] = useState<string | null>(null);
+  /**
+   * The save whose note is being written, and what has been typed into it.
+   *
+   * One at a time: two open notes would be two drafts to keep straight, and a
+   * note is a thing a reader writes and then closes rather than a field they
+   * leave open across a list.
+   */
+  const [noting, setNoting] = useState<{ saveId: string; text: string } | null>(null);
   const [exportNote, setExportNote] = useState<string | null>(null);
   /*
    * Whether this screen is still on screen.
@@ -1109,29 +1129,241 @@ export function Library({ userId }: { userId: string }) {
                         {item.archived ? 'Archived ✓' : 'Archive'}
                       </button>
 
+                      {/*
+                        The last of the five, and the worst of them: a note is up to
+                        20,000 characters and `window.prompt` offered a single-line box
+                        with no wrapping, no newlines and no way to see what was already
+                        there. A textarea is what the field always needed.
+                      */}
                       <button
                         type="button"
                         className="btn btn--plain"
-                        onClick={() => {
-                          const next =
-                            window
-                              .prompt('A note on this idea', item.note ?? '')
-                              ?.slice(0, 20000) ?? null;
-                          if (next === null) return;
-                          patchSave(item, { note: next.trim() || null });
-                        }}
+                        aria-expanded={noting?.saveId === item.saveId}
+                        onClick={() =>
+                          setNoting(
+                            noting?.saveId === item.saveId
+                              ? null
+                              : { saveId: item.saveId, text: item.note ?? '' },
+                          )
+                        }
                       >
                         {item.note ? 'Edit note' : 'Add note'}
                       </button>
                     </div>
 
-                    {item.note ? <p className="library__note">{item.note}</p> : null}
+                    {noting?.saveId === item.saveId ? (
+                      <div className="stack">
+                        <label className="field__label" htmlFor={`note-${item.saveId}`}>
+                          A note on this idea
+                        </label>
+                        <textarea
+                          id={`note-${item.saveId}`}
+                          className="field__textarea"
+                          rows={3}
+                          maxLength={20000}
+                          value={noting.text}
+                          ref={(el) => el?.focus()}
+                          onChange={(e) => setNoting({ saveId: item.saveId, text: e.target.value })}
+                        />
+                        <p>
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={busy}
+                            onClick={() => {
+                              const text = noting.text.trim();
+                              setNoting(null);
+                              // An emptied note is a removed note, which is what the
+                              // prompt did when the reader cleared it and pressed OK.
+                              patchSave(item, { note: text || null });
+                            }}
+                          >
+                            Keep the note
+                          </button>{' '}
+                          <button
+                            type="button"
+                            className="btn btn--plain"
+                            onClick={() => setNoting(null)}
+                          >
+                            Never mind
+                          </button>
+                        </p>
+                      </div>
+                    ) : item.note ? (
+                      <p className="library__note">{item.note}</p>
+                    ) : null}
                   </div>
                 ))}
             </section>
           );
         })
       )}
+
+      <Imported userId={userId} />
     </div>
+  );
+}
+
+/**
+ * The highlights a reader brought with them.
+ *
+ * Kept apart from the saved list above, and not merged into it, because they are a
+ * different kind of thing: a save is an idea from the catalogue the reader chose to
+ * keep, and an import is their own text, private, readable by nobody else, and
+ * arriving four hundred at a time. Filing four hundred Kindle highlights into the
+ * same list as eleven saved Pulls would bury the second under the first.
+ *
+ * Its own fetch, for the reason the Delta and the graph have theirs: two requests
+ * that each render when they land beat one that makes the whole screen wait.
+ */
+function Imported({ userId }: { userId: string }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<
+    { batches: ImportBatch[]; items: ImportedItem[] } | 'failed' | null
+  >(null);
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [reloads, setReloads] = useState(0);
+
+  /*
+   * Loaded when the section is opened, not with the screen.
+   *
+   * It is two more round trips and a reader with no imports has no use for either.
+   * The disclosure is what asks for them, which also means the cost is paid by the
+   * reader who is about to look at the answer.
+   */
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    Promise.all([fetchImports(userId), fetchImportedItems(userId)])
+      .then(([batches, items]) => {
+        if (live) setState({ batches, items });
+      })
+      .catch((e: unknown) => {
+        console.error('Could not load your imports', e);
+        if (live) setState('failed');
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, userId, reloads]);
+
+  const loaded = state !== null && state !== 'failed' ? state : null;
+  const groups = groupImported(loaded?.items ?? []);
+
+  async function undo(batch: ImportBatch) {
+    setNote(null);
+    setUndoing(batch.id);
+    try {
+      const result = await undoImport(batch.id);
+      setNote(
+        result.alreadyUndone
+          ? 'That batch was already taken back.'
+          : `Took back ${result.removed} ${result.removed === 1 ? 'highlight' : 'highlights'}.`,
+      );
+      setReloads((n) => n + 1);
+    } catch (e: unknown) {
+      console.error('Could not undo the import', e);
+      setNote('Could not take that batch back just now. Nothing was removed.');
+    } finally {
+      setUndoing(null);
+    }
+  }
+
+  return (
+    <section className="stack">
+      <h2 style={{ fontSize: 'var(--step-1)', margin: 0 }}>
+        <button
+          type="button"
+          className="btn btn--plain"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+          style={{ textAlign: 'left' }}
+        >
+          Imported highlights
+        </button>
+      </h2>
+
+      {open && state === null && (
+        <p className="meta" role="status">
+          Loading…
+        </p>
+      )}
+
+      {open && state === 'failed' && (
+        <p className="meta" role="alert">
+          Could not read your imports just now.{' '}
+          <button type="button" className="btn btn--plain" onClick={() => setReloads((n) => n + 1)}>
+            Try again
+          </button>
+        </p>
+      )}
+
+      {open && loaded && (
+        <>
+          <p className="meta">{importedSummary(groups)}</p>
+
+          {note && (
+            <p className="meta" role="status">
+              {note}
+            </p>
+          )}
+
+          {/*
+            The batches, with a way back out of each.
+            An import is the one action in this app that writes hundreds of rows on
+            one press, so it is the one that most needs an undo — and `undo_import`
+            is idempotent and does not block re-importing the same file, so pressing
+            it is recoverable in both directions.
+          */}
+          {loaded.batches.length > 0 && (
+            <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {loaded.batches.map((batch) => (
+                <li key={batch.id} className="library__item">
+                  <span className="meta">{importBatchLabel(batch)}</span>{' '}
+                  {batch.undoneAt ? (
+                    <span className="meta">· taken back</span>
+                  ) : isUndoable(batch) ? (
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      disabled={undoing !== null}
+                      onClick={() => void undo(batch)}
+                    >
+                      {undoing === batch.id ? 'Taking it back…' : 'Undo this batch'}
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {groups.map((group) => (
+            <section key={group.workId} className="stack">
+              <h3 style={{ fontSize: 'var(--step-0)', margin: 0 }}>{group.title}</h3>
+              <p className="meta">
+                {group.items.length} {group.items.length === 1 ? 'highlight' : 'highlights'}
+              </p>
+              <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {group.items.map((item) => (
+                  <li key={item.id} className="library__item">
+                    <p style={{ margin: 0 }}>{item.body}</p>
+                    {item.locator ? <p className="meta">{item.locator}</p> : null}
+                    {/*
+                      The same form the source page offers, not a second one. A
+                      reader who has just kept four hundred highlights is precisely
+                      the reader with something to practise, and `remember_pull`
+                      makes the highlight due NOW rather than tomorrow — "Remember
+                      this" is an explicit ask to practise.
+                    */}
+                    <RememberThis pullId={item.pullId} idPrefix="imported" />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </>
+      )}
+    </section>
   );
 }
