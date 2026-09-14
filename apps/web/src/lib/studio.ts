@@ -161,6 +161,52 @@ export function buildImportSource(items: readonly ImportedItem[]): string {
     .join('\n\n');
 }
 
+/**
+ * As much of a book as one summary can take, and how much that was.
+ *
+ * `checkSubmission` refuses anything over `MAX_TEXT_CHARS` with "Send it in parts",
+ * which the paste box can act on and the picker cannot: the only granularity it offers
+ * is a whole book. A reader with four thousand Kindle highlights in one title — which is
+ * the reader the Studio's own copy describes — could therefore never use it at all.
+ *
+ * So the text is cut to a whole number of highlights and the screen says so BEFORE the
+ * press. Cut rather than sampled, and from the front rather than the middle: the order
+ * is the order they were kept, a prefix of it is still a book read from the beginning,
+ * and — the property this has to keep — it is deterministic, so two presses hash to the
+ * same `works.content_hash` and the second does not pay again.
+ *
+ * `used` is how many highlights went in, `total` how many there were. Equal means
+ * nothing was left out and the screen says nothing.
+ */
+export function fitImportSource(
+  items: readonly ImportedItem[],
+  max: number = MAX_TEXT_CHARS,
+): { text: string; used: number; total: number } {
+  const whole = buildImportSource(items);
+  if (whole.length <= max) return { text: whole, used: items.length, total: items.length };
+
+  // Grown one highlight at a time rather than sliced at a character, because half a
+  // passage sent to a model is a passage that says something its author did not.
+  let used = 0;
+  let text = '';
+  for (let i = 1; i <= items.length; i += 1) {
+    const next = buildImportSource(items.slice(0, i));
+    if (next.length > max) break;
+    text = next;
+    used = i;
+  }
+  return { text, used, total: items.length };
+}
+
+/** What to say when a book was too long to send whole. */
+export function truncationNote(used: number, total: number): string | null {
+  if (used >= total) return null;
+  if (used === 0) {
+    return 'The first highlight in this book is on its own longer than one summary can take.';
+  }
+  return `This book is longer than one summary can take. The first ${used.toLocaleString()} of ${total.toLocaleString()} highlights will be sent.`;
+}
+
 /** Everything `generation_jobs` says about a job the reader asked for. */
 export interface StudioJob {
   id: string;
@@ -241,6 +287,12 @@ export function describeJob(job: StudioJob, now: number = Date.now()): string {
   if (job.status === 'failed') {
     return job.error ? `That did not finish: ${job.error}` : 'That did not finish.';
   }
+  // `cancelled` is a status `generation_jobs` really has — the sweep's terminal pass
+  // names it — and everything not matched above fell through to the running branches,
+  // so a job cancelled half an hour ago was described as "Taking longer than usual. It
+  // will finish on its own." `isWorthPolling` is false for it, so the line never
+  // corrected itself either.
+  if (job.status === 'cancelled') return 'That was cancelled.';
   if (job.status === 'queued') return 'Waiting its turn.';
 
   // Past this, no generation is still plausibly mid-call: the worker holds a message

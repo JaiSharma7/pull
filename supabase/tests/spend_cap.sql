@@ -522,6 +522,60 @@ begin
   raise notice 'spend_cap.sql: a reader may ask whether there is room and not how much, and may not reserve, settle or insert';
 end $$;
 
+-- ------------- 7b. a replayed submit returns the job it is replaying
+--
+-- A request that committed and whose response was lost leaves the Studio telling the
+-- reader it never arrived. They press again, and without a mutation id that second press
+-- is a second paid generation and a second summary of one book on their own shelf. Run
+-- before the budget fixtures below spend the day, since the door refuses everything once
+-- the cap is gone and there would be nothing left to replay.
+do $$
+declare
+  reader  uuid;
+  once    jsonb;
+  twice   jsonb;
+  mut     uuid := extensions.gen_random_uuid();
+  jobs    int;
+begin
+  perform set_config('role', 'postgres', true);
+  select u.id into reader from auth.users u
+   where u.email like 'spend-cap%' order by u.email limit 1;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader, 'role', 'authenticated')::text, true);
+
+  once := public.enqueue_generation_job(
+    jsonb_build_object('title', 'Replayed', 'text', 'x'), mut);
+  twice := public.enqueue_generation_job(
+    jsonb_build_object('title', 'Replayed', 'text', 'x'), mut);
+
+  if (twice ->> 'jobId') <> (once ->> 'jobId') then
+    raise exception
+      'a replayed submit queued a second job (% then %). That is a second paid '
+      'generation for one press.', once ->> 'jobId', twice ->> 'jobId';
+  end if;
+  if (twice ->> 'replayed')::boolean is not true then
+    raise exception 'a replay was not reported as one, so the screen cannot tell';
+  end if;
+
+  select count(*) into jobs
+  from public.generation_jobs gj
+  where gj.requester_id = reader and gj.client_mutation_id = mut;
+  if jobs <> 1 then
+    raise exception 'one submission left % job rows', jobs;
+  end if;
+
+  -- A DIFFERENT id from the same reader is a different submission, not a replay.
+  if (public.enqueue_generation_job(jsonb_build_object('title', 'Another', 'text', 'x'),
+                                    extensions.gen_random_uuid()) ->> 'jobId')
+     = (once ->> 'jobId') then
+    raise exception 'a second submission was mistaken for a replay of the first';
+  end if;
+
+  raise notice 'spend_cap.sql: a replayed submit returns its job rather than buying another';
+end $$;
+
 -- ------------------------------------------- 8. a spent day refuses at the door
 --
 -- Back to the owner, because the fixture writes a ledger row and then the assertion

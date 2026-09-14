@@ -25,10 +25,11 @@
  * model provider.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   budgetLine,
-  buildImportSource,
+  fitImportSource,
+  truncationNote,
   checkSubmission,
   describeJob,
   fetchBudgetState,
@@ -49,6 +50,7 @@ import {
 } from '../lib/studio-api.js';
 import type { ImportedItem } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
+import { mutationId } from '../lib/submission.js';
 
 /** How often a running job is asked about. */
 const POLL_MS = 10_000;
@@ -68,6 +70,17 @@ export function Studio({
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  /*
+   * ONE ID PER SUBMISSION, kept across the reader's retries of it.
+   *
+   * Minted when a submission is first sent and cleared only when one succeeds, so the
+   * press that follows "That has not reached your account" replays rather than buys: a
+   * request that committed and lost its response is indistinguishable from one that
+   * never arrived, and only the database can tell. Cleared on success so the NEXT
+   * submission — a different text, or the same book asked for again on purpose — is a
+   * new one.
+   */
+  const submission = useRef<string | null>(null);
 
   const [budget, setBudget] = useState<BudgetState | null>(null);
   const [books, setBooks] = useState<{ workId: string; title: string; kind: string | null }[]>([]);
@@ -220,10 +233,21 @@ export function Studio({
    * inside `submit`. Two independently computed copies of the thing whose bytes decide
    * `works.content_hash` is also one more than there should be.
    */
-  const importedText = useMemo(
-    () => (pickedItems ? buildImportSource(pickedItems) : ''),
+  const imported = useMemo(
+    () => (pickedItems ? fitImportSource(pickedItems) : { text: '', used: 0, total: 0 }),
     [pickedItems],
   );
+  const importedText = imported.text;
+  /*
+   * Said before the press, not after it.
+   *
+   * A book over `MAX_TEXT_CHARS` came back from `checkSubmission` with "Send it in
+   * parts" — advice the paste box can take and the picker cannot, since the only
+   * granularity it offers is a whole book. `fitImportSource` cuts to a whole number of
+   * highlights instead, deterministically, and this is the sentence that makes that an
+   * offer rather than something done quietly to the reader's book.
+   */
+  const shortened = truncationNote(imported.used, imported.total);
 
   async function submit() {
     if (sending) return;
@@ -236,6 +260,14 @@ export function Studio({
     // book a second ago.
     if (picked && pickedItems === null) {
       setError('Still reading that book’s highlights — try again in a moment.');
+      return;
+    }
+
+    // The one case `fitImportSource` cannot cut its way out of: a single highlight over
+    // the whole bound. Said here rather than left to `checkSubmission`, which would
+    // answer "Send it in parts" to a reader who has no parts to send.
+    if (picked && pickedItems !== null && imported.used === 0 && pickedItems.length > 0) {
+      setError('The first highlight in this book is on its own longer than one summary can take.');
       return;
     }
 
@@ -258,13 +290,20 @@ export function Studio({
         title: check.title,
         text: check.text,
         kind: picked ? studioKindFor(picked.kind) : kind,
-        author: author.trim() || null,
+        // Null for a picked book, like `kind` and `workId` beside it. The Author field
+        // is only rendered on the paste branch, so a value here is whatever the reader
+        // typed before switching the source chip — inert on the adopt path, and written
+        // verbatim into a new `works` row on the fall-through that exists for the case
+        // where the ownership re-check fails.
+        author: picked ? null : author.trim() || null,
         // Only for an imported book, and the server checks it twice: the target
         // keeps it only if this reader authored a summary on that work, and
         // `template` asks the row again at the moment it writes. Sending it is
         // what makes the book gain a summary rather than acquire a second row.
         workId: picked ? picked.workId : null,
+        mutationId: (submission.current ??= mutationId()),
       });
+      submission.current = null;
       setBudget(queued.budget);
       setNote(
         queued.queue === 'fast'
@@ -375,10 +414,17 @@ export function Studio({
             Reading your highlights from “{picked.title}”…
           </p>
         ) : (
-          <p className="meta">
-            {pickedItems.length} {pickedItems.length === 1 ? 'highlight' : 'highlights'} from “
-            {picked.title}”, joined in the order you kept them.
-          </p>
+          <>
+            <p className="meta">
+              {pickedItems.length} {pickedItems.length === 1 ? 'highlight' : 'highlights'} from “
+              {picked.title}”, joined in the order you kept them.
+            </p>
+            {shortened && (
+              <p className="meta" role="status">
+                {shortened}
+              </p>
+            )}
+          </>
         )
       ) : (
         <>

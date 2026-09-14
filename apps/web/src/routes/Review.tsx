@@ -623,6 +623,14 @@ export function Review() {
         setSessionTotal((prev) => nextSessionTotal(prev, filtered.length));
         setOffline(false);
         setPractisingFrom(null);
+        /*
+         * And the error goes, because this effect is no longer only reached by pressing
+         * Try again. The reconnect refetch bumps `reloads` on its own, and `if (error)`
+         * is checked before `if (!due)` — so a reader who came out of a tunnel had the
+         * session load behind an error screen they had no reason to dismiss, on the one
+         * path that exists to spare them dismissing anything.
+         */
+        setError(null);
 
         /*
          * Every successful page is downloaded, without being asked for. Law 3

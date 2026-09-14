@@ -431,14 +431,20 @@ export function Library({ userId }: { userId: string }) {
     if (!activeStash) return;
     /*
      * GUARDED HERE AS WELL AS BY `disabled`, because the Markdown path never awaits.
-     * A state flag set and cleared inside one synchronous run batches into a single
-     * render, so `disabled` never engages between two clicks and the reader gets the
-     * same file twice, the second named "… (1).md". The CSV path is safe by accident --
-     * its `await` lets React commit `disabled` first -- which is not a difference worth
-     * relying on. `claimBusy` is the flag read in the tick it is written.
+     * A flag set and cleared inside one synchronous run batches into a single render, so
+     * `disabled` never engages between two clicks and the reader gets the same file
+     * twice, the second named "… (1).md".
+     *
+     * `claimBusy` alone does not fix that, and saying it did was the mistake: a ref
+     * beats a second call in the SAME turn, and two clicks are two turns — the first
+     * handler had already reached its `finally` and given the flag back. So the work is
+     * yielded to a macrotask, which lets React commit the render that disables the
+     * button before the download starts. The CSV path was safe by accident, its own
+     * `await` doing the same thing; now neither depends on the accident.
      */
     if (!claimBusy()) return;
     setExportNote(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     try {
       const now = new Date();
       const slug = exportSlug(activeStash.name);

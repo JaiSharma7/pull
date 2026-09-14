@@ -6,6 +6,8 @@ export {
   budgetLine,
   isBudgetState,
   buildImportSource,
+  fitImportSource,
+  truncationNote,
   checkSubmission,
   describeJob,
   isRunning,
@@ -69,6 +71,18 @@ export async function requestPrivateSummary(input: {
   kind: StudioKind;
   author?: string | null;
   workId?: string | null;
+  /**
+   * Minted once per submission by the screen, and REUSED on the reader's retry.
+   *
+   * `isOfflineFailure` cannot tell a request that never arrived from one that arrived,
+   * committed and lost its response — so the screen says "that has not reached your
+   * account" either way, and the reader presses again. Without this the second press is
+   * another ~5.6 cents of provider spend and, on an adopted book, a second summary of
+   * one title on their own shelf. With it the database answers with the job they already
+   * have. Every other replayable write in this app carries one; this is the one that
+   * spends money.
+   */
+  mutationId: string;
 }): Promise<Enqueued> {
   const { data, error } = await supabase.rpc('enqueue_generation_job', {
     p_target: {
@@ -80,6 +94,7 @@ export async function requestPrivateSummary(input: {
       ...(input.author ? { author: input.author } : {}),
       ...(input.workId ? { work_id: input.workId } : {}),
     },
+    p_mutation_id: input.mutationId,
   });
   if (error) throw rpcError(error);
   return data as unknown as Enqueued;

@@ -22,6 +22,28 @@ and reviewers should reject it on that basis alone.
    one canonical generation costs ~$0.056 and serves thousands of readers, while
    per-user regeneration costs ~$56 per thousand. That ratio is the business model.
 
+   **One carve-out, and it is bounded rather than excused: the Studio.** A reader may
+   ask for a summary of _their own_ text — a pasted document, or the highlights they
+   imported — and that is a model call per reader per document, which is the ratio above
+   pointing the wrong way. It is sanctioned because every term that makes the ratio
+   dangerous is capped in the schema rather than in a comment:
+
+   - It is never in a read path. Nothing renders by calling a model; a Studio job is
+     queued, walked by the worker, and read back as rows like any other summary.
+   - Every call writes to `cost_ledger`, and holds its money in `budget_reservations`
+     before the provider is called, so spend is visible while it is in flight.
+   - `daily_spend_cap_cents()` is a GLOBAL ceiling (200¢). `enqueue_generation_job`
+     refuses at the door once the day cannot fund a whole job, and `reserve_budget`
+     refuses each step, so the worst case for a day is the cap and not the demand.
+   - One requester gets three fast jobs a day, then a widening stagger, and fifty in
+     total — `enqueue_generation_job` again, under an advisory lock.
+   - The result is `private` and never joins the catalogue, so it cannot be a way to
+     publish around law 4.
+
+   A private generation outside those bounds is the thing this law forbids. Widening
+   any of them — a bigger cap, a higher ceiling, a public result — is a change to the
+   law and belongs in this file, not in a PR that quietly needs the room.
+
 3. **Free law — the five stay free.**
    Audio, offline, unlimited history, unlimited stashing and curated Daily Pulls are
    free forever. Each is affordable by design, not by subsidy: audio is client-side

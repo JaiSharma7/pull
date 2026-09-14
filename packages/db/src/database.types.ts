@@ -624,6 +624,7 @@ export type Database = {
       generation_jobs: {
         Row: {
           attempts: number
+          client_mutation_id: string | null
           cost_cents: number
           created_at: string
           current_step: string
@@ -641,6 +642,7 @@ export type Database = {
         }
         Insert: {
           attempts?: number
+          client_mutation_id?: string | null
           cost_cents?: number
           created_at?: string
           current_step?: string
@@ -658,6 +660,7 @@ export type Database = {
         }
         Update: {
           attempts?: number
+          client_mutation_id?: string | null
           cost_cents?: number
           created_at?: string
           current_step?: string
@@ -2408,7 +2411,10 @@ export type Database = {
         Returns: number
       }
       enable_log_retention: { Args: { p_cron?: string }; Returns: number }
-      enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
+      enqueue_generation_job: {
+        Args: { p_mutation_id?: string; p_target: Json }
+        Returns: Json
+      }
       generate_mfa_recovery_codes: { Args: never; Returns: string[] }
       generation_budget_state: { Args: never; Returns: string }
       generation_secret: { Args: { p_name: string }; Returns: string }

@@ -4,12 +4,14 @@ import {
   buildImportSource,
   checkSubmission,
   describeJob,
+  fitImportSource,
   isRunning,
   isWorthPolling,
   MAX_TEXT_CHARS,
   MIN_TEXT_CHARS,
   POLL_FOR_MS,
   STALLED_AFTER_MS,
+  truncationNote,
   type StudioJob,
 } from './studio.js';
 import type { ImportedItem } from './imports.js';
@@ -125,11 +127,75 @@ describe('buildImportSource', () => {
   });
 });
 
+describe('fitImportSource', () => {
+  const long = (n: number) => 'x'.repeat(n);
+
+  it('sends the whole book when it fits', () => {
+    const items = [highlight('One.'), highlight('Two.')];
+    const fitted = fitImportSource(items, 1000);
+    expect(fitted.used).toBe(2);
+    expect(fitted.total).toBe(2);
+    expect(fitted.text).toBe('One.\n\nTwo.');
+  });
+
+  /*
+   * The dead end this replaced: `checkSubmission` answered a four-thousand-highlight
+   * book with "Send it in parts", and the picker has no parts — the only granularity it
+   * offers is a whole book, so the reader its own copy describes could not use Studio.
+   */
+  it('cuts to a whole number of highlights rather than refusing the book', () => {
+    const items = [highlight(long(50)), highlight(long(50)), highlight(long(50))];
+    const fitted = fitImportSource(items, 110);
+    expect(fitted.used).toBe(2);
+    expect(fitted.total).toBe(3);
+    expect(fitted.text.length).toBeLessThanOrEqual(110);
+    // Whole passages, never half of one: a passage cut mid-sentence says something its
+    // author did not.
+    expect(fitted.text).toBe(`${long(50)}\n\n${long(50)}`);
+  });
+
+  it('is deterministic when it cuts, so a second press does not pay again', () => {
+    const items = [highlight(long(50)), highlight(long(50)), highlight(long(50))];
+    expect(fitImportSource(items, 110).text).toBe(fitImportSource(items, 110).text);
+  });
+
+  it('reports nothing usable when the first highlight alone is over the bound', () => {
+    const fitted = fitImportSource([highlight(long(400))], 100);
+    expect(fitted.used).toBe(0);
+    expect(fitted.text).toBe('');
+  });
+});
+
+describe('truncationNote', () => {
+  it('says nothing when the whole book went in', () => {
+    expect(truncationNote(12, 12)).toBeNull();
+  });
+
+  it('names both numbers, because the reader is about to pay for one of them', () => {
+    expect(truncationNote(1842, 4000)).toBe(
+      'This book is longer than one summary can take. The first 1,842 of 4,000 highlights will be sent.',
+    );
+  });
+
+  it('says what is wrong when not one highlight fits', () => {
+    expect(truncationNote(0, 3)).toContain('on its own longer');
+  });
+});
+
 describe('describeJob', () => {
   it('says waiting for a queued job, which is what a budget wait looks like', () => {
     // A job waiting on the day's cap stays `queued` while the worker re-sends its
     // step. It is early, not broken, and must not read as a failure.
     expect(describeJob(job(), NOW)).toBe('Waiting its turn.');
+  });
+
+  // A status `generation_jobs` really has, and one that used to fall through to the
+  // running branches: a job cancelled half an hour ago was told it would finish on its
+  // own, on a screen that argues at length against saying what it cannot know.
+  it('says a cancelled job was cancelled rather than that it is still working', () => {
+    expect(
+      describeJob(job({ status: 'cancelled', currentStep: 'synthesize' }), NOW + 60 * 60 * 1000),
+    ).toBe('That was cancelled.');
   });
 
   it('names the phase rather than the DAG node', () => {
