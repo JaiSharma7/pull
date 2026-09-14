@@ -120,6 +120,15 @@ export function Studio({
   function pick(next: string) {
     editing();
     setItemsFailed(null);
+    /*
+     * And the title, which belonged to the source being left.
+     *
+     * `named = title.trim() || picked.title` means a title typed for one book wins over
+     * the next one's — so picking A, naming it, then picking B filed a paid generation
+     * of B's highlights under A's name, with only the placeholder changing to say
+     * otherwise. The field is a per-source override; leaving the source retires it.
+     */
+    setTitle('');
     setSource(next);
   }
 
@@ -338,7 +347,15 @@ export function Studio({
     // the whole bound. Said here rather than left to `checkSubmission`, which would
     // answer "Send it in parts" to a reader who has no parts to send.
     if (picked && pickedItems !== null && imported.text === '' && pickedItems.length > 0) {
-      setError('The first highlight in this book is on its own longer than one summary can take.');
+      // Two ways to end with no text, and they are not the same thing to be told.
+      // `complete` means nothing was dropped for LENGTH — so every row in the book was
+      // blank, and naming the first highlight as too long is a cause that is false and
+      // leaves the reader nothing they could do about it.
+      setError(
+        imported.complete
+          ? 'There is no text in this book’s highlights to summarise.'
+          : 'The first highlight in this book is on its own longer than one summary can take.',
+      );
       return;
     }
 

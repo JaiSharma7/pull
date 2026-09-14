@@ -578,6 +578,7 @@ export function Review() {
   const [pack, setPack] = useState<{ count: number; syncedAt: number } | null>(null);
   const [practisingFrom, setPractisingFrom] = useState<number | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
 
   /*
    * ONE FETCH PER PAGE, NOT PER ANSWER.
@@ -696,6 +697,10 @@ export function Review() {
             setSessionTotal((prev) => nextSessionTotal(prev, left.length));
             setPractisingFrom(downloaded.syncedAt);
             setOffline(true);
+            // And the error goes: `if (error)` is checked before `if (!due)`, so a reader
+            // already on the error screen when the reconnect refetch fired — the one path
+            // into this effect that does not clear it — got a session loaded behind it.
+            setError(null);
             return;
           }
 
@@ -717,8 +722,10 @@ export function Review() {
             setDue([]);
             setOffline(true);
             // Nothing is being practised from the downloaded copy any more — it is
-            // finished — so the banner that says so goes with it.
+            // finished — so the banner that says so goes with it, and so does any error
+            // this session started behind.
             setPractisingFrom(null);
+            setError(null);
             return;
           }
         }
@@ -801,7 +808,15 @@ export function Review() {
   /** Take today's practice with you, deliberately, before the signal goes. */
   const download = useCallback(() => {
     const userId = getCurrentUserId();
-    if (userId === null || downloading) return;
+    /*
+     * A ref, not the state flag, for the reason `Studio.tsx` and `Library.tsx` both give
+     * at their own: `downloading` is the value this render captured, and `setDownloading`
+     * does not change it — so a double tap, or Enter held down, ran two fetches and two
+     * `storeReviewPack` transactions over the same store, whose `setPack` calls could
+     * then land out of order. `disabled` cannot help either; it has not committed yet.
+     */
+    if (userId === null || downloadingRef.current) return;
+    downloadingRef.current = true;
     setDownloading(true);
     api
       .fetchDueReviews()
@@ -816,8 +831,11 @@ export function Review() {
         // device before is still there, and the label still describes it.
         console.error('Could not download the practice pack', e);
       })
-      .finally(() => setDownloading(false));
-  }, [downloading]);
+      .finally(() => {
+        downloadingRef.current = false;
+        setDownloading(false);
+      });
+  }, []);
 
   /*
    * The offline copy, and the offer to refresh it. Rendered under every state of

@@ -296,9 +296,12 @@ export function Source({
       .then((kept) => {
         if (!cancelled) setSaved(kept);
       })
-      .catch(() => {
-        // A Save control that opens unpressed is wrong about a kept idea until the
-        // next press, and pressing it is idempotent (`savePull` swallows 23505).
+      .catch((e: unknown) => {
+        // Logged, then degraded. A Save control that opens unpressed is wrong about a
+        // kept idea until the next press, and pressing it is idempotent (`savePull`
+        // swallows 23505) — but an empty catch made this the one read on the page that
+        // could fail with nothing anywhere saying it had.
+        console.error('Could not read which of these ideas you have kept', e);
       });
     return () => {
       cancelled = true;

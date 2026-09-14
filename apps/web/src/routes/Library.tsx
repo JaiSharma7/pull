@@ -238,6 +238,10 @@ export function Library({ userId }: { userId: string }) {
    */
   async function exportHighlights() {
     if (!claimBusy()) return;
+    // Cleared on the way in, as `exportStash` does: a failure message from an earlier
+    // attempt was left standing over a file that had just landed, and the comment below
+    // claims a status line is spoken either way.
+    setExportNote(null);
     try {
       const sources = await fetchExportData(userId);
       const now = new Date();
@@ -246,6 +250,12 @@ export function Library({ userId }: { userId: string }) {
         'text/markdown',
         toMarkdown(sources, now),
       );
+      // Said on success too, which is what makes the claim below true: the line was
+      // written only on failure, so a blind reader pressing Export still got silence
+      // when it worked.
+      if (mounted.current) {
+        setExportNote(`Exported ${sources.length} ${sources.length === 1 ? 'source' : 'sources'}.`);
+      }
     } catch (e) {
       console.error('Could not export highlights', e);
       // The same live region the collection export writes to, and for the reason
@@ -1344,6 +1354,7 @@ function Imported({ userId }: { userId: string }) {
     | null
   >(null);
   const [undoing, setUndoing] = useState<string | null>(null);
+  const undoingRef = useRef(false);
   /*
    * One book open at a time, and its highlights fetched when it opens.
    *
@@ -1427,6 +1438,12 @@ function Imported({ userId }: { userId: string }) {
   const loaded = state !== null && state !== 'failed' ? state : null;
 
   async function undo(batch: ImportBatch) {
+    // A ref, for the reason the busy latch above is one: `disabled={undoing !== null}`
+    // has not committed when a second click of a double-click runs, so both reached
+    // `undoImport` — the second came back `alreadyUndone` and the reader was told their
+    // batch had already been taken back, in a race over which answer landed last.
+    if (undoingRef.current) return;
+    undoingRef.current = true;
     setNote(null);
     setUndoing(batch.id);
     try {
@@ -1449,6 +1466,7 @@ function Imported({ userId }: { userId: string }) {
       console.error('Could not undo the import', e);
       setNote('Could not take that batch back just now. Nothing was removed.');
     } finally {
+      undoingRef.current = false;
       setUndoing(null);
     }
   }

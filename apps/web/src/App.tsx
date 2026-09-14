@@ -595,10 +595,28 @@ export function App() {
    * the engine, the utterance and the queue survive a navigation between any two of
    * these screens.
    */
-  const withPlayer = (node: ReactNode) => (
-    <PlayerProvider userId={session?.user.id ?? null} durable={!!session && !isGuest(session)}>
-      {node}
-      {/*
+  /*
+   * AND NOT WHILE A FACTOR IS OWED, which the first version of this got half right.
+   *
+   * The second-factor gate returns bare, further down — but every screen wrapped here
+   * is returned ABOVE it, so a session that owes a factor had only to type `/privacy`,
+   * or any unknown path, to be handed `PlayerProvider` with its own user id. The engine
+   * restores that reader's stored queue and the bar draws "Paused · 2 of 5" over the
+   * page with a Play button that reads the ideas aloud — which is exactly what somebody
+   * holding a password and not a factor must not reach. Read off `factorState` directly
+   * rather than off `owesFactor`, which is derived further down than this has to be
+   * used; an answer that is missing, or is about a different account, counts as owed.
+   */
+  const factorPending =
+    session !== null && (factorState?.userId !== session.user.id || factorState.owes !== false);
+
+  const withPlayer = (node: ReactNode) =>
+    factorPending ? (
+      node
+    ) : (
+      <PlayerProvider userId={session?.user.id ?? null} durable={!!session && !isGuest(session)}>
+        {node}
+        {/*
         THE BAR TRAVELS WITH THE ENGINE, and the two came apart once already. Wrapping
         the provider around every return kept the voice alive across a navigation and
         left the bar inside `shell` — so a reader who tapped Privacy from under the bar
@@ -611,9 +629,9 @@ export function App() {
         screen reader now meets it after the footer instead of before. `:root
         [data-listening]` still keeps the footer out from under it.
       */}
-      <PlayerBar />
-    </PlayerProvider>
-  );
+        <PlayerBar />
+      </PlayerProvider>
+    );
 
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
@@ -814,16 +832,11 @@ export function App() {
    * reader cannot reach.
    */
   /*
-   * NO PLAYER BEHIND THIS GATE, unlike every other early return above.
-   *
-   * `withPlayer` passes the reader's own id, `PlayerEngine` keys on it and restores
-   * their stored queue, and `PlayerBar` then draws "Paused · 2 of 5 · Meditations" with
-   * a Play button that speaks the body of the ideas aloud. The comment above is that a
-   * factor-owing session must not reach anything a signed-in reader can reach, and their
-   * last listening session is exactly that — on a shared machine it is the previous
-   * reader's, read out by anyone who has the password and not the factor. So these two
-   * returns are bare, the engine unmounts, and the queue is still in storage when the
-   * factor is passed.
+   * No player behind this gate — see `factorPending` above, which is what keeps it off
+   * the screens returned before this one as well. These two are bare for the same
+   * reason: a factor-owing session must not reach anything a signed-in reader can, and
+   * their last listening session is exactly that. The queue is still in storage when
+   * the factor is passed.
    */
   if (session && owesFactor === null)
     return (
