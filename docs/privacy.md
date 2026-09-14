@@ -274,6 +274,13 @@ What the app does put on your device, all of it first-party and all of it necess
 
 - **Your sign-in token**, in `localStorage`, so you stay signed in.
 - **A small amount of interface state**, in `localStorage`.
+- **Your listening settings and your listening queue.** The three settings — speed, voice
+  and sleep timer — are in `localStorage`, because they describe the machine rather than
+  you: a voice is an engine installed on _this_ device and means nothing on another one.
+  The queue is what you have lined up to hear, so it is a reading list rather than a
+  setting, and it is kept under your own id and cleared when you sign out. A guest's
+  queue, and a signed-out visitor's, live in `sessionStorage` instead, so the next person
+  to open the browser on a shared machine does not find it waiting.
 - **Your offline library**, in IndexedDB — the Pulls cached for reading without a
   connection and a queue of writes made while disconnected — which is how offline reading
   is free rather than a paid tier. The cached Pulls are keyed to the account that fetched
@@ -283,7 +290,7 @@ What the app does put on your device, all of it first-party and all of it necess
   line will say so once it is something you can actually do.)
 - **The app itself**, cached by a service worker.
 
-Clearing your browser's site data removes all four, and signs you out.
+Clearing your browser's site data removes all of it, and signs you out.
 
 Read-aloud uses your browser's built-in speech synthesis. **No audio is recorded, and nothing
 is sent to us.**

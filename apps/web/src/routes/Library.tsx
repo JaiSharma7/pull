@@ -17,8 +17,10 @@ import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
 import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
+import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import type { Track } from '../lib/player.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
-import { speak } from '../lib/speech.js';
+import { speechSupported } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import {
   MAX_DEPTH,
@@ -57,6 +59,13 @@ const FILTERS: { id: LibraryFilter; label: string }[] = [
   { id: 'read-later', label: 'Read later' },
   { id: 'archived', label: 'Archived' },
 ];
+
+/**
+ * Whether this browser can speak at all, decided once — the same reasoning
+ * `Feed` gives: a capability cannot change between renders, and a control that
+ * cannot work is withheld rather than drawn dead.
+ */
+const CAN_SPEAK = speechSupported();
 
 export function Library({ userId }: { userId: string }) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
@@ -106,6 +115,19 @@ export function Library({ userId }: { userId: string }) {
      preference, not a property of any single saved idea. */
   const [depth, setDepth] = useState(1);
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+
+  /*
+   * The queue lives above the shell, so the Library hands it tracks rather than
+   * speaking anything itself. This screen is where listening to a whole source
+   * becomes worth having: a reader with fourteen kept ideas from one book has a
+   * walk's worth of material and, until now, fourteen presses to hear it.
+   */
+  const player = usePlayer();
+  const trackFor = (item: LibraryItem, title: string): Track => ({
+    id: item.id,
+    title,
+    text: textAtDepth(item, depth),
+  });
   /*
    * The graph view's numbers come from `get_user_knowledge_graph` — the same RPC the
    * `/graph` destination reads — and not from anything derivable here.
@@ -881,6 +903,25 @@ export function Library({ userId }: { userId: string }) {
                 )}
               </p>
 
+              {/*
+                A source is a listening session.
+                `enqueue` de-duplicates on the Pull's id, so pressing this twice adds
+                nothing the second time and pressing it after queueing two cards by hand
+                adds only the twelve that were not already there. Withheld when the
+                browser cannot speak, like every other Listen control.
+              */}
+              {CAN_SPEAK && group.items.length > 0 && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    player.enqueue(group.items.map((item) => trackFor(item, group.title)))
+                  }
+                >
+                  Listen to this collection
+                </button>
+              )}
+
               {open &&
                 group.items.map((item) => (
                   <div key={item.id} className="library__item">
@@ -895,7 +936,24 @@ export function Library({ userId }: { userId: string }) {
                       saved
                       depth={depth}
                       onDepthChange={setDepth}
-                      onListen={() => speak(textAtDepth(item, depth))}
+                      listening={isPlaying(player.state, item.id)}
+                      onListen={
+                        CAN_SPEAK
+                          ? () => {
+                              if (isPlaying(player.state, item.id)) player.stop();
+                              else player.playNow(trackFor(item, group.title));
+                            }
+                          : undefined
+                      }
+                      queued={isQueued(player.state, item.id)}
+                      onQueue={
+                        CAN_SPEAK
+                          ? () => {
+                              if (isQueued(player.state, item.id)) player.remove(item.id);
+                              else player.enqueue([trackFor(item, group.title)]);
+                            }
+                          : undefined
+                      }
                       onShare={() => void share(item, group.title)}
                       shareLabel={shareLabel(shareCapability(navigator))}
                     />

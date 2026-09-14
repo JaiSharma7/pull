@@ -14,12 +14,14 @@ import {
   readCachedPulls,
 } from '../lib/offline.js';
 import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
+import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import type { Track } from '../lib/player.js';
 import { IN_VIEW_THRESHOLDS, isGenuinelyInView } from '../lib/in-view.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
-import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
+import { speechSupported } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
@@ -118,8 +120,16 @@ export function Feed({
    */
   const [moreError, setMoreError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  /** The card being read aloud, if any. Null is silence. */
-  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  /*
+   * Listening is the player's, not the feed's.
+   *
+   * This screen used to hold a `speakingId` and call `speak` directly, which made
+   * playback a property of a mounted card: scrolling on left the voice running with
+   * no control that could reach it, and the tab switch that hides this component
+   * would have orphaned it entirely. The queue now lives above the shell
+   * (`components/PlayerProvider.tsx`) and the feed only hands it tracks.
+   */
+  const player = usePlayer();
 
   /*
    * What the share control actually did, which was previously unobservable.
@@ -612,38 +622,54 @@ export function Feed({
   );
 
   /*
+   * A card, as something to hear.
+   *
+   * The text is taken at the reader's CURRENT depth, which is why this is built at
+   * the moment of the press rather than stored with the queue: "Listen" on a card
+   * showing the claim should read the claim, and on the same card opened to the
+   * full argument should read the argument.
+   */
+  const trackFor = useCallback(
+    (row: FeedRow): Track => ({
+      id: row.id,
+      title: row.work.title,
+      text: textAtDepth({ ...row, hasSource: Boolean(onOpenSource) }, depth),
+    }),
+    [depth, onOpenSource],
+  );
+
+  /*
    * Listen, and stop listening.
    *
-   * `speechSupported()` and `stopSpeaking()` were exported from `lib/speech.ts` and
-   * called from nowhere, so playback was a one-way door: start a card reading, scroll
-   * on, and it kept talking with no control that could stop it. Audio is one of the
-   * five capabilities law 3 promises free forever, and free is exactly when it has to
-   * work properly.
-   *
-   * One card speaks at a time — `speak` cancels whatever is already running, so
-   * tracking a single id matches what the browser actually does.
+   * Pressing Listen on the card that is already playing stops the player rather than
+   * restarting it, which is the toggle `PullCard`'s `listening` prop describes.
+   * Pressing it on any other card plays that one next — `playNow` keeps the queue
+   * and puts the card after the current track, so a reader who has queued five
+   * things and then hears one they want now does not lose the other four.
    */
   const onListen = useCallback(
     (row: FeedRow) => {
-      if (speakingId === row.id) {
-        stopSpeaking();
-        setSpeakingId(null);
+      if (isPlaying(player.state, row.id)) {
+        player.stop();
         return;
       }
-      speak(textAtDepth({ ...row, hasSource: Boolean(onOpenSource) }, depth), {
-        // Guarded on the id: cancelling the previous utterance fires *its* `onend`,
-        // and without the check that ending would clear the card that just started.
-        onEnd: () => setSpeakingId((id) => (id === row.id ? null : id)),
-      });
-      setSpeakingId(row.id);
+      player.playNow(trackFor(row));
     },
-    [speakingId, depth, onOpenSource],
+    [player, trackFor],
   );
 
-  // Speech outlives the component — `speechSynthesis` is global — so a reader who
-  // signs out mid-sentence would otherwise be followed by a voice with no UI left to
-  // stop it.
-  useEffect(() => () => stopSpeaking(), []);
+  /*
+   * Queue, and unqueue. The queue is the reader's list, so the same press takes a
+   * card back out of it; `remove` on the track being spoken moves the player on
+   * rather than leaving it reading something the reader just removed.
+   */
+  const onQueue = useCallback(
+    (row: FeedRow) => {
+      if (isQueued(player.state, row.id)) player.remove(row.id);
+      else player.enqueue([trackFor(row)]);
+    },
+    [player, trackFor],
+  );
 
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
@@ -958,8 +984,10 @@ export function Feed({
             onRead={() => onRead(item.row, item.index)}
             onVisible={(visible) => onCardVisible(item.row.id, visible)}
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
-            listening={speakingId === item.row.id}
+            listening={isPlaying(player.state, item.row.id)}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
+            queued={isQueued(player.state, item.row.id)}
+            onQueue={CAN_SPEAK ? () => onQueue(item.row) : undefined}
             onShare={() => void share(item.row)}
             shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}
@@ -1003,6 +1031,8 @@ function PullCardInView({
   onOpenSource,
   onListen,
   listening,
+  onQueue,
+  queued,
   onShare,
   shareNote: shareOutcomeNote,
   shareLabel: shareControlLabel,
@@ -1019,6 +1049,9 @@ function PullCardInView({
   /** Absent where the browser cannot speak, so no dead control is rendered. */
   onListen?: () => void;
   listening: boolean;
+  /** Absent for the same reason `onListen` is. */
+  onQueue?: () => void;
+  queued: boolean;
   onShare: () => void;
   /** What the last share attempt did, or null when there is nothing to say. */
   shareNote: string | null;
@@ -1119,6 +1152,8 @@ function PullCardInView({
         onSave={onSave}
         onListen={onListen}
         listening={listening}
+        onQueue={onQueue}
+        queued={queued}
         onOpenSource={onOpenSource}
         onShare={onShare}
         shareLabel={shareControlLabel}

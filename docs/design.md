@@ -101,6 +101,19 @@ by layout. So:
 - **Never slide the next card into frame.** Advancing is the reader's act.
 - **The end is a screen, not an absence.** `Enough` exists because a feed that merely
   runs out of content has told the reader nothing.
+- **The listening queue advances itself, and that is not an exception.** A queue is
+  built by the reader one press at a time, is finite, never refills itself, and ends —
+  the bar disappears with it. That is a playlist. What law 7 forbids is an infinite
+  runway nobody asked for, and reading is still never advanced for anyone.
+
+The player bar is held to the same rules as everything else on screen. It is a hairline
+rule and a line of mono over the same paper: **never a full-bleed band of colour, never a
+shadow to lift it, and never a scrubber** — `speechSynthesis` has no timeline, so a
+progress bar would be a control that lies about what it can do. It tracks the reading
+column rather than the window, it says where the reader is in the queue in words
+("Listening · 2 of 5 · Meditations"), it rises once and does not under
+`prefers-reduced-motion`, and the shell reserves room at its foot so `Enough` and the
+Colophon — the two visible edges of a session — are never underneath it.
 
 A useful test: if a screenshot of this app could be mistaken for a video feed with the
 sound off, the layout is wrong.

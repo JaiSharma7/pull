@@ -3,6 +3,8 @@ import type { Session } from '@supabase/supabase-js';
 import { Settings } from './routes/Settings.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
+import { PlayerBar } from './components/PlayerBar.js';
+import { PlayerProvider } from './components/PlayerProvider.js';
 import { Daily } from './routes/Daily.js';
 import { Explore } from './routes/Explore.js';
 import { History } from './routes/History.js';
@@ -744,63 +746,73 @@ export function App() {
   if (session && owesFactor)
     return <SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />;
 
+  /*
+   * The player wraps the whole shell, because a queue outliving the screen it was
+   * started from is the entire point of it: the bar has to survive a tab change and
+   * a navigation, and every screen that can hand it something — Feed, Library,
+   * Source, Appearance — has to reach the same one.
+   *
+   * `durable` is false for a guest. A guest's queue is a reading list belonging to
+   * an anonymous account that the sweep deletes, kept in this tab and no longer.
+   */
   const shell = (
-    <div className="shell">
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
+    <PlayerProvider userId={session?.user.id ?? null} durable={!visitor && !guest}>
+      <div className="shell">
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
 
-      <header className="shell__masthead">
-        <span className="shell__brand">
-          <img
-            className="shell__logo"
-            src="/brand/wordmark.png"
-            alt="What a Pull"
-            width="1000"
-            height="225"
-          />
-        </span>
+        <header className="shell__masthead">
+          <span className="shell__brand">
+            <img
+              className="shell__logo"
+              src="/brand/wordmark.png"
+              alt="What a Pull"
+              width="1000"
+              height="225"
+            />
+          </span>
 
-        {/*
+          {/*
           The sections live in the masthead below 60rem and in the left rail
           above it. Rendering both and hiding one would put two controls with
           the same name in the accessibility tree, so the rail is the only
           copy on wide screens and this one steps aside for it.
         */}
-        <nav aria-label="Sections" className="shell__masthead-nav">
-          {!visitor &&
-            SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="btn btn--plain shell__masthead-item"
-                aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
-                onClick={() => goToTab(s.id)}
-              >
-                {s.label}
-              </button>
-            ))}
-          {/*
+          <nav aria-label="Sections" className="shell__masthead-nav">
+            {!visitor &&
+              SECTIONS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="btn btn--plain shell__masthead-item"
+                  aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
+                  onClick={() => goToTab(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            {/*
               A destination is current when its URL is open, and a section is
               current only when no route is. Without the `!routeOpen` above, a
               reader on /search had two elements marked aria-current="page" —
               "For You" and "Search" — which a screen reader reports as two
               current locations in one navigation.
             */}
-          {destinations.map((d) => (
-            <button
-              key={d.path}
-              type="button"
-              className="btn btn--plain shell__masthead-item"
-              aria-current={isPath(path, d.path) ? 'page' : undefined}
-              onClick={() => navigate(d.path)}
-            >
-              {d.label}
-            </button>
-          ))}
-        </nav>
+            {destinations.map((d) => (
+              <button
+                key={d.path}
+                type="button"
+                className="btn btn--plain shell__masthead-item"
+                aria-current={isPath(path, d.path) ? 'page' : undefined}
+                onClick={() => navigate(d.path)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </nav>
 
-        {/*
+          {/*
             In the masthead rather than in Preferences, because it is a reading control
             and the moment a reader wants it is while they are reading. Burying a
             display setting two screens away means it is found once and never again.
@@ -808,33 +820,33 @@ export function App() {
             The masthead itself stays visible in focus mode: a full-screen reading mode
             with no visible way out is the pattern this product exists not to be.
           */}
-        {/*
+          {/*
           Wrapped, so the trailing controls stay together and stay right. The auto margin
           moved off this button and onto the group: an auto margin resolves per flex line,
           so with three trailing children it pushed only the ones sharing its line and let
           the last wrap alone to the left under the others.
         */}
-        <span className="shell__actions">
-          <button
-            type="button"
-            className="btn btn--plain"
-            aria-pressed={focus}
-            title="Larger type, no rails. The line length stays the same."
-            onClick={() => {
-              const next = !focus;
-              setFocus(next);
-              storeFocus(next);
-              // Inside the click, because `requestFullscreen` is rejected outside a
-              // user gesture. Awaiting it would also delay the CSS half behind a
-              // permission decision the CSS half does not depend on.
-              void (next ? enterFullscreen(document) : exitFullscreen(document));
-            }}
-          >
-            {focus ? 'Exit focus' : 'Focus'}
-          </button>
+          <span className="shell__actions">
+            <button
+              type="button"
+              className="btn btn--plain"
+              aria-pressed={focus}
+              title="Larger type, no rails. The line length stays the same."
+              onClick={() => {
+                const next = !focus;
+                setFocus(next);
+                storeFocus(next);
+                // Inside the click, because `requestFullscreen` is rejected outside a
+                // user gesture. Awaiting it would also delay the CSS half behind a
+                // permission decision the CSS half does not depend on.
+                void (next ? enterFullscreen(document) : exitFullscreen(document));
+              }}
+            >
+              {focus ? 'Exit focus' : 'Focus'}
+            </button>
 
-          {visitor ? (
-            /*
+            {visitor ? (
+              /*
               A door, not a wall. A visitor reached this screen through a shared
               link or the catalogue; the offer to keep what they find is the
               reason to sign in, and it belongs where they already are rather
@@ -844,17 +856,17 @@ export function App() {
               it: `#p-<pullId>` is the idea that was shared, and a sign-in that
               returns to the source without it returns to the wrong place.
             */
-            <button
-              type="button"
-              className="btn btn--plain"
-              onClick={() =>
-                navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
-              }
-            >
-              Sign in to keep these
-            </button>
-          ) : guest ? (
-            /*
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() =>
+                  navigate(`/?next=${encodeURIComponent(readLocation() + window.location.hash)}`)
+                }
+              >
+                Sign in to keep these
+              </button>
+            ) : guest ? (
+              /*
             A marker and a way out, and neither of them is `signOut` here.
 
             The first draft put "Sign in" in the pixel where every account holder's
@@ -881,70 +893,70 @@ export function App() {
             second, deliberate press. /account is not a public route, so `signOut()`
             there does land on the sign-in screen -- the one place it always worked.
           */
-            <span className="shell__guest">
-              <span className="meta">Reading as a guest</span>
-              {/*
+              <span className="shell__guest">
+                <span className="meta">Reading as a guest</span>
+                {/*
               The control disappears on the page it leads to. `navigate` pushes
               unconditionally, so pressing it from /account changed nothing on screen and
               grew the Back stack by one — a button that looks live, does nothing visible,
               and costs the reader a press to undo. The marker stays, because the fact it
               states is still true.
             */}
-              {!accountOpen && (
-                <button
-                  type="button"
-                  className="btn btn--plain"
-                  onClick={() => navigate('/account')}
-                >
-                  Sign in
-                </button>
-              )}
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--plain"
-              onClick={() => void supabase.auth.signOut()}
-            >
-              Sign out
-            </button>
-          )}
-        </span>
-      </header>
+                {!accountOpen && (
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => navigate('/account')}
+                  >
+                    Sign in
+                  </button>
+                )}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void supabase.auth.signOut()}
+              >
+                Sign out
+              </button>
+            )}
+          </span>
+        </header>
 
-      <div className="shell__body">
-        <aside className="shell__rail" aria-label="Sections">
-          <p className="meta shell__group">{visitor ? 'Browse' : 'Reading'}</p>
-          <nav className="shell__nav">
-            {!visitor &&
-              SECTIONS.map((s) => (
+        <div className="shell__body">
+          <aside className="shell__rail" aria-label="Sections">
+            <p className="meta shell__group">{visitor ? 'Browse' : 'Reading'}</p>
+            <nav className="shell__nav">
+              {!visitor &&
+                SECTIONS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="btn btn--plain shell__nav-item"
+                    aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
+                    onClick={() => goToTab(s.id)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              {destinations.map((d) => (
                 <button
-                  key={s.id}
+                  key={d.path}
                   type="button"
                   className="btn btn--plain shell__nav-item"
-                  aria-current={tab === s.id && !routeOpen ? 'page' : undefined}
-                  onClick={() => goToTab(s.id)}
+                  aria-current={isPath(path, d.path) ? 'page' : undefined}
+                  onClick={() => navigate(d.path)}
                 >
-                  {s.label}
+                  {d.label}
                 </button>
               ))}
-            {destinations.map((d) => (
-              <button
-                key={d.path}
-                type="button"
-                className="btn btn--plain shell__nav-item"
-                aria-current={isPath(path, d.path) ? 'page' : undefined}
-                onClick={() => navigate(d.path)}
-              >
-                {d.label}
-              </button>
-            ))}
-          </nav>
-        </aside>
+            </nav>
+          </aside>
 
-        <main id="main" className="shell__main">
-          <div className="shell__column">
-            {/*
+          <main id="main" className="shell__main">
+            <div className="shell__column">
+              {/*
               The feed is hidden rather than unmounted, and that is a correctness
               choice rather than a performance one.
 
@@ -965,83 +977,83 @@ export function App() {
               from the accessibility tree, so the hidden feed is not reachable by a
               screen reader or by tabbing.
             */}
-            {session && (
-              <div hidden={tab !== 'feed' || routeOpen}>
-                <Feed
-                  userId={session.user.id}
-                  onStats={setStats}
-                  refreshKey={prefsSaved}
+              {session && (
+                <div hidden={tab !== 'feed' || routeOpen}>
+                  <Feed
+                    userId={session.user.id}
+                    onStats={setStats}
+                    refreshKey={prefsSaved}
+                    onOpenSource={(id) => navigate(`/source/${id}`)}
+                  />
+                </div>
+              )}
+              {sourceId !== null && (
+                <Source
+                  key={`${sourceId}:${summaryParam ?? ''}`}
+                  workId={sourceId}
+                  summaryId={summaryParam ?? undefined}
+                  userId={session?.user.id ?? null}
+                  onNavigate={navigate}
+                  onTitle={reportRouteTitle}
+                />
+              )}
+              {pullId !== null && (
+                <PullRedirect
+                  pullId={pullId}
+                  userId={session?.user.id ?? null}
+                  onReplace={replaceWith}
+                  onNavigate={navigate}
+                />
+              )}
+              {exploreOpen && <Explore onNavigate={navigate} />}
+              {pathsOpen && <Paths userId={session?.user.id ?? null} onNavigate={navigate} />}
+              {pathSlug !== null && (
+                <Path
+                  key={pathSlug}
+                  slug={decodeSegment(pathSlug)}
+                  userId={session?.user.id ?? null}
+                  onNavigate={navigate}
+                  onTitle={reportRouteTitle}
+                  onGoToReview={() => goToTab('review')}
+                />
+              )}
+              {graphOpen && !guest && (
+                <Graph
+                  userId={session?.user.id ?? null}
                   onOpenSource={(id) => navigate(`/source/${id}`)}
                 />
-              </div>
-            )}
-            {sourceId !== null && (
-              <Source
-                key={`${sourceId}:${summaryParam ?? ''}`}
-                workId={sourceId}
-                summaryId={summaryParam ?? undefined}
-                userId={session?.user.id ?? null}
-                onNavigate={navigate}
-                onTitle={reportRouteTitle}
-              />
-            )}
-            {pullId !== null && (
-              <PullRedirect
-                pullId={pullId}
-                userId={session?.user.id ?? null}
-                onReplace={replaceWith}
-                onNavigate={navigate}
-              />
-            )}
-            {exploreOpen && <Explore onNavigate={navigate} />}
-            {pathsOpen && <Paths userId={session?.user.id ?? null} onNavigate={navigate} />}
-            {pathSlug !== null && (
-              <Path
-                key={pathSlug}
-                slug={decodeSegment(pathSlug)}
-                userId={session?.user.id ?? null}
-                onNavigate={navigate}
-                onTitle={reportRouteTitle}
-                onGoToReview={() => goToTab('review')}
-              />
-            )}
-            {graphOpen && !guest && (
-              <Graph
-                userId={session?.user.id ?? null}
-                onOpenSource={(id) => navigate(`/source/${id}`)}
-              />
-            )}
-            {/* No `onComplete` destination. It used to navigate to /metacognition, which
+              )}
+              {/* No `onComplete` destination. It used to navigate to /metacognition, which
                 re-implies by navigation the thing the import does not do: nothing here
                 reaches the Delta, so landing the reader on the ROI dashboard afterwards
                 suggests it did. */}
-            {importOpen && !guest && <Ingestion />}
+              {importOpen && !guest && <Ingestion />}
 
-            {demoOpen && (
-              <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
-            )}
-            {metacognitionOpen && !guest && (
-              <MetacognitiveDashboard
-                userId={session?.user.id ?? null}
-                onNavigate={navigate}
-                onGoToReview={() => goToTab('review')}
-              />
-            )}
-            {(settingsOpen || appearanceOpen || (accountOpen && session && !guest)) && (
-              <Settings
-                session={session}
-                section={
-                  accountOpen
-                    ? 'account'
-                    : appearanceOpen
-                      ? 'appearance'
-                      : queryParam(path, 'section')
-                }
-                onNavigate={navigate}
-                onPreferencesSaved={() => setPrefsSaved((n) => n + 1)}
-              />
-            )}
-            {/*
+              {demoOpen && (
+                <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
+              )}
+              {metacognitionOpen && !guest && (
+                <MetacognitiveDashboard
+                  userId={session?.user.id ?? null}
+                  onNavigate={navigate}
+                  onGoToReview={() => goToTab('review')}
+                />
+              )}
+              {(settingsOpen || appearanceOpen || (accountOpen && session && !guest)) && (
+                <Settings
+                  session={session}
+                  section={
+                    accountOpen
+                      ? 'account'
+                      : appearanceOpen
+                        ? 'appearance'
+                        : queryParam(path, 'section')
+                  }
+                  onNavigate={navigate}
+                  onPreferencesSaved={() => setPrefsSaved((n) => n + 1)}
+                />
+              )}
+              {/*
               An answer rather than an empty column.
 
               `/account` is withheld from a guest's navigation, and a URL is still a URL:
@@ -1051,7 +1063,7 @@ export function App() {
               code in a mailbox — so rendering it would be a page of things that cannot
               complete. This says which one thing to do instead.
             */}
-            {/*
+              {/*
               The same answer `/account` gives, for the same reason and now for the three
               destinations gated from a guest above. A URL is still a URL: adding
               `&& !guest` to the routes without a fallback meant a guest arriving at
@@ -1059,17 +1071,17 @@ export function App() {
               a rail and an entirely empty main — `routeOpen` hides the feed, and
               `isKnownPath` matches, so the 404 branch does not catch it either.
             */}
-            {(graphOpen || importOpen || metacognitionOpen) && guest && (
-              <section className="stack measure">
-                <p className="meta">Reading as a guest</p>
-                <h1>This one needs an account.</h1>
-                <p>
-                  A guest session keeps your reading on this device and nothing else. These screens
-                  are built from a knowledge model that belongs to an account — what you have read,
-                  how well you are holding on to it, and what connects to what — so there is nothing
-                  here to show you yet.
-                </p>
-                {/*
+              {(graphOpen || importOpen || metacognitionOpen) && guest && (
+                <section className="stack measure">
+                  <p className="meta">Reading as a guest</p>
+                  <h1>This one needs an account.</h1>
+                  <p>
+                    A guest session keeps your reading on this device and nothing else. These
+                    screens are built from a knowledge model that belongs to an account — what you
+                    have read, how well you are holding on to it, and what connects to what — so
+                    there is nothing here to show you yet.
+                  </p>
+                  {/*
                   What /account says, because it is what actually happens. This read
                   "everything you have read as a guest carries over when you sign in",
                   which is false — `signInWithOtp` mints a different `auth.users` row,
@@ -1078,36 +1090,36 @@ export function App() {
                   most likely to be acted on: it sat under a prompt to sign in, on a screen
                   a guest reaches only after building up something to lose.
                 */}
-                {/* Body text, not `.meta`. The rule and its reason are written 25 lines
+                  {/* Body text, not `.meta`. The rule and its reason are written 25 lines
                     below on /account: `.meta` is a chip face, all-caps destroys word shape,
                     and it is wrong for the one sentence on a screen that carries a
                     consequence — which this now does. */}
-                <p>
-                  Signing in starts a fresh account, so what you have read as a guest stays behind.
-                  Worth knowing before you do it.
-                </p>
-                <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
-                  Back to reading
-                </button>
-              </section>
-            )}
+                  <p>
+                    Signing in starts a fresh account, so what you have read as a guest stays
+                    behind. Worth knowing before you do it.
+                  </p>
+                  <button type="button" className="btn btn--primary" onClick={() => navigate('/')}>
+                    Back to reading
+                  </button>
+                </section>
+              )}
 
-            {accountOpen && guest && (
-              <section className="stack measure">
-                <p className="meta">Account</p>
-                {/*
+              {accountOpen && guest && (
+                <section className="stack measure">
+                  <p className="meta">Account</p>
+                  {/*
                   A plain `h1`, matching Account.tsx. `.prose__heading` carries a 3rem
                   top margin and expects to be the first child of a `.prose`; used here
                   it wins over the stack's 1rem and floats the eyebrow away from its own
                   heading, so the two versions of this route open differently.
                 */}
-                <h1>You are reading as a guest.</h1>
-                <p>
-                  There is no account to manage here yet — every control on this screen acts on an
-                  email address, and a guest session has none. That is also what makes the next part
-                  worth reading before you press it.
-                </p>
-                {/*
+                  <h1>You are reading as a guest.</h1>
+                  <p>
+                    There is no account to manage here yet — every control on this screen acts on an
+                    email address, and a guest session has none. That is also what makes the next
+                    part worth reading before you press it.
+                  </p>
+                  {/*
                   Plain body text, deliberately not `.meta`.
 
                   `.meta` is uppercase mono at --step--1: a chip face, right for "For You" and
@@ -1115,12 +1127,12 @@ export function App() {
                   consequence. All-caps destroys word shape, and this is the sentence a reader
                   has to actually read rather than glance at.
                 */}
-                <p id="guest-consequence">
-                  Signing in starts a <strong>fresh account</strong>. This guest session ends when
-                  you do, and it cannot be reopened — there is no address to send a code to — so
-                  what you have read and stashed as a guest stays behind.
-                </p>
-                {/*
+                  <p id="guest-consequence">
+                    Signing in starts a <strong>fresh account</strong>. This guest session ends when
+                    you do, and it cannot be reopened — there is no address to send a code to — so
+                    what you have read and stashed as a guest stays behind.
+                  </p>
+                  {/*
                   The expiry, said here as well as on the sign-in screen.
 
                   A guest reads the sign-in screen once, before they have anything to lose, and
@@ -1128,13 +1140,13 @@ export function App() {
                   that matters — everything here goes in a day — is only ever shown to somebody
                   who has not yet made anything worth keeping.
                 */}
-                <p>
-                  This session also ends on its own. Closing this tab ends it here, the way a
-                  private window does, and the account behind it is deleted a day after you last use
-                  it, along with everything keyed to it. Signing in with an email address is what
-                  makes any of it stay.
-                </p>
-                {/*
+                  <p>
+                    This session also ends on its own. Closing this tab ends it here, the way a
+                    private window does, and the account behind it is deleted a day after you last
+                    use it, along with everything keyed to it. Signing in with an email address is
+                    what makes any of it stay.
+                  </p>
+                  {/*
                   Two presses, which is the shape every irreversible action on the real
                   Account screen already takes: "make them do something that could not be a
                   misclick". This one has less recoverability than any of them — no address,
@@ -1142,7 +1154,7 @@ export function App() {
                   bookmark, primed to hit the primary button because they came to sign in.
                   Oxblood is not what makes it safe; the second press is.
                 */}
-                {/*
+                  {/*
                   `.shell__confirm`, not `.stack`, and the difference is visible rather than
                   pedantic. `.stack` separates children with `margin-block-start` alone,
                   which does nothing useful between two `<button>`s: they are
@@ -1151,7 +1163,7 @@ export function App() {
                   butted against "KEEP READING AS A GUEST" with a text node's worth of
                   space between them, destructive option first.
                 */}
-                {/*
+                  {/*
                   Announced, because focus alone does not say what happened.
                   Pressing the trigger swaps it for two different buttons and moves focus
                   to the safe one, so a screen reader says "Keep reading as a guest,
@@ -1161,166 +1173,175 @@ export function App() {
                   text is what gets announced; rendering the region itself conditionally
                   is the version that stays silent.
                 */}
-                <p className="sr-only" role="status">
-                  {guestLeaving
-                    ? 'Confirm ending this guest session. This cannot be undone. Two choices ' +
-                      'follow: end it and sign in, or keep reading as a guest.'
-                    : ''}
-                </p>
-                <div className="shell__confirm">
-                  {guestLeaving ? (
-                    <>
+                  <p className="sr-only" role="status">
+                    {guestLeaving
+                      ? 'Confirm ending this guest session. This cannot be undone. Two choices ' +
+                        'follow: end it and sign in, or keep reading as a guest.'
+                      : ''}
+                  </p>
+                  <div className="shell__confirm">
+                    {guestLeaving ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn--primary"
+                          aria-describedby="guest-consequence"
+                          onClick={() => {
+                            // Navigate first: `signOut()` alone leaves the address at
+                            // /account, which keeps the tab title reading "Account" over the
+                            // sign-in screen and drops the next guest straight back onto this
+                            // panel instead of the feed.
+                            navigate('/');
+                            void supabase.auth.signOut();
+                          }}
+                        >
+                          Yes — end it and sign in
+                        </button>
+                        <button
+                          type="button"
+                          ref={guestKeepRef}
+                          className="btn btn--plain"
+                          onClick={() => {
+                            // Focus returns to the control that opened the confirmation,
+                            // which is where a keyboard reader was before they asked.
+                            guestWantsFocus.current = 'end';
+                            setGuestLeaving(false);
+                          }}
+                        >
+                          Keep reading as a guest
+                        </button>
+                      </>
+                    ) : (
                       <button
                         type="button"
+                        ref={guestEndRef}
                         className="btn btn--primary"
                         aria-describedby="guest-consequence"
                         onClick={() => {
-                          // Navigate first: `signOut()` alone leaves the address at
-                          // /account, which keeps the tab title reading "Account" over the
-                          // sign-in screen and drops the next guest straight back onto this
-                          // panel instead of the feed.
-                          navigate('/');
-                          void supabase.auth.signOut();
+                          guestWantsFocus.current = 'keep';
+                          setGuestLeaving(true);
                         }}
                       >
-                        Yes — end it and sign in
+                        End this guest session and sign in
                       </button>
-                      <button
-                        type="button"
-                        ref={guestKeepRef}
-                        className="btn btn--plain"
-                        onClick={() => {
-                          // Focus returns to the control that opened the confirmation,
-                          // which is where a keyboard reader was before they asked.
-                          guestWantsFocus.current = 'end';
-                          setGuestLeaving(false);
-                        }}
-                      >
-                        Keep reading as a guest
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      ref={guestEndRef}
-                      className="btn btn--primary"
-                      aria-describedby="guest-consequence"
-                      onClick={() => {
-                        guestWantsFocus.current = 'keep';
-                        setGuestLeaving(true);
-                      }}
-                    >
-                      End this guest session and sign in
-                    </button>
-                  )}
-                </div>
-              </section>
-            )}
-            {topicSlug !== null && (
-              // Keyed on the slug so moving between topics is a fresh
-              // component rather than one that has to remember to reset its
-              // limit — the same reason `Source` is keyed on its work id.
-              <Topic key={topicSlug} slug={decodeSegment(topicSlug)} onNavigate={navigate} />
-            )}
-            {searchOpen && (
-              <Search
-                query={searchQuery}
-                onNavigate={navigate}
-                onSearch={(q) => navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search')}
-              />
-            )}
-            {session && tab === 'daily' && !routeOpen && (
-              <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
-            )}
-            {session && tab === 'review' && !routeOpen && <Review />}
-            {session && tab === 'library' && !routeOpen && <Library userId={session.user.id} />}
-            {session && tab === 'history' && !routeOpen && (
-              <History onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
-            )}
-            {session && tab === 'preferences' && !routeOpen && (
-              <Preferences
-                userId={session.user.id}
-                onDone={() => {
-                  setPrefsSaved((n) => n + 1);
-                  setTab('feed');
-                }}
-              />
-            )}
-          </div>
-        </main>
+                    )}
+                  </div>
+                </section>
+              )}
+              {topicSlug !== null && (
+                // Keyed on the slug so moving between topics is a fresh
+                // component rather than one that has to remember to reset its
+                // limit — the same reason `Source` is keyed on its work id.
+                <Topic key={topicSlug} slug={decodeSegment(topicSlug)} onNavigate={navigate} />
+              )}
+              {searchOpen && (
+                <Search
+                  query={searchQuery}
+                  onNavigate={navigate}
+                  onSearch={(q) => navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search')}
+                />
+              )}
+              {session && tab === 'daily' && !routeOpen && (
+                <Daily onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+              )}
+              {session && tab === 'review' && !routeOpen && <Review />}
+              {session && tab === 'library' && !routeOpen && <Library userId={session.user.id} />}
+              {session && tab === 'history' && !routeOpen && (
+                <History onNavigate={navigate} onGoToFeed={() => goToTab('feed')} />
+              )}
+              {session && tab === 'preferences' && !routeOpen && (
+                <Preferences
+                  userId={session.user.id}
+                  onDone={() => {
+                    setPrefsSaved((n) => n + 1);
+                    setTab('feed');
+                  }}
+                />
+              )}
+            </div>
+          </main>
 
-        {/*
+          {/*
             The tally is an account of one sitting — ideas met, kept, recalled,
             and the time the Delta spared. Every number in it is derived from a
             reader's own history, so for a visitor it would be five zeroes and a
             dash presented as a result. Omitted rather than emptied.
           */}
-        {!visitor && (
-          <aside className="shell__aside" aria-label="This session">
-            <div className="shell__group">
-              <p className="meta">This session</p>
-              <div className="shell__stat">
-                <span>Ideas met</span>
-                <span className="shell__stat-value">{stats?.read ?? 0}</span>
+          {!visitor && (
+            <aside className="shell__aside" aria-label="This session">
+              <div className="shell__group">
+                <p className="meta">This session</p>
+                <div className="shell__stat">
+                  <span>Ideas met</span>
+                  <span className="shell__stat-value">{stats?.read ?? 0}</span>
+                </div>
+                <div className="shell__stat">
+                  <span>Saved</span>
+                  <span className="shell__stat-value">{stats?.saved ?? 0}</span>
+                </div>
+                <div className="shell__stat">
+                  <span>Recalled</span>
+                  <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
+                </div>
               </div>
-              <div className="shell__stat">
-                <span>Saved</span>
-                <span className="shell__stat-value">{stats?.saved ?? 0}</span>
-              </div>
-              <div className="shell__stat">
-                <span>Recalled</span>
-                <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
-              </div>
-            </div>
 
-            {/*
+              {/*
             Time saved rather than time spent, in the one accent colour — it is
             the number the product is optimising for, and putting it here keeps
             it in view during a session instead of only at the end of one.
           */}
-            <div className="shell__group">
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'baseline',
-                }}
-              >
-                <p className="meta">The Delta</p>
-                {/* Same condition as `destinations` above, which withholds /metacognition
+              <div className="shell__group">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                  }}
+                >
+                  <p className="meta">The Delta</p>
+                  {/* Same condition as `destinations` above, which withholds /metacognition
                     from a guest. The two navigations disagreed: the rail offered a guest a
                     link the masthead deliberately hid, and the route would have refused it.
                     No arrow either — nothing else in the app labels a button that way. */}
-                {!visitor && !guest ? (
-                  <button
-                    type="button"
-                    className="btn btn--plain meta"
-                    style={{ textDecoration: 'underline' }}
-                    onClick={() => navigate('/metacognition')}
-                  >
-                    Your progress
-                  </button>
-                ) : null}
-              </div>
+                  {!visitor && !guest ? (
+                    <button
+                      type="button"
+                      className="btn btn--plain meta"
+                      style={{ textDecoration: 'underline' }}
+                      onClick={() => navigate('/metacognition')}
+                    >
+                      Your progress
+                    </button>
+                  ) : null}
+                </div>
 
-              <div className="shell__stat">
-                <span>Already knew</span>
-                <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
-              </div>
+                <div className="shell__stat">
+                  <span>Already knew</span>
+                  <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
+                </div>
 
-              <div className="shell__stat">
-                <span>Time saved</span>
-                <span className="shell__stat-value shell__stat-value--accent">
-                  {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
-                </span>
+                <div className="shell__stat">
+                  <span>Time saved</span>
+                  <span className="shell__stat-value shell__stat-value--accent">
+                    {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
+                  </span>
+                </div>
               </div>
-            </div>
-          </aside>
-        )}
+            </aside>
+          )}
+        </div>
+
+        {/*
+          Above the Colophon in reading order, and over it on screen. The bar is
+          fixed to the window, so this is where a screen reader meets it — after
+          the reading and before the footer — while `:root[data-listening]` keeps
+          the footer itself out from under it.
+        */}
+        <PlayerBar />
+
+        <Colophon onNavigate={navigate} />
       </div>
-
-      <Colophon onNavigate={navigate} />
-    </div>
+    </PlayerProvider>
   );
 
   /*

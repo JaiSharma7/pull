@@ -1,0 +1,114 @@
+/*
+ * The player bar.
+ *
+ * A hairline rule and a line of mono, fixed to the bottom of the window. It is
+ * the same paper as the page — never a full-bleed band of colour, never a
+ * shadow to lift it, because separation here is by rule like everywhere else.
+ *
+ * It is drawn only while something is queued, so the space reserved for it at
+ * the foot of the shell is spent only while it is being used.
+ */
+
+.player {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--surface-raised);
+  border-top: 1px solid var(--rule);
+  /* The home indicator on a phone, which sits over the bottom of the window. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/*
+ * The bar tracks the reading column rather than the window.
+ *
+ * Fixed to the viewport is where it has to live — that is what outliving a
+ * navigation means — but its contents belong over the column the reader is
+ * reading, not stretched across a 1400px display.
+ */
+.player__inner {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.player__now {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  /*
+   * One line, and the title is what gives way. "Listening · 2 of 5" is the part
+   * a listener needs at a glance; a long book title wrapping the bar to three
+   * rows on a phone would push the controls off the bottom of the window.
+   */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.player__sleep {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.player__select {
+  width: auto;
+  padding: var(--space-1) var(--space-2);
+}
+
+/*
+ * Room for the bar at the foot of the shell.
+ *
+ * Set on the root by the player engine while a queue exists, in the same shape
+ * focus mode uses, because the shell cannot see the player from where it is
+ * mounted. Without it `Enough` and the Colophon — the two places law 7 puts a
+ * visible edge on the session — end up underneath the one piece of chrome that
+ * is deliberately always on top.
+ */
+:root[data-listening='on'] .shell {
+  padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom));
+}
+
+/*
+ * It arrives from below, once, and only for a reader who has not asked
+ * otherwise. `base.css` already flattens every animation under
+ * `prefers-reduced-motion: reduce`; this states it as a condition rather than
+ * relying on a 0.01ms duration to be imperceptible.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .player {
+    animation: player-rise var(--transition) both;
+  }
+}
+
+:root[data-motion='reduced'] .player {
+  animation: none;
+}
+
+@keyframes player-rise {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: none;
+  }
+}
