@@ -118,6 +118,9 @@ export function Studio({
    * caused it, which is also what stops it being a synchronous set inside an effect.
    */
   function pick(next: string) {
+    // The chip already selected is not a change of source, and pressing it should not
+    // throw away a title being typed. Everything below is about LEAVING a source.
+    if (next === source) return;
     editing();
     setItemsFailed(null);
     /*
@@ -395,9 +398,14 @@ export function Studio({
       submission.current = null;
       setBudget(queued.budget);
       setNote(
-        queued.queue === 'fast'
-          ? `Started. ${queued.remainingToday} more today.`
-          : `Queued, starting in about ${waitMinutes(queued.delaySeconds)}. ${queued.remainingToday} more today.`,
+        // A replay of a job that is already over has no place in a queue to report, and
+        // `queue`/`delaySeconds` describe one — so saying "Started." here would sit
+        // directly above a row in the list below saying it did not finish.
+        queued.finished
+          ? 'You already asked for this one, and it has finished — it is in the list below.'
+          : queued.queue === 'fast'
+            ? `Started. ${queued.remainingToday} more today.`
+            : `Queued, starting in about ${waitMinutes(queued.delaySeconds)}. ${queued.remainingToday} more today.`,
       );
       if (!picked) setText('');
       reloadJobs();

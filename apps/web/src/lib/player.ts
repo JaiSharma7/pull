@@ -210,8 +210,23 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
           // In the queue, or earlier in this same batch: one entry either way, and the
           // newest text wins. Changed only when it actually differs, so an enqueue that
           // alters nothing still returns the same state object.
+          /*
+           * EXCEPT THE ONE BEING SPOKEN, which is the other half of this.
+           *
+           * Replacing the current track's text without bumping the epoch leaves the
+           * effect layer on `sameUtterance`, so it resumes rather than re-speaks: the
+           * voice finishes the old words while the queue holds the new ones. Bumping
+           * the epoch instead would restart the passage mid-sentence because the reader
+           * queued a source. So the track being read is left exactly as it is being
+           * read, and the entry agrees with the utterance until it ends.
+           */
+          const speaking = state.status !== 'idle' && already === state.index;
           const current = queue[already] ?? fresh[already - queue.length];
-          if (current && (current.text !== track.text || current.title !== track.title)) {
+          if (
+            !speaking &&
+            current &&
+            (current.text !== track.text || current.title !== track.title)
+          ) {
             replaced = true;
             if (already < queue.length) queue[already] = track;
             else fresh[already - queue.length] = track;

@@ -284,8 +284,12 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * catalogue row. `template`'s own adopt branch states the rule this follows:
        * nothing about a private generation should re-score or re-attribute a row.
        *
-       * A NEW work is a different matter and keeps its credit: it is the reader's own
-       * row, made from their own text, and nobody else's page changes.
+       * A NEW work is not a different matter either, which is the correction to the
+       * correction: `works` is keyed by `content_hash`, so the row a private paste
+       * creates is the row a later CANONICAL generation of the same text adopts —
+       * inheriting the byline somebody typed into a text box and the `user_owned`
+       * rights posture along with it, on what is by then a public catalogue page.
+       * Identity here is the text, not the creator, so a private job credits nobody.
        */
       const mayAmendShared = visibility === 'public';
 
@@ -360,7 +364,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
 
       const workId = (data as { id: string }).id;
       await fileUnderTopics(workId);
-      await creditAuthor(workId);
+      if (mayAmendShared) await creditAuthor(workId);
       return { workId, existing: false };
     },
 

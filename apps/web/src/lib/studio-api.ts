@@ -42,6 +42,20 @@ export interface Enqueued {
   remainingToday: number;
   /** `open | low | spent`. Never the figures — see `generation_budget_state()`. */
   budget: BudgetState;
+  /**
+   * Set when this answer is a REPLAY — the mutation id named a job that already exists,
+   * so nothing was queued and nothing was charged.
+   */
+  replayed?: boolean;
+  /**
+   * Set when that job is already over. `queue` and `delaySeconds` describe a place in a
+   * queue, which a finished job does not have, so the screen must not read them: saying
+   * "Started." above a job list that says it did not finish is the failure this field
+   * exists to prevent.
+   */
+  finished?: boolean;
+  /** The job's own status, present with `finished`. */
+  status?: string;
 }
 
 /**

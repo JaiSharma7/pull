@@ -76,14 +76,31 @@ describe('enqueue', () => {
    * words — and dropping them kept the short ones while the screen showed the long ones.
    */
   it('refreshes a queued track rather than dropping the press', () => {
-    const claim = { id: 'a', title: 'Meditations', text: 'The claim.' };
-    const argument = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+    const claim = { id: 'b', title: 'Meditations', text: 'The claim.' };
+    const argument = { id: 'b', title: 'Meditations', text: 'The claim, and the argument.' };
     const s = run([
-      { type: 'enqueue', tracks: [claim, track('b')] },
-      { type: 'enqueue', tracks: [argument, track('b')] },
+      { type: 'enqueue', tracks: [track('a'), claim] },
+      { type: 'enqueue', tracks: [track('a'), argument] },
     ]);
     expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
-    expect(s.queue[0]!.text).toBe(argument.text);
+    expect(s.queue[1]!.text).toBe(argument.text);
+  });
+
+  /*
+   * Except the one being spoken. Replacing its text without bumping the epoch leaves
+   * the effect layer resuming rather than re-speaking — the voice finishes the old
+   * words while the queue holds the new — and bumping the epoch would restart the
+   * passage mid-sentence because the reader queued a source.
+   */
+  it('leaves the track being spoken exactly as it is being spoken', () => {
+    const claim = { id: 'a', title: 'Meditations', text: 'The claim.' };
+    const argument = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+    const playing = run([{ type: 'enqueue', tracks: [claim] }]);
+    expect(playing.status).toBe('playing');
+
+    const after = playerReducer(playing, { type: 'enqueue', tracks: [argument] });
+    expect(after).toBe(playing);
+    expect(after.queue[0]!.text).toBe(claim.text);
   });
 
   it('returns the same state when nothing new arrives', () => {

@@ -615,6 +615,26 @@ begin
     raise exception 'a second submission was mistaken for a replay of the first';
   end if;
 
+  /*
+   * And a job that is OVER says so rather than reporting a place in the queue. The
+   * Studio prints "Started." on `queue = 'fast'`, so a replay of a submit whose job had
+   * since failed announced a summary that had already not happened.
+   */
+  perform set_config('role', 'postgres', true);
+  update public.generation_jobs set status = 'failed', finished_at = now()
+   where id = (once ->> 'jobId')::uuid;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader, 'role', 'authenticated')::text, true);
+
+  twice := public.enqueue_generation_job(
+    jsonb_build_object('title', 'Replayed', 'text', 'x'), mut);
+  if (twice ->> 'finished')::boolean is not true or (twice ->> 'status') <> 'failed' then
+    raise exception
+      'a replay of a job that had already failed answered %, so the screen says a summary '
+      'has started.', twice;
+  end if;
+
   raise notice 'spend_cap.sql: a replayed submit returns its job rather than buying another';
 end $$;
 

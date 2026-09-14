@@ -934,7 +934,13 @@ export function Source({
                   </p>
                 )}
 
-                {highlightHint === p.id ? (
+                {/*
+                  Behind the same gate as the button it points at. Turning the dial below
+                  the claim takes the Highlight control off the screen, and this was
+                  outside the gate — so the instruction stayed, naming a button that was
+                  not there and a passage that was not shown.
+                */}
+                {userId && bodyShown && highlightHint === p.id ? (
                   <p className="meta" role="status">
                     Select some words in this idea first, then press Highlight.
                   </p>

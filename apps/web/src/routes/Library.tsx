@@ -1474,6 +1474,11 @@ function Imported({ userId }: { userId: string }) {
        */
       setOpenWork(null);
       setItems(null);
+      // Back to `null` first, like the Try again path below and for the same reason: the
+      // three counts on screen describe the library before this undo, so leaving them
+      // standing kept "400 highlights from 6 books" and an Undo button for a batch that
+      // is gone until the refetches landed.
+      setState(null);
       setReloads((n) => n + 1);
     } catch (e: unknown) {
       console.error('Could not undo the import', e);

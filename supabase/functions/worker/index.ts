@@ -105,9 +105,12 @@ const supabase = createClient(
  * reader is then told the day's budget is spent. So the settle rides with the insert
  * here, the same way it rides with the ledger row there.
  *
- * Settled FIRST. If the insert collides on 23505 -- the expected case where a
- * `succeeded` row already exists for this attempt -- the money should still be
- * released, and the caller treats that collision as success.
+ * RECORDED FIRST, AND SETTLED UNLESS THE STEP ALREADY SUCCEEDED -- which is the
+ * opposite of what this said, and the body below is where the reasoning lives. A
+ * collision with a `succeeded` row means `record_job_step` has already released this
+ * step's money in its own transaction; settling again would take a share belonging to
+ * another call. A collision with a FAILED row means nothing has been released, so it
+ * settles. The caller treats the collision as success either way.
  */
 async function failUnbilled(
   jobId: string,
@@ -531,7 +534,23 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    const attempt = (last?.attempt ?? 0) + 1;
+    /*
+     * ONE ATTEMPT NUMBER PER DELIVERY, not per row already written.
+     *
+     * `(last.attempt ?? 0) + 1` is the same number for two deliveries that race, and
+     * `job_steps` is unique on `(job_id, step, attempt)` — so when a long provider call
+     * is redelivered at the 180 s visibility timeout and both calls return, the second
+     * one's `record_job_step` violates that key and the WHOLE transaction rolls back,
+     * ITS `cost_ledger` ROW WITH IT. Six cents of real spend then exists nowhere the cap
+     * can see, for ever, and 20260914070000's header — which says both calls reach the
+     * ledger through their own `record_job_step` — is only true if they can.
+     *
+     * `read_ct` is pgmq's own delivery counter, incremented before this function runs,
+     * so two deliveries of one message never share it. Taking the larger of the two
+     * keeps the number monotonic when a failed attempt did not manage to record itself,
+     * which is the case the `read_ct` bound below exists for.
+     */
+    const attempt = Math.max(msg.read_ct, (last?.attempt ?? 0) + 1);
 
     // Two bounds, because the first one can be lost. `attempt` comes from
     // `job_steps`, which assumes every failed attempt manages to record itself;
