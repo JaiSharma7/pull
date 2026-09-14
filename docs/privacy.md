@@ -208,10 +208,11 @@ the source material and our prompt — not you, not your history, and not your l
 
 **The exception is a document you submit yourself.** If you ask the Studio to generate a
 summary of your own text, a URL, or highlights you have imported, that text is the source,
-and the pipeline sends it to Google as the context for the summary it writes. You are doing
-that deliberately, but it is your content reaching a model provider, and it deserves
-stating plainly rather than leaving as an implication: what never reaches a model is your
-**reading** — not something you supplied to be summarised.
+and the pipeline sends it to a model provider as the context for the summary it writes —
+Google, or Anthropic where a deployment configures the fallback that answers when Gemini
+is unavailable. You are doing that deliberately, but it is your content reaching a model
+provider, and it deserves stating plainly rather than leaving as an implication: what
+never reaches a model is your **reading** — not something you supplied to be summarised.
 
 The Studio says that sentence on the screen, above the box, before you have typed anything
 — not in this policy alone. The summary it writes is **private**: it is readable by you,
@@ -243,6 +244,7 @@ The app uses these services:
 | **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
 | **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
 | **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
+| **Anthropic** (Claude API)            | The same, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
 | **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
 
 Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your

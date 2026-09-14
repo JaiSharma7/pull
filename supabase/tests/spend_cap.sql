@@ -694,9 +694,15 @@ end $$;
 -- ------------------- 9. and a day with less than one job left refuses too
 --
 -- The door and the reservation have to agree. `spent >= cap` let a job in at 196 of 200,
--- told the reader "Started. 46 more today.", and then `reserve_budget` refused it at
--- `196 + 6 > 200` -- so it parked in the 24-hour budget wait with the screen saying it
--- had begun. Every job enqueued in the last few cents of a day behaved that way.
+-- told the reader "Started. 46 more today.", and then `reserve_budget` refused it -- so
+-- it parked in the 24-hour budget wait with the screen saying it had begun. Every job
+-- enqueued in the last few cents of a day behaved that way.
+--
+-- TEN CENTS LEFT, deliberately: enough that `spent >= cap` is false, more than the seven
+-- the door used to ask for, and less than the twenty it asks for now that `synthesize`
+-- reserves the provider's own worst case rather than the expected cost of a Gemini call.
+-- Four cents -- what this used to wind the day back to -- is refused by both thresholds,
+-- so it could not tell them apart.
 do $$
 declare
   reader uuid;
@@ -706,14 +712,14 @@ begin
   select u.id into reader from auth.users u
    where u.email like 'spend-cap%' order by u.email limit 1;
 
-  -- Wind the day back to four cents left: enough that `spent >= cap` is false, and less
-  -- than the seven a job reserves before it can run.
+  -- Wind the day back to ten cents left: `spent >= cap` is false, and ten is less than
+  -- the twenty a job reserves before it can run.
   delete from public.cost_ledger;
   insert into public.generation_jobs (requester_id, target, status)
   values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job;
   perform public.record_job_step(
     job, 'synthesize', 1, 'stub', 'v1', 1, 1,
-    public.daily_spend_cap_cents() - 4, 5, 'stub', true, null
+    public.daily_spend_cap_cents() - 10, 5, 'stub', true, null
   );
 end $$;
 
@@ -730,13 +736,13 @@ begin
     json_build_object('sub', reader, 'role', 'authenticated')::text, true);
 
   begin
-    perform public.enqueue_generation_job('{"title":"Four cents left","text":"x"}'::jsonb);
+    perform public.enqueue_generation_job('{"title":"Ten cents left","text":"x"}'::jsonb);
   exception when configuration_limit_exceeded then
     refused := true;
   end;
   if not refused then
     raise exception
-      'a job was accepted with four cents left, which is less than the seven it will '
+      'a job was accepted with ten cents left, which is less than the twenty it will '
       'reserve. It would park in a 24-hour wait under a screen saying it had started.';
   end if;
 

@@ -12,7 +12,12 @@
  */
 
 import { PROMPTS, toGeminiSchema } from './prompts.ts';
-import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
+import {
+  BilledProviderError,
+  buildSummaryPrompt,
+  ProviderUnavailableError,
+  worstCaseCentsFor,
+} from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -48,6 +53,13 @@ export interface GeminiConfig {
   inputUsdPerMTok: number;
   outputUsdPerMTok: number;
   embeddingUsdPerMTok: number;
+  /**
+   * The output ceiling the request sets, which is also what makes a worst case exist.
+   *
+   * See `generationConfig` below: without one, the bill has no upper bound this code
+   * knows, and `reserve_budget` holds money before the call rather than after it.
+   */
+  maxOutputTokens: number;
   /** Injectable so a test can drive the module without reaching the network. */
   fetchImpl?: typeof fetch;
   /** Below the platform's 150s wall clock, so a hung call fails the step rather than the worker. */
@@ -325,6 +337,7 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
     // proved it — the chain led with 3.7, answered on 3.6, and a name pinned to the
     // head would have labelled it wrongly. The model that ran is returned per call.
     name: 'gemini',
+    worstCaseCents: worstCaseCentsFor(config),
 
     async generateSummary(input: SummaryInput) {
       const body = {
@@ -332,6 +345,18 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
         generationConfig: {
           responseMimeType: 'application/json',
           responseSchema: SUMMARY_SCHEMA,
+          /*
+           * A CEILING, which this request did not have.
+           *
+           * Without one the model's own limit applies, which is a number this code does
+           * not know and a bill this code cannot bound — and `reserve_budget` holds
+           * money against the daily cap BEFORE the call, so an unbounded output is a
+           * hold that can always be exceeded. `anthropic.ts` has required `max_tokens`
+           * from the start and the same reasoning applies here; the default is set well
+           * above what a summary of `MAX_SOURCE_CHARS` has ever produced, so it bounds
+           * the charge without truncating an answer.
+           */
+          maxOutputTokens: config.maxOutputTokens,
         },
       };
 

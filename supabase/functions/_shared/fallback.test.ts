@@ -4,6 +4,7 @@ import {
   createFallbackSummaryProvider,
   ProviderUnavailableError,
   stubSummaryProvider,
+  worstCaseCentsFor,
   type SummaryProvider,
   type Usage,
 } from './providers.ts';
@@ -27,15 +28,55 @@ const USAGE: Usage = { inputTokens: 10, outputTokens: 20, costCents: 3 };
 function failsWith(error: unknown): SummaryProvider {
   return {
     name: 'primary',
+    worstCaseCents: 6,
     generateSummary: vi.fn(() => Promise.reject(error)),
   };
 }
 
 const input = { workTitle: 'Meditations', kind: 'book', context: 'x' };
 
+describe('worstCaseCentsFor', () => {
+  /*
+   * The number `reserve_budget` holds before a call, and the reason it is computed
+   * rather than pinned: it was 6 — the expected cost of a Gemini summary — while the
+   * Anthropic fallback at its own configured ceiling and prices can charge nearly three
+   * times that for one accepted source. A day at 194 cents then admitted a call that
+   * took the ledger past 200, which is the overshoot the reservation exists to close.
+   */
+  it('covers the Anthropic fallback at its configured ceiling and prices', () => {
+    // 64,000 input tokens at $1.00/MTok is 6.4c; 24,576 output at $5.00/MTok is 12.29c.
+    expect(
+      worstCaseCentsFor({ inputUsdPerMTok: 1.0, outputUsdPerMTok: 5.0, maxOutputTokens: 24_576 }),
+    ).toBe(19);
+  });
+
+  it('covers Gemini at its defaults', () => {
+    // 64,000 at $0.75/MTok is 4.8c; 24,576 at $3.00/MTok is 7.37c.
+    expect(
+      worstCaseCentsFor({ inputUsdPerMTok: 0.75, outputUsdPerMTok: 3.0, maxOutputTokens: 24_576 }),
+    ).toBe(13);
+  });
+
+  // Rounded UP, always: a hold that rounds down is a hold the charge can exceed, which
+  // is the whole failure in miniature.
+  it('never rounds a fraction of a cent away', () => {
+    expect(
+      worstCaseCentsFor({ inputUsdPerMTok: 0, outputUsdPerMTok: 0.01, maxOutputTokens: 1_000 }),
+    ).toBe(1);
+  });
+
+  it('is the more expensive of the two when a chain may use either', () => {
+    const chain = createFallbackSummaryProvider(
+      { name: 'cheap', worstCaseCents: 6, generateSummary: vi.fn() },
+      { name: 'dear', worstCaseCents: 19, generateSummary: vi.fn() },
+    );
+    expect(chain.worstCaseCents).toBe(19);
+  });
+});
+
 describe('createFallbackSummaryProvider', () => {
   it('never asks the fallback when the primary answers', async () => {
-    const fallback = { name: 'fallback', generateSummary: vi.fn() };
+    const fallback = { name: 'fallback', worstCaseCents: 19, generateSummary: vi.fn() };
     const chain = createFallbackSummaryProvider(stubSummaryProvider, fallback);
 
     const got = await chain.generateSummary(input);
@@ -65,7 +106,7 @@ describe('createFallbackSummaryProvider', () => {
       usage: USAGE,
       model: 'gemini-3.6-flash',
     });
-    const fallback = { name: 'fallback', generateSummary: vi.fn() };
+    const fallback = { name: 'fallback', worstCaseCents: 19, generateSummary: vi.fn() };
     const chain = createFallbackSummaryProvider(failsWith(billed), fallback);
 
     await expect(chain.generateSummary(input)).rejects.toThrow(BilledProviderError);
@@ -75,7 +116,7 @@ describe('createFallbackSummaryProvider', () => {
   it('rethrows an ordinary failure rather than paying a second vendor to rediscover it', async () => {
     // A malformed request, a bug, a socket closing mid-stream: none of them are
     // evidence the primary is out of quota, and none get better for money.
-    const fallback = { name: 'fallback', generateSummary: vi.fn() };
+    const fallback = { name: 'fallback', worstCaseCents: 19, generateSummary: vi.fn() };
     const chain = createFallbackSummaryProvider(failsWith(new Error('boom')), fallback);
 
     await expect(chain.generateSummary(input)).rejects.toThrow('boom');

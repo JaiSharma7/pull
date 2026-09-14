@@ -433,6 +433,9 @@ describe('reuse skips the paid work', () => {
     const deps = {
       summary: {
         name: 'fake',
+        // What `synthesize` now reserves: the provider's own ceiling rather than a
+        // constant, so the assertion below reads the number the pipeline actually holds.
+        worstCaseCents: 19,
         generateSummary: async () => {
           calls.summary++;
           return {
@@ -669,7 +672,13 @@ describe('reuse skips the paid work', () => {
       priorOutputs: { acquire: acquired.output },
     } as never);
 
-    expect(calls.reserved).toEqual([{ step: 'synthesize', cents: RESERVE_CENTS.synthesize }]);
+    /*
+     * THE PROVIDER'S CEILING. It was `RESERVE_CENTS.synthesize`, a hand-pinned 6 — the
+     * expected cost of a Gemini call — and a reservation smaller than the charge that
+     * replaces it lets the cap be overshot by the difference. The Anthropic fallback at
+     * its configured `max_tokens` and prices charges nearly three times that.
+     */
+    expect(calls.reserved).toEqual([{ step: 'synthesize', cents: 19 }]);
     expect(calls.claim).toBe(1);
     expect(calls.summary).toBe(1);
   });
@@ -1245,6 +1254,9 @@ describe('reuse skips the paid work', () => {
     const deps = {
       summary: {
         name: 'fake',
+        // What `synthesize` now reserves: the provider's own ceiling rather than a
+        // constant, so the assertion below reads the number the pipeline actually holds.
+        worstCaseCents: 19,
         generateSummary: async () => {
           calls.summary++;
           return {

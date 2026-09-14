@@ -458,10 +458,19 @@ export function Studio({
         `docs/privacy.md` names this as the one exception to "nothing about your reading
         reaches a model", and a reader has to meet it before they have typed anything
         rather than after they have decided.
+
+        BOTH PROVIDERS ARE NAMED, which this said only Google. `SUMMARY_FALLBACK_PROVIDER`
+        builds a chain that sends the same text to Anthropic when Gemini is unavailable —
+        `providers.ts` falls through on `ProviderUnavailableError` — and this screen
+        cannot read an Edge Function's environment to know whether a deployment has one
+        configured. Consent has to describe what CAN happen to the document somebody is
+        about to paste, so it names the set rather than the likely case: over-naming a
+        processor is not the direction in which this is harmful.
       */}
       <p className="studio__consent">
-        This text is sent to Google to write the summary. It is the one thing this product sends to
-        a model provider, and it happens because you asked.
+        This text is sent to a model provider to write the summary — Google, or Anthropic if Google
+        is unavailable. It is the one thing this product sends to a model provider, and it happens
+        because you asked.
       </p>
 
       {budget && <p className="meta">{budgetLine(budget)}</p>}

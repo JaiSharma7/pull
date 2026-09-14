@@ -171,8 +171,48 @@ export class BilledProviderError extends Error {
   }
 }
 
+/**
+ * The largest number of input tokens one `synthesize` call can be handed.
+ *
+ * `MAX_SOURCE_CHARS` is 200,000 and `enqueue_generation_job` refuses more, so four
+ * characters to a token — the conventional English ratio, and generous for prose —
+ * puts the ceiling at 50,000. Rounded up to 64,000 so a denser script or a prompt
+ * that grows does not quietly cross it, because this number's only job is to be an
+ * upper bound that is never wrong in the cheap direction.
+ */
+export const MAX_SUMMARY_INPUT_TOKENS = 64_000;
+
+/** Cents, rounded UP: a hold that rounds down is a hold that can be exceeded. */
+export function worstCaseCentsFor(config: {
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+  maxOutputTokens: number;
+}): number {
+  const usd =
+    (MAX_SUMMARY_INPUT_TOKENS / 1_000_000) * config.inputUsdPerMTok +
+    (config.maxOutputTokens / 1_000_000) * config.outputUsdPerMTok;
+  return Math.ceil(usd * 100);
+}
+
 export interface SummaryProvider {
   readonly name: string;
+  /**
+   * The most one call can cost, in cents, under this provider's configuration.
+   *
+   * `reserve_budget` holds this against the daily cap before the call, so it has to be
+   * a CEILING and not an estimate: a reservation smaller than the charge that replaces
+   * it lets the cap be overshot by the difference, once per call in flight, which is
+   * the hole the reservation exists to close. It was a hand-pinned 6 — the expected
+   * cost of a Gemini summary — and the Anthropic fallback at its own configured
+   * ceiling and prices can charge nearly three times that for one accepted source, so
+   * a day at 194 cents admitted a call that took the ledger past 200.
+   *
+   * Derived from the two things that actually bound a bill: the largest input the
+   * pipeline accepts, and the output ceiling the request itself sets. Both providers
+   * now set one — an unbounded `max_tokens` is an unbounded charge, which is not
+   * something a cap can be built on.
+   */
+  readonly worstCaseCents: number;
   /**
    * `model` is returned rather than read off the provider because a provider may fall
    * back between models mid-run — the newest Flash returns 503 under load often enough
@@ -210,6 +250,9 @@ export interface ImageProvider {
  */
 export const stubSummaryProvider: SummaryProvider = {
   name: 'stub',
+  // Free, so it holds nothing. The documented no-key path must not be refused by a cap
+  // for money it cannot spend.
+  worstCaseCents: 0,
   async generateSummary(input) {
     const opening = input.context.trim().slice(0, 240);
     return {
@@ -349,6 +392,11 @@ export function createFallbackSummaryProvider(
     // Both names, because `job_steps.provider` should say which chain ran, and the
     // model returned per call already says which one actually answered.
     name: `${primary.name}->${fallback.name}`,
+
+    // The MORE expensive of the two, because either may answer and the hold is taken
+    // before anybody knows which will. A chain that reserved the primary's ceiling and
+    // then fell back is the overshoot with an extra step in it.
+    worstCaseCents: Math.max(primary.worstCaseCents, fallback.worstCaseCents),
 
     async generateSummary(input) {
       try {

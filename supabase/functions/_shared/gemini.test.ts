@@ -24,6 +24,7 @@ function configWith(overrides: Partial<GeminiConfig>): GeminiConfig {
     inputUsdPerMTok: 1,
     outputUsdPerMTok: 1,
     embeddingUsdPerMTok: 1,
+    maxOutputTokens: 24_576,
     ...overrides,
   };
 }

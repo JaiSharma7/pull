@@ -82,16 +82,18 @@ export class BudgetExhaustedError extends Error {
  * the exact hole the reservation exists to close. Overshooting the other way
  * costs a little unused headroom for the seconds a call takes.
  *
- * The two steps that call a provider, and no more than that. `artwork` was here for
- * completeness, at 5 — a number nobody had checked against an invoice, for a step that
- * returns `{ generated: false }` without calling anything. `enqueue_generation_job`'s
- * door check states the worst case a job can cost as 7 = 6 + 1, deliberately excluding
- * it, so a third entry here was an invitation to read the worst case as 12 and to widen
- * the door for money no step spends. When an image provider is switched on it arrives
- * with a price somebody has seen.
+ * ONE ENTRY NOW. `synthesize` reserves `deps.summary.worstCaseCents`, which each
+ * provider derives from its own configured prices and output ceiling — a constant here
+ * was the expected cost of a Gemini call, and the Anthropic fallback can charge nearly
+ * three times it, so a day at 194 cents admitted a call that took the ledger past 200.
+ * `artwork` was here too, at 5, for a step that calls nothing and reserves nothing.
+ *
+ * `embed` stays a constant because it is bounded by something this file does know: one
+ * call embeds the Pulls of one summary, a few thousand tokens at
+ * `GEMINI_EMBEDDING_USD_PER_MTOK` (0.15 by default), which is a fraction of a cent. The
+ * cent is the rounding, not an estimate of the bill.
  */
 export const RESERVE_CENTS = {
-  synthesize: 6,
   embed: 1,
 } as const satisfies Record<string, number>;
 
@@ -1232,7 +1234,11 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        * the claim again on the delivery that finds budget.
        */
       try {
-        await db.reserveBudget(job.id, 'synthesize', RESERVE_CENTS.synthesize);
+        // The PROVIDER's ceiling, not a constant. `RESERVE_CENTS.synthesize` was the
+        // expected cost of a Gemini call, and a reservation smaller than the charge that
+        // replaces it is the overshoot this whole mechanism exists to stop — the
+        // Anthropic fallback at its configured ceiling charges nearly three times it.
+        await db.reserveBudget(job.id, 'synthesize', deps.summary.worstCaseCents);
       } catch (e) {
         // The recovery must not replace the refusal. A `releaseSourceHash` that rejects
         // transiently would propagate instead of `BudgetExhaustedError`, and the worker

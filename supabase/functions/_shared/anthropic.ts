@@ -13,7 +13,12 @@
  * result lands in `cost_ledger`.
  */
 
-import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
+import {
+  BilledProviderError,
+  buildSummaryPrompt,
+  ProviderUnavailableError,
+  worstCaseCentsFor,
+} from './providers.ts';
 import { PROMPTS } from './prompts.ts';
 import type { CanonicalSummary, SummaryInput, SummaryProvider, Usage } from './providers.ts';
 
@@ -208,6 +213,14 @@ function toolInput(payload: Record<string, unknown>): Record<string, unknown> {
 export function createAnthropicSummaryProvider(config: AnthropicConfig): SummaryProvider {
   return {
     name: 'anthropic',
+    // `maxTokens` is this provider's own required ceiling, so the worst case has always
+    // been computable here — it was simply never asked for. At the default model prices
+    // it is nearly three times the six cents that used to be reserved for every call.
+    worstCaseCents: worstCaseCentsFor({
+      inputUsdPerMTok: config.inputUsdPerMTok,
+      outputUsdPerMTok: config.outputUsdPerMTok,
+      maxOutputTokens: config.maxTokens,
+    }),
 
     async generateSummary(input: SummaryInput) {
       const tool = summaryTool();

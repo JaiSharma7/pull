@@ -69,6 +69,16 @@ const DEFAULT_INPUT_USD_PER_MTOK = 0.75;
 const DEFAULT_OUTPUT_USD_PER_MTOK = 3.0;
 const DEFAULT_EMBEDDING_USD_PER_MTOK = 0.15;
 
+/**
+ * Gemini's output ceiling, matching the one `anthropic.ts` has always required.
+ *
+ * The request had none, so the bill had no bound this code knew — and the daily cap
+ * holds money before the call. Set well above the longest summary this pipeline has
+ * produced for a 200,000-character source, so it bounds the charge without truncating
+ * an answer: the number exists to make a worst case computable, not to shorten output.
+ */
+const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 24_576;
+
 export function anthropicConfigFrom(env: Env, apiKey: string) {
   return {
     apiKey,
@@ -105,6 +115,7 @@ export function geminiConfigFrom(env: Env, apiKey: string): GeminiConfig {
       'GEMINI_EMBEDDING_USD_PER_MTOK',
       DEFAULT_EMBEDDING_USD_PER_MTOK,
     ),
+    maxOutputTokens: numberFrom(env, 'GEMINI_MAX_OUTPUT_TOKENS', DEFAULT_GEMINI_MAX_OUTPUT_TOKENS),
   };
 }
 
