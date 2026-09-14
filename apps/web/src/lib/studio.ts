@@ -196,18 +196,31 @@ export const STALLED_AFTER_MS = 20 * 60 * 1000;
 
 const EARLY_STEPS = new Set(['resolve_identity', 'acquire', 'chunk']);
 
+/** What a reader may be told about the day's budget: whether there is room, not how much. */
+export type BudgetState = 'open' | 'low' | 'spent';
+
+export function isBudgetState(value: unknown): value is BudgetState {
+  return value === 'open' || value === 'low' || value === 'spent';
+}
+
 /**
  * What is left of today's global budget, as a sentence.
  *
- * In money rather than in jobs, because that is what the cap actually counts and
- * because a number of jobs would be a guess: a long source costs more than a short
- * one. Said plainly rather than hidden — a reader who is told the day is spent can
- * come back tomorrow, and one who is not simply sees a button that does nothing.
+ * COARSE, and that is the correction rather than the shape. It used to take the exact
+ * spend and the exact cap and print the difference — which is a live countdown to
+ * closing the day for everybody, handed to the one person who might want to. The
+ * migration that added the cap argues against exactly that and then granted both
+ * numbers; `generation_budget_state()` is what a reader gets now.
+ *
+ * Still said rather than hidden: a reader who is told the day is spent can come back
+ * tomorrow, and one who is not simply sees a button that does nothing.
  */
-export function budgetLine(spentCents: number, capCents: number): string {
-  const left = Math.max(0, capCents - spentCents);
-  if (left <= 0) {
+export function budgetLine(state: BudgetState): string {
+  if (state === 'spent') {
     return 'Today’s generation budget is spent. Summaries start again at midnight UTC.';
   }
-  return `About $${(left / 100).toFixed(2)} of today’s shared generation budget is left.`;
+  if (state === 'low') {
+    return 'Today’s shared generation budget is nearly used up.';
+  }
+  return 'There is room in today’s shared generation budget.';
 }

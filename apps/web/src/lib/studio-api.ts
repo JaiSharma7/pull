@@ -1,9 +1,10 @@
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
-import type { StudioJob, StudioKind } from './studio.js';
+import { isBudgetState, type BudgetState, type StudioJob, type StudioKind } from './studio.js';
 
 export {
   budgetLine,
+  isBudgetState,
   buildImportSource,
   checkSubmission,
   describeJob,
@@ -14,17 +15,20 @@ export {
   MIN_TEXT_CHARS,
   STUDIO_KINDS,
 } from './studio.js';
-export type { StudioJob, StudioKind, SubmitCheck } from './studio.js';
+export type { BudgetState, StudioJob, StudioKind, SubmitCheck } from './studio.js';
 
 /**
- * The reader's imported highlights, for the source picker.
+ * The reader's books, and one book's highlights.
  *
- * Re-exported under a name that says what the Studio wants it for rather than
- * imported from two modules by one screen. It is the same walk the Library does;
- * nothing about it is Studio-specific, which is precisely why it is not
- * reimplemented here.
+ * Re-exported rather than reimplemented — nothing about either is Studio-specific.
+ * `fetchImportedWorks` is what the picker needs (one row per book); the items are
+ * fetched for the ONE book a reader picks, because their bodies are only wanted for
+ * the text that is actually sent.
  */
-export { fetchImportedItems as fetchImportedItemsForStudio } from './import-api.js';
+export {
+  fetchImportedItems as fetchImportedItemsForStudio,
+  fetchImportedWorks,
+} from './import-api.js';
 
 /** What `enqueue_generation_job` answers with. */
 export interface Enqueued {
@@ -33,8 +37,8 @@ export interface Enqueued {
   queue: 'fast' | 'normal';
   delaySeconds: number;
   remainingToday: number;
-  spentTodayCents: number;
-  dailyCapCents: number;
+  /** `open | low | spent`. Never the figures — see `generation_budget_state()`. */
+  budget: BudgetState;
 }
 
 /**
@@ -80,24 +84,22 @@ export async function requestPrivateSummary(input: {
 }
 
 /**
- * What the product has spent today, in cents.
+ * Whether there is budget left today — never how much.
  *
- * `spend_today()` is granted to `authenticated` precisely so this screen can say
- * there is no budget left rather than letting a reader submit into a refusal. It
- * is refused to `anon`: a signed-out visitor cannot enqueue, so the number tells
- * them nothing they can act on and tells anybody else how close the product is to
- * its own ceiling.
+ * `spend_today()` and `daily_spend_cap_cents()` were both granted to `authenticated`
+ * so this screen could print the difference, which is a live countdown to closing the
+ * day for everybody handed to the one account that might want to. Both are back behind
+ * the service role; this is the whole of what a reader may know, and it is enough for
+ * the sentence the screen needs.
+ *
+ * An unreadable answer is treated as `open`. Refusing to let somebody start because a
+ * status call failed would be the wrong failure: `enqueue_generation_job` checks the
+ * cap itself and answers 53400, which is a real refusal with a real reason.
  */
-export async function fetchSpendToday(): Promise<number> {
-  const { data, error } = await supabase.rpc('spend_today');
+export async function fetchBudgetState(): Promise<BudgetState> {
+  const { data, error } = await supabase.rpc('generation_budget_state');
   if (error) throw rpcError(error);
-  return typeof data === 'number' ? data : Number(data ?? 0);
-}
-
-export async function fetchDailyCap(): Promise<number> {
-  const { data, error } = await supabase.rpc('daily_spend_cap_cents');
-  if (error) throw rpcError(error);
-  return typeof data === 'number' ? data : Number(data ?? 0);
+  return isBudgetState(data) ? data : 'open';
 }
 
 /**

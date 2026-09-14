@@ -171,7 +171,7 @@ export async function fetchImports(userId: string): Promise<ImportBatch[]> {
  * cannot open is not something they can do anything with, and "(unavailable)" is
  * worse than its absence.
  */
-export async function fetchImportedItems(userId: string): Promise<ImportedItem[]> {
+export async function fetchImportedItems(userId: string, workId?: string): Promise<ImportedItem[]> {
   const rows = await pageAfter<EmbeddedImportItem>((after, limit) => {
     let q = supabase
       .from('import_items')
@@ -182,6 +182,11 @@ export async function fetchImportedItems(userId: string): Promise<ImportedItem[]
       .not('pull_id', 'is', null)
       .order('id', { ascending: true })
       .limit(limit);
+    // Scoped to one book where the caller only wants one. Studio needs the bodies of
+    // the book a reader picked and of no other, and walking four thousand highlights
+    // a hundred at a time to draw a row of title buttons is forty round trips for
+    // information `fetchImportedWorks` answers in one.
+    if (workId) q = q.eq('work_id', workId);
     if (after !== null) q = q.gt('id', after);
     return q;
   }, 'id');
@@ -239,4 +244,43 @@ function narrowSourceKind(value: string): ImportSourceKind {
   return value === 'kindle' || value === 'readwise' || value === 'csv' || value === 'paste'
     ? value
     : 'csv';
+}
+
+/**
+ * The books this reader has imported, without their highlights.
+ *
+ * One row per book rather than one per highlight, which is the difference between a
+ * bounded request and a walk over everything a reader owns. `commit_import` creates
+ * exactly one summary per (reader, work), so the reader's own summaries ARE their books
+ * — and a Studio generation on one adds a second summary on the same work, which is why
+ * this dedupes rather than trusting one row per title.
+ *
+ * Paged for the usual reason: `max_rows` is 100, and a reader may have more than a
+ * hundred books. `id` order is arbitrary (it is a uuid), so titles are sorted here.
+ */
+export async function fetchImportedWorks(
+  userId: string,
+): Promise<{ workId: string; title: string; kind: string | null }[]> {
+  const rows = await pageAfter<{
+    id: string;
+    works: { id: string; title: string; kind: string | null } | null;
+  }>((after, limit) => {
+    let q = supabase
+      .from('summaries')
+      .select('id, works(id, title, kind)')
+      .eq('author_id', userId)
+      .order('id', { ascending: true })
+      .limit(limit);
+    if (after !== null) q = q.gt('id', after);
+    return q;
+  }, 'id');
+
+  const byWork = new Map<string, { workId: string; title: string; kind: string | null }>();
+  for (const r of rows) {
+    if (!r.works) continue;
+    if (!byWork.has(r.works.id)) {
+      byWork.set(r.works.id, { workId: r.works.id, title: r.works.title, kind: r.works.kind });
+    }
+  }
+  return [...byWork.values()].sort((a, b) => a.title.localeCompare(b.title));
 }

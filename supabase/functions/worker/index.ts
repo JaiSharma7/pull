@@ -116,13 +116,29 @@ async function failUnbilled(
   message: string,
   durationMs: number,
 ) {
-  // Checked, not a bare await. supabase-js resolves rather than throws on a Postgres
-  // error, so an unchecked settle is a hold left open by exactly the transient
-  // conditions -- pool exhaustion, a statement timeout -- that produce the outage this
-  // path exists for. Logged rather than thrown: the step still has to be recorded, and
-  // the sweep's terminal pass and the TTL are the backstops.
-  const settled = await supabase.rpc('settle_job_budget', { p_job_id: jobId });
-  if (settled.error) console.error('could not settle budget for', jobId, settled.error);
+  /*
+   * THIS STEP'S HOLD, not the job's.
+   *
+   * `graph.ts` dispatches `extract_evidence` beside `synthesize` and `artwork` beside
+   * `embed`, in separate invocations — so a job can have two reservations open at once.
+   * The first version of this called `settle_job_budget`, which releases every open row
+   * for the job, so a transient failure of one step let go of a sibling's hold while
+   * that sibling was still inside its provider call. Concurrent workers then reserved
+   * against a total that was short by exactly the money about to be spent, which is the
+   * overshoot the whole reservation exists to prevent.
+   *
+   * `record_failed_job_step` settles `(job, step)` on the billed path; this is the same
+   * scope on the unbilled one. Releasing a whole job is right only where the job is
+   * really over, which is the exhausted-retries path below.
+   *
+   * Checked, not a bare await: supabase-js resolves rather than throws on a Postgres
+   * error, so an unchecked settle is a hold left open by exactly the transient
+   * conditions that produce the outage this path exists for. Logged rather than thrown —
+   * the step still has to be recorded, and the sweep's terminal pass and the TTL are the
+   * backstops.
+   */
+  const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
+  if (settled.error) console.error('could not settle budget for', jobId, step, settled.error);
 
   return supabase.from('job_steps').insert({
     job_id: jobId,
@@ -491,13 +507,17 @@ Deno.serve(async (req) => {
         /*
          * The holds first, then the status.
          *
-         * This path fails the job itself and archives the message, so nothing
-         * downstream will ever record a step for it -- and `record_failed_job_step`,
-         * which is what normally settles, is never called. Left open, a reservation
-         * taken by `synthesize` stands against the global cap until the one-hour TTL,
-         * and the sweep cannot help: it selects `queued`/`running`, and this row is
-         * about to stop being either. Before the update, so a throw below leaves the
-         * money released rather than the job un-failed AND the money held.
+         * This path fails the JOB and archives the message, so nothing downstream will
+         * ever record a step for it -- and `record_failed_job_step`, which is what
+         * normally settles, is never called. Left open, a reservation taken by
+         * `synthesize` stands against the global cap until the one-hour TTL, and the
+         * sweep cannot help: it selects `queued`/`running`, and this row is about to
+         * stop being either. Before the update, so a throw below leaves the money
+         * released rather than the job un-failed AND the money held.
+         *
+         * By JOB here, unlike `failUnbilled` above, and the difference is the whole
+         * distinction: this ends every step the job has, so every hold it carries is
+         * for a charge that can no longer arrive.
          */
         must(
           await supabase.rpc('settle_job_budget', { p_job_id: jobId }),

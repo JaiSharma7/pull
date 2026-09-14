@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
 import { RememberThis } from '../components/RememberThis.js';
-import { fetchSavedPullIds, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
+import { fetchSavedAmong, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
 import type { Track } from '../lib/player.js';
@@ -236,6 +236,32 @@ export function Source({
   const player = usePlayer();
 
   /*
+   * Whether each idea's claim is on screen at the current depth, computed once.
+   *
+   * Highlighting measures a selection against the body, and the dial can turn the body
+   * off — the shortest stop is the headline alone — so the control is withheld there
+   * rather than left to fail silently on a missing ref. `depthLevels` tokenises every
+   * field of every Pull, and doing it inside the map ran it per card on every render,
+   * including renders about a share note or a saved id. Keyed on the two things it
+   * actually depends on.
+   *
+   * Above the early returns, with the other hooks: `pulls` only exists after `detail`
+   * has loaded, and a hook that runs only on the renders where it does is a hook that
+   * changes order.
+   */
+  const shownAtDepth = useMemo(() => {
+    const shown = new Map<string, boolean>();
+    for (const p of detail?.pulls ?? []) {
+      const levels = depthLevels({ ...p, hasSource: false });
+      shown.set(
+        p.id,
+        levels.slice(0, clampDepth(depth, levels) + 1).some((l) => l.key === 'claim'),
+      );
+    }
+    return shown;
+  }, [detail, depth]);
+
+  /*
    * What this reader has already kept, so the card's Save control says which way
    * it points. Fetched once per reader rather than per idea; a failure is silent
    * and leaves every card unsaved, which is recoverable in one press and is the
@@ -251,11 +277,18 @@ export function Source({
    */
   const saved = userId ? savedIds : EMPTY_SAVED;
   useEffect(() => {
-    if (!userId) return;
+    const ids = detail?.pulls.map((p) => p.id) ?? [];
+    if (!userId || ids.length === 0) return;
     let cancelled = false;
-    fetchSavedPullIds(userId)
-      .then((ids) => {
-        if (!cancelled) setSaved(ids);
+    /*
+     * Asked for THESE ideas, not for the whole library. `fetchSavedPullIds` walks all
+     * of `saved_items` a hundred rows at a time — law 3 promises unlimited stashing, so
+     * a reader with five thousand saves paid fifty sequential round trips to decorate
+     * eighteen Save controls.
+     */
+    fetchSavedAmong(userId, ids)
+      .then((kept) => {
+        if (!cancelled) setSaved(kept);
       })
       .catch(() => {
         // A Save control that opens unpressed is wrong about a kept idea until the
@@ -264,7 +297,7 @@ export function Source({
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, detail]);
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
    * from `fetchSource` is a work that does not exist; an error is an error. Review
@@ -696,18 +729,7 @@ export function Source({
               myQuestions.userId === userId
                 ? myQuestions.rows.filter((q) => q.pullId === p.id)
                 : [];
-            /*
-             * Whether the claim is on screen at the current depth.
-             *
-             * Highlighting measures a selection against the body, and the dial can
-             * now turn the body off — the shortest stop is the headline alone. The
-             * control is withheld there rather than left to fail silently on a
-             * missing ref, which is what it would have done.
-             */
-            const levels = depthLevels({ ...p, hasSource: false });
-            const bodyShown = levels
-              .slice(0, clampDepth(depth, levels) + 1)
-              .some((l) => l.key === 'claim');
+            const bodyShown = shownAtDepth.get(p.id) ?? false;
             const track = (): Track => ({
               id: p.id,
               title: work.title,

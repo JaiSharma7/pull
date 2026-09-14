@@ -210,12 +210,22 @@ describe('isRunning', () => {
 });
 
 describe('budgetLine', () => {
-  it('says what is left, in money, because money is what the cap counts', () => {
-    expect(budgetLine(50, 200)).toBe('About $1.50 of today’s shared generation budget is left.');
+  /*
+   * Coarse on purpose. It used to print `cap - spent`, which is a live countdown to
+   * closing the day for everybody handed to the one account that might want to — the
+   * disclosure the migration that added the cap argues against and then granted.
+   */
+  it('says the day is spent rather than showing a button that does nothing', () => {
+    expect(budgetLine('spent')).toContain('spent');
   });
 
-  it('says the day is spent rather than showing a button that does nothing', () => {
-    expect(budgetLine(200, 200)).toContain('spent');
-    expect(budgetLine(240, 200)).toContain('spent');
+  it('warns before it is gone, so "spent" does not arrive as a fault', () => {
+    expect(budgetLine('low')).toContain('nearly');
+  });
+
+  it('never quotes a figure a reader could aim at', () => {
+    for (const state of ['open', 'low', 'spent'] as const) {
+      expect(budgetLine(state)).not.toMatch(/\d/);
+    }
   });
 });

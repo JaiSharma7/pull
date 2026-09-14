@@ -44,6 +44,13 @@
 -- it ever lands, writes its `cost_ledger` row on the day it lands, so nothing is lost by
 -- letting yesterday's holds expire with yesterday.
 --
+-- And one disclosure, from the same round: 20260914010000 argued that a readable
+-- budget number "tells them exactly how much to spend to close the door on everyone
+-- else", admitted one account can close that door, and then granted `spend_today()`
+-- and `daily_spend_cap_cents()` to every signed-in reader. `generation_budget_state()`
+-- replaces both for the client with `open | low | spent`, and the figures go back
+-- behind the service role.
+--
 -- Law 2 holds: arithmetic over two tables. No model runs in here.
 
 /*
@@ -261,3 +268,179 @@ $$;
 
 revoke all on function public.reserve_budget(uuid, text, numeric) from public, anon, authenticated;
 grant execute on function public.reserve_budget(uuid, text, numeric) to service_role;
+
+-- ------------------------------------- a reader is told THAT, not HOW MUCH
+
+/*
+ * Whether there is budget left, without saying how much.
+ *
+ * 20260914010000 rejected a settings table on the grounds that "a number a reader
+ * could read tells them exactly how much to spend to close the door on everyone
+ * else", admitted in the same header that one account CAN close that door, and then
+ * granted `spend_today()` and `daily_spend_cap_cents()` to `authenticated` — which
+ * hands every signed-in reader both halves of exactly that number, with a live
+ * progress read to confirm the attempt is working. The review of this PR put the two
+ * halves of the contradiction side by side.
+ *
+ * Studio needs one sentence: can I start something now, or is today done. This is
+ * that sentence and nothing more. `low` exists because "spent" arriving with no
+ * warning reads as a fault, and a fifth of a day's budget is not a targeting number:
+ * it moves in steps of whole generations and says nothing about where the line is.
+ *
+ * `stable`, not `immutable` -- it reads two tables.
+ */
+create function public.generation_budget_state()
+returns text
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select case
+           when public.spend_today() >= public.daily_spend_cap_cents() then 'spent'
+           when public.spend_today() >= public.daily_spend_cap_cents() * 0.8 then 'low'
+           else 'open'
+         end;
+$$;
+
+comment on function public.generation_budget_state is
+  'open | low | spent. What a reader may be told about the daily generation budget: '
+  'whether there is room, never how much. See 20260914030000.';
+
+revoke all on function public.generation_budget_state() from public, anon;
+grant execute on function public.generation_budget_state() to authenticated, service_role;
+
+/*
+ * And the exact figures go back behind the service role.
+ *
+ * `spend_today()` is what the worker and the cap check read; nothing a reader can
+ * reach needs the number itself now that `generation_budget_state()` exists.
+ * `daily_spend_cap_cents()` is the other half of the same subtraction, so it goes with
+ * it -- a cap alone is harmless, a cap beside a spend is a countdown.
+ */
+revoke execute on function public.spend_today() from authenticated;
+revoke execute on function public.daily_spend_cap_cents() from authenticated;
+
+/*
+ * `enqueue_generation_job`, restated from 20260914010000 without the two figures.
+ *
+ * Every bound is that migration's verbatim -- the authenticated check, the positive
+ * `is_anonymous` assertion, the job-kind and payload validation, the `work_id` guard,
+ * the cap check, the per-requester lock, the UTC-day count, the ceiling, the stagger.
+ * What changes is the RETURN: `spentTodayCents` and `dailyCapCents` handed the caller
+ * the same countdown `generation_budget_state()` exists to withhold, and a payload is a
+ * disclosure like any other. `budget` carries the coarse state instead, so the client
+ * still has its sentence.
+ */
+create or replace function public.enqueue_generation_job(p_target jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  daily_fast_limit   constant int := 3;
+  daily_hard_ceiling constant int := 50;
+  stagger_seconds    constant int := 300;
+  max_text_length    constant int := 200000;
+  max_title_length   constant int := 200;
+
+  uid        uuid := (select auth.uid());
+  used       int;
+  over       boolean;
+  job_id     uuid;
+  delay_for  int;
+  job_kind   text;
+  target     jsonb := coalesce(p_target, '{}'::jsonb);
+  work_ref   text;
+  spent      numeric;
+  cap        numeric := public.daily_spend_cap_cents();
+begin
+  if uid is null then
+    raise exception 'enqueue_generation_job requires an authenticated user';
+  end if;
+
+  if not exists (
+    select 1 from auth.users u where u.id = uid and u.is_anonymous is not true
+  ) then
+    raise exception
+      'Generating a summary needs an account. Sign in with an email address and try again.'
+      using errcode = '28000';
+  end if;
+
+  job_kind := coalesce(nullif(target ->> 'jobKind', ''), 'canonical_summary');
+  if job_kind not in ('canonical_summary', 'private_summary') then
+    raise exception 'unknown job kind %; expected canonical_summary or private_summary',
+      job_kind
+      using errcode = '22023';
+  end if;
+
+  if length(coalesce(target ->> 'text', '')) > max_text_length then
+    raise exception 'the submitted text is % characters; the limit is %',
+      length(target ->> 'text'), max_text_length
+      using errcode = 'check_violation';
+  end if;
+
+  if length(coalesce(target ->> 'title', '')) > max_title_length then
+    raise exception 'the title is % characters; the limit is %',
+      length(target ->> 'title'), max_title_length
+      using errcode = 'check_violation';
+  end if;
+
+  target := target - 'visibility';
+  work_ref := target ->> 'work_id';
+  if work_ref is null
+     or work_ref !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or not exists (
+       select 1 from public.summaries s
+       where s.work_id = work_ref::uuid and s.author_id = uid
+     )
+  then
+    target := target - 'work_id';
+  end if;
+
+  spent := public.spend_today();
+  if spent >= cap then
+    raise exception
+      'the daily generation budget is spent. Summaries resume at 00:00 UTC.'
+      using errcode = '53400';
+  end if;
+
+  perform pg_advisory_xact_lock(pg_catalog.hashtextextended(uid::text, 0));
+
+  select count(*) into used
+  from public.generation_jobs
+  where requester_id = uid
+    and created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc';
+
+  if used >= daily_hard_ceiling then
+    raise exception 'daily generation ceiling reached (% jobs); try again tomorrow',
+      daily_hard_ceiling
+      using errcode = 'check_violation';
+  end if;
+
+  over := used >= daily_fast_limit;
+
+  delay_for := case
+                 when over then (used - daily_fast_limit + 1) * stagger_seconds
+                 else 0
+               end;
+
+  insert into public.generation_jobs (requester_id, kind, target, status)
+  values (uid, job_kind, target, 'queued')
+  returning id into job_id;
+
+  perform pgmq.send('generation',
+                    jsonb_build_object('jobId', job_id, 'step', 'resolve_identity'),
+                    delay_for);
+
+  return jsonb_build_object(
+    'jobId', job_id,
+    'kind', job_kind,
+    'queue', case when over then 'normal' else 'fast' end,
+    'delaySeconds', delay_for,
+    'remainingToday', daily_hard_ceiling - used - 1,
+    'budget', public.generation_budget_state()
+  );
+end;
+$$;

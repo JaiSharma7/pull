@@ -181,12 +181,22 @@ early waits sixteen hours and is perfectly healthy.
 so every row said `canonical_summary` whatever it actually was. `enqueue_generation_job`
 now writes it, narrowed to two values:
 
-| `kind`              | What it is                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------- |
-| `canonical_summary` | A work for the catalogue. Published, public, generated once and read by thousands — the whole      |
-|                     | economics of law 2.                                                                                |
-| `private_summary`   | A reader's own text, summarised for them. Published nothing, visible to its requester, and counted |
-|                     | against the same daily cap and the same per-requester quota.                                       |
+| `kind`              | What it describes                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `canonical_summary` | A work for the catalogue: published, public, generated once and read by thousands. |
+| `private_summary`   | A reader's own text, summarised for them and published nowhere.                    |
+
+**The column is descriptive, and it is worth being exact about that**, because the table
+above reads like an enforcement mechanism and is not one yet. Nothing in
+`supabase/functions` branches on `kind`. What actually keeps a private summary private is
+`generation_jobs.visibility` — which defaults to `private`, which `enqueue_generation_job`
+refuses to take from the client, and which `template` passes to `summaries.visibility` —
+plus the `moderate` step, which re-checks rights immediately before publication and
+refuses an uncleared job. Those three hold the line. `kind` records which sort of job it
+is, so a spend report can tell canonical work from private and so the pipeline has
+somewhere to branch when `embed_private` and `relate_only` arrive. Validating it today
+buys a refusal for a typo rather than a job nothing will ever pick up, which is worth
+having and is not the same as enforcement.
 
 A private summary is the one place a reader's own content reaches a model provider, and
 it happens because they asked. `docs/privacy.md` says so in the reader's words.

@@ -31,19 +31,20 @@ import {
   buildImportSource,
   checkSubmission,
   describeJob,
-  fetchDailyCap,
+  fetchBudgetState,
   fetchImportedItemsForStudio,
+  fetchImportedWorks,
   fetchMyJobs,
-  fetchSpendToday,
   isWorthPolling,
   MAX_TEXT_CHARS,
   MIN_TEXT_CHARS,
   requestPrivateSummary,
   STUDIO_KINDS,
+  type BudgetState,
   type StudioJob,
   type StudioKind,
 } from '../lib/studio-api.js';
-import { groupImported, type ImportedWorkGroup } from '../lib/import-api.js';
+import type { ImportedItem } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
 /** How often a running job is asked about. */
@@ -65,8 +66,16 @@ export function Studio({
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  const [budget, setBudget] = useState<{ spent: number; cap: number } | null>(null);
-  const [books, setBooks] = useState<ImportedWorkGroup[]>([]);
+  const [budget, setBudget] = useState<BudgetState | null>(null);
+  const [books, setBooks] = useState<{ workId: string; title: string; kind: string | null }[]>([]);
+  /*
+   * The picked book's highlights, fetched when it is picked.
+   *
+   * Studio used to load every highlight the reader owns on mount — forty sequential
+   * requests and every body in memory for a four-thousand-highlight library — to draw a
+   * row of title buttons. The bodies are wanted only for the one book that is sent.
+   */
+  const [items, setItems] = useState<{ workId: string; rows: ImportedItem[] } | null>(null);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
 
   const reloadJobs = useCallback(() => {
@@ -77,14 +86,14 @@ export function Studio({
 
   useEffect(() => {
     let live = true;
-    Promise.all([fetchSpendToday(), fetchDailyCap()])
-      .then(([spent, cap]) => {
-        if (live) setBudget({ spent, cap });
+    fetchBudgetState()
+      .then((state) => {
+        if (live) setBudget(state);
       })
       .catch((e: unknown) => console.error('Could not read the budget', e));
-    fetchImportedItemsForStudio(userId)
-      .then((items) => {
-        if (live) setBooks(groupImported(items));
+    fetchImportedWorks(userId)
+      .then((found) => {
+        if (live) setBooks(found);
       })
       .catch((e: unknown) => console.error('Could not read your imports', e));
     reloadJobs();
@@ -116,6 +125,22 @@ export function Studio({
 
   const picked = source === 'paste' ? null : (books.find((b) => b.workId === source) ?? null);
 
+  useEffect(() => {
+    if (picked === null || items?.workId === picked.workId) return;
+    let live = true;
+    fetchImportedItemsForStudio(userId, picked.workId)
+      .then((rows) => {
+        if (live) setItems({ workId: picked.workId, rows });
+      })
+      .catch((e: unknown) => console.error('Could not read that book’s highlights', e));
+    return () => {
+      live = false;
+    };
+  }, [picked, items?.workId, userId]);
+
+  /** The picked book's rows, and only once they are the picked book's. */
+  const pickedItems = picked && items?.workId === picked.workId ? items.rows : null;
+
   /*
    * Built once per selection, not once per render and again on submit.
    *
@@ -125,12 +150,24 @@ export function Studio({
    * inside `submit`. Two independently computed copies of the thing whose bytes decide
    * `works.content_hash` is also one more than there should be.
    */
-  const importedText = useMemo(() => (picked ? buildImportSource(picked.items) : ''), [picked]);
+  const importedText = useMemo(
+    () => (pickedItems ? buildImportSource(pickedItems) : ''),
+    [pickedItems],
+  );
 
   async function submit() {
     if (sending) return;
     setError(null);
     setNote(null);
+
+    // Said as what it is. Without this the empty `importedText` reaches
+    // `checkSubmission` and comes back as "there needs to be at least 200 characters",
+    // which is a confusing thing to tell somebody who picked a four-hundred-highlight
+    // book a second ago.
+    if (picked && pickedItems === null) {
+      setError('Still reading that book’s highlights — try again in a moment.');
+      return;
+    }
 
     const body = picked ? importedText : text;
     const named = picked ? picked.title : title;
@@ -153,7 +190,7 @@ export function Studio({
         // what makes the book gain a summary rather than acquire a second row.
         workId: picked ? picked.workId : null,
       });
-      setBudget({ spent: queued.spentTodayCents, cap: queued.dailyCapCents });
+      setBudget(queued.budget);
       setNote(
         queued.queue === 'fast'
           ? `Started. ${queued.remainingToday} more today.`
@@ -197,7 +234,7 @@ export function Studio({
         a model provider, and it happens because you asked.
       </p>
 
-      {budget && <p className="meta">{budgetLine(budget.spent, budget.cap)}</p>}
+      {budget && <p className="meta">{budgetLine(budget)}</p>}
 
       <hr className="rule" />
 
@@ -232,10 +269,16 @@ export function Studio({
       </fieldset>
 
       {picked ? (
-        <p className="meta">
-          {picked.items.length} {picked.items.length === 1 ? 'highlight' : 'highlights'} from “
-          {picked.title}”, joined in the order you kept them.
-        </p>
+        pickedItems === null ? (
+          <p className="meta" role="status">
+            Reading your highlights from “{picked.title}”…
+          </p>
+        ) : (
+          <p className="meta">
+            {pickedItems.length} {pickedItems.length === 1 ? 'highlight' : 'highlights'} from “
+            {picked.title}”, joined in the order you kept them.
+          </p>
+        )
       ) : (
         <>
           <label className="field__label" htmlFor="studio-title">

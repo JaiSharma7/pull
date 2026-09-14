@@ -304,9 +304,35 @@ begin
     raise exception 'these assertions must run as authenticated, not as %', current_user;
   end if;
 
-  -- The reader may ask what has been spent -- Studio says so before they submit --
-  -- and may not reserve, settle, or insert a job row.
-  perform public.spend_today();
+  -- The reader may ask WHETHER there is budget, and not how much: 20260914010000
+  -- argues a readable number tells somebody exactly how much to spend to close the
+  -- door on everyone else, and then granted them the number. They may not reserve,
+  -- settle, or insert a job row either.
+  if public.generation_budget_state() not in ('open', 'low', 'spent') then
+    raise exception 'generation_budget_state() answered something the client cannot read';
+  end if;
+
+  refused := false;
+  begin
+    perform public.spend_today();
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'a reader could read spend_today(). With daily_spend_cap_cents() beside it that '
+      'is a live countdown to closing the day for everybody.';
+  end if;
+
+  refused := false;
+  begin
+    perform public.daily_spend_cap_cents();
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  if not refused then
+    raise exception 'a reader could read the cap, which is the other half of the countdown.';
+  end if;
 
   refused := false;
   begin

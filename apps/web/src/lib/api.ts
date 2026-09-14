@@ -311,6 +311,28 @@ export async function fetchSavedPullIds(userId: string): Promise<Set<string>> {
 }
 
 /**
+ * Which of these Pulls this reader has kept.
+ *
+ * Bounded by the page rather than by the library, which is what separates it from
+ * `fetchSavedPullIds`. That one walks all of `saved_items` — law 3 promises unlimited
+ * stashing, so a reader with 5,000 saves pays fifty sequential round trips — and a
+ * screen showing eighteen ideas needs the answer for eighteen ids. One request, and
+ * the `in` list is the page.
+ */
+export async function fetchSavedAmong(userId: string, pullIds: string[]): Promise<Set<string>> {
+  if (pullIds.length === 0) return new Set();
+  const { data, error } = await supabase
+    .from('saved_items')
+    .select('pull_id')
+    .eq('user_id', userId)
+    .in('pull_id', pullIds);
+  if (error) throw rpcError(error);
+  const ids = new Set<string>();
+  for (const r of data ?? []) if (r.pull_id !== null) ids.add(r.pull_id);
+  return ids;
+}
+
+/**
  * The Library: saved Pulls, newest first, with the source that anchors them.
  *
  * Paged for the same reason as `fetchSavedPullIds` — `max_rows` is 100 and law 3

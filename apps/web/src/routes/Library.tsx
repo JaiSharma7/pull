@@ -361,6 +361,9 @@ export function Library({ userId }: { userId: string }) {
    */
   const nestTarget = activeStash && canNestNew(tree, activeStash.id) ? activeStash : null;
 
+  /** How many collections go with the one whose delete is armed; -1 for the node itself. */
+  const armedCount = armedStash === null ? 0 : descendantIds(tree, armedStash).size - 1;
+
   /*
    * What is filed in the selected collection — all of it, not what is on screen.
    *
@@ -517,6 +520,14 @@ export function Library({ userId }: { userId: string }) {
   }
 
   async function addStash(typed: string) {
+    /*
+     * Guarded here as well as by the button's `disabled`, for the reason `exportStash`
+     * gives about its own guard: the Enter path has no disabled state to engage, and
+     * key repeat fires it once per repeat before React can re-render the field away.
+     * Each call mints its own `crypto.randomUUID()`, so the collide-on-retry protection
+     * does not apply and the reader ends up deleting two identically named collections.
+     */
+    if (busy) return;
     // Bounded to `stashes_name_length`: an over-long name queued offline would be
     // refused for good on drain, not shown back.
     const name = typed.slice(0, 200);
@@ -791,8 +802,14 @@ export function Library({ userId }: { userId: string }) {
               */}
               {armedStash === node.id ? (
                 <span className="meta" role="status">
-                  {descendantIds(tree, node.id).size - 1 > 0
-                    ? `Deletes “${node.name}” and ${descendantIds(tree, node.id).size - 1} inside it. Nothing you have kept is deleted.`
+                  {/*
+                    One walk, hoisted. It was called twice here — once for the test and
+                    once for the number — and a third time in `removeStash`, so the
+                    count the sentence quotes and the set the delete acts on were
+                    computed separately from the same tree.
+                  */}
+                  {armedCount > 0
+                    ? `Deletes “${node.name}” and ${armedCount} inside it. Nothing you have kept is deleted.`
                     : `Deletes “${node.name}”. Nothing you have kept is deleted.`}{' '}
                   <button
                     type="button"
@@ -1248,6 +1265,15 @@ function Imported({ userId }: { userId: string }) {
     { batches: ImportBatch[]; items: ImportedItem[] } | 'failed' | null
   >(null);
   const [undoing, setUndoing] = useState<string | null>(null);
+  /*
+   * One book open at a time, as the saved list above already does.
+   *
+   * Rendering every group's items mounts one `<li>` and one `RememberThis` — with its
+   * own reducer — per highlight, and this section's own copy describes a reader
+   * arriving with four hundred of them. Four hundred reducers in one commit is a
+   * visible stall on a phone, and it grows with what law 3 promises is unlimited.
+   */
+  const [openWork, setOpenWork] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
 
@@ -1364,30 +1390,45 @@ function Imported({ userId }: { userId: string }) {
             </ul>
           )}
 
-          {groups.map((group) => (
-            <section key={group.workId} className="stack">
-              <h3 style={{ fontSize: 'var(--step-0)', margin: 0 }}>{group.title}</h3>
-              <p className="meta">
-                {group.items.length} {group.items.length === 1 ? 'highlight' : 'highlights'}
-              </p>
-              <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                {group.items.map((item) => (
-                  <li key={item.id} className="library__item">
-                    <p style={{ margin: 0 }}>{item.body}</p>
-                    {item.locator ? <p className="meta">{item.locator}</p> : null}
-                    {/*
-                      The same form the source page offers, not a second one. A
-                      reader who has just kept four hundred highlights is precisely
-                      the reader with something to practise, and `remember_pull`
-                      makes the highlight due NOW rather than tomorrow — "Remember
-                      this" is an explicit ask to practise.
-                    */}
-                    <RememberThis pullId={item.pullId} idPrefix="imported" />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+          {groups.map((group) => {
+            const open = openWork === group.workId;
+            return (
+              <section key={group.workId} className="stack">
+                <h3 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    aria-expanded={open}
+                    style={{ textAlign: 'left' }}
+                    onClick={() => setOpenWork(open ? null : group.workId)}
+                  >
+                    {group.title}
+                  </button>
+                </h3>
+                <p className="meta">
+                  {group.items.length} {group.items.length === 1 ? 'highlight' : 'highlights'}
+                </p>
+                {open && (
+                  <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {group.items.map((item) => (
+                      <li key={item.id} className="library__item">
+                        <p style={{ margin: 0 }}>{item.body}</p>
+                        {item.locator ? <p className="meta">{item.locator}</p> : null}
+                        {/*
+                          The same form the source page offers, not a second one. A
+                          reader who has just kept four hundred highlights is precisely
+                          the reader with something to practise, and `remember_pull`
+                          makes the highlight due NOW rather than tomorrow — "Remember
+                          this" is an explicit ask to practise.
+                        */}
+                        <RememberThis pullId={item.pullId} idPrefix="imported" />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            );
+          })}
         </>
       )}
     </section>

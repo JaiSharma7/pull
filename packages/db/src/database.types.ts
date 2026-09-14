@@ -2395,6 +2395,7 @@ export type Database = {
       enable_log_retention: { Args: { p_cron?: string }; Returns: number }
       enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
       generate_mfa_recovery_codes: { Args: never; Returns: string[] }
+      generation_budget_state: { Args: never; Returns: string }
       generation_secret: { Args: { p_name: string }; Returns: string }
       get_catalogue: { Args: never; Returns: Json }
       get_daily_pulls: { Args: { p_day: string }; Returns: Json }

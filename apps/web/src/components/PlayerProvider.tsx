@@ -398,6 +398,12 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
     prefsRef.current = prefs;
   }, [prefs]);
 
+  /** What the player is doing, for the setters, which must not close over it. */
+  const statusRef = useRef(state.status);
+  useEffect(() => {
+    statusRef.current = state.status;
+  }, [state.status]);
+
   const writePrefs = useCallback((next: AudioPrefs) => {
     prefsRef.current = next;
     setPrefs(next);
@@ -428,13 +434,28 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
     },
     [writePrefs],
   );
+  /*
+   * A deadline only while something is playing; otherwise only a preference.
+   *
+   * `sleepUntil` is an absolute timestamp, and turning "30 minutes" into one against
+   * an idle player starts the clock on silence. A reader choosing 30 minutes in
+   * Appearance at 20:00 and starting to listen at 22:00 had a deadline two hours in
+   * the past — and the arming effect refuses to refresh it, because it only arms when
+   * `sleepUntil` is null. The first track ended, `advance` read a deadline already
+   * passed, and the player paused itself immediately.
+   *
+   * So a choice made in silence is remembered and nothing more; the arming effect
+   * turns it into a deadline at the moment the voice starts, which is what the
+   * duration means.
+   */
   const setSleep = useCallback(
     (sleep: SleepTimer) => {
       writePrefs({ ...prefsRef.current, sleep });
       const minutes = sleepMinutes(sleep);
+      const live = statusRef.current === 'playing';
       dispatch({
         type: 'setSleep',
-        until: minutes === null ? null : Date.now() + minutes * MINUTE_MS,
+        until: minutes === null || !live ? null : Date.now() + minutes * MINUTE_MS,
       });
     },
     [writePrefs],
