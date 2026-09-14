@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PullCard, SynapseMap, type SynapseNode, textAtDepth } from '@wap/ui';
 import * as api from '../lib/api.js';
 
@@ -116,6 +116,21 @@ export function Library({ userId }: { userId: string }) {
    * leave open across a list.
    */
   const [noting, setNoting] = useState<{ saveId: string; text: string } | null>(null);
+
+  /*
+   * Focus a field when it appears, exactly once.
+   *
+   * An inline `ref={(el) => el?.focus()}` is a new function identity on every render,
+   * so React detaches and reattaches it every time — and both fields are controlled,
+   * so that is once per keystroke. `focus()` scrolls its element into view, so on a
+   * phone the viewport was yanked back to the field on every character typed. Held in
+   * a `useCallback` with no dependencies, the ref is the same function across renders
+   * and React calls it only on mount and unmount, which is what the comments at the
+   * call sites actually describe.
+   */
+  const focusOnMount = useCallback((el: HTMLInputElement | HTMLTextAreaElement | null) => {
+    el?.focus();
+  }, []);
   const [exportNote, setExportNote] = useState<string | null>(null);
   /*
    * Whether this screen is still on screen.
@@ -810,7 +825,7 @@ export function Library({ userId }: { userId: string }) {
                   this replacement worse for exactly the keyboard readers the
                   replacement is for.
                 */
-                ref={(el) => el?.focus()}
+                ref={focusOnMount}
                 onChange={(e) => setNewStashName(e.target.value)}
                 onKeyDown={(e) => {
                   // Enter keeps it and Escape abandons it, because a field that can
@@ -1173,7 +1188,7 @@ export function Library({ userId }: { userId: string }) {
                           rows={3}
                           maxLength={20000}
                           value={noting.text}
-                          ref={(el) => el?.focus()}
+                          ref={focusOnMount}
                           onChange={(e) => setNoting({ saveId: item.saveId, text: e.target.value })}
                         />
                         <p>

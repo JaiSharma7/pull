@@ -352,7 +352,19 @@ export interface PipelineDb {
      * it is not decoration — see `createSummary` in `db.ts`.
      */
     authorId: string | null;
+    /**
+     * Which version of this work's summary this is. Defaults to 1, which is right
+     * for every canonical generation and for the first private one.
+     *
+     * Sent only when adopting a work the requester already has a summary on — an
+     * imported book, whose version 1 is the row `commit_import` hangs the
+     * highlights from. Writing a second summary at version 1 collides, adopts the
+     * import, and lets `cards` overwrite the reader's own highlights.
+     */
+    version?: number;
   }): Promise<string>;
+  /** The next free `summaries.version` for this work and author. See `db.ts`. */
+  nextSummaryVersion(workId: string, authorId: string | null): Promise<number>;
   /**
    * Returns each Pull with the ordinal it was written at.
    *
@@ -1178,12 +1190,27 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         throw new SourceHeldError();
       }
 
-      // The day's budget, held immediately before the call and settled by the
-      // ledger row `record_job_step` writes for it. After the claim, so a job that
-      // is only ever going to wait on a held source does not take a hold it will
-      // not use -- and before the provider, because a reservation taken afterwards
-      // would be a receipt rather than a cap.
-      await db.reserveBudget(job.id, 'synthesize', RESERVE_CENTS.synthesize);
+      /*
+       * The day's budget, held immediately before the call and settled by the ledger
+       * row `record_job_step` writes for it. After the claim, so a job that is only
+       * ever going to wait on a held source does not take a hold it will not use --
+       * and before the provider, because a reservation taken afterwards would be a
+       * receipt rather than a cap.
+       *
+       * AND THE CLAIM IS RELEASED IF THE BUDGET REFUSES. A budget wait can last 24
+       * hours, and every redelivery re-runs this step from the top and renews the
+       * lease -- so a job that is merely early would hold the source hash for a day
+       * while every other job on the same text got `held`, burned its own 30 minutes
+       * of waiting, and then failed TERMINALLY for doing nothing wrong. This job is
+       * not synthesising anything, so it has no business holding the source; it takes
+       * the claim again on the delivery that finds budget.
+       */
+      try {
+        await db.reserveBudget(job.id, 'synthesize', RESERVE_CENTS.synthesize);
+      } catch (e) {
+        if (e instanceof BudgetExhaustedError) await db.releaseSourceHash(job.id);
+        throw e;
+      }
 
       /*
        * Two ways to be billed and get nothing, and both have to reach the ledger.
@@ -1303,6 +1330,37 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        */
       const adopting = asString(job.target.work_id) || null;
       if (adopting && (await db.requesterOwnsWork(job.requester_id, adopting))) {
+        /*
+         * Idempotent before anything else. A retry of this step after
+         * `attachSummaryToJob` committed would otherwise write a SECOND generated
+         * summary at the next version and leave the first orphaned — the failure
+         * `createSummary`'s own comment describes, which its adopt-on-collision
+         * cannot catch here because each attempt asks for a different version.
+         */
+        if (job.summary_id) {
+          return {
+            output: {
+              workId: adopting,
+              summaryId: job.summary_id,
+              reused: false,
+              adopted: true,
+            },
+          };
+        }
+
+        /*
+         * A NEW VERSION, never version 1.
+         *
+         * The reader's imported book already carries their version 1: the summary
+         * `commit_import` created to hang four hundred highlights from. Writing this
+         * one at the default collides on `(work_id, version, author_id)`,
+         * `createSummary` adopts on collision, and the step returns the IMPORT's
+         * summary — after which `cards` upserts the model's pulls into it on
+         * `(summary_id, ordinal)` and replaces the reader's own highlight text at
+         * every ordinal the two lists share. Their highlights are gone, and
+         * `import_items.pull_id` still points at the rows now holding model output.
+         */
+        const version = await db.nextSummaryVersion(adopting, job.requester_id);
         const summaryId = await db.createSummary({
           workId: adopting,
           title: summary.title,
@@ -1311,9 +1369,10 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
           sections: { elevatorPitch: summary.elevatorPitch, whyItMatters: summary.whyItMatters },
           visibility: job.visibility,
           authorId: job.requester_id,
+          version,
         });
         await db.attachSummaryToJob(job.id, summaryId, adopting);
-        return { output: { workId: adopting, summaryId, reused: false, adopted: true } };
+        return { output: { workId: adopting, summaryId, reused: false, adopted: true, version } };
       }
 
       const { workId } = await db.upsertWork({

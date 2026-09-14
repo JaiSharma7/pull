@@ -277,13 +277,20 @@ export function PullCard({
       <hr className="pull-card__rule" />
 
       {/*
-        Provenance, and the answer to it, on one line under the rule. Rendered
-        only when there is a reason to give: a mute with nothing explaining why
-        the card is there is a control that arrives without its question.
+        Provenance, and the answer to it, on one line under the rule.
+
+        Either half alone is enough to draw the line. The first version required a
+        reason, on the grounds that a mute without one arrives without its question
+        — and that withheld the control on exactly the pages where it does the most
+        good: a new reader's first feed, where `get_feed` has measured nothing and
+        returns `reason = null` for every row, and every offline card, whose cached
+        row predates the column. The reader least served by the ranking had no way
+        to say so. The empty span keeps the mute at the end of the line, where it
+        is when there is a reason beside it.
       */}
-      {reason ? (
+      {reason || onMute ? (
         <p className="pull-card__reason">
-          <span className="pull-card__why">{reason}</span>
+          {reason ? <span className="pull-card__why">{reason}</span> : <span />}
           {onMute && (
             <button
               type="button"

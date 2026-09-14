@@ -678,20 +678,24 @@ export function Review() {
   }, [reloads]);
 
   /*
-   * One refetch when the connection comes back, and only while it would change
-   * anything.
+   * One refetch when the connection comes back, and only where there is nothing on
+   * screen for it to interrupt.
    *
-   * Unconditionally re-fetching on `online` would replace the page the reader is
-   * halfway through — the exact failure the comment above this effect describes,
-   * arriving by a different door. So it is armed only when the screen is showing
-   * the downloaded copy or an offline error, which are the two states a returning
-   * connection actually answers.
+   * Armed on the ERROR screen alone. The first version also armed it while
+   * practising from the downloaded copy, which is the one state where a reader is
+   * mid-session: leaving a tunnel fired `online`, the refetch replaced `due`, and
+   * the question they were reading — with the latency accumulated for it —
+   * was swapped for a different card with no notice. That is precisely the failure
+   * the comment above the main effect describes, arriving by another door, and it is
+   * worse than the one it was trying to fix.
+   *
+   * Nothing is lost by waiting. Grades queue and drain on their own, and a pack that
+   * runs out bumps `reloads` at the page boundary, which is where a refetch belongs.
    */
-  const stranded = practisingFrom !== null || offline;
   useEffect(() => {
-    if (!stranded) return;
+    if (error === null) return;
     return onReconnect(() => setReloads((n) => n + 1));
-  }, [stranded]);
+  }, [error]);
 
   /*
    * What is already on the device, read once, independently of the fetch.

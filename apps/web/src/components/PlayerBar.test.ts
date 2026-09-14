@@ -102,6 +102,18 @@ describe('PlayerBar', () => {
     expect(render(playing({ index: 2 }))).toContain('aria-label="Stop listening"');
   });
 
+  it('always offers a way to put the bar away, which Stop does not do', () => {
+    /*
+     * `stop` keeps the queue and the position in it, by design — so after it, a
+     * reader on the last track had a bar drawn as "Paused · 3 of 3", a reserved
+     * strip under the Colophon, no Next, and no way out but playing to the end or
+     * signing out.
+     */
+    for (const state of [playing(), playing({ status: 'paused' }), playing({ index: 2 })]) {
+      expect(render(state)).toContain('aria-label="Clear the listening queue"');
+    }
+  });
+
   it('shows the remembered sleep timer as the chosen one', () => {
     const html = render(playing(), {
       prefs: { rate: 1, voiceURI: null, sleep: '30' },

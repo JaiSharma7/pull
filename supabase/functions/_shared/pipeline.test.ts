@@ -420,7 +420,7 @@ describe('reuse skips the paid work', () => {
         qualityScore: number | null;
         trustScore: number | null;
       };
-      createSummary?: { authorId: string | null; visibility: string };
+      createSummary?: { authorId: string | null; visibility: string; version?: number };
       insertQuizQuestions?: readonly QuizQuestionRow[];
     } = {};
 
@@ -476,11 +476,17 @@ describe('reuse skips the paid work', () => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
         },
-        createSummary: async (input: { authorId: string | null; visibility: string }) => {
+        createSummary: async (input: {
+          authorId: string | null;
+          visibility: string;
+          version?: number;
+        }) => {
           calls.createSummary++;
           received.createSummary = input;
           return 's1';
         },
+        // A work the reader has imported already carries their version 1.
+        nextSummaryVersion: async () => 2,
         /*
          * Returns a row per generated Pull, which it did not before.
          *
@@ -673,6 +679,38 @@ describe('reuse skips the paid work', () => {
     expect(calls.summary).toBe(0);
   });
 
+  it('lets go of the source when the budget refuses, so no one else waits on it', async () => {
+    /*
+     * A budget wait can last 24 hours and every redelivery re-runs this step from the
+     * top, renewing the lease. Held through that, a job that is merely early would
+     * starve every other job on the same text: each gets `held`, burns its own 30
+     * minutes of waiting, and then fails terminally for doing nothing wrong.
+     */
+    const { deps, calls } = harness(null, 'claimed', 'spent');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const err = await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never).catch((e) => e);
+
+    expect(err).toBeInstanceOf(BudgetExhaustedError);
+    expect(calls.claim).toBe(1);
+    expect(calls.release).toBe(1);
+  });
+
+  it('keeps the source when the provider is what failed, since that is a real attempt', async () => {
+    // Only a budget refusal releases. A billed failure is an attempt on this source and
+    // the claim is what stops a second job paying for the same text alongside it.
+    const { deps, calls } = harness(null);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+    expect(calls.release).toBe(0);
+  });
+
   it('holds against the cap for embedding too, since a cheap call is still a call', async () => {
     const { deps, calls } = harness(null);
 
@@ -700,18 +738,51 @@ describe('reuse skips the paid work', () => {
    * requester has nothing to do with.
    */
   it('adopts a work the requester authored a summary on rather than keying on the hash', async () => {
-    const { deps, calls } = harness(null, 'claimed', 'available', true);
+    const { deps, calls, received } = harness(null, 'claimed', 'available', true);
     const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
     const out = (await runPipelineStep('template', {
       ...deps,
       job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-imported' } },
       priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
-    } as never)) as { output: { workId: string; adopted?: boolean } };
+    } as never)) as { output: { workId: string; adopted?: boolean; version?: number } };
 
     expect(out.output.workId).toBe('w-imported');
     expect(out.output.adopted).toBe(true);
     expect(calls.createSummary).toBe(1);
+
+    /*
+     * NEVER VERSION 1, which is the whole safety property.
+     *
+     * An imported book already carries the reader's version 1 — the summary
+     * `commit_import` hangs the highlights from. Writing this one at the default
+     * collides on `(work_id, version, author_id)`, `createSummary` adopts on
+     * collision and returns the IMPORT's summary, and `cards` then upserts model
+     * output over the reader's own highlight text at every shared ordinal.
+     */
+    expect(received.createSummary?.version).toBe(2);
+    expect(out.output.version).toBe(2);
+  });
+
+  it('writes no second summary when the step is retried after attaching one', async () => {
+    // A retry after `attachSummaryToJob` committed would otherwise ask for the NEXT
+    // version again and leave the first generated summary orphaned — and adopting on
+    // collision cannot catch it, because each attempt asks for a different version.
+    const { deps, calls } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: {
+        ...(deps as { job: Record<string, unknown> }).job,
+        target: { work_id: 'w-imported' },
+        summary_id: 's-already',
+      },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { summaryId: string } };
+
+    expect(out.output.summaryId).toBe('s-already');
+    expect(calls.createSummary).toBe(0);
   });
 
   it('keys on the hash when the work belongs to somebody else', async () => {
@@ -1142,6 +1213,7 @@ describe('reuse skips the paid work', () => {
         },
         upsertWork: async () => ({ workId: 'w1', existing: false }),
         createSummary: async () => 's1',
+        nextSummaryVersion: async () => 1,
         insertPulls: async () => [],
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,

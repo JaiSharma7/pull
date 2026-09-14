@@ -349,6 +349,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       sections,
       visibility,
       authorId,
+      version = SUMMARY_VERSION,
     }) {
       /*
        * `template` must be safe to run twice, and it was not.
@@ -363,14 +364,18 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * synthesise.
        *
        * Adopting on collision fixes both, because in both cases the existing row
-       * is exactly the row this step was trying to create. `version` is not sent
-       * and defaults to 1, so it is part of the key and is matched explicitly
-       * here rather than left implied.
+       * is exactly the row this step was trying to create. `version` is part of
+       * the key, so it is sent and then matched on THE VALUE THAT WAS SENT rather
+       * than on a constant — which is what makes adopting an owned work safe. A
+       * generated summary on an imported book is version 2 or later, and matching
+       * a hardcoded 1 there would adopt the IMPORT's summary and let `cards`
+       * overwrite the reader's own highlights at the colliding ordinals.
        */
       const insert = await supabase
         .from('summaries')
         .insert({
           work_id: workId,
+          version,
           title,
           elevator_pitch: elevatorPitch,
           why_it_matters: whyItMatters,
@@ -400,7 +405,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           .from('summaries')
           .select('id')
           .eq('work_id', workId)
-          .eq('version', SUMMARY_VERSION);
+          .eq('version', version);
         // `.eq` on a null author_id would render as `author_id=eq.null` and match
         // nothing; the unique constraint treats nulls as distinct anyway, so a
         // collision here can only be a row that shares this author.
@@ -577,6 +582,36 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         );
       }
       return (count ?? 0) > 0;
+    },
+
+    /**
+     * The next version this requester may write on a work they already have one on.
+     *
+     * `summaries` is unique on `(work_id, version, author_id)`, and an imported book
+     * already carries the reader's version 1 — the summary `commit_import` created to
+     * hang the highlights from. A generated summary on the same work has to be its
+     * own row, or `createSummary` collides, adopts the import, and `cards` upserts
+     * model output over the reader's highlights at every colliding ordinal.
+     *
+     * Racy by construction, and safely so: two concurrent jobs can both read 1 and
+     * both try 2, and the loser's 23505 adopts the winner's row — which is a
+     * generated summary, not the import, and is the case `createSummary`'s own
+     * comment already reasons about.
+     */
+    async nextSummaryVersion(workId, authorId) {
+      if (authorId === null) return SUMMARY_VERSION;
+      const { data, error } = await supabase
+        .from('summaries')
+        .select('version')
+        .eq('work_id', workId)
+        .eq('author_id', authorId)
+        .order('version', { ascending: false })
+        .limit(1);
+      if (error) {
+        throw new Error(`read summary versions: ${error.message ?? JSON.stringify(error)}`);
+      }
+      const highest = (data ?? [])[0]?.version;
+      return typeof highest === 'number' ? highest + 1 : SUMMARY_VERSION;
     },
 
     async attachSummaryToJob(jobId, summaryId, workId) {

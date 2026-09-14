@@ -35,6 +35,15 @@
 --     for a worker that died between reserving and calling anything, which is the case
 --     no client-side call can cover.
 --
+-- One more, from the same round: `spend_today()` and `reserve_budget` counted every
+-- open reservation inside the one-hour TTL WITHOUT bounding it to the UTC day. A hold
+-- taken at 23:58 for a call that stalls is still inside its TTL at 00:05, so the new
+-- day opened with cents spent on it that belong to a day already closed out -- and a
+-- provider stall at the boundary is exactly what produces several of them at once.
+-- Both are restated here with the day bound the ledger half already had. The charge, if
+-- it ever lands, writes its `cost_ledger` row on the day it lands, so nothing is lost by
+-- letting yesterday's holds expire with yesterday.
+--
 -- Law 2 holds: arithmetic over two tables. No model runs in here.
 
 /*
@@ -154,3 +163,101 @@ begin
   return swept;
 end;
 $$;
+
+/*
+ * `spend_today()`, restated from 20260914010000 with the day bound on both halves.
+ *
+ * The ledger half was already bounded to the UTC day; the reservation half was bounded
+ * only by the TTL, so a hold taken minutes before midnight was charged against the
+ * morning. `least(day start, now - ttl)` is not the answer -- a hold must satisfy BOTH,
+ * so the two predicates stand together and the tighter one wins whenever they disagree,
+ * which is the first hour of every day.
+ */
+create or replace function public.spend_today()
+returns numeric
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select coalesce(
+           (select sum(cl.cost_cents)
+              from public.cost_ledger cl
+             where cl.created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc'),
+           0)
+       + coalesce(
+           (select sum(br.reserved_cents)
+              from public.budget_reservations br
+             where br.settled_at is null
+               and br.created_at >= now() - public.budget_reservation_ttl()
+               and br.created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc'),
+           0);
+$$;
+
+comment on function public.spend_today is
+  'Provider spend so far in this UTC day: the cost_ledger plus open reservations TAKEN '
+  'TODAY. Never generation_jobs.cost_cents, which is a second copy of every ledgered '
+  'charge. See 20260914010000 and 20260914030000.';
+
+revoke all on function public.spend_today() from public, anon;
+grant execute on function public.spend_today() to authenticated, service_role;
+
+/*
+ * `reserve_budget`, restated from 20260914010000 with the same day bound.
+ *
+ * Every other line is that migration's verbatim: the global advisory lock, the
+ * exclusion of the (job, step) being replaced, the 53400, the on-conflict reuse.
+ * A cap that refused a worker at 00:05 for a hold belonging to yesterday would stall
+ * the first generations of every day.
+ */
+create or replace function public.reserve_budget(p_job_id uuid, p_step text, p_cents numeric)
+returns numeric
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  cap       numeric := public.daily_spend_cap_cents();
+  want      numeric := greatest(coalesce(p_cents, 0), 0);
+  committed numeric;
+  held      numeric;
+begin
+  if p_job_id is null or p_step is null or p_step = '' then
+    raise exception 'reserve_budget needs a job and a step' using errcode = '22023';
+  end if;
+
+  -- One lock for the whole budget. The constant is arbitrary and only has to be
+  -- the same one every caller uses.
+  perform pg_advisory_xact_lock(pg_catalog.hashtextextended('what-a-pull:budget', 0));
+
+  select coalesce(sum(cl.cost_cents), 0) into committed
+  from public.cost_ledger cl
+  where cl.created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc';
+
+  select coalesce(sum(br.reserved_cents), 0) into held
+  from public.budget_reservations br
+  where br.settled_at is null
+    and br.created_at >= now() - public.budget_reservation_ttl()
+    and br.created_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc'
+    and not (br.job_id = p_job_id and br.step = p_step);
+
+  if committed + held + want > cap then
+    raise exception
+      'the daily generation budget is spent (% of % cents held or charged); this step '
+      'needs % more', round(committed + held, 4), cap, round(want, 4)
+      using errcode = '53400';
+  end if;
+
+  insert into public.budget_reservations (job_id, step, reserved_cents)
+  values (p_job_id, p_step, want)
+  on conflict (job_id, step) do update
+    set reserved_cents = excluded.reserved_cents,
+        created_at     = now(),
+        settled_at     = null;
+
+  return cap - (committed + held + want);
+end;
+$$;
+
+revoke all on function public.reserve_budget(uuid, text, numeric) from public, anon, authenticated;
+grant execute on function public.reserve_budget(uuid, text, numeric) to service_role;

@@ -15,7 +15,8 @@
  * Reading is still never advanced for anyone.
  *
  * The bar renders nothing at all when there is nothing queued, so the reserved
- * space below the Colophon is spent only while it is being used.
+ * space below the Colophon is spent only while it is being used — and Done is what
+ * makes "nothing queued" reachable on purpose rather than only by playing to the end.
  */
 
 import { SLEEP_TIMERS, AUDIO_COPY, type SleepTimer } from '../lib/audio-prefs.js';
@@ -39,7 +40,7 @@ export function listeningLabel(state: PlayerState): string {
 }
 
 export function PlayerBar() {
-  const { state, supported, prefs, pause, resume, next, stop, setSleep } = usePlayer();
+  const { state, supported, prefs, pause, resume, next, stop, clear, setSleep } = usePlayer();
   const track = currentTrack(state);
 
   // Nothing queued is nothing to draw. A bar that sat there empty would be a
@@ -85,6 +86,27 @@ export function PlayerBar() {
 
           <button type="button" className="btn" onClick={stop} aria-label="Stop listening">
             Stop
+          </button>
+
+          {/*
+            Stop keeps the queue; Done gives it back.
+
+            `stop` is deliberately not a `clear` — a reader who stops halfway through
+            five sources should find them where they left them. But without a way to
+            empty the queue, `currentTrack` stays non-null, the bar stays drawn as
+            "Paused · 3 of 3", and `:root[data-listening]` keeps reserving a strip
+            under the Colophon — so the only ways out were playing the queue to its
+            end or signing out. The header of this file promises the bar goes away
+            when the session ends; this is what makes that true after Stop as well as
+            after the last track.
+          */}
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={clear}
+            aria-label="Clear the listening queue"
+          >
+            Done
           </button>
 
           <label className="player__sleep">

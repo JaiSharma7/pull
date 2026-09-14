@@ -123,8 +123,23 @@ export function isRunning(job: StudioJob): boolean {
  */
 export function isWorthPolling(job: StudioJob, now: number = Date.now()): boolean {
   if (!isRunning(job)) return false;
-  return job.status === 'queued' || now - Date.parse(job.createdAt) <= STALLED_AFTER_MS;
+  return now - Date.parse(job.createdAt) <= POLL_FOR_MS;
 }
+
+/**
+ * How long a job is worth asking about, whatever its status.
+ *
+ * The first version exempted `queued` entirely, on the reasoning that a queued job is
+ * about to start — which left the same unbounded poll on the other status: the
+ * per-requester stagger delays the 50th job of the day by `(50 - 3 + 1) * 300` seconds,
+ * nearly four hours, and the job is `queued` for all of it. A tab left open issued
+ * roughly fourteen hundred requests against a row that could not change.
+ *
+ * Four hours covers the whole stagger, so a job that started the day queued is still
+ * being watched when its turn comes. Past that the reader sees the answer on their next
+ * visit, which is when it will have changed.
+ */
+export const POLL_FOR_MS = 4 * 60 * 60 * 1000;
 
 /**
  * What a job is doing, in the reader's terms rather than the queue's.
@@ -134,15 +149,22 @@ export function isWorthPolling(job: StudioJob, now: number = Date.now()): boolea
  * whether it is nearly done, and whether it went wrong — so the steps are folded
  * into three sentences and a failure quotes its own reason.
  *
- * WHAT THIS CANNOT TELL, said here because the first version claimed it could: a job
- * parked on the day's spent budget is indistinguishable from one that is working.
- * `dispatch_generation_step` sets `status = 'running'` on every hop, so a job waiting
- * at `synthesize` is `running` and the worker never touches its status while it
- * re-sends the step — for up to 24 hours. Telling that reader "Writing the summary."
- * for a day would be a screen lying at length, so a provider step that has been sitting
- * long enough to be implausible says it is waiting instead. That threshold is a guess
- * about elapsed time, which is the honest shape of it; the alternative is a new column
- * the worker writes, and that is a migration rather than a sentence.
+ * WHAT THIS CANNOT TELL, said here because two versions of it have now claimed
+ * something it does not know. A job parked on the day's spent budget is
+ * indistinguishable from one that is working: `dispatch_generation_step` sets
+ * `status = 'running'` on every hop, so a job waiting at `synthesize` is `running`,
+ * and the worker never touches its status while it re-sends the step for up to 24
+ * hours. Telling that reader "Writing the summary." for a day would be a screen lying
+ * at length.
+ *
+ * So a job running past any plausible duration says it is TAKING LONGER, and does not
+ * guess why. The previous version named the budget, which mislabels in both directions
+ * — a genuinely slow source is told the budget is spent, and a budget-parked job is
+ * told a summary is being written for its first twenty minutes. The worker does know
+ * which it is (it increments `budgetWaits` on the queue message), and surfacing that
+ * needs a column it writes: a migration rather than a sentence, and worth doing rather
+ * than guessing at. Named here so the next person finds the decision rather than the
+ * guess.
  */
 export function describeJob(job: StudioJob, now: number = Date.now()): string {
   if (job.status === 'succeeded') return 'Done.';
@@ -151,12 +173,11 @@ export function describeJob(job: StudioJob, now: number = Date.now()): string {
   }
   if (job.status === 'queued') return 'Waiting its turn.';
 
-  // Past this, no generation is still genuinely mid-call: the worker holds a message
-  // for 180 s and a whole run is minutes. A job still `running` after it is waiting on
-  // something — the day's budget, most likely — and saying so is the one description
-  // that is true in both cases.
+  // Past this, no generation is still plausibly mid-call: the worker holds a message
+  // for 180 s and a whole run is minutes. What it is waiting on is not something this
+  // screen can see, so it does not say.
   if (now - Date.parse(job.createdAt) > STALLED_AFTER_MS) {
-    return 'Waiting — the day’s generation budget may be spent. It will start again on its own.';
+    return 'Taking longer than usual. It will finish on its own — you can close this.';
   }
 
   if (EARLY_STEPS.has(job.currentStep)) return 'Reading the text.';

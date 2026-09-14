@@ -116,7 +116,14 @@ async function failUnbilled(
   message: string,
   durationMs: number,
 ) {
-  await supabase.rpc('settle_job_budget', { p_job_id: jobId });
+  // Checked, not a bare await. supabase-js resolves rather than throws on a Postgres
+  // error, so an unchecked settle is a hold left open by exactly the transient
+  // conditions -- pool exhaustion, a statement timeout -- that produce the outage this
+  // path exists for. Logged rather than thrown: the step still has to be recorded, and
+  // the sweep's terminal pass and the TTL are the backstops.
+  const settled = await supabase.rpc('settle_job_budget', { p_job_id: jobId });
+  if (settled.error) console.error('could not settle budget for', jobId, settled.error);
+
   return supabase.from('job_steps').insert({
     job_id: jobId,
     step,
@@ -492,7 +499,10 @@ Deno.serve(async (req) => {
          * about to stop being either. Before the update, so a throw below leaves the
          * money released rather than the job un-failed AND the money held.
          */
-        await supabase.rpc('settle_job_budget', { p_job_id: jobId });
+        must(
+          await supabase.rpc('settle_job_budget', { p_job_id: jobId }),
+          'settle budget for an exhausted job',
+        );
 
         must(
           await supabase

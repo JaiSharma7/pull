@@ -239,6 +239,24 @@ begin
     raise exception 'settle_job_budget left % cents held', public.spend_today() - 10;
   end if;
 
+  -- --------------------------- 5d. and a hold belongs to the day it was taken in
+  --
+  -- A hold taken at 23:58 for a call that stalls is still inside its one-hour TTL at
+  -- 00:05. Counted, the new day opens with cents spent on it that belong to a day
+  -- already closed out -- and a provider stall at the boundary produces several at
+  -- once, so the first readers of the morning are refused for yesterday's ghosts.
+  perform public.reserve_budget(job_a, 'artwork', 70);
+  update public.budget_reservations
+     set created_at = date_trunc('day', (now() at time zone 'utc')) at time zone 'utc'
+                      - interval '2 minutes'
+   where job_id = job_a and step = 'artwork';
+  if public.spend_today() <> 10 then
+    raise exception
+      'a hold taken before midnight is counted against today (total %). The charge, if '
+      'it lands, writes its ledger row on the day it lands.', public.spend_today();
+  end if;
+  delete from public.budget_reservations where job_id = job_a and step = 'artwork';
+
   -- ------------------------------------------------ 6. and the TTL is the backstop
   --
   -- If the sweep never runs, an ancient hold is ignored rather than believed for ever.

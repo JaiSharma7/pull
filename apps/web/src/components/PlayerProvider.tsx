@@ -331,10 +331,10 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
    * so whether a given browser attaches these controls to it is a fact about that
    * browser. Every call is guarded and the feature degrades to the bar on screen.
    */
+  const track = currentTrack(state);
   useEffect(() => {
     const session = navigator.mediaSession;
     if (!session) return;
-    const track = currentTrack(state);
     if (track === null) {
       session.metadata = null;
       session.playbackState = 'none';
@@ -347,7 +347,17 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
       // handlers below still work; only the title on the lock screen is lost.
     }
     session.playbackState = state.status === 'playing' ? 'playing' : 'paused';
-  }, [state]);
+    // Keyed on the track and the status rather than on the whole state, which is what
+    // the comment above claims. On `[state]` every `setRate` drag, every enqueue and
+    // every `ended` tick allocated a fresh `MediaMetadata` and reassigned it — and a
+    // metadata reassignment repaints the lock screen on some browsers, so a rate
+    // slider dragged through ten steps repainted it ten times.
+    //
+    // `track` by reference, not by id: the reducer keeps a Track's identity across
+    // every transition that does not replace it — `enqueue` spreads the existing
+    // entries, `remove` filters them, `setRate` does not touch the queue — so this is
+    // both what the rule wants and what the effect actually depends on.
+  }, [track, state.status]);
 
   useEffect(() => {
     const session = navigator.mediaSession;

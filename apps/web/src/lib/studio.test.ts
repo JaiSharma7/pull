@@ -8,6 +8,7 @@ import {
   isWorthPolling,
   MAX_TEXT_CHARS,
   MIN_TEXT_CHARS,
+  POLL_FOR_MS,
   STALLED_AFTER_MS,
   type StudioJob,
 } from './studio.js';
@@ -146,8 +147,10 @@ describe('describeJob', () => {
   it('stops claiming a summary is being written once that is implausible', () => {
     const stalled = job({ status: 'running', currentStep: 'synthesize' });
     const late = Date.parse(stalled.createdAt) + STALLED_AFTER_MS + 1;
-    expect(describeJob(stalled, late)).toContain('budget may be spent');
+    expect(describeJob(stalled, late)).toContain('Taking longer');
     expect(describeJob(stalled, late)).not.toContain('Writing');
+    // And it does not guess WHY. Naming the budget mislabels a genuinely slow source.
+    expect(describeJob(stalled, late)).not.toContain('budget');
   });
 
   it('does not call a job stalled while it is still plausibly working', () => {
@@ -169,20 +172,26 @@ describe('describeJob', () => {
 });
 
 describe('isWorthPolling', () => {
-  it('keeps asking about a job that is queued, however long it waits for its turn', () => {
-    // The per-requester stagger can delay a START by hours, and that job is `queued`.
+  it('keeps asking about a queued job for the length of the stagger, and no longer', () => {
+    // The per-requester stagger delays the 50th job of the day by nearly four hours,
+    // and it is `queued` for all of it — but exempting `queued` outright left the same
+    // unbounded poll the bound exists to remove, pointed at the other status.
     const queued = job({ status: 'queued' });
-    expect(isWorthPolling(queued, Date.parse(queued.createdAt) + 6 * 60 * 60 * 1000)).toBe(true);
+    const at = (ms: number) => Date.parse(queued.createdAt) + ms;
+    expect(isWorthPolling(queued, at(3 * 60 * 60 * 1000))).toBe(true);
+    expect(isWorthPolling(queued, at(POLL_FOR_MS + 1))).toBe(false);
   });
 
-  it('stops asking about a job that has been running past any plausible duration', () => {
+  it('stops asking long before a budget wait could run out', () => {
     // Not the same question as `isRunning`, and conflating them had the screen polling
     // every ten seconds for up to twenty-four hours against a job parked on the budget.
+    // Nor the same question as `describeJob`'s threshold: twenty minutes is when
+    // "Writing the summary" stops being honest, four hours is when asking again stops
+    // being worth a request.
     const stalled = job({ status: 'running', currentStep: 'synthesize' });
-    expect(isWorthPolling(stalled, Date.parse(stalled.createdAt) + STALLED_AFTER_MS + 1)).toBe(
-      false,
-    );
-    expect(isWorthPolling(stalled, Date.parse(stalled.createdAt) + 1000)).toBe(true);
+    const at = (ms: number) => Date.parse(stalled.createdAt) + ms;
+    expect(isWorthPolling(stalled, at(STALLED_AFTER_MS + 1))).toBe(true);
+    expect(isWorthPolling(stalled, at(POLL_FOR_MS + 1))).toBe(false);
   });
 
   it('never asks about a job that has finished', () => {

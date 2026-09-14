@@ -344,7 +344,7 @@ describe('why this card', () => {
     expect(html).toContain(`<span class="pull-card__why">${reason}</span>`);
   });
 
-  it('draws nothing where nothing about the card was measured', () => {
+  it('draws no line at all when there is neither a reason nor a mute', () => {
     for (const value of [undefined, null, '']) {
       const html = renderToStaticMarkup(createElement(PullCard, { ...base, reason: value }));
       expect(html).not.toContain('pull-card__reason');
@@ -359,9 +359,16 @@ describe('why this card', () => {
     expect(html).toContain('Less like this');
   });
 
-  it('withholds the mute where no reason explains the card', () => {
+  it('offers the mute even where nothing explains the card', () => {
+    /*
+     * A new reader's first feed has no measured term, so `get_feed` returns
+     * `reason = null` for every row, and an offline card's cached row predates the
+     * column entirely. Requiring a reason withheld the control on exactly the pages
+     * where the ranking serves the reader least.
+     */
     const html = renderToStaticMarkup(createElement(PullCard, { ...base, onMute: () => {} }));
-    expect(html).not.toContain('Less like this');
+    expect(html).toContain('Less like this');
+    expect(html).not.toContain('pull-card__why');
   });
 
   it('keeps the mute out of the action row, where the reader acts on the idea', () => {
