@@ -40,6 +40,7 @@ import {
   MAX_TITLE_CHARS,
   MIN_TEXT_CHARS,
   requestPrivateSummary,
+  STUDIO_KIND_LABEL,
   STUDIO_KINDS,
   type BudgetState,
   type StudioJob,
@@ -94,7 +95,16 @@ export function Studio({
    */
   const [booksFailed, setBooksFailed] = useState<number | null>(null);
   const [itemsFailed, setItemsFailed] = useState<string | null>(null);
+  /*
+   * TWO COUNTERS, because there are two things that can fail independently.
+   *
+   * One counter drove both retries, and it was in the deps of both effects: pressing
+   * Try again under a failed highlight fetch re-ran the budget state, the book list and
+   * the job list as well — three round trips to retry a fourth, unrelated one, on a
+   * screen whose whole argument is that generation is metered.
+   */
   const [reloads, setReloads] = useState(0);
+  const [itemReloads, setItemReloads] = useState(0);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
 
   const reloadJobs = useCallback(() => {
@@ -157,12 +167,12 @@ export function Studio({
   const picked = source === 'paste' ? null : (books.find((b) => b.workId === source) ?? null);
 
   /** The highlight fetch currently in flight, or the one that would be. */
-  const itemsAttempt = picked ? `${picked.workId}#${reloads}` : null;
+  const itemsAttempt = picked ? `${picked.workId}#${itemReloads}` : null;
 
   useEffect(() => {
     if (picked === null || items?.workId === picked.workId) return;
     let live = true;
-    const attempt = `${picked.workId}#${reloads}`;
+    const attempt = `${picked.workId}#${itemReloads}`;
     fetchImportedItemsForStudio(userId, picked.workId)
       .then((rows) => {
         if (live) setItems({ workId: picked.workId, rows });
@@ -174,7 +184,7 @@ export function Studio({
     return () => {
       live = false;
     };
-  }, [picked, items?.workId, userId, reloads]);
+  }, [picked, items?.workId, userId, itemReloads]);
 
   /** The picked book's rows, and only once they are the picked book's. */
   const pickedItems = picked && items?.workId === picked.workId ? items.rows : null;
@@ -329,7 +339,7 @@ export function Studio({
             <button
               type="button"
               className="btn btn--plain"
-              onClick={() => setReloads((n) => n + 1)}
+              onClick={() => setItemReloads((n) => n + 1)}
             >
               Try again
             </button>
@@ -369,7 +379,7 @@ export function Studio({
           >
             {STUDIO_KINDS.map((k) => (
               <option key={k} value={k}>
-                {k}
+                {STUDIO_KIND_LABEL[k]}
               </option>
             ))}
           </select>

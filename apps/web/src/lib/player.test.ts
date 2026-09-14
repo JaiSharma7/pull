@@ -143,6 +143,32 @@ describe('playNow', () => {
     expect(s.queue.map((t) => t.id)).toEqual(['a']);
     expect(s.status).toBe('playing');
   });
+
+  /*
+   * A Track is an id, a title and TEXT, and the text is the reader's current depth.
+   * Every caller builds one at the moment of the press — a card queued at the claim
+   * and then played at full depth hands over a different track with the same id — so
+   * matching on the id and keeping the queued copy read the short version aloud while
+   * the screen showed the long one.
+   */
+  it('speaks the track it was handed, not the copy already queued', () => {
+    const queued = { id: 'a', title: 'Meditations', text: 'The claim.' };
+    const deeper = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+
+    const moved = run([
+      { type: 'enqueue', tracks: [queued, track('b')] },
+      { type: 'next' },
+      { type: 'playNow', track: deeper },
+    ]);
+    expect(currentTrack(moved)?.text).toBe(deeper.text);
+
+    const restarted = run([
+      { type: 'enqueue', tracks: [queued] },
+      { type: 'playNow', track: deeper },
+    ]);
+    expect(restarted.queue).toHaveLength(1);
+    expect(currentTrack(restarted)?.text).toBe(deeper.text);
+  });
 });
 
 describe('hydrate: the cursor keeps pointing at the track it named', () => {

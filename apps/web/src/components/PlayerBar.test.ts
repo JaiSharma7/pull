@@ -66,6 +66,13 @@ describe('listeningLabel', () => {
     expect(listeningLabel(playing({ status: 'paused' }))).toBe('Paused · 2 of 3 · The Enchiridion');
   });
 
+  // `stop` keeps the queue, so the bar stays drawn — and Play from there starts the
+  // track again rather than resuming it. Calling that "Paused" made the label promise
+  // something the next press would not do.
+  it('says stopped when the queue is kept but nothing is playing', () => {
+    expect(listeningLabel(playing({ status: 'idle' }))).toBe('Stopped · 2 of 3 · The Enchiridion');
+  });
+
   it('is empty when there is nothing to play', () => {
     expect(listeningLabel(INITIAL_PLAYER)).toBe('');
   });

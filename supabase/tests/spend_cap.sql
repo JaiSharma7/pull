@@ -239,21 +239,27 @@ begin
       'that is how a cap nobody spent closes for an hour.', public.spend_today() - 10;
   end if;
 
-  -- ------------------------------------ 5c. and one call releases a whole job
+  -- --------------------- 5c. and two holds on one job are two independent holds
   --
-  -- `settle_job_budget` is what the worker calls on the two failure paths that never
-  -- reach `record_failed_job_step`. By job rather than by step, because the caller
-  -- failing a job does not always know which steps reserved.
+  -- `settle_job_budget` released all of a job's holds in one call, and 20260914050000
+  -- drops it: both callers now settle `(job, step)`, because a job being failed is not
+  -- the same moment as every one of its steps being over -- `extract_evidence` runs
+  -- beside `synthesize` and can still be mid-call. What has to hold is that settling
+  -- one step leaves its sibling's money exactly where it was.
   perform public.reserve_budget(job_a, 'embed', 20);
   perform public.reserve_budget(job_a, 'artwork', 30);
   if public.spend_today() <> 60 then
     raise exception 'two holds on one job came to %', public.spend_today() - 10;
   end if;
-  if public.settle_job_budget(job_a) <> 2 then
-    raise exception 'settle_job_budget did not close both of one job''s holds';
+  perform public.settle_budget(job_a, 'embed');
+  if public.spend_today() <> 40 then
+    raise exception
+      'settling one step of a two-step job left % held; it should have released 20 and '
+      'left the sibling''s 30 alone.', public.spend_today() - 10;
   end if;
+  perform public.settle_budget(job_a, 'artwork');
   if public.spend_today() <> 10 then
-    raise exception 'settle_job_budget left % cents held', public.spend_today() - 10;
+    raise exception 'settling the sibling left % cents held', public.spend_today() - 10;
   end if;
 
   -- --------------------------- 5d. and a hold belongs to the day it was taken in
@@ -371,16 +377,6 @@ begin
     raise exception 'a reader could settle a reservation, and so release a hold at will.';
   end if;
 
-  refused := false;
-  begin
-    perform public.settle_job_budget(extensions.gen_random_uuid());
-  exception when insufficient_privilege then
-    refused := true;
-  end;
-  if not refused then
-    raise exception
-      'a reader could settle a whole job''s holds. Same authority as taking one.';
-  end if;
 
   refused := false;
   begin

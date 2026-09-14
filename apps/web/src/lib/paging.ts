@@ -35,8 +35,12 @@ import { rpcError } from './rpc-error.js';
  * Named here because nothing in either signature said the two numbers were coupled, and
  * the whole point of this module is that a silent cap is worse than a loud one. If
  * `config.toml` changes, this is the line that has to move with it.
+ *
+ * Exported because the cap binds a query that neither walk covers: an `in` list longer
+ * than this comes back with 100 rows of the set the caller asked for and nothing saying
+ * the rest were dropped. `fetchImportedWorks` batches against this number.
  */
-const MAX_ROWS = 100;
+export const MAX_ROWS = 100;
 
 /*
  * `throw rpcError(error)`, not `throw error`. supabase-js resolves with a plain error

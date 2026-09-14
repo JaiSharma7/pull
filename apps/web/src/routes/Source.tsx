@@ -842,6 +842,17 @@ export function Source({
                   ) : null}
                 </p>
 
+                {/*
+                  TWO CONTROLS, ONE GATE TOO MANY.
+                
+                  Highlighting needs a body on screen: it measures a selection against
+                  the rendered element, so at a depth stop that does not show the claim
+                  there is nothing to select. Removing a mark needs no such thing — the
+                  marks are stored, and they come back the moment the dial goes up. They
+                  were behind the same `bodyShown`, so a reader who turned the dial down
+                  lost the only way to clear a highlight they had just made, with nothing
+                  on screen saying why the button had gone.
+                */}
                 {userId && bodyShown && (
                   <p className="source__pull-actions">
                     <button
@@ -886,28 +897,31 @@ export function Source({
                       }}
                     >
                       Highlight the selection
-                    </button>{' '}
-                    {highlights.some((h) => h.pullId === p.id) && (
-                      <button
-                        type="button"
-                        className="btn btn--plain"
-                        onClick={() => {
-                          const mine = highlights.filter((h) => h.pullId === p.id);
-                          const last = mine[mine.length - 1];
-                          if (!last) return;
-                          // Same reasoning as the insert: a load in flight would
-                          // otherwise put this one back.
-                          claimHighlightLoad();
-                          setHighlights((prev) => prev.filter((h) => h.id !== last.id));
-                          deleteHighlight(last.id).catch((e: unknown) => {
-                            console.error('Could not remove the highlight', e);
-                            reloadHighlights();
-                          });
-                        }}
-                      >
-                        Remove the last one
-                      </button>
-                    )}
+                    </button>
+                  </p>
+                )}
+
+                {userId && highlights.some((h) => h.pullId === p.id) && (
+                  <p className="source__pull-actions">
+                    <button
+                      type="button"
+                      className="btn btn--plain"
+                      onClick={() => {
+                        const mine = highlights.filter((h) => h.pullId === p.id);
+                        const last = mine[mine.length - 1];
+                        if (!last) return;
+                        // Same reasoning as the insert: a load in flight would
+                        // otherwise put this one back.
+                        claimHighlightLoad();
+                        setHighlights((prev) => prev.filter((h) => h.id !== last.id));
+                        deleteHighlight(last.id).catch((e: unknown) => {
+                          console.error('Could not remove the highlight', e);
+                          reloadHighlights();
+                        });
+                      }}
+                    >
+                      Remove the last one
+                    </button>
                   </p>
                 )}
 

@@ -121,7 +121,7 @@ async function failUnbilled(
    *
    * `graph.ts` dispatches `extract_evidence` beside `synthesize` and `artwork` beside
    * `embed`, in separate invocations — so a job can have two reservations open at once.
-   * The first version of this called `settle_job_budget`, which releases every open row
+   * The first version of this called `settle_job_budget` (since dropped), which released every open row
    * for the job, so a transient failure of one step let go of a sibling's hold while
    * that sibling was still inside its provider call. Concurrent workers then reserved
    * against a total that was short by exactly the money about to be spent, which is the
@@ -511,11 +511,10 @@ Deno.serve(async (req) => {
          * ever record a step for it -- and `record_failed_job_step`, which is what
          * normally settles, is never called. Left open, a reservation taken for this
          * step stands against the global cap until the one-hour TTL. Before the update,
-         * so a throw below leaves the money released rather than the job un-failed AND
-         * the money held.
+         * so the money is released first if the writes below fail.
          *
          * THIS STEP, not the job, and that is a correction rather than a nicety. It
-         * called `settle_job_budget` first, on the reasoning that a failed job ends
+         * called `settle_job_budget` — now dropped — on the reasoning that a failed job ends
          * every step it has -- which is not true at the moment this runs. `graph.ts`
          * dispatches `extract_evidence` beside `synthesize` and `artwork` beside
          * `embed`, in separate invocations, so exhausting one step's retries can
@@ -530,10 +529,24 @@ Deno.serve(async (req) => {
          * `sweep_stranded_generation_jobs` settles every open reservation on a terminal
          * job, which this row is about to become, and the TTL is behind that.
          */
-        must(
-          await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step }),
-          'settle budget for an exhausted step',
-        );
+        const released = await supabase.rpc('settle_budget', {
+          p_job_id: jobId,
+          p_step: step,
+        });
+        /*
+         * Logged, not thrown, which `failUnbilled` above got right and this did not.
+         *
+         * Under `must`, a settle that failed for any transient reason -- a pooler reset,
+         * a statement timeout -- threw before the two writes that actually matter: the
+         * job was never marked failed and the message was never archived, so the next
+         * tick redelivered it into this same branch and threw again, for ever. The
+         * sweep cannot rescue that either, since its selection requires that NO message
+         * is queued for the job. A held cent is bounded by the TTL; a job that can never
+         * reach a terminal state is not bounded by anything.
+         */
+        if (released.error) {
+          console.error('settle budget for an exhausted step', jobId, step, released.error);
+        }
 
         must(
           await supabase

@@ -35,7 +35,15 @@ import { usePlayer } from './PlayerProvider.js';
 export function listeningLabel(state: PlayerState): string {
   const track = currentTrack(state);
   if (track === null) return '';
-  const verb = state.status === 'playing' ? 'Listening' : 'Paused';
+  /*
+   * THREE STATES, not two. `stop` sets `idle` and deliberately KEEPS the queue, so
+   * `currentTrack` is still non-null and this line is still drawn — and calling that
+   * "Paused" was a promise the next press could not keep: `resume` from `idle` bumps
+   * the epoch, which starts the track again from the top rather than resuming it. The
+   * label now says which of the two it is, so Play does what the line implies.
+   */
+  const verb =
+    state.status === 'playing' ? 'Listening' : state.status === 'paused' ? 'Paused' : 'Stopped';
   return `${verb} · ${state.index + 1} of ${state.queue.length} · ${track.title}`;
 }
 

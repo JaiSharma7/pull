@@ -98,6 +98,31 @@ export function Library({ userId }: { userId: string }) {
   const [stashId, setStashId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /*
+   * The same flag, readable IN THE SAME TICK.
+   *
+   * Three of the writers below guard on `busy` to stop a second invocation, and the
+   * guard could not work: `busy` is the value this render captured, and `setBusy(true)`
+   * does not change it — two `keydown` events dispatched before React commits both read
+   * `false` and both proceed. That is precisely the case the guards were written for,
+   * since the Enter path has no `disabled` to engage and key repeat fires once per
+   * repeat. A ref is set synchronously, so the second call sees it, which is the same
+   * answer `RememberThis` already uses for its own double-submit.
+   */
+  const busyRef = useRef(false);
+
+  /** Take the flag if it is free. `false` means somebody else has it. */
+  function claimBusy(): boolean {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    return true;
+  }
+
+  function releaseBusy() {
+    busyRef.current = false;
+    setBusy(false);
+  }
+  /*
    * The two native dialogs this screen used to open, as screen state.
    *
    * `naming` is the name field standing in for `window.prompt`; `armedStash` is
@@ -206,7 +231,7 @@ export function Library({ userId }: { userId: string }) {
    * having sits behind a wall should not put the reader's own words behind one.
    */
   async function exportHighlights() {
-    setBusy(true);
+    if (!claimBusy()) return;
     try {
       const sources = await fetchExportData(userId);
       const now = new Date();
@@ -224,7 +249,8 @@ export function Library({ userId }: { userId: string }) {
       // on failure; a `role="status"` line is spoken either way.
       if (mounted.current) setExportNote('Could not build the export just now.');
     } finally {
-      if (mounted.current) setBusy(false);
+      if (mounted.current) releaseBusy();
+      else busyRef.current = false;
     }
   }
 
@@ -405,14 +431,14 @@ export function Library({ userId }: { userId: string }) {
     if (!activeStash) return;
     /*
      * GUARDED HERE AS WELL AS BY `disabled`, because the Markdown path never awaits.
-     * `setBusy(true)` and `setBusy(false)` batch into one render, so `disabled` never
-     * engages between two clicks and the reader gets the same file twice, the second
-     * named "… (1).md". The CSV path is safe by accident -- its `await` lets React commit
-     * `disabled` first -- which is not a difference worth relying on.
+     * A state flag set and cleared inside one synchronous run batches into a single
+     * render, so `disabled` never engages between two clicks and the reader gets the
+     * same file twice, the second named "… (1).md". The CSV path is safe by accident --
+     * its `await` lets React commit `disabled` first -- which is not a difference worth
+     * relying on. `claimBusy` is the flag read in the tick it is written.
      */
-    if (busy) return;
+    if (!claimBusy()) return;
     setExportNote(null);
-    setBusy(true);
     try {
       const now = new Date();
       const slug = exportSlug(activeStash.name);
@@ -444,7 +470,8 @@ export function Library({ userId }: { userId: string }) {
        */
       if (mounted.current) setExportNote('Could not build the export just now.');
     } finally {
-      if (mounted.current) setBusy(false);
+      if (mounted.current) releaseBusy();
+      else busyRef.current = false;
     }
   }
 
@@ -527,15 +554,16 @@ export function Library({ userId }: { userId: string }) {
      * key repeat fires it once per repeat before React can re-render the field away.
      * Each call mints its own `crypto.randomUUID()`, so the collide-on-retry protection
      * does not apply and the reader ends up deleting two identically named collections.
+     * Through `claimBusy` rather than a bare `if (busy)`, which is what made the guard
+     * real: the second keystroke arrives before the render that would have set it.
      */
-    if (busy) return;
+    if (!claimBusy()) return;
     // Bounded to `stashes_name_length`: an over-long name queued offline would be
     // refused for good on drain, not shown back.
     const name = typed.slice(0, 200);
     if (!name.trim()) return;
     setNaming(false);
     setNewStashName('');
-    setBusy(true);
     // The id is minted here rather than by the database, so a retry after a lost
     // response collides on the primary key instead of creating a second folder
     // with the same name. See `createStash`.
@@ -568,7 +596,7 @@ export function Library({ userId }: { userId: string }) {
         reload();
       }
     } finally {
-      setBusy(false);
+      releaseBusy();
     }
   }
 
@@ -603,7 +631,7 @@ export function Library({ userId }: { userId: string }) {
       if (stashId !== null && doomed.has(stashId)) setStashId(null);
     };
 
-    setBusy(true);
+    if (!claimBusy()) return;
     try {
       await stashApi.deleteStash(node.id);
       clearSelection();
@@ -625,7 +653,7 @@ export function Library({ userId }: { userId: string }) {
         reload();
       }
     } finally {
-      setBusy(false);
+      releaseBusy();
     }
   }
 

@@ -13,6 +13,7 @@ export {
   MAX_TEXT_CHARS,
   MAX_TITLE_CHARS,
   MIN_TEXT_CHARS,
+  STUDIO_KIND_LABEL,
   STUDIO_KINDS,
 } from './studio.js';
 export type { BudgetState, StudioJob, StudioKind, SubmitCheck } from './studio.js';

@@ -598,6 +598,46 @@ export function createPipelineDb(supabase: Db): PipelineDb {
      * generated summary, not the import, and is the case `createSummary`'s own
      * comment already reasons about.
      */
+    async attachGeneratedSummary({
+      jobId,
+      workId,
+      title,
+      elevatorPitch,
+      whyItMatters,
+      sections,
+      visibility,
+    }) {
+      /*
+       * One RPC, and the reason it is an RPC at all is that two statements cannot be
+       * made atomic from here. See the function's own migration: the insert and the
+       * update to `generation_jobs.summary_id` have to commit together, or a lost
+       * response leaves a summary nothing references and a retry that cannot tell.
+       */
+      const { data, error } = await supabase.rpc('attach_generated_summary', {
+        p_job_id: jobId,
+        p_work_id: workId,
+        p_title: title,
+        p_elevator_pitch: elevatorPitch,
+        p_why_it_matters: whyItMatters,
+        p_sections: sections as never,
+        p_visibility: visibility,
+      });
+      if (error) {
+        throw new Error(
+          `attach generated summary: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      const row = (data ?? {}) as { summaryId?: string; version?: number; created?: boolean };
+      if (!row.summaryId) {
+        throw new Error('attach generated summary: the function returned no summary id');
+      }
+      return {
+        summaryId: row.summaryId,
+        version: typeof row.version === 'number' ? row.version : null,
+        created: row.created === true,
+      };
+    },
+
     async attachSummaryToJob(jobId, summaryId, workId) {
       must(
         await supabase

@@ -14,6 +14,8 @@
  * asserting has to live where a test can reach it.
  */
 
+import type { WorkKind } from '@wap/schemas';
+
 import type { ImportedItem } from './imports.js';
 
 /**
@@ -31,9 +33,42 @@ export const MAX_TEXT_CHARS = 200_000;
 
 export const MAX_TITLE_CHARS = 200;
 
-/** The work kinds the pipeline knows, as the Studio offers them. */
-export const STUDIO_KINDS = ['book', 'essay', 'paper', 'talk', 'article'] as const;
+/**
+ * The work kinds the Studio offers, as a SUBSET of the ones the database has.
+ *
+ * Every member is a `work_kind`, and that is the correction rather than a tidy-up.
+ * The first version of this list was written by hand and offered `talk` and `article`,
+ * neither of which is in the enum — so `asWorkKind` in the pipeline, which narrows an
+ * unknown kind to the default rather than failing, silently rewrote both to `essay`.
+ * A reader who said "this is a talk" was told nothing and got an essay, while
+ * `lecture`, `video` and `interview` — the members that would have described it — were
+ * not on offer at all.
+ *
+ * Derived from `WORK_KINDS` so it cannot drift again: `packages/schemas` is the mirror
+ * of the enum and the mirror is compile-time enforced, so a member removed from the
+ * database fails typecheck here rather than turning into a silent default at
+ * generation time. Narrowed rather than used whole because `film` and `documentary`
+ * are things a reader cannot paste the text of.
+ */
+export const STUDIO_KINDS = [
+  'book',
+  'essay',
+  'paper',
+  'lecture',
+  'interview',
+  'other',
+] as const satisfies readonly WorkKind[];
 export type StudioKind = (typeof STUDIO_KINDS)[number];
+
+/** What each of them is called on the screen, since the enum members are not copy. */
+export const STUDIO_KIND_LABEL: Record<StudioKind, string> = {
+  book: 'Book',
+  essay: 'Essay',
+  paper: 'Paper',
+  lecture: 'Talk or lecture',
+  interview: 'Interview',
+  other: 'Something else',
+};
 
 export type SubmitCheck = { ok: true; text: string; title: string } | { ok: false; error: string };
 

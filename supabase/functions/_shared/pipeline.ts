@@ -93,16 +93,6 @@ export const RESERVE_CENTS = {
 } as const satisfies Record<string, number>;
 
 /**
- * The version a generated summary takes on a work the requester already owns.
- *
- * Two, because `commit_import` writes the reader's version 1 on an imported book and
- * hangs their highlights from it. Fixed rather than computed, so that a retry after a
- * committed insert collides with its own row and `createSummary` adopts it — see the
- * adopt branch in `template`, which is the only thing that writes this.
- */
-export const GENERATED_VERSION = 2;
-
-/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -407,6 +397,25 @@ export interface PipelineDb {
   insertQuizQuestions(rows: QuizQuestionRow[]): Promise<void>;
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
+  /**
+   * Write a generated summary on a work the requester owns AND point the job at it,
+   * in one transaction.
+   *
+   * Not `createSummary` followed by `attachSummaryToJob`: between those two calls is a
+   * network, and a lost response after the first leaves a summary nothing references
+   * with a job that cannot tell a retry from a fresh start. See
+   * `20260914050000_a_summary_and_its_job_are_written_together.sql`, which is where the
+   * two failed answers that preceded this one are written down.
+   */
+  attachGeneratedSummary(input: {
+    jobId: string;
+    workId: string;
+    title: string;
+    elevatorPitch: string | null;
+    whyItMatters: string | null;
+    sections: unknown;
+    visibility: string;
+  }): Promise<{ summaryId: string; version: number | null; created: boolean }>;
   /**
    * Reserve a source for this job's synthesis.
    *
@@ -1357,48 +1366,39 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         }
 
         /*
-         * A NEW VERSION, never version 1, and a CONSTANT one.
+         * ONE CALL, because the row and the reference have to land together.
          *
-         * The reader's imported book already carries their version 1: the summary
-         * `commit_import` created to hang four hundred highlights from. Writing this
-         * one at the default collides on `(work_id, version, author_id)`,
-         * `createSummary` adopts on collision, and the step returns the IMPORT's
-         * summary — after which `cards` upserts the model's pulls into it on
-         * `(summary_id, ordinal)` and replaces the reader's own highlight text at
-         * every ordinal the two lists share. Their highlights are gone, and
-         * `import_items.pull_id` still points at the rows now holding model output.
-         *
-         * Constant rather than "the next free version", which is what this asked for
-         * first and which quietly gave up the one property the guard above is built
-         * on. `createSummary` recovers a half-finished attempt by COLLIDING with the
-         * row it wrote last time, and a version computed from what is already there
-         * never collides: the orphan left by a committed insert whose
-         * `attachSummaryToJob` failed is itself what makes the retry pick a higher
-         * number, so each attempt wrote another empty draft on the reader's own book
-         * until the job ran out of attempts. `commit_import` writes version 1 and
-         * nothing else writes here, so this number is this branch's alone, and the
-         * retry lands on its own row.
-         *
-         * What it gives up, said plainly: a SECOND generation of the same book adopts
-         * the first one's summary rather than getting a version of its own, so the
-         * reader ends with one generated summary per imported book, its cards
-         * refreshed and its title the one the first run chose. That is the behaviour
-         * the canonical path has always had for the same reason, and one refreshed
-         * summary is a better answer than a fan of near-identical drafts.
+         * The guard above catches a retry whose attach committed. It cannot catch the
+         * retry whose INSERT committed and whose attach did not: `job.summary_id` is
+         * still null, so this branch runs again, and what it does then decides whether
+         * the reader ends up with one summary or several. Both answers written in this
+         * file were wrong in opposite directions — "the next free version" wrote a
+         * fresh draft per attempt, since the orphan is what makes the next version
+         * higher; a constant version made a genuine SECOND generation collide with the
+         * first one's published summary, and `cards` then rewrote part of a live
+         * document. `attach_generated_summary` does both writes inside one transaction
+         * with the job row locked, so there is no window to be on the wrong side of,
+         * and the version is chosen under that lock: never 1, which is the reader's
+         * import, and never a version another job is already using.
          */
-        const version = GENERATED_VERSION;
-        const summaryId = await db.createSummary({
+        const written = await db.attachGeneratedSummary({
+          jobId: job.id,
           workId: adopting,
           title: summary.title,
           elevatorPitch: summary.elevatorPitch,
           whyItMatters: summary.whyItMatters,
           sections: { elevatorPitch: summary.elevatorPitch, whyItMatters: summary.whyItMatters },
           visibility: job.visibility,
-          authorId: job.requester_id,
-          version,
         });
-        await db.attachSummaryToJob(job.id, summaryId, adopting);
-        return { output: { workId: adopting, summaryId, reused: false, adopted: true, version } };
+        return {
+          output: {
+            workId: adopting,
+            summaryId: written.summaryId,
+            reused: false,
+            adopted: true,
+            version: written.version,
+          },
+        };
       }
 
       const { workId } = await db.upsertWork({
@@ -1554,10 +1554,32 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         return { id: row.id, text: `${p.headline}\n\n${p.body}` };
       });
 
-      // Embedding is cheap and is still a provider call, so it is still counted.
-      // A cap that only bounded the expensive step would be a cap on synthesis
-      // rather than on spend.
-      await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
+      /*
+       * Embedding is cheap and is still a provider call, so it is still counted.
+       * A cap that only bounded the expensive step would be a cap on synthesis
+       * rather than on spend.
+       *
+       * AND THE CLAIM IS RENEWED IF THE BUDGET REFUSES -- the opposite of what
+       * `synthesize` does with the same refusal, because the job is in the opposite
+       * position. There, nothing has been synthesised yet, so a job that is merely
+       * early has no business holding a source other jobs could be working on. Here
+       * the text HAS been synthesised and its Pulls are written; the summary is a
+       * draft, so `findPublishedSummaryByHash` cannot offer it to anybody, and a
+       * second job that took the source over would pay the full synthesis price for
+       * work already done and paid for. The wait re-sends this step every 900 s and
+       * the lease is 30 minutes, so renewing on each refusal keeps the source
+       * through a wait that may last until midnight.
+       */
+      try {
+        await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
+      } catch (e) {
+        if (e instanceof BudgetExhaustedError) {
+          const held = priorOutputs.acquire as { hash?: unknown } | undefined;
+          const hash = asString(held?.hash);
+          if (hash) await db.claimSourceHash(job.id, hash);
+        }
+        throw e;
+      }
 
       const { vectors, usage } = await deps.embedding.embed(pairs.map((p) => p.text));
 

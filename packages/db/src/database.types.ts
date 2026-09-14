@@ -2332,6 +2332,18 @@ export type Database = {
         Args: { p_msg_id: number }
         Returns: boolean
       }
+      attach_generated_summary: {
+        Args: {
+          p_elevator_pitch: string
+          p_job_id: string
+          p_sections: Json
+          p_title: string
+          p_visibility: string
+          p_why_it_matters: string
+          p_work_id: string
+        }
+        Returns: Json
+      }
       attribute_work: {
         Args: { p_author: string; p_work_id: string }
         Returns: undefined
@@ -2664,7 +2676,6 @@ export type Database = {
         Args: { p_job_id: string; p_step: string }
         Returns: undefined
       }
-      settle_job_budget: { Args: { p_job_id: string }; Returns: number }
       settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
       spend_today: { Args: never; Returns: number }
       summary_is_readable: {

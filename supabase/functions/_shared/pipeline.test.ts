@@ -403,6 +403,7 @@ describe('reuse skips the paid work', () => {
       summary: 0,
       embedding: 0,
       createSummary: 0,
+      attachGenerated: 0,
       insertPulls: 0,
       insertQuizQuestions: 0,
       claim: 0,
@@ -421,8 +422,12 @@ describe('reuse skips the paid work', () => {
         trustScore: number | null;
       };
       createSummary?: { authorId: string | null; visibility: string; version?: number };
+      attachGenerated?: { jobId: string; workId: string; visibility: string; title: string };
       insertQuizQuestions?: readonly QuizQuestionRow[];
     } = {};
+
+    /** One generated summary per job, as `attach_generated_summary` guarantees. */
+    const attached = new Map<string, { summaryId: string; version: number }>();
 
     const deps = {
       summary: {
@@ -514,6 +519,27 @@ describe('reuse skips the paid work', () => {
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,
         attachSummaryToJob: async () => undefined,
+        /*
+         * A STORE, not a stub. The property this stands in for is that the summary and
+         * the job's reference to it are written together, so the fake keeps the one it
+         * wrote per job and hands the same id back on a second call — which is what the
+         * real function does under a row lock, and what a stub returning a fresh id
+         * every time would have hidden.
+         */
+        attachGeneratedSummary: async (input: {
+          jobId: string;
+          workId: string;
+          visibility: string;
+          title: string;
+        }) => {
+          calls.attachGenerated++;
+          received.attachGenerated = input;
+          const held = attached.get(input.jobId);
+          if (held) return { ...held, created: false };
+          const made = { summaryId: `s-gen-${attached.size + 1}`, version: 2 };
+          attached.set(input.jobId, made);
+          return { ...made, created: true };
+        },
         claimSourceHash: async () => {
           calls.claim++;
           return claim;
@@ -747,33 +773,44 @@ describe('reuse skips the paid work', () => {
 
     expect(out.output.workId).toBe('w-imported');
     expect(out.output.adopted).toBe(true);
-    expect(calls.createSummary).toBe(1);
+    expect(calls.attachGenerated).toBe(1);
 
     /*
-     * NEVER VERSION 1, which is the whole safety property.
+     * THROUGH THE ATOMIC WRITE, and never through `createSummary`.
      *
-     * An imported book already carries the reader's version 1 — the summary
-     * `commit_import` hangs the highlights from. Writing this one at the default
-     * collides on `(work_id, version, author_id)`, `createSummary` adopts on
-     * collision and returns the IMPORT's summary, and `cards` then upserts model
-     * output over the reader's own highlight text at every shared ordinal.
+     * The plain insert cannot be made to land with the job's reference to it, and the
+     * version it would have to be given has no right answer from out here — see
+     * 20260914050000. What this asserts is that the adopt path does not take that
+     * route at all, and that what comes back is never version 1: an imported book
+     * already carries the reader's version 1, the summary `commit_import` hangs the
+     * highlights from, and `cards` would upsert model output over their own highlight
+     * text at every shared ordinal.
      */
-    expect(received.createSummary?.version).toBe(2);
+    expect(calls.createSummary).toBe(0);
     expect(out.output.version).toBe(2);
+
+    // The reader's own work and the JOB's visibility, not the target's: a client-sent
+    // visibility never survives `enqueue_generation_job`, and a private generation
+    // written public would be the reader's own book published on their behalf.
+    expect(received.attachGenerated?.workId).toBe('w-imported');
+    expect(received.attachGenerated?.visibility).toBe(
+      (deps as { job: { visibility: string } }).job.visibility,
+    );
   });
 
-  it('asks for the same version on a retry whose attach never landed', async () => {
+  it('writes one summary across a retry whose attach never landed', async () => {
     /*
-     * The orphan case, and the one the guard above CANNOT catch.
+     * The orphan case, and the one the `job.summary_id` guard CANNOT catch.
      *
-     * `createSummary` commits, `attachSummaryToJob` does not — a lost response is
-     * enough — so the retry arrives with `job.summary_id` still null. Asking the
-     * database for "the next free version" then steps over the row the last attempt
-     * wrote, because that row is itself what makes the next version higher: a second
-     * empty draft on the reader's own book, and another on every remaining attempt.
-     * A constant version collides with it instead, and `createSummary` adopts.
+     * The insert commits, the attach does not — a lost response is enough — so the
+     * retry arrives with `job.summary_id` still null and this branch runs again. Asking
+     * the database for "the next free version" wrote a second empty draft on the
+     * reader's own book, because the orphan is itself what makes the next version
+     * higher; a constant version collided with the first GENERATION's published
+     * summary instead. Neither is a problem the caller can solve, which is why the
+     * write and the reference now land in one transaction keyed on the job.
      */
-    const { deps, received } = harness(null, 'claimed', 'available', true);
+    const { deps } = harness(null, 'claimed', 'available', true);
     const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
     const attempt = {
       ...deps,
@@ -781,12 +818,14 @@ describe('reuse skips the paid work', () => {
       priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
     };
 
-    await runPipelineStep('template', attempt as never);
-    const first = received.createSummary?.version;
-    await runPipelineStep('template', attempt as never);
+    const first = (await runPipelineStep('template', attempt as never)) as {
+      output: { summaryId: string };
+    };
+    const second = (await runPipelineStep('template', attempt as never)) as {
+      output: { summaryId: string };
+    };
 
-    expect(first).toBe(2);
-    expect(received.createSummary?.version).toBe(first);
+    expect(second.output.summaryId).toBe(first.output.summaryId);
   });
 
   it('writes no second summary when the step is retried after attaching one', async () => {

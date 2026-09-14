@@ -18,7 +18,7 @@ import {
 } from './import-fold.js';
 import type { ImportBatch, ImportedItem } from './imports.js';
 import type { ImportItem } from './ingestion.js';
-import { pageAfter } from './paging.js';
+import { MAX_ROWS, pageAfter } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 
@@ -273,7 +273,7 @@ export async function fetchImportedWorks(
       .not('pull_id', 'is', null)
       .not('work_id', 'is', null)
       .order('work_id', { ascending: true })
-      .limit(100);
+      .limit(MAX_ROWS);
     if (after !== null) q = q.gt('work_id', after);
     const { data, error } = await q;
     if (error) throw rpcError(error);
@@ -284,16 +284,30 @@ export async function fetchImportedWorks(
     // Past the last book this page reached, so the next request starts at the next one
     // rather than at the next highlight.
     after = rows[rows.length - 1]!.work_id;
-    if (rows.length < 100) break;
+    if (rows.length < MAX_ROWS) break;
   }
   if (ids.length === 0) return [];
 
-  const { data, error } = await supabase.from('works').select('id, title, kind').in('id', ids);
-  if (error) throw rpcError(error);
+  /*
+   * The titles, IN BATCHES, because `max_rows` bounds a response by rows and not by
+   * how the filter was written. A single `in` list of 140 ids is a perfectly valid
+   * request that comes back with 100 rows and no indication the rest exist, so a
+   * reader with more than a hundred imported books quietly lost the tail of their own
+   * shelf — and with it the ability to generate from those books at all. Law 3 does
+   * not put a number on stashing, so nothing here may either. `MAX_ROWS` is the
+   * server's own cap, so each request is one round trip that comes back whole.
+   */
+  const found: { workId: string; title: string; kind: string | null }[] = [];
+  for (let i = 0; i < ids.length; i += MAX_ROWS) {
+    const { data, error } = await supabase
+      .from('works')
+      .select('id, title, kind')
+      .in('id', ids.slice(i, i + MAX_ROWS));
+    if (error) throw rpcError(error);
+    for (const w of data ?? []) found.push({ workId: w.id, title: w.title, kind: w.kind });
+  }
 
-  return (data ?? [])
-    .map((w) => ({ workId: w.id, title: w.title, kind: w.kind }))
-    .sort((a, b) => a.title.localeCompare(b.title));
+  return found.sort((a, b) => a.title.localeCompare(b.title));
 }
 
 /**
