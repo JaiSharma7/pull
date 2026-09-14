@@ -131,16 +131,23 @@ async function failUnbilled(
    * scope on the unbilled one, and so is the exhausted-retries path below -- a job
    * being failed is not the same moment as every one of its steps being over.
    *
+   * RECORDED FIRST, AND SETTLED ONLY IF THE RECORD WAS NEW. The order used to be the
+   * other way round, on the reasoning that a 23505 collision -- a `succeeded` row
+   * already written for this attempt, with only the transition after it failing --
+   * should still release the money. That is exactly backwards now that a hold counts
+   * its calls: the collision means `record_job_step` ALREADY settled this step, so a
+   * second settle takes a share belonging to a concurrently redelivered call still
+   * inside its provider, and the cap is short by the money that call is about to spend.
+   * A settle for a step that never held anything is a harmless no-op; a settle for a
+   * step that has already settled is the overshoot this whole mechanism exists to stop.
+   *
    * Checked, not a bare await: supabase-js resolves rather than throws on a Postgres
    * error, so an unchecked settle is a hold left open by exactly the transient
    * conditions that produce the outage this path exists for. Logged rather than thrown —
-   * the step still has to be recorded, and the sweep's terminal pass and the TTL are the
-   * backstops.
+   * the caller still has to see the insert's own result, and the sweep's terminal pass
+   * and the TTL are the backstops.
    */
-  const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
-  if (settled.error) console.error('could not settle budget for', jobId, step, settled.error);
-
-  return supabase.from('job_steps').insert({
+  const recorded = await supabase.from('job_steps').insert({
     job_id: jobId,
     step,
     attempt,
@@ -149,6 +156,14 @@ async function failUnbilled(
     duration_ms: durationMs,
     finished_at: new Date().toISOString(),
   });
+
+  const collided = (recorded.error as { code?: string } | null)?.code === '23505';
+  if (!collided) {
+    const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
+    if (settled.error) console.error('could not settle budget for', jobId, step, settled.error);
+  }
+
+  return recorded;
 }
 
 interface QueueMessage {

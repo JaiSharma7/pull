@@ -175,16 +175,14 @@ export function buildImportSource(items: readonly ImportedItem[]): string {
  * and — the property this has to keep — it is deterministic, so two presses hash to the
  * same `works.content_hash` and the second does not pay again.
  *
- * `used` is how many highlights went in, `total` how many there were. Equal means
- * nothing was left out and the screen says nothing.
+ * `used` is how many highlights went in — rows with nothing in them are not among them —
+ * and `total` how many there were. Equal means nothing was left out and the screen says
+ * nothing; `used` of zero with a non-empty book means not one highlight fits.
  */
 export function fitImportSource(
   items: readonly ImportedItem[],
   max: number = MAX_TEXT_CHARS,
-): { text: string; used: number; total: number } {
-  const whole = buildImportSource(items);
-  if (whole.length <= max) return { text: whole, used: items.length, total: items.length };
-
+): { text: string; used: number; total: number; complete: boolean } {
   /*
    * Grown one highlight at a time rather than sliced at a character, because half a
    * passage sent to a model is a passage that says something its author did not.
@@ -199,30 +197,46 @@ export function fitImportSource(
   const parts: string[] = [];
   let length = 0;
   let used = 0;
+  let complete = true;
   for (const item of items) {
-    used += 1;
     const body = item.body.trim();
+    // An empty row is skipped WITHOUT counting: `used` is what the reader is told went
+    // in ("the first N of M"), and counting rows that contributed nothing both inflated
+    // that sentence and defeated the caller's "not one highlight fits" guard — a book
+    // whose first row was blank and whose second was over the bound came back with
+    // `used = 1` and no text at all.
     if (body === '') continue;
     const locator = item.locator?.trim();
     const part = locator ? `${locator}\n${body}` : body;
     const added = parts.length === 0 ? part.length : part.length + 2;
     if (length + added > max) {
-      used -= 1;
+      complete = false;
       break;
     }
     parts.push(part);
     length += added;
+    used += 1;
   }
-  return { text: parts.join('\n\n'), used, total: items.length };
+  /*
+   * `complete` is reported rather than inferred from `used === total`, because those
+   * are no longer the same question: a book with a blank row among its highlights sends
+   * every real one and still has `used < total`, and comparing the two printed "the
+   * first 399 of 400 highlights will be sent" for a book nothing was left out of.
+   */
+  return { text: parts.join('\n\n'), used, total: items.length, complete };
 }
 
 /** What to say when a book was too long to send whole. */
-export function truncationNote(used: number, total: number): string | null {
-  if (used >= total) return null;
-  if (used === 0) {
+export function truncationNote(fitted: {
+  used: number;
+  total: number;
+  complete: boolean;
+}): string | null {
+  if (fitted.complete) return null;
+  if (fitted.used === 0) {
     return 'The first highlight in this book is on its own longer than one summary can take.';
   }
-  return `This book is longer than one summary can take. The first ${used.toLocaleString()} of ${total.toLocaleString()} highlights will be sent.`;
+  return `This book is longer than one summary can take. The first ${fitted.used.toLocaleString()} of ${fitted.total.toLocaleString()} highlights will be sent.`;
 }
 
 /** Everything `generation_jobs` says about a job the reader asked for. */
@@ -253,6 +267,15 @@ export function isRunning(job: StudioJob): boolean {
 }
 
 /**
+ * How often a running job is asked about.
+ *
+ * Here rather than in the screen because `isWorthPolling` reasons in terms of it: the
+ * window it allows a running job is the stall threshold plus one poll, so the line that
+ * says the job is taking longer than usual is drawn before the asking stops.
+ */
+export const POLL_MS = 10_000;
+
+/**
  * Whether this job is worth asking about again soon.
  *
  * Not the same question as `isRunning`, and conflating them had Studio polling every
@@ -263,7 +286,23 @@ export function isRunning(job: StudioJob): boolean {
  */
 export function isWorthPolling(job: StudioJob, now: number = Date.now()): boolean {
   if (!isRunning(job)) return false;
-  return now - Date.parse(job.createdAt) <= POLL_FOR_MS;
+  /*
+   * TWO CLOCKS, because the two states are waiting for different things.
+   *
+   * A QUEUED job is waiting out the per-requester stagger, which is measured from when
+   * it was created and can be four hours — so it is worth asking about for that long.
+   *
+   * A RUNNING job that has not moved is a different animal: `dispatch_generation_step`
+   * stamps `updated_at` on every hop, and a job parked on the day's spent budget stops
+   * stamping while the worker re-sends its step for up to 24 hours. Measuring it from
+   * creation kept a ten-second poll alive for four hours against a row that could not
+   * change until midnight — roughly fifteen hundred requests, on a screen whose premise
+   * is that everything here is metered. Past the point where "running" stops being the
+   * honest word (`STALLED_AFTER_MS`, plus one poll of slack so the line that says so is
+   * the last thing drawn), the answer will not arrive while the reader watches.
+   */
+  if (job.status === 'queued') return now - Date.parse(job.createdAt) <= POLL_FOR_MS;
+  return now - Date.parse(job.updatedAt) <= STALLED_AFTER_MS + POLL_MS;
 }
 
 /**

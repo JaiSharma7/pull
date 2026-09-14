@@ -1050,14 +1050,22 @@ export function Feed({
         )}
 
       {items.map((item) =>
-        muted.has(item.row.work.id) ? (
+        item.type === 'pull' && muted.has(item.row.work.id) ? (
           /*
             The card that was pressed on becomes the notice; every other card of the
             same source goes. One entry per muted work, so a reader who mutes three
             sources keeps three notices and three ways back — which a single `from`
             could not do, and did not.
+
+            THE TYPE IS TESTED FIRST, and that is not a tidy-up. With the mute checked
+            ahead of it, an interrupt whose idea came from the muted source fell into
+            this branch, failed the inner `item.type === 'pull'` test and rendered as
+            `null` — a scheduled recall question silently dropped, with no grade, no
+            `handledSlots` entry and nothing recording that it went. "See less of this
+            source" is about what the feed PICKS; a question about something the reader
+            has already learned from it is the one thing the product is measured on.
           */
-          item.type === 'pull' && muted.get(item.row.work.id) === item.row.id ? (
+          muted.get(item.row.work.id) === item.row.id ? (
             <p key={item.row.id} className="meta feed__muted" role="status">
               You will see less of {item.row.work.title}.{' '}
               <button

@@ -598,16 +598,6 @@ export function createPipelineDb(supabase: Db): PipelineDb {
      * the row written and the job pointed at it inside one transaction holding a lock,
      * which is the only arrangement where a lost response cannot leave an orphan.
      */
-    async renewSourceClaim(jobId) {
-      const { data, error } = await supabase.rpc('renew_source_claim', { p_job_id: jobId });
-      if (error) {
-        throw new Error(
-          `renew source claim: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
-        );
-      }
-      return data === true;
-    },
-
     async attachGeneratedSummary({
       jobId,
       workId,

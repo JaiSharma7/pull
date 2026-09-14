@@ -43,6 +43,7 @@ import {
   requestPrivateSummary,
   STUDIO_KIND_LABEL,
   STUDIO_KINDS,
+  POLL_MS,
   studioKindFor,
   waitMinutes,
   type BudgetState,
@@ -53,9 +54,6 @@ import type { ImportedItem } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { sqlState } from '../lib/rpc-error.js';
 import { mutationId } from '../lib/submission.js';
-
-/** How often a running job is asked about. */
-const POLL_MS = 10_000;
 
 export function Studio({
   userId,
@@ -108,6 +106,21 @@ export function Studio({
    */
   function editing() {
     submission.current = null;
+  }
+
+  /**
+   * Picking a source, which is an edit AND a fresh attempt at that book's highlights.
+   *
+   * The failure key is `(book, retry counter)`, and neither moves when a reader leaves a
+   * book and comes back — so a book that failed once drew its red alert again the moment
+   * it was re-picked, over a refetch that was already in flight and about to succeed.
+   * Clearing it here rather than in the effect keeps the state change in the event that
+   * caused it, which is also what stops it being a synchronous set inside an effect.
+   */
+  function pick(next: string) {
+    editing();
+    setItemsFailed(null);
+    setSource(next);
   }
 
   const [budget, setBudget] = useState<BudgetState | null>(null);
@@ -280,7 +293,8 @@ export function Studio({
    * `works.content_hash` is also one more than there should be.
    */
   const imported = useMemo(
-    () => (pickedItems ? fitImportSource(pickedItems) : { text: '', used: 0, total: 0 }),
+    () =>
+      pickedItems ? fitImportSource(pickedItems) : { text: '', used: 0, total: 0, complete: true },
     [pickedItems],
   );
   const importedText = imported.text;
@@ -293,7 +307,7 @@ export function Studio({
    * highlights instead, deterministically, and this is the sentence that makes that an
    * offer rather than something done quietly to the reader's book.
    */
-  const shortened = truncationNote(imported.used, imported.total);
+  const shortened = truncationNote(imported);
 
   async function submit() {
     if (sendingRef.current) return;
@@ -323,7 +337,7 @@ export function Studio({
     // The one case `fitImportSource` cannot cut its way out of: a single highlight over
     // the whole bound. Said here rather than left to `checkSubmission`, which would
     // answer "Send it in parts" to a reader who has no parts to send.
-    if (picked && pickedItems !== null && imported.used === 0 && pickedItems.length > 0) {
+    if (picked && pickedItems !== null && imported.text === '' && pickedItems.length > 0) {
       setError('The first highlight in this book is on its own longer than one summary can take.');
       return;
     }
@@ -432,10 +446,7 @@ export function Studio({
             type="button"
             className="btn btn--plain library__filter"
             aria-pressed={source === 'paste'}
-            onClick={() => {
-              editing();
-              setSource('paste');
-            }}
+            onClick={() => pick('paste')}
           >
             Something I paste
           </button>
@@ -445,10 +456,7 @@ export function Studio({
               type="button"
               className="btn btn--plain library__filter"
               aria-pressed={source === book.workId}
-              onClick={() => {
-                editing();
-                setSource(book.workId);
-              }}
+              onClick={() => pick(book.workId)}
             >
               {book.title}
             </button>

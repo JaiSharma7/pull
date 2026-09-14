@@ -716,12 +716,25 @@ export function Review() {
           if (graded.current.size > 0) {
             setDue([]);
             setOffline(true);
+            // Nothing is being practised from the downloaded copy any more — it is
+            // finished — so the banner that says so goes with it.
+            setPractisingFrom(null);
             return;
           }
         }
 
         setOffline(wasOffline);
         setError(e instanceof Error ? e.message : String(e));
+        /*
+         * And the banner goes on the way to the error screen.
+         *
+         * `practisingFrom` was set when the pack took over and cleared only on a
+         * successful fetch, so a failure after an offline session rendered "Practising
+         * from your downloaded copy · last synced three hours ago" above "Could not
+         * check what is fading." — which is the one case the screen refuses to serve
+         * from the pack, saying it is doing so.
+         */
+        setPractisingFrom(null);
       }
     })().catch((e: unknown) => {
       if (cancelled) return;

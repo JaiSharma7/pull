@@ -137,6 +137,7 @@ describe('fitImportSource', () => {
     const fitted = fitImportSource(items, 1000);
     expect(fitted.used).toBe(2);
     expect(fitted.total).toBe(2);
+    expect(fitted.complete).toBe(true);
     expect(fitted.text).toBe('One.\n\nTwo.');
   });
 
@@ -169,19 +170,34 @@ describe('fitImportSource', () => {
   it('produces exactly what buildImportSource would for the highlights it kept', () => {
     const items = [
       highlight(long(50), 'Location 1'),
-      highlight('   '),
       highlight(long(50), 'Location 3'),
       highlight(long(50)),
     ];
     const fitted = fitImportSource(items, 140);
+    expect(fitted.used).toBe(2);
     expect(fitted.text).toBe(buildImportSource(items.slice(0, fitted.used)));
   });
 
-  it('counts the empty highlights it skipped as used, since they were considered', () => {
+  /*
+   * An empty row contributed nothing, so it is not one of the highlights the reader is
+   * told was sent. Counting them both inflated "the first N of M" and defeated the
+   * caller's "not one of them fits" guard — a book whose first row was blank and whose
+   * second was over the bound came back claiming one highlight and no text.
+   */
+  it('does not count the empty highlights it skipped', () => {
     const items = [highlight('One.'), highlight('   '), highlight('Two.')];
     const fitted = fitImportSource(items, 1000);
-    expect(fitted.used).toBe(3);
+    expect(fitted.used).toBe(2);
+    // Nothing was dropped for LENGTH, so the screen says nothing about shortening.
+    expect(fitted.complete).toBe(true);
+    expect(truncationNote(fitted)).toBeNull();
     expect(fitted.text).toBe('One.\n\nTwo.');
+  });
+
+  it('reports nothing usable when the only real highlight is over the bound', () => {
+    const fitted = fitImportSource([highlight('   '), highlight(long(400))], 100);
+    expect(fitted.used).toBe(0);
+    expect(fitted.text).toBe('');
   });
 
   it('reports nothing usable when the first highlight alone is over the bound', () => {
@@ -193,17 +209,17 @@ describe('fitImportSource', () => {
 
 describe('truncationNote', () => {
   it('says nothing when the whole book went in', () => {
-    expect(truncationNote(12, 12)).toBeNull();
+    expect(truncationNote({ used: 12, total: 12, complete: true })).toBeNull();
   });
 
   it('names both numbers, because the reader is about to pay for one of them', () => {
-    expect(truncationNote(1842, 4000)).toBe(
+    expect(truncationNote({ used: 1842, total: 4000, complete: false })).toBe(
       'This book is longer than one summary can take. The first 1,842 of 4,000 highlights will be sent.',
     );
   });
 
   it('says what is wrong when not one highlight fits', () => {
-    expect(truncationNote(0, 3)).toContain('on its own longer');
+    expect(truncationNote({ used: 0, total: 3, complete: false })).toContain('on its own longer');
   });
 });
 

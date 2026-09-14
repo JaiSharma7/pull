@@ -418,14 +418,6 @@ export interface PipelineDb {
    * hostage -- see 20260902200000.
    */
   claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
-  /**
-   * Extend the lease on whatever source this job already claimed.
-   *
-   * For the job parked on the day's budget with its text already synthesised and paid
-   * for: `claimSourceHash` needs a hash, which the step that waits does not have and
-   * should not be handed. Answers false when there was nothing of this job's to renew.
-   */
-  renewSourceClaim(jobId: string): Promise<boolean>;
   releaseSourceHash(jobId: string): Promise<void>;
   /**
    * Hold `cents` against the day's cap for this step, or refuse.
@@ -1584,22 +1576,28 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
       } catch (e) {
         /*
-         * BY JOB, because this step does not have the hash and should not be given it.
+         * RELEASED, exactly as `synthesize` does with the same refusal — and this is the
+         * second reversal of this line, so both answers are written down.
          *
-         * The first version read `priorOutputs.acquire.hash` and therefore did nothing at
-         * all: `NEEDS.embed` is `['cards', 'synthesize']`, and 20260902160000 hands a
-         * step only what it declares it reads — precisely so the source text is not
-         * shipped to steps that have no use for it. Widening that declaration to reach
-         * one string would undo the change it was made by. `renew_source_claim` takes
-         * the job id, which the claim row already carries an index on.
+         * Holding the claim was meant to stop a second job paying to synthesise text
+         * this job has already synthesised and paid for. It does, and it does something
+         * worse: this wait is re-sent every 900 s for up to 24 hours, and each pass
+         * renewed the 30-minute lease, so the claim could be held until midnight. A
+         * second job on the same text gets `held` from `claim_source_hash`, waits its
+         * own bounded 30 minutes, and then fails TERMINALLY for doing nothing wrong.
+         * Paying twice costs money once; starving every other job on that text is the
+         * failure the claim's own comment in `synthesize` calls out by name.
          *
-         * Swallowed for the reason `synthesize` gives at its own recovery: a renewal
+         * So the source goes back. This job has its draft and needs nothing from the
+         * claim; whoever takes it can finish sooner than this job will.
+         *
+         * Swallowed for the reason `synthesize` gives at its own recovery: a release
          * that fails transiently must not take the place of the refusal, or the worker
          * stops seeing a budget wait and starts seeing a failed attempt.
          */
         if (e instanceof BudgetExhaustedError) {
-          await db.renewSourceClaim(job.id).catch((renew: unknown) => {
-            console.error('embed: could not renew the source claim', renew);
+          await db.releaseSourceHash(job.id).catch((release: unknown) => {
+            console.error('embed: could not release the source claim', release);
           });
         }
         throw e;

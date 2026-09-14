@@ -536,7 +536,6 @@ describe('reuse skips the paid work', () => {
           attached.set(input.jobId, made);
           return { ...made, created: true };
         },
-        renewSourceClaim: async () => true,
         claimSourceHash: async () => {
           calls.claim++;
           return claim;
@@ -1281,7 +1280,6 @@ describe('reuse skips the paid work', () => {
           attached.push({ jobId, summaryId, workId });
         },
         claimSourceHash: async () => 'claimed' as const,
-        renewSourceClaim: async () => true,
         releaseSourceHash: async () => undefined,
         reserveBudget: async () => undefined,
         requesterOwnsWork: async () => false,

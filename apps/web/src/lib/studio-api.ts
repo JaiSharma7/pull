@@ -4,15 +4,13 @@ import { isBudgetState, type BudgetState, type StudioJob, type StudioKind } from
 
 export {
   budgetLine,
-  isBudgetState,
-  buildImportSource,
   fitImportSource,
   truncationNote,
   waitMinutes,
   checkSubmission,
   describeJob,
-  isRunning,
   isWorthPolling,
+  POLL_MS,
   MAX_TEXT_CHARS,
   MAX_TITLE_CHARS,
   MIN_TEXT_CHARS,

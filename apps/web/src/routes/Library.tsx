@@ -1536,7 +1536,14 @@ function Imported({ userId }: { userId: string }) {
                     className="btn btn--plain"
                     aria-expanded={expanded}
                     style={{ textAlign: 'left' }}
-                    onClick={() => setOpenWork(expanded ? null : book.workId)}
+                    onClick={() => {
+                      // The failure key is `(book, retry counter)` and neither moves
+                      // when a reader closes a book and opens it again — so a book that
+                      // failed once drew its alert again over the refetch that was
+                      // already in flight. Cleared in the event that causes the fetch.
+                      setItemsFailed(null);
+                      setOpenWork(expanded ? null : book.workId);
+                    }}
                   >
                     {book.title}
                   </button>
