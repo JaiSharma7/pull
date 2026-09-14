@@ -20,9 +20,10 @@ import { queueIfOffline } from '../lib/offline.js';
 import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
 import { RememberThis } from '../components/RememberThis.js';
 import {
+  countImportedItems,
   fetchImportedItems,
+  fetchImportedWorks,
   fetchImports,
-  groupImported,
   importBatchLabel,
   importedSummary,
   isUndoable,
@@ -1261,35 +1262,71 @@ export function Library({ userId }: { userId: string }) {
  */
 function Imported({ userId }: { userId: string }) {
   const [open, setOpen] = useState(false);
+  /*
+   * The SHELF, not the books.
+   *
+   * `fetchImportedWorks` is one row per book and `countImportedItems` is one count
+   * header with no rows at all, so opening this section costs two bounded requests
+   * whatever the reader has. It used to walk `fetchImportedItems(userId)` — every
+   * highlight they own, a hundred at a time, each carrying its pull's body — and then
+   * group the result in memory purely to print a list of titles and a count. For the
+   * reader this section describes, the one arriving with four hundred highlights (and
+   * law 3 promises no ceiling above that), that is forty sequential round trips and
+   * several megabytes before a single heading is drawn. `fetchImportedWorks`'s own
+   * docstring names that pattern as the thing it was written to remove, and it was
+   * written for Studio while this screen was left still doing it.
+   *
+   * Ordered by title rather than by most recent, which is the one thing the walk gave
+   * that this does not: the newest highlight in a book is not something a query bounded
+   * by books can see. The batches above are already in import order and say what
+   * arrived last, so the recency question still has an answer on the screen; a shelf is
+   * alphabetical.
+   */
   const [state, setState] = useState<
-    { batches: ImportBatch[]; items: ImportedItem[] } | 'failed' | null
+    | { batches: ImportBatch[]; books: { workId: string; title: string }[]; total: number }
+    | 'failed'
+    | null
   >(null);
   const [undoing, setUndoing] = useState<string | null>(null);
   /*
-   * One book open at a time, as the saved list above already does.
+   * One book open at a time, and its highlights fetched when it opens.
    *
    * Rendering every group's items mounts one `<li>` and one `RememberThis` — with its
    * own reducer — per highlight, and this section's own copy describes a reader
    * arriving with four hundred of them. Four hundred reducers in one commit is a
-   * visible stall on a phone, and it grows with what law 3 promises is unlimited.
+   * visible stall on a phone, and it grows with what law 3 promises is unlimited. Now
+   * the rows for the other books are not merely unrendered, they are never fetched.
    */
   const [openWork, setOpenWork] = useState<string | null>(null);
+  const [items, setItems] = useState<{ workId: string; rows: ImportedItem[] } | null>(null);
+  /*
+   * Which ATTEMPT failed, for the reason `Studio.tsx` gives at its own two: a flag
+   * would have to be cleared synchronously inside the effect that starts the next
+   * fetch, and a key lets the render derive the stale message away instead.
+   */
+  const [itemsFailed, setItemsFailed] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
 
   /*
    * Loaded when the section is opened, not with the screen.
    *
-   * It is two more round trips and a reader with no imports has no use for either.
-   * The disclosure is what asks for them, which also means the cost is paid by the
-   * reader who is about to look at the answer.
+   * It is three more round trips and a reader with no imports has no use for any of
+   * them. The disclosure is what asks, which also means the cost is paid by the reader
+   * who is about to look at the answer.
    */
   useEffect(() => {
     if (!open) return;
     let live = true;
-    Promise.all([fetchImports(userId), fetchImportedItems(userId)])
-      .then(([batches, items]) => {
-        if (live) setState({ batches, items });
+    Promise.all([fetchImports(userId), fetchImportedWorks(userId), countImportedItems(userId)])
+      .then(([batches, works, total]) => {
+        if (live) {
+          setState({
+            batches,
+            books: works.map((w) => ({ workId: w.workId, title: w.title })),
+            total,
+          });
+        }
       })
       .catch((e: unknown) => {
         console.error('Could not load your imports', e);
@@ -1300,8 +1337,27 @@ function Imported({ userId }: { userId: string }) {
     };
   }, [open, userId, reloads]);
 
+  /** The highlight fetch currently in flight, or the one that would be. */
+  const itemsAttempt = openWork === null ? null : `${openWork}#${reloads}`;
+
+  useEffect(() => {
+    if (openWork === null || items?.workId === openWork) return;
+    let live = true;
+    const attempt = `${openWork}#${reloads}`;
+    fetchImportedItems(userId, openWork)
+      .then((rows) => {
+        if (live) setItems({ workId: openWork, rows });
+      })
+      .catch((e: unknown) => {
+        console.error('Could not read that book’s highlights', e);
+        if (live) setItemsFailed(attempt);
+      });
+    return () => {
+      live = false;
+    };
+  }, [openWork, items?.workId, userId, reloads]);
+
   const loaded = state !== null && state !== 'failed' ? state : null;
-  const groups = groupImported(loaded?.items ?? []);
 
   async function undo(batch: ImportBatch) {
     setNote(null);
@@ -1313,6 +1369,14 @@ function Imported({ userId }: { userId: string }) {
           ? 'That batch was already taken back.'
           : `Took back ${result.removed} ${result.removed === 1 ? 'highlight' : 'highlights'}.`,
       );
+      /*
+       * The open book closes, and its rows go with it. An undo can remove the very
+       * highlights on screen and can empty a book off the shelf entirely, and the fetch
+       * effect above skips a book whose rows it already holds — so keeping them would
+       * leave deleted highlights rendered under a heading that no longer exists.
+       */
+      setOpenWork(null);
+      setItems(null);
       setReloads((n) => n + 1);
     } catch (e: unknown) {
       console.error('Could not undo the import', e);
@@ -1353,7 +1417,7 @@ function Imported({ userId }: { userId: string }) {
 
       {open && loaded && (
         <>
-          <p className="meta">{importedSummary(groups)}</p>
+          <p className="meta">{importedSummary(loaded.total, loaded.books.length)}</p>
 
           {note && (
             <p className="meta" role="status">
@@ -1390,46 +1454,66 @@ function Imported({ userId }: { userId: string }) {
             </ul>
           )}
 
-          {groups.map((group) => {
+          {loaded.books.map((book) => {
             // `expanded`, not `open`: the section's own disclosure state is called
             // `open` in this component's scope, and a per-book binding of the same
             // name shadowed it — two booleans one letter apart, both true at once,
             // reading as the same thing.
-            const expanded = openWork === group.workId;
+            const expanded = openWork === book.workId;
+            const rows = expanded && items?.workId === book.workId ? items.rows : null;
             return (
-              <section key={group.workId} className="stack">
+              <section key={book.workId} className="stack">
                 <h3 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
                   <button
                     type="button"
                     className="btn btn--plain"
                     aria-expanded={expanded}
                     style={{ textAlign: 'left' }}
-                    onClick={() => setOpenWork(expanded ? null : group.workId)}
+                    onClick={() => setOpenWork(expanded ? null : book.workId)}
                   >
-                    {group.title}
+                    {book.title}
                   </button>
                 </h3>
-                <p className="meta">
-                  {group.items.length} {group.items.length === 1 ? 'highlight' : 'highlights'}
-                </p>
-                {expanded && (
-                  <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                    {group.items.map((item) => (
-                      <li key={item.id} className="library__item">
-                        <p style={{ margin: 0 }}>{item.body}</p>
-                        {item.locator ? <p className="meta">{item.locator}</p> : null}
-                        {/*
-                          The same form the source page offers, not a second one. A
-                          reader who has just kept four hundred highlights is precisely
-                          the reader with something to practise, and `remember_pull`
-                          makes the highlight due NOW rather than tomorrow — "Remember
-                          this" is an explicit ask to practise.
-                        */}
-                        <RememberThis pullId={item.pullId} idPrefix="imported" />
-                      </li>
-                    ))}
-                  </ul>
-                )}
+
+                {expanded &&
+                  (itemsFailed === itemsAttempt ? (
+                    <p className="meta" role="alert">
+                      Could not read that book’s highlights.{' '}
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        onClick={() => setReloads((n) => n + 1)}
+                      >
+                        Try again
+                      </button>
+                    </p>
+                  ) : rows === null ? (
+                    <p className="meta" role="status">
+                      Reading your highlights…
+                    </p>
+                  ) : (
+                    <>
+                      <p className="meta">
+                        {rows.length} {rows.length === 1 ? 'highlight' : 'highlights'}
+                      </p>
+                      <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                        {rows.map((item) => (
+                          <li key={item.id} className="library__item">
+                            <p style={{ margin: 0 }}>{item.body}</p>
+                            {item.locator ? <p className="meta">{item.locator}</p> : null}
+                            {/*
+                              The same form the source page offers, not a second one. A
+                              reader who has just kept four hundred highlights is precisely
+                              the reader with something to practise, and `remember_pull`
+                              makes the highlight due NOW rather than tomorrow — "Remember
+                              this" is an explicit ask to practise.
+                            */}
+                            <RememberThis pullId={item.pullId} idPrefix="imported" />
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ))}
               </section>
             );
           })}

@@ -93,6 +93,16 @@ export const RESERVE_CENTS = {
 } as const satisfies Record<string, number>;
 
 /**
+ * The version a generated summary takes on a work the requester already owns.
+ *
+ * Two, because `commit_import` writes the reader's version 1 on an imported book and
+ * hangs their highlights from it. Fixed rather than computed, so that a retry after a
+ * committed insert collides with its own row and `createSummary` adopts it — see the
+ * adopt branch in `template`, which is the only thing that writes this.
+ */
+export const GENERATED_VERSION = 2;
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -363,8 +373,6 @@ export interface PipelineDb {
      */
     version?: number;
   }): Promise<string>;
-  /** The next free `summaries.version` for this work and author. See `db.ts`. */
-  nextSummaryVersion(workId: string, authorId: string | null): Promise<number>;
   /**
    * Returns each Pull with the ordinal it was written at.
    *
@@ -1349,7 +1357,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         }
 
         /*
-         * A NEW VERSION, never version 1.
+         * A NEW VERSION, never version 1, and a CONSTANT one.
          *
          * The reader's imported book already carries their version 1: the summary
          * `commit_import` created to hang four hundred highlights from. Writing this
@@ -1359,8 +1367,26 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
          * `(summary_id, ordinal)` and replaces the reader's own highlight text at
          * every ordinal the two lists share. Their highlights are gone, and
          * `import_items.pull_id` still points at the rows now holding model output.
+         *
+         * Constant rather than "the next free version", which is what this asked for
+         * first and which quietly gave up the one property the guard above is built
+         * on. `createSummary` recovers a half-finished attempt by COLLIDING with the
+         * row it wrote last time, and a version computed from what is already there
+         * never collides: the orphan left by a committed insert whose
+         * `attachSummaryToJob` failed is itself what makes the retry pick a higher
+         * number, so each attempt wrote another empty draft on the reader's own book
+         * until the job ran out of attempts. `commit_import` writes version 1 and
+         * nothing else writes here, so this number is this branch's alone, and the
+         * retry lands on its own row.
+         *
+         * What it gives up, said plainly: a SECOND generation of the same book adopts
+         * the first one's summary rather than getting a version of its own, so the
+         * reader ends with one generated summary per imported book, its cards
+         * refreshed and its title the one the first run chose. That is the behaviour
+         * the canonical path has always had for the same reason, and one refreshed
+         * summary is a better answer than a fan of near-identical drafts.
          */
-        const version = await db.nextSummaryVersion(adopting, job.requester_id);
+        const version = GENERATED_VERSION;
         const summaryId = await db.createSummary({
           workId: adopting,
           title: summary.title,

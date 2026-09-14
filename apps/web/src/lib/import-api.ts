@@ -34,14 +34,8 @@ import { supabase } from './supabase.js';
  */
 export type { ImportResult, ImportSourceKind, UndoResult } from './import-fold.js';
 export { hashFile, mergeAttempts, PartialImportError } from './import-fold.js';
-export type { ImportBatch, ImportedItem, ImportedWorkGroup } from './imports.js';
-export {
-  groupImported,
-  importBatchLabel,
-  importedSummary,
-  isUndoable,
-  SOURCE_KIND_LABEL,
-} from './imports.js';
+export type { ImportBatch, ImportedItem } from './imports.js';
+export { importBatchLabel, importedSummary, isUndoable, SOURCE_KIND_LABEL } from './imports.js';
 
 /**
  * Keep a batch of highlights.
@@ -300,4 +294,28 @@ export async function fetchImportedWorks(
   return (data ?? [])
     .map((w) => ({ workId: w.id, title: w.title, kind: w.kind }))
     .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * How many highlights this reader has kept, without reading one of them.
+ *
+ * `head: true` asks PostgREST for the count header and no rows at all, so the whole
+ * answer is one request whatever the number is. The alternative the Library used to
+ * run — walk every `import_items` row a hundred at a time, each carrying its pull's
+ * body, and take `.length` — is forty round trips and several megabytes to print one
+ * sentence, and it grew with exactly the thing law 3 promises is unlimited.
+ *
+ * Scoped to one book when a `workId` is given, which is what the open group needs
+ * before its rows have landed.
+ */
+export async function countImportedItems(userId: string, workId?: string): Promise<number> {
+  let q = supabase
+    .from('import_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .not('pull_id', 'is', null);
+  if (workId) q = q.eq('work_id', workId);
+  const { count, error } = await q;
+  if (error) throw rpcError(error);
+  return count ?? 0;
 }

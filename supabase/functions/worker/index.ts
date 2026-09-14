@@ -128,8 +128,8 @@ async function failUnbilled(
    * overshoot the whole reservation exists to prevent.
    *
    * `record_failed_job_step` settles `(job, step)` on the billed path; this is the same
-   * scope on the unbilled one. Releasing a whole job is right only where the job is
-   * really over, which is the exhausted-retries path below.
+   * scope on the unbilled one, and so is the exhausted-retries path below -- a job
+   * being failed is not the same moment as every one of its steps being over.
    *
    * Checked, not a bare await: supabase-js resolves rather than throws on a Postgres
    * error, so an unchecked settle is a hold left open by exactly the transient
@@ -505,23 +505,34 @@ Deno.serve(async (req) => {
       // leaving the job stuck in `running` with nothing to retry it.
       try {
         /*
-         * The holds first, then the status.
+         * The hold first, then the status.
          *
          * This path fails the JOB and archives the message, so nothing downstream will
          * ever record a step for it -- and `record_failed_job_step`, which is what
-         * normally settles, is never called. Left open, a reservation taken by
-         * `synthesize` stands against the global cap until the one-hour TTL, and the
-         * sweep cannot help: it selects `queued`/`running`, and this row is about to
-         * stop being either. Before the update, so a throw below leaves the money
-         * released rather than the job un-failed AND the money held.
+         * normally settles, is never called. Left open, a reservation taken for this
+         * step stands against the global cap until the one-hour TTL. Before the update,
+         * so a throw below leaves the money released rather than the job un-failed AND
+         * the money held.
          *
-         * By JOB here, unlike `failUnbilled` above, and the difference is the whole
-         * distinction: this ends every step the job has, so every hold it carries is
-         * for a charge that can no longer arrive.
+         * THIS STEP, not the job, and that is a correction rather than a nicety. It
+         * called `settle_job_budget` first, on the reasoning that a failed job ends
+         * every step it has -- which is not true at the moment this runs. `graph.ts`
+         * dispatches `extract_evidence` beside `synthesize` and `artwork` beside
+         * `embed`, in separate invocations, so exhausting one step's retries can
+         * release a sibling's hold while that sibling is still inside its provider
+         * call. The charge then arrives after the money was given back, concurrent
+         * workers reserve against a total short by exactly that amount, and the cap is
+         * overshot -- verbatim the failure `failUnbilled` above was narrowed to avoid,
+         * left standing on the path that looked like it had the better claim to
+         * job-wide scope.
+         *
+         * A hold belonging to a step that crashed before it could settle is covered:
+         * `sweep_stranded_generation_jobs` settles every open reservation on a terminal
+         * job, which this row is about to become, and the TTL is behind that.
          */
         must(
-          await supabase.rpc('settle_job_budget', { p_job_id: jobId }),
-          'settle budget for an exhausted job',
+          await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step }),
+          'settle budget for an exhausted step',
         );
 
         must(

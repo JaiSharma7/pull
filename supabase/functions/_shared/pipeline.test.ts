@@ -485,8 +485,6 @@ describe('reuse skips the paid work', () => {
           received.createSummary = input;
           return 's1';
         },
-        // A work the reader has imported already carries their version 1.
-        nextSummaryVersion: async () => 2,
         /*
          * Returns a row per generated Pull, which it did not before.
          *
@@ -762,6 +760,33 @@ describe('reuse skips the paid work', () => {
      */
     expect(received.createSummary?.version).toBe(2);
     expect(out.output.version).toBe(2);
+  });
+
+  it('asks for the same version on a retry whose attach never landed', async () => {
+    /*
+     * The orphan case, and the one the guard above CANNOT catch.
+     *
+     * `createSummary` commits, `attachSummaryToJob` does not — a lost response is
+     * enough — so the retry arrives with `job.summary_id` still null. Asking the
+     * database for "the next free version" then steps over the row the last attempt
+     * wrote, because that row is itself what makes the next version higher: a second
+     * empty draft on the reader's own book, and another on every remaining attempt.
+     * A constant version collides with it instead, and `createSummary` adopts.
+     */
+    const { deps, received } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-imported' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    };
+
+    await runPipelineStep('template', attempt as never);
+    const first = received.createSummary?.version;
+    await runPipelineStep('template', attempt as never);
+
+    expect(first).toBe(2);
+    expect(received.createSummary?.version).toBe(first);
   });
 
   it('writes no second summary when the step is retried after attaching one', async () => {
@@ -1213,7 +1238,6 @@ describe('reuse skips the paid work', () => {
         },
         upsertWork: async () => ({ workId: 'w1', existing: false }),
         createSummary: async () => 's1',
-        nextSummaryVersion: async () => 1,
         insertPulls: async () => [],
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,

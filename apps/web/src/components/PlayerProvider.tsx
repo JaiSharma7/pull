@@ -244,7 +244,32 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
     }
 
     if (!sameUtterance) {
-      spokenEpoch.current = state.epoch;
+      /*
+       * THE EPOCH THIS CLOSURE WAS STARTED UNDER, not the token `speak` returns.
+       *
+       * `ended` is checked against `state.epoch` in the reducer — `token` there is
+       * named for the epoch it carries — and `speak` hands `onEnd` its OWN counter
+       * (`lib/speech.ts` mints `++lastToken` per utterance). The two only look
+       * interchangeable because, on a fresh page played straight through, each
+       * epoch bump is followed by exactly one `speak` and the counters walk in
+       * step. They come apart the moment anything breaks that one-to-one:
+       *
+       *   - Resume from `paused` deliberately does NOT bump the epoch (the same
+       *     utterance continues), so a queue restored from storage at epoch 0 and
+       *     then played speaks under token 1 against epoch 0 — every ending is
+       *     discarded and the player sits silent on "Listening · 1 of 5".
+       *   - `PlayerEngine` is keyed on the user id, so a sign-in or sign-out
+       *     remounts it at epoch 0 while `lastToken` keeps its page-lifetime
+       *     value. After that the two never meet again and the queue never
+       *     advances for the rest of the page.
+       *
+       * The epoch is what the guard is FOR — telling this utterance's ending from
+       * the one `speak` abandons while starting it — so the epoch is what goes in.
+       * An abandoned utterance's closure still carries its own older epoch, which
+       * is exactly the stale ending the reducer drops.
+       */
+      const epoch = state.epoch;
+      spokenEpoch.current = epoch;
       spokenRate.current = state.rate;
       spokenVoice.current = state.voiceURI;
       speak(track.text, {
@@ -252,7 +277,7 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
         voiceURI: state.voiceURI,
         // `now` so the sleep timer is read at the boundary it fires on. The
         // reducer never reads a clock; the caller that has one passes it.
-        onEnd: (ended) => dispatch({ type: 'ended', token: ended, now: Date.now() }),
+        onEnd: () => dispatch({ type: 'ended', token: epoch, now: Date.now() }),
       });
       return;
     }

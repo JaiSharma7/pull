@@ -189,7 +189,17 @@ begin
   --
   -- Nothing will ever record for a job the sweep declares dead, so the sweep is the
   -- only thing between a crash and an hour of held budget.
+  --
+  -- Backdated with the job, because 20260914040000 made the settlement pass ignore a
+  -- hold younger than its own threshold: a young hold belongs to a step that is still
+  -- calling its provider, not to a crash. Nothing real puts a fresh hold on a job the
+  -- sweep will fail -- `reserve_budget` runs immediately after a dispatch that stamps
+  -- `updated_at`, and a job stamped seconds ago is not stranded -- so the fixture is
+  -- what was unrealistic here, and it was hiding the sibling race the new bound closes.
   perform public.reserve_budget(job_d, 'artwork', 50);
+  update public.budget_reservations
+     set created_at = now() - interval '25 minutes'
+   where job_id = job_d and step = 'artwork';
   if public.spend_today() <> 60 then
     raise exception 'the fixture for the sweep did not take; spend_today() is %',
       public.spend_today();
@@ -207,9 +217,16 @@ begin
   -- terminal failure the pipeline has: the worker exhausting a step's retries and
   -- marking the job failed itself. That job is no longer `queued` or `running`, so the
   -- sweep's own selection can never reach it, and nothing else would until the TTL.
+  --
+  -- Backdated for the reason 5 above gives: the settlement pass leaves a hold younger
+  -- than its threshold alone, because a young hold on a job that has just failed is a
+  -- SIBLING STEP still inside its provider call. Section 11 asserts that half.
   insert into public.generation_jobs (requester_id, target, status)
   values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job_e;
   perform public.reserve_budget(job_e, 'synthesize', 40);
+  update public.budget_reservations
+     set created_at = now() - interval '25 minutes'
+   where job_id = job_e and step = 'synthesize';
   update public.generation_jobs set status = 'failed', finished_at = now() where id = job_e;
   if public.spend_today() <> 50 then
     raise exception 'the fixture for the terminal sweep did not take; spend_today() is %',
@@ -568,6 +585,111 @@ begin
   end if;
 
   raise notice 'spend_cap.sql: the door refuses what the reservation could not grant';
+end $$;
+
+-- ------------------------ 10. a malformed target is refused, not raised from within
+--
+-- Every other refusal in `enqueue_generation_job` is a sentence the caller can act on.
+-- A jsonb SCALAR -- what `{"p_target": "hello"}` sends through PostgREST -- passed every
+-- `->>` as NULL and then reached `target - 'visibility'`, where Postgres raises
+-- `cannot delete from scalar`: a 500 out of the internals of a function the caller
+-- cannot read. 20260914040000 refuses it at the top instead.
+do $$
+declare
+  reader  uuid;
+  refused text := null;
+begin
+  perform set_config('role', 'postgres', true);
+  select u.id into reader from auth.users u
+   where u.email like 'spend-cap%' order by u.email limit 1;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader, 'role', 'authenticated')::text, true);
+
+  begin
+    perform public.enqueue_generation_job('"hello"'::jsonb);
+  exception when others then
+    refused := sqlerrm;
+  end;
+
+  if refused is null then
+    raise exception 'a jsonb scalar was accepted as a generation target';
+  end if;
+  if refused like '%delete from scalar%' then
+    raise exception
+      'a malformed target still raises from inside the function: %. The caller gets a '
+      'stack trace where every other bad shape gets a sentence.', refused;
+  end if;
+  if refused not like '%must be an object%' then
+    raise exception 'a malformed target was refused, but not in terms a caller can read: %',
+      refused;
+  end if;
+
+  /*
+   * `null` and `'{}'` are NOT asserted here, and deliberately: by this point sections 8
+   * and 9 have charged the day's whole cap inside this transaction, so an acceptable
+   * target is refused for the budget rather than accepted. `coalesce(p_target, '{}')`
+   * runs before the new guard and `jsonb_typeof('{}')` is `object`, so the shape the
+   * guard must not break is the one every other section of this file enqueues with.
+   */
+  raise notice 'spend_cap.sql: a malformed target is refused in the same voice as the others';
+end $$;
+
+-- ----------------- 11. a hold still in use is not stranded, however dead its job is
+--
+-- `graph.ts` runs `extract_evidence` beside `synthesize` and `artwork` beside `embed`,
+-- in separate invocations. So the instant one step exhausts its retries and fails the
+-- JOB, a sibling can still be inside its provider call holding a live reservation --
+-- and a terminal-status sweep that keys on status alone hands that money back before
+-- the charge arrives. The sweep now leaves a hold younger than its own threshold alone.
+do $$
+declare
+  reader   uuid;
+  job      uuid;
+  open_now int;
+begin
+  perform set_config('role', 'postgres', true);
+
+  select u.id into reader from auth.users u
+   where u.email like 'spend-cap%' order by u.email limit 1;
+
+  insert into public.generation_jobs (requester_id, target, status, finished_at)
+  values (reader, '{"text":"x"}'::jsonb, 'failed', now()) returning id into job;
+
+  -- A sibling that reserved a second ago and is still calling its provider.
+  insert into public.budget_reservations (job_id, step, reserved_cents, created_at)
+  values (job, 'synthesize', 6, now());
+
+  perform public.sweep_stranded_generation_jobs();
+
+  select count(*) into open_now
+  from public.budget_reservations br
+  where br.job_id = job and br.settled_at is null;
+  if open_now <> 1 then
+    raise exception
+      'the sweep released a hold taken seconds ago on a job that had just failed. The '
+      'step holding it is still mid-call, and its charge will land against a total '
+      'this pass made short by exactly that amount.';
+  end if;
+
+  -- The same row, once it is genuinely older than the threshold.
+  update public.budget_reservations br
+     set created_at = now() - interval '30 minutes'
+   where br.job_id = job;
+
+  perform public.sweep_stranded_generation_jobs();
+
+  select count(*) into open_now
+  from public.budget_reservations br
+  where br.job_id = job and br.settled_at is null;
+  if open_now <> 0 then
+    raise exception
+      'the sweep left a half-hour-old hold open on a terminal job. Nothing will ever '
+      'record for it, so it is money held against the cap for a charge that cannot come.';
+  end if;
+
+  raise notice 'spend_cap.sql: the sweep settles a stranded hold and leaves a live one alone';
 end $$;
 
 rollback;

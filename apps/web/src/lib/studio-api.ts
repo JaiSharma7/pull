@@ -92,9 +92,12 @@ export async function requestPrivateSummary(input: {
  * the service role; this is the whole of what a reader may know, and it is enough for
  * the sentence the screen needs.
  *
- * An unreadable answer is treated as `open`. Refusing to let somebody start because a
- * status call failed would be the wrong failure: `enqueue_generation_job` checks the
- * cap itself and answers 53400, which is a real refusal with a real reason.
+ * An unreadable answer is treated as `open`, BY THE CALLER: this throws like every
+ * other call in this module, and `Studio.tsx` catches it and falls back. Refusing to
+ * let somebody start because a status call failed would be the wrong failure —
+ * `enqueue_generation_job` checks the cap itself and answers 53400, which is a real
+ * refusal with a real reason — but swallowing the error here would also hide a broken
+ * RPC from the console, so the fallback is at the screen and the throw stays.
  */
 export async function fetchBudgetState(): Promise<BudgetState> {
   const { data, error } = await supabase.rpc('generation_budget_state');

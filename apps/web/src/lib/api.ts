@@ -237,11 +237,12 @@ export async function unsavePull(pullId: string, userId: string) {
  *
  * The impression is telemetry: WHICH card was in front of them when they asked.
  * It is written on the muted card alone, not on every remaining card of that
- * work, because the others were never rejected — they were withdrawn. The update
- * comes first because the card has almost always been shown already today, and
- * `feed_impressions_once_per_day` makes a second insert for it a conflict; the
- * insert is the case where it has not, and a race between two tabs lands back on
- * the same conflict and is swallowed there.
+ * work, because the others were never rejected — they were withdrawn. One
+ * statement does it: the card has almost always been shown already today, and
+ * `feed_impressions_once_per_day` makes a second insert for it a conflict, so the
+ * RPC below upserts on that conflict target rather than reading first and choosing
+ * between an update and an insert. Two tabs racing land on the same conflict and
+ * the later one wins, which is the right answer — both are the same mute.
  *
  * A failed impression never fails the mute. The reader asked for less of a
  * source, and they have it.

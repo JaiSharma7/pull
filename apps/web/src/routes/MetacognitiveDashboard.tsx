@@ -571,9 +571,25 @@ function BeliefRow({ belief, onNavigate }: { belief: Belief; onNavigate: (path: 
    * One `related_pulls` call per belief on mount would be twenty round trips to
    * render a screen — and the case against something is read one at a time, if at
    * all. `null` is untouched, `'asking'` is in flight, and a settled answer is
-   * either the opposing idea or the honest absence of one.
+   * the opposing idea, the honest absence of one, or a failure to find out.
+   *
+   * `'failed'` is its own state because the first version had the catch set
+   * `'none'`, which renders "Nobody has written one down yet." — a positive claim
+   * about the catalogue, made from a request that never came back. Offline, or on a
+   * 500, the reader would be told an authored objection does not exist when it may
+   * well. The two are different answers and the screen says which one it has.
    */
-  const [against, setAgainst] = useState<'asking' | RelatedPull | 'none' | null>(null);
+  const [against, setAgainst] = useState<'asking' | RelatedPull | 'none' | 'failed' | null>(null);
+
+  function ask() {
+    setAgainst('asking');
+    fetchCaseAgainst(belief.pullId)
+      .then((found) => setAgainst(found ?? 'none'))
+      .catch((e: unknown) => {
+        console.error('Could not look for the case against', e);
+        setAgainst('failed');
+      });
+  }
   const moved = changeLine(belief);
 
   return (
@@ -606,22 +622,19 @@ function BeliefRow({ belief, onNavigate }: { belief: Belief; onNavigate: (path: 
       {belief.stance === 'agree' && (
         <p style={{ margin: 'var(--space-2) 0 0' }}>
           {against === null ? (
-            <button
-              type="button"
-              className="btn btn--plain"
-              style={{ padding: 0 }}
-              onClick={() => {
-                setAgainst('asking');
-                fetchCaseAgainst(belief.pullId)
-                  .then((found) => setAgainst(found ?? 'none'))
-                  .catch(() => setAgainst('none'));
-              }}
-            >
+            <button type="button" className="btn btn--plain" style={{ padding: 0 }} onClick={ask}>
               The case against
             </button>
           ) : against === 'asking' ? (
             <span className="meta" role="status">
               Looking…
+            </span>
+          ) : against === 'failed' ? (
+            <span className="meta" role="alert">
+              Could not look that up.{' '}
+              <button type="button" className="btn btn--plain" style={{ padding: 0 }} onClick={ask}>
+                Try again
+              </button>
             </span>
           ) : against === 'none' ? (
             /*

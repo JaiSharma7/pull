@@ -109,7 +109,16 @@ export function Studio({
       .then((state) => {
         if (live) setBudget(state);
       })
-      .catch((e: unknown) => console.error('Could not read the budget', e));
+      .catch((e: unknown) => {
+        // `open`, not nothing. `fetchBudgetState` documents an unreadable answer as
+        // `open` and then throws on one, so the fallback has to live here: without it
+        // `budget` stays null, the sentence is not rendered at all, and the reader gets
+        // a screen that silently drops a line it promises. Refusing to let somebody
+        // start because a status call failed would be the wrong failure —
+        // `enqueue_generation_job` checks the cap itself and answers 53400.
+        console.error('Could not read the budget', e);
+        if (live) setBudget('open');
+      });
     fetchImportedWorks(userId)
       .then((found) => {
         if (live) setBooks(found);

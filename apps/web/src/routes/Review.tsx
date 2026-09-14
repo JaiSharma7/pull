@@ -657,11 +657,27 @@ export function Review() {
           const downloaded = await readReviewPack(userId);
           if (cancelled) return;
           const left = downloaded ? mergePack(downloaded.items, answered) : [];
+
+          /*
+           * `pack` is what is ON THE DEVICE; `left` is what is left of this session.
+           *
+           * They are different facts and this used to report the second as the first:
+           * a reader who downloaded twenty and answered twelve online has eight stored
+           * (each answer removes one) and might have three of those still in the
+           * offline queue, so `left` is five — and the label said "5 ideas ready
+           * offline" over eight. Set before the branch below, because the case where
+           * nothing is LEFT is exactly the one that falls through to the error screen,
+           * where the label would otherwise say "Nothing downloaded yet" over a pack
+           * that plainly exists.
+           */
+          if (downloaded) {
+            setPack({ count: downloaded.items.length, syncedAt: downloaded.syncedAt });
+          }
+
           if (downloaded && left.length > 0) {
             setDue(left);
             setSessionTotal((prev) => nextSessionTotal(prev, left.length));
             setPractisingFrom(downloaded.syncedAt);
-            setPack({ count: left.length, syncedAt: downloaded.syncedAt });
             setOffline(true);
             return;
           }

@@ -367,7 +367,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * is exactly the row this step was trying to create. `version` is part of
        * the key, so it is sent and then matched on THE VALUE THAT WAS SENT rather
        * than on a constant — which is what makes adopting an owned work safe. A
-       * generated summary on an imported book is version 2 or later, and matching
+       * generated summary on an imported book is `GENERATED_VERSION`, and matching
        * a hardcoded 1 there would adopt the IMPORT's summary and let `cards`
        * overwrite the reader's own highlights at the colliding ordinals.
        */
@@ -598,22 +598,6 @@ export function createPipelineDb(supabase: Db): PipelineDb {
      * generated summary, not the import, and is the case `createSummary`'s own
      * comment already reasons about.
      */
-    async nextSummaryVersion(workId, authorId) {
-      if (authorId === null) return SUMMARY_VERSION;
-      const { data, error } = await supabase
-        .from('summaries')
-        .select('version')
-        .eq('work_id', workId)
-        .eq('author_id', authorId)
-        .order('version', { ascending: false })
-        .limit(1);
-      if (error) {
-        throw new Error(`read summary versions: ${error.message ?? JSON.stringify(error)}`);
-      }
-      const highest = (data ?? [])[0]?.version;
-      return typeof highest === 'number' ? highest + 1 : SUMMARY_VERSION;
-    },
-
     async attachSummaryToJob(jobId, summaryId, workId) {
       must(
         await supabase
