@@ -2560,6 +2560,10 @@ export type Database = {
         }
         Returns: string
       }
+      record_mute_impression: {
+        Args: { p_position?: number; p_pull_id: string }
+        Returns: undefined
+      }
       record_read: {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined

@@ -37,6 +37,7 @@ import {
   fetchMyJobs,
   isWorthPolling,
   MAX_TEXT_CHARS,
+  MAX_TITLE_CHARS,
   MIN_TEXT_CHARS,
   requestPrivateSummary,
   STUDIO_KINDS,
@@ -76,6 +77,24 @@ export function Studio({
    * row of title buttons. The bodies are wanted only for the one book that is sent.
    */
   const [items, setItems] = useState<{ workId: string; rows: ImportedItem[] } | null>(null);
+  /*
+   * What could not be read, as the ATTEMPT that failed rather than a flag.
+   *
+   * Both fetches used to report to `console.error` alone. A failed highlight fetch
+   * left the screen saying "Reading your highlights from X…" for ever, with no retry
+   * and a submit that refused with "try again in a moment" — a sentence that could
+   * never come true without a reload. A screen that cannot do the thing has to say so.
+   *
+   * Each holds the key of the attempt it belongs to — the retry counter for the book
+   * list, and the book plus the retry counter for the highlights — and the render
+   * compares that key against the attempt currently in flight. So picking a second book
+   * or pressing Try again retires the old message by DERIVING it away, with no effect
+   * body that clears state synchronously: two failures sharing one `'books' | 'items'`
+   * slot needed exactly that clear, and it is the cascading render lint forbids.
+   */
+  const [booksFailed, setBooksFailed] = useState<number | null>(null);
+  const [itemsFailed, setItemsFailed] = useState<string | null>(null);
+  const [reloads, setReloads] = useState(0);
   const [jobs, setJobs] = useState<StudioJob[]>([]);
 
   const reloadJobs = useCallback(() => {
@@ -95,12 +114,15 @@ export function Studio({
       .then((found) => {
         if (live) setBooks(found);
       })
-      .catch((e: unknown) => console.error('Could not read your imports', e));
+      .catch((e: unknown) => {
+        console.error('Could not read your imports', e);
+        if (live) setBooksFailed(reloads);
+      });
     reloadJobs();
     return () => {
       live = false;
     };
-  }, [userId, reloadJobs]);
+  }, [userId, reloadJobs, reloads]);
 
   /*
    * Polled while something is running, and not otherwise.
@@ -125,18 +147,25 @@ export function Studio({
 
   const picked = source === 'paste' ? null : (books.find((b) => b.workId === source) ?? null);
 
+  /** The highlight fetch currently in flight, or the one that would be. */
+  const itemsAttempt = picked ? `${picked.workId}#${reloads}` : null;
+
   useEffect(() => {
     if (picked === null || items?.workId === picked.workId) return;
     let live = true;
+    const attempt = `${picked.workId}#${reloads}`;
     fetchImportedItemsForStudio(userId, picked.workId)
       .then((rows) => {
         if (live) setItems({ workId: picked.workId, rows });
       })
-      .catch((e: unknown) => console.error('Could not read that book’s highlights', e));
+      .catch((e: unknown) => {
+        console.error('Could not read that book’s highlights', e);
+        if (live) setItemsFailed(attempt);
+      });
     return () => {
       live = false;
     };
-  }, [picked, items?.workId, userId]);
+  }, [picked, items?.workId, userId, reloads]);
 
   /** The picked book's rows, and only once they are the picked book's. */
   const pickedItems = picked && items?.workId === picked.workId ? items.rows : null;
@@ -170,7 +199,12 @@ export function Studio({
     }
 
     const body = picked ? importedText : text;
-    const named = picked ? picked.title : title;
+    // The reader's own wording wins where they have given one, for a picked book as
+    // much as for pasted text. Without an editable title, a book whose stored title is
+    // over the bound was refused by `checkSubmission` naming a field the picked branch
+    // did not render — a dead end reachable from data the screen would not let them
+    // change.
+    const named = title.trim() || (picked ? picked.title : '');
     const check = checkSubmission({ title: named, text: body });
     if (!check.ok) {
       setError(check.error);
@@ -261,15 +295,37 @@ export function Studio({
             </button>
           ))}
         </div>
-        {books.length === 0 && (
+        {booksFailed === reloads ? (
+          <p className="remember__error" role="alert">
+            Could not read your imported books.{' '}
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => setReloads((n) => n + 1)}
+            >
+              Try again
+            </button>
+          </p>
+        ) : books.length === 0 ? (
           <p className="meta">
             Import a Kindle or Readwise file and your own books appear here as well.
           </p>
-        )}
+        ) : null}
       </fieldset>
 
       {picked ? (
-        pickedItems === null ? (
+        itemsFailed === itemsAttempt ? (
+          <p className="remember__error" role="alert">
+            Could not read that book’s highlights.{' '}
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => setReloads((n) => n + 1)}
+            >
+              Try again
+            </button>
+          </p>
+        ) : pickedItems === null ? (
           <p className="meta" role="status">
             Reading your highlights from “{picked.title}”…
           </p>
@@ -281,18 +337,6 @@ export function Studio({
         )
       ) : (
         <>
-          <label className="field__label" htmlFor="studio-title">
-            Title
-          </label>
-          <input
-            id="studio-title"
-            className="field__input"
-            value={title}
-            maxLength={200}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="What this is called"
-          />
-
           <label className="field__label" htmlFor="studio-author">
             Author
           </label>
@@ -300,7 +344,7 @@ export function Studio({
             id="studio-author"
             className="field__input"
             value={author}
-            maxLength={200}
+            maxLength={MAX_TITLE_CHARS}
             onChange={(e) => setAuthor(e.target.value)}
             placeholder="Optional"
           />
@@ -345,6 +389,25 @@ export function Studio({
           </p>
         </>
       )}
+
+      {/*
+        Rendered for a picked book as well as for pasted text, and that is not a
+        convenience. The title of an imported book is whatever the file said, which can
+        be longer than the column allows — and with no field, `checkSubmission` refused
+        naming something the screen would not let the reader change. Their wording wins
+        where they give one; the book's is the placeholder and the fallback.
+      */}
+      <label className="field__label" htmlFor="studio-title">
+        Title
+      </label>
+      <input
+        id="studio-title"
+        className="field__input"
+        value={title}
+        maxLength={MAX_TITLE_CHARS}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder={picked ? picked.title : 'What this is called'}
+      />
 
       {error && (
         <p className="remember__error" role="alert">

@@ -250,23 +250,23 @@ export async function muteWork(workId: string, pullId: string, userId: string) {
   const { error } = await supabase.from('muted_works').insert({ user_id: userId, work_id: workId });
   if (error && error.code !== '23505') throw rpcError(error);
 
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const { data } = await supabase
-      .from('feed_impressions')
-      .update({ action: 'muted' })
-      .eq('user_id', userId)
-      .eq('pull_id', pullId)
-      .eq('shown_on', today)
-      .select('id');
-    if ((data ?? []).length === 0) {
-      await supabase
-        .from('feed_impressions')
-        .insert({ user_id: userId, pull_id: pullId, action: 'muted' });
-    }
-  } catch {
-    // Telemetry, and the mute is already recorded.
-  }
+  /*
+   * Through an RPC, because the day in `feed_impressions_once_per_day` is the SERVER's.
+   *
+   * `shown_on` is generated from `shown_at`, so computing today's date here put a
+   * device clock inside a unique key: skewed, or a request sent either side of
+   * midnight, matched no row, fell through to an insert, and collided — so the one
+   * piece of telemetry a mute exists to leave was silently never written.
+   * `record_mute_impression` does the upsert on the real conflict target, as the
+   * invoker, so `feed_impressions_own` still decides whose row it is.
+   */
+  const { error: noted } = await supabase.rpc('record_mute_impression', {
+    p_pull_id: pullId,
+  });
+  // Telemetry, and the mute itself is already recorded. Logged rather than thrown,
+  // and not swallowed silently — a `try {}` around this would never have fired anyway,
+  // because postgrest-js resolves with `{ error }` instead of rejecting.
+  if (noted) console.error('Could not record the mute impression', noted);
 }
 
 /** Hear from this source again. */

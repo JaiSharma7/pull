@@ -462,7 +462,7 @@ begin
     raise exception 'a malformed work_id failed the whole call';
   end if;
 
-  raise notice 'spend_cap.sql: a reader may ask what is spent and may not reserve, settle or insert';
+  raise notice 'spend_cap.sql: a reader may ask whether there is room and not how much, and may not reserve, settle or insert';
 end $$;
 
 -- ------------------------------------------- 8. a spent day refuses at the door
@@ -516,6 +516,58 @@ begin
   end if;
 
   raise notice 'spend_cap.sql: a spent day refuses at the door rather than queueing a wait';
+end $$;
+
+-- ------------------- 9. and a day with less than one job left refuses too
+--
+-- The door and the reservation have to agree. `spent >= cap` let a job in at 196 of 200,
+-- told the reader "Started. 46 more today.", and then `reserve_budget` refused it at
+-- `196 + 6 > 200` -- so it parked in the 24-hour budget wait with the screen saying it
+-- had begun. Every job enqueued in the last few cents of a day behaved that way.
+do $$
+declare
+  reader uuid;
+  job    uuid;
+begin
+  perform set_config('role', 'postgres', true);
+  select u.id into reader from auth.users u
+   where u.email like 'spend-cap%' order by u.email limit 1;
+
+  -- Wind the day back to four cents left: enough that `spent >= cap` is false, and less
+  -- than the seven a job reserves before it can run.
+  delete from public.cost_ledger;
+  insert into public.generation_jobs (requester_id, target, status)
+  values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job;
+  perform public.record_job_step(
+    job, 'synthesize', 1, 'stub', 'v1', 1, 1,
+    public.daily_spend_cap_cents() - 4, 5, 'stub', true, null
+  );
+end $$;
+
+do $$
+declare
+  reader  uuid;
+  refused boolean := false;
+begin
+  select u.id into reader from auth.users u
+   where u.email like 'spend-cap%' order by u.email limit 1;
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', reader, 'role', 'authenticated')::text, true);
+
+  begin
+    perform public.enqueue_generation_job('{"title":"Four cents left","text":"x"}'::jsonb);
+  exception when configuration_limit_exceeded then
+    refused := true;
+  end;
+  if not refused then
+    raise exception
+      'a job was accepted with four cents left, which is less than the seven it will '
+      'reserve. It would park in a 24-hour wait under a screen saying it had started.';
+  end if;
+
+  raise notice 'spend_cap.sql: the door refuses what the reservation could not grant';
 end $$;
 
 rollback;

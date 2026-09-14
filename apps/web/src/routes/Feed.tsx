@@ -1179,6 +1179,30 @@ function PullCardInView({
   const ref = useRef<HTMLDivElement>(null);
 
   /*
+   * The callbacks, held rather than depended on.
+   *
+   * The observer effect used to list `[onRead, onVisible]`, and both are fresh arrow
+   * closures minted at the call site on every render of `Feed` — which now re-renders
+   * on every player transition, because `usePlayer()` subscribes it to the whole
+   * reducer. So pressing Pause on the bar, or dragging the sleep timer, tore down and
+   * rebuilt every visible card's `IntersectionObserver`: the cleanup cleared the
+   * pending `MIN_DWELL_MS` timer, reset `fired`, and fired `onVisible(false)`, which
+   * stops the dwell clock until the new observer's first callback arrives
+   * asynchronously. A reader using the player while the feed was on screen lost dwell
+   * measurement and could lose the read event entirely — which this file spends a
+   * great deal of effort not getting wrong in the other direction.
+   *
+   * Refs read at call time instead, so the observer outlives a re-render and the
+   * effect depends on nothing that changes.
+   */
+  const onReadRef = useRef(onRead);
+  const onVisibleRef = useRef(onVisible);
+  useEffect(() => {
+    onReadRef.current = onRead;
+    onVisibleRef.current = onVisible;
+  });
+
+  /*
    * Both edges now, not just the first one.
    *
    * This observer only ever reported `isIntersecting`, which is all "counts as read"
@@ -1231,14 +1255,14 @@ function PullCardInView({
               timer = setTimeout(() => {
                 fired = true;
                 timer = undefined;
-                onRead();
+                onReadRef.current();
               }, MIN_DWELL_MS);
             }
           } else if (timer !== undefined) {
             clearTimeout(timer);
             timer = undefined;
           }
-          onVisible(e.isIntersecting);
+          onVisibleRef.current(e.isIntersecting);
         }
       },
       { threshold: [...IN_VIEW_THRESHOLDS] },
@@ -1247,9 +1271,11 @@ function PullCardInView({
     return () => {
       if (timer !== undefined) clearTimeout(timer);
       io.disconnect();
-      onVisible(false);
+      onVisibleRef.current(false);
     };
-  }, [onRead, onVisible]);
+    // Nothing: the observer is set up once per mounted card and reads its callbacks
+    // through refs. See the block above.
+  }, []);
 
   return (
     // `feed__item` is the scroll-snap target. It wraps the card rather than being the

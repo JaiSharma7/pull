@@ -81,6 +81,25 @@ begin
 end;
 $$;
 
+/*
+ * The open set, indexed.
+ *
+ * 20260914010000 declined an index on `settled_at` because it settled only
+ * `br.job_id = any(stranded)` -- a handful of ids -- and "the open set is bounded by the
+ * number of steps in flight". The terminal pass below invalidates that reasoning: its
+ * predicate is `settled_at is null` over the whole table, `budget_reservations` rows are
+ * never deleted (only stamped), and the sweeper ticks every five minutes. Without this
+ * the tick is a full scan of a monotonically growing table, forever, to find the few rows
+ * that are open.
+ *
+ * Partial, so it indexes only what the predicate asks for and stays the size of the open
+ * set rather than the size of history. Invariant 6 refuses two identical index
+ * definitions on one table; this is the only one on `settled_at`.
+ */
+create index budget_reservations_open_idx
+  on public.budget_reservations (settled_at)
+  where settled_at is null;
+
 comment on function public.settle_job_budget is
   'Close every open budget hold a job carries. Called by the worker on both failure '
   'paths that do not reach record_failed_job_step. See 20260914030000.';
@@ -206,8 +225,12 @@ comment on function public.spend_today is
   'TODAY. Never generation_jobs.cost_cents, which is a second copy of every ledgered '
   'charge. See 20260914010000 and 20260914030000.';
 
-revoke all on function public.spend_today() from public, anon;
-grant execute on function public.spend_today() to authenticated, service_role;
+-- NOT granted to `authenticated`, unlike 20260914010000's version. The reader-facing
+-- half is `generation_budget_state()` below; granting the figure here and revoking it
+-- further down would leave two contradictory statements about one privilege in one file,
+-- and an audit that greps for `to authenticated` would read the first.
+revoke all on function public.spend_today() from public, anon, authenticated;
+grant execute on function public.spend_today() to service_role;
 
 /*
  * `reserve_budget`, restated from 20260914010000 with the same day bound.
@@ -291,16 +314,22 @@ grant execute on function public.reserve_budget(uuid, text, numeric) to service_
  */
 create function public.generation_budget_state()
 returns text
-language sql
+language plpgsql
 security definer
 stable
 set search_path = ''
 as $$
-  select case
-           when public.spend_today() >= public.daily_spend_cap_cents() then 'spent'
-           when public.spend_today() >= public.daily_spend_cap_cents() * 0.8 then 'low'
-           else 'open'
-         end;
+declare
+  -- Read once. A `case` over two calls evaluates `spend_today()` twice for the common
+  -- `open` answer -- four aggregate scans over `cost_ledger` and `budget_reservations`
+  -- instead of two -- on a function in the reader's request path.
+  spent numeric := public.spend_today();
+  cap   numeric := public.daily_spend_cap_cents();
+begin
+  if spent >= cap then return 'spent'; end if;
+  if spent >= cap * 0.8 then return 'low'; end if;
+  return 'open';
+end;
 $$;
 
 comment on function public.generation_budget_state is
@@ -310,15 +339,8 @@ comment on function public.generation_budget_state is
 revoke all on function public.generation_budget_state() from public, anon;
 grant execute on function public.generation_budget_state() to authenticated, service_role;
 
-/*
- * And the exact figures go back behind the service role.
- *
- * `spend_today()` is what the worker and the cap check read; nothing a reader can
- * reach needs the number itself now that `generation_budget_state()` exists.
- * `daily_spend_cap_cents()` is the other half of the same subtraction, so it goes with
- * it -- a cap alone is harmless, a cap beside a spend is a countdown.
- */
-revoke execute on function public.spend_today() from authenticated;
+-- The other half of the same subtraction. A cap alone is harmless; a cap beside a
+-- spend is a countdown, and `spend_today()` above is already service-role only.
 revoke execute on function public.daily_spend_cap_cents() from authenticated;
 
 /*
@@ -344,6 +366,8 @@ declare
   stagger_seconds    constant int := 300;
   max_text_length    constant int := 200000;
   max_title_length   constant int := 200;
+  -- What one job will reserve before it can do anything: synthesize plus embed.
+  min_job_cents      constant numeric := 7;
 
   uid        uuid := (select auth.uid());
   used       int;
@@ -399,8 +423,22 @@ begin
     target := target - 'work_id';
   end if;
 
+  /*
+   * REFUSED WHERE A JOB COULD NOT RUN, not only where the budget is exactly gone.
+   *
+   * `spent >= cap` let a job in at 196 of 200 and told the reader it had started, and
+   * `reserve_budget` then refused it at `196 + 6 > 200` -- so it parked in the 24-hour
+   * budget wait while the screen said "Started. 46 more today." The door and the
+   * reservation have to agree, so the door asks for what a job actually needs: the
+   * worst case of the two provider steps it will reserve for (`RESERVE_CENTS` in
+   * `supabase/functions/_shared/pipeline.ts`, 6 for synthesize and 1 for embed).
+   *
+   * Stated here rather than imported because SQL cannot read that file. If those
+   * constants move, this moves with them -- and the failure if it does not is a job
+   * accepted into a wait, which is visible rather than silent.
+   */
   spent := public.spend_today();
-  if spent >= cap then
+  if spent + min_job_cents > cap then
     raise exception
       'the daily generation budget is spent. Summaries resume at 00:00 UTC.'
       using errcode = '53400';
@@ -444,3 +482,39 @@ begin
   );
 end;
 $$;
+
+-- ------------------------------- a mute's impression, on the server's clock
+
+/*
+ * Record that this card is what the reader was looking at when they muted its source.
+ *
+ * `feed_impressions.shown_on` is `generated always as ((shown_at at time zone 'UTC')
+ * ::date) stored`, so the day is the SERVER's. The client was computing its own UTC
+ * date to find today's row, which puts a device clock in the middle of a unique key:
+ * a skewed clock, or a request sent either side of midnight, matched zero rows, fell
+ * through to an insert, and violated `feed_impressions_once_per_day` -- so the one
+ * piece of telemetry the mute exists to leave was silently never written.
+ *
+ * `on conflict ... do update` on the real index does the whole thing in one statement
+ * with no date arithmetic anywhere near the client. `security invoker`, so
+ * `feed_impressions_own` is what decides whose row this is, exactly as it does for the
+ * client's own insert -- this function adds no authority, only the correct conflict
+ * target.
+ */
+create function public.record_mute_impression(p_pull_id uuid, p_position int default 0)
+returns void
+language sql
+security invoker
+set search_path = ''
+as $$
+  insert into public.feed_impressions (user_id, pull_id, position, action)
+  select (select auth.uid()), p_pull_id, coalesce(p_position, 0), 'muted'
+  where (select auth.uid()) is not null
+  on conflict (user_id, pull_id, shown_on) do update set action = 'muted';
+$$;
+
+comment on function public.record_mute_impression is
+  'Mark the card a reader muted from, on the server''s clock. See 20260914030000.';
+
+revoke all on function public.record_mute_impression(uuid, int) from public, anon;
+grant execute on function public.record_mute_impression(uuid, int) to authenticated;

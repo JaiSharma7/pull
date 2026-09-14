@@ -1391,16 +1391,20 @@ function Imported({ userId }: { userId: string }) {
           )}
 
           {groups.map((group) => {
-            const open = openWork === group.workId;
+            // `expanded`, not `open`: the section's own disclosure state is called
+            // `open` in this component's scope, and a per-book binding of the same
+            // name shadowed it — two booleans one letter apart, both true at once,
+            // reading as the same thing.
+            const expanded = openWork === group.workId;
             return (
               <section key={group.workId} className="stack">
                 <h3 style={{ fontSize: 'var(--step-0)', margin: 0 }}>
                   <button
                     type="button"
                     className="btn btn--plain"
-                    aria-expanded={open}
+                    aria-expanded={expanded}
                     style={{ textAlign: 'left' }}
-                    onClick={() => setOpenWork(open ? null : group.workId)}
+                    onClick={() => setOpenWork(expanded ? null : group.workId)}
                   >
                     {group.title}
                   </button>
@@ -1408,7 +1412,7 @@ function Imported({ userId }: { userId: string }) {
                 <p className="meta">
                   {group.items.length} {group.items.length === 1 ? 'highlight' : 'highlights'}
                 </p>
-                {open && (
+                {expanded && (
                   <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                     {group.items.map((item) => (
                       <li key={item.id} className="library__item">

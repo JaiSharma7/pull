@@ -72,14 +72,25 @@ export function checkSubmission(input: { title: string; text: string }): SubmitC
 /**
  * The text of an imported source, built from the highlights themselves.
  *
- * DETERMINISTIC, which is the whole reason this is a function rather than a
- * template literal at the call site: the pipeline hashes what it is given
- * (`works.content_hash`) and reuses a summary of the same hash, so the same
- * highlights must produce byte-identical text on two presses or the reader pays
- * twice for one book. Order comes from the rows as they were kept — the caller
- * hands them in that order and this does not re-sort — and the locator rides on
- * its own line so the model can cite where a passage came from without it running
- * into the passage.
+ * DETERMINISTIC, which is why this is a function rather than a template literal at
+ * the call site. The same highlights must produce byte-identical text on two presses:
+ * the pipeline hashes what it is given and dedupes canonical work on
+ * `works.content_hash`, and a screen that shuffled its own input would make every
+ * property keyed on that hash meaningless.
+ *
+ * WHAT IT DOES NOT BUY, on the path this function's output actually takes: reuse.
+ * `template` adopts the reader's existing work rather than calling `upsertWork`, so
+ * no `works` row ever carries this text's hash and `findPublishedSummaryByHash` cannot
+ * find it — a second generation of the same book runs the full paid walk again. That
+ * is a real gap rather than a subtlety, and closing it is a design question the adopt
+ * path raises and does not answer: the reader's work already carries TWO readable
+ * summaries by then (the import's and the generated one), so a hash lookup has to be
+ * told which of them it is looking for. Named here rather than implied away; the
+ * screen warns instead, which is the honest interim.
+ *
+ * Order comes from the rows as they were kept — the caller hands them in that order and
+ * this does not re-sort — and the locator rides on its own line so the model can cite
+ * where a passage came from without it running into the passage.
  *
  * Highlights are joined by a blank line rather than a separator glyph. They are
  * passages from one book, not a list, and the pipeline's own segmentation reads

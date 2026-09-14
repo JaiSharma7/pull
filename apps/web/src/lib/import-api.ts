@@ -249,38 +249,55 @@ function narrowSourceKind(value: string): ImportSourceKind {
 /**
  * The books this reader has imported, without their highlights.
  *
- * One row per book rather than one per highlight, which is the difference between a
- * bounded request and a walk over everything a reader owns. `commit_import` creates
- * exactly one summary per (reader, work), so the reader's own summaries ARE their books
- * — and a Studio generation on one adds a second summary on the same work, which is why
- * this dedupes rather than trusting one row per title.
+ * ONE ROW PER BOOK, which is the difference between a bounded request and a walk over
+ * everything a reader owns — Studio drew a row of title buttons and paid forty
+ * sequential requests with every highlight body in them to do it.
  *
- * Paged for the usual reason: `max_rows` is 100, and a reader may have more than a
- * hundred books. `id` order is arbitrary (it is a uuid), so titles are sorted here.
+ * Two steps, because PostgREST has no `distinct`. The first walks `import_items` for
+ * its `work_id` alone and keysets ON THAT COLUMN, so each page skips the rest of the
+ * book it landed in: the walk is bounded by the number of books rather than by the
+ * number of highlights, and each row is one uuid. The second asks `works` for their
+ * titles in a single `in` list.
+ *
+ * Read from `import_items` rather than from the reader's summaries, and that is the
+ * correction rather than the shape: filtering on `summaries.author_id` returns every
+ * work the reader has authored anything on, which includes the works their own Studio
+ * generations created — so a pasted essay appeared in the picker as a "book", answered
+ * with no highlights when picked, and refused submission with a message about needing
+ * 200 characters. A book is a work with imported items in it.
  */
 export async function fetchImportedWorks(
   userId: string,
 ): Promise<{ workId: string; title: string; kind: string | null }[]> {
-  const rows = await pageAfter<{
-    id: string;
-    works: { id: string; title: string; kind: string | null } | null;
-  }>((after, limit) => {
+  const ids: string[] = [];
+  let after: string | null = null;
+  for (;;) {
     let q = supabase
-      .from('summaries')
-      .select('id, works(id, title, kind)')
-      .eq('author_id', userId)
-      .order('id', { ascending: true })
-      .limit(limit);
-    if (after !== null) q = q.gt('id', after);
-    return q;
-  }, 'id');
+      .from('import_items')
+      .select('work_id')
+      .eq('user_id', userId)
+      .not('pull_id', 'is', null)
+      .not('work_id', 'is', null)
+      .order('work_id', { ascending: true })
+      .limit(100);
+    if (after !== null) q = q.gt('work_id', after);
+    const { data, error } = await q;
+    if (error) throw rpcError(error);
 
-  const byWork = new Map<string, { workId: string; title: string; kind: string | null }>();
-  for (const r of rows) {
-    if (!r.works) continue;
-    if (!byWork.has(r.works.id)) {
-      byWork.set(r.works.id, { workId: r.works.id, title: r.works.title, kind: r.works.kind });
-    }
+    const rows = (data ?? []).filter((r): r is { work_id: string } => r.work_id !== null);
+    if (rows.length === 0) break;
+    for (const r of rows) if (ids[ids.length - 1] !== r.work_id) ids.push(r.work_id);
+    // Past the last book this page reached, so the next request starts at the next one
+    // rather than at the next highlight.
+    after = rows[rows.length - 1]!.work_id;
+    if (rows.length < 100) break;
   }
-  return [...byWork.values()].sort((a, b) => a.title.localeCompare(b.title));
+  if (ids.length === 0) return [];
+
+  const { data, error } = await supabase.from('works').select('id, title, kind').in('id', ids);
+  if (error) throw rpcError(error);
+
+  return (data ?? [])
+    .map((w) => ({ workId: w.id, title: w.title, kind: w.kind }))
+    .sort((a, b) => a.title.localeCompare(b.title));
 }
