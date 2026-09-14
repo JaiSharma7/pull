@@ -27,12 +27,13 @@ model of what you already know, so it stops re-teaching it.
 
 Built, and working today:
 
-|                        |                                                                                                                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **The Delta**          | The app knows what you already know, and refuses to spend your time on it. Open a source: _"You already know 14 of these 18. Here are the 4 that are new."_ It reports **time saved**, not time spent. |
-| **Interleaved Recall** | Questions arrive _inside_ the feed at unpredictable moments — bounded, seeded, and dismissible. A Review tab is a chore people skip; a question at the right moment gets answered.                     |
-| **Half-Life**          | No streak guilt. Ideas decay; Review shows what is fading. Sessions end on **Enough**.                                                                                                                 |
-| **Say It Back**        | Explain an idea in your own words, then compare it with the card and grade yourself. _Self-graded_ — the model-graded version is designed and not built (`explanations.gap_score` is never written).   |
+|                        |                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The Delta**          | The app knows what you already know, and refuses to spend your time on it. Open a source: _"You already know 14 of these 18. Here are the 4 that are new."_ It reports **time saved**, not time spent.                                                        |
+| **Interleaved Recall** | Questions arrive _inside_ the feed at unpredictable moments — bounded, seeded, and dismissible. A Review tab is a chore people skip; a question at the right moment gets answered.                                                                            |
+| **Half-Life**          | No streak guilt. Ideas decay; Review shows what is fading. Sessions end on **Enough**.                                                                                                                                                                        |
+| **Say It Back**        | Explain an idea in your own words, then compare it with the card and grade yourself. _Self-graded_ — the model-graded version is designed and not built (`explanations.gap_score` is never written).                                                          |
+| **Studio**             | Have your own text summarised — an essay, a paper, or the highlights you imported. Private, never published, under the same per-reader quota and a global daily spend cap. The one place a model sees something of yours, said on the screen before you type. |
 
 Designed, with the data being collected and no screen yet. Named here because a
 half-built feature is easier to trust when it says so:

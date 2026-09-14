@@ -8,6 +8,7 @@ import { PlayerBar } from './components/PlayerBar.js';
 import { PlayerProvider } from './components/PlayerProvider.js';
 import { Daily } from './routes/Daily.js';
 import { Explore } from './routes/Explore.js';
+import { Studio } from './routes/Studio.js';
 import { History } from './routes/History.js';
 
 /*
@@ -127,6 +128,7 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
    */
   { path: '/graph', label: 'Graph', signedIn: true },
   { path: '/import', label: 'Import', signedIn: true },
+  { path: '/studio', label: 'Studio', signedIn: true },
   { path: '/metacognition', label: 'Progress', signedIn: true },
 
   { path: '/settings', label: 'Settings' },
@@ -616,6 +618,7 @@ export function App() {
   const settingsOpen = isPath(path, '/settings');
   const graphOpen = isPath(path, '/graph');
   const importOpen = isPath(path, '/import');
+  const studioOpen = isPath(path, '/studio');
   const demoOpen = isPath(path, '/demo');
   const metacognitionOpen = isPath(path, '/metacognition');
   /*
@@ -662,6 +665,7 @@ export function App() {
     settingsOpen ||
     graphOpen ||
     importOpen ||
+    studioOpen ||
     demoOpen ||
     metacognitionOpen ||
     accountOpen ||
@@ -1058,6 +1062,17 @@ export function App() {
                 suggests it did. */}
               {importOpen && !guest && <Ingestion />}
 
+              {/*
+                Signed in and not a guest, like the three beside it. A guest may not
+                enqueue at all -- `enqueue_generation_job` refuses an anonymous account
+                with 28000, because one canonical generation costs real money and a
+                guest session costs nothing -- so the screen is withheld rather than
+                rendered as a form that cannot complete.
+              */}
+              {studioOpen && !guest && session && (
+                <Studio userId={session.user.id} onNavigate={navigate} />
+              )}
+
               {demoOpen && (
                 <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
               )}
@@ -1100,7 +1115,7 @@ export function App() {
               a rail and an entirely empty main — `routeOpen` hides the feed, and
               `isKnownPath` matches, so the 404 branch does not catch it either.
             */}
-              {(graphOpen || importOpen || metacognitionOpen) && guest && (
+              {(graphOpen || importOpen || studioOpen || metacognitionOpen) && guest && (
                 <section className="stack measure">
                   <p className="meta">Reading as a guest</p>
                   <h1>This one needs an account.</h1>

@@ -207,11 +207,17 @@ into a canonical summary that thousands of readers then share. What that call co
 the source material and our prompt — not you, not your history, and not your library.
 
 **The exception is a document you submit yourself.** If you ask the Studio to generate a
-summary of your own text or a URL, that text is the source, and the pipeline sends it to
-Google as the context for the summary it writes. You are doing that deliberately, but it is
-your content reaching a model provider, and it deserves stating plainly rather than leaving
-as an implication: what never reaches a model is your **reading** — not something you
-supplied to be summarised.
+summary of your own text, a URL, or highlights you have imported, that text is the source,
+and the pipeline sends it to Google as the context for the summary it writes. You are doing
+that deliberately, but it is your content reaching a model provider, and it deserves
+stating plainly rather than leaving as an implication: what never reaches a model is your
+**reading** — not something you supplied to be summarised.
+
+The Studio says that sentence on the screen, above the box, before you have typed anything
+— not in this policy alone. The summary it writes is **private**: it is readable by you,
+it is not published, it never enters the catalogue or anybody else's feed, and it is
+deleted with your account like everything else keyed to you. Asking for one needs an
+account, because generation costs real money and a guest session costs nothing to create.
 
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no

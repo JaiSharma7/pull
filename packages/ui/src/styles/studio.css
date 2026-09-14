@@ -1,0 +1,22 @@
+/*
+ * Studio — a summary of the reader's own text.
+ *
+ * One rule, because the screen is a form and the app already has forms. What it
+ * does not already have is a sentence a reader must meet BEFORE they act.
+ */
+/*
+ * The consent line on the Studio.
+ *
+ * The one sentence on this product's screens that a reader has to meet before
+ * they act rather than after — "this text is sent to Google" — so it is set apart
+ * from the prose around it by a hairline and the accent, which is exactly how
+ * `remember__error` is set apart and for the same reason: colour alone is never
+ * the signal (design.md), and this is not an error, so it gets the rule without
+ * the alarm.
+ */
+.studio__consent {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--rule-strong);
+  color: var(--text-soft);
+}
