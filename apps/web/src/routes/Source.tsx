@@ -249,6 +249,14 @@ export function Source({
    */
   const [depth, setDepth] = useState(READING_DEPTH);
 
+  /**
+   * The idea whose Highlight control was pressed with nothing selected.
+   *
+   * One at a time, and cleared by the next successful mark: two ideas cannot both
+   * be waiting for a selection, because there is one selection.
+   */
+  const [highlightHint, setHighlightHint] = useState<string | null>(null);
+
   /** The listening queue, which lives above the shell and outlives this page. */
   const player = usePlayer();
 
@@ -904,9 +912,16 @@ export function Source({
                         if (!el) return;
                         const range = selectionOffsetsIn(el);
                         if (!range) {
-                          window.alert('Select some words in this idea first.');
+                          // On the screen, beside the control, not in a modal. The
+                          // last of the five native dialogs `docs/contributing-map.md`
+                          // lists: `window.alert` blocks, cannot be read in the app's
+                          // voice, and on a phone is a system sheet that looks like it
+                          // came from somewhere else — over a message whose whole
+                          // content is "look at the thing behind me".
+                          setHighlightHint(p.id);
                           return;
                         }
+                        setHighlightHint(null);
                         const id = globalThis.crypto.randomUUID();
                         // Optimistic, then sent. A highlight that takes a round
                         // trip to appear feels broken at the exact moment the
@@ -984,6 +999,12 @@ export function Source({
                     )}
                   </p>
                 )}
+
+                {highlightHint === p.id ? (
+                  <p className="meta" role="status">
+                    Select some words in this idea first, then press Highlight.
+                  </p>
+                ) : null}
 
                 {userId && ask.openFor === p.id && (
                   <div className="source__ask" id={`ask-form-${p.id}`}>

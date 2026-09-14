@@ -84,6 +84,18 @@ export function Library({ userId }: { userId: string }) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [stashId, setStashId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /*
+   * The two native dialogs this screen used to open, as screen state.
+   *
+   * `naming` is the name field standing in for `window.prompt`; `armedStash` is
+   * the collection whose delete has been pressed once, standing in for
+   * `window.confirm`. Both follow `Account.tsx`, which does its confirmations
+   * inline for reasons its header sets out at length, and closing the last of the
+   * five native dialogs is the `docs/contributing-map.md` item this carries out.
+   */
+  const [naming, setNaming] = useState(false);
+  const [newStashName, setNewStashName] = useState('');
+  const [armedStash, setArmedStash] = useState<string | null>(null);
   const [exportNote, setExportNote] = useState<string | null>(null);
   /*
    * Whether this screen is still on screen.
@@ -169,9 +181,14 @@ export function Library({ userId }: { userId: string }) {
       );
     } catch (e) {
       console.error('Could not export highlights', e);
-      window.alert('Could not build the export just now.');
+      // The same live region the collection export writes to, and for the reason
+      // stated there: `window.alert` blocks, cannot be read in the app's voice,
+      // and on a phone is a system sheet that looks like it came from somewhere
+      // else. A blind reader pressing Export got silence on success and a modal
+      // on failure; a `role="status"` line is spoken either way.
+      if (mounted.current) setExportNote('Could not build the export just now.');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -464,11 +481,13 @@ export function Library({ userId }: { userId: string }) {
     setShareStatus(note ? { saveId: item.saveId, note } : null);
   }
 
-  async function addStash() {
+  async function addStash(typed: string) {
     // Bounded to `stashes_name_length`: an over-long name queued offline would be
     // refused for good on drain, not shown back.
-    const name = window.prompt('Name this collection')?.slice(0, 200) ?? null;
-    if (!name?.trim()) return;
+    const name = typed.slice(0, 200);
+    if (!name.trim()) return;
+    setNaming(false);
+    setNewStashName('');
     setBusy(true);
     // The id is minted here rather than by the database, so a retry after a lost
     // response collides on the primary key instead of creating a second folder
@@ -514,11 +533,21 @@ export function Library({ userId }: { userId: string }) {
      * told which before they agree to it rather than after.
      */
     const doomed = descendantIds(tree, node.id);
-    const childCount = doomed.size - 1;
-    const warning = childCount
-      ? `Delete “${node.name}” and ${childCount} collection${childCount === 1 ? '' : 's'} inside it? Nothing you have kept is deleted.`
-      : `Delete “${node.name}”? Nothing you have kept is deleted.`;
-    if (!window.confirm(warning)) return;
+
+    /*
+     * Armed, then done — the shape every destructive action in `Account.tsx`
+     * takes, and for the reasons its header gives: a `window.confirm` cannot be
+     * styled, cannot be read in the app's voice, and on a phone is a system sheet
+     * that looks like it came from somewhere else. The first press states the
+     * consequence beside the control and the second one carries it out, so the
+     * warning is on screen where the reader is looking rather than over the top
+     * of it.
+     */
+    if (armedStash !== node.id) {
+      setArmedStash(node.id);
+      return;
+    }
+    setArmedStash(null);
 
     // Every collection in `doomed` goes, not only the one named — so a selection
     // pointing at any of them would survive the row it names and leave the
@@ -697,21 +726,101 @@ export function Library({ userId }: { userId: string }) {
                 type="button"
                 className="btn btn--plain library__remove"
                 onClick={() => void removeStash(node)}
-                aria-label={`Delete the collection ${node.name}`}
+                aria-label={
+                  armedStash === node.id
+                    ? `Confirm deleting the collection ${node.name}`
+                    : `Delete the collection ${node.name}`
+                }
                 disabled={busy}
               >
-                ×
+                {armedStash === node.id ? 'Delete' : '×'}
               </button>
+              {/*
+                The consequence, beside the control, only once it has been asked
+                for. Said in what it costs the reader rather than in what it does
+                to the database: `stashes.parent_id` is `on delete cascade` while
+                `saved_items.stash_id` is `on delete set null` — one word apart in
+                the same migration, opposite consequences — so the children go and
+                the saves stay.
+              */}
+              {armedStash === node.id ? (
+                <span className="meta" role="status">
+                  {descendantIds(tree, node.id).size - 1 > 0
+                    ? `Deletes “${node.name}” and ${descendantIds(tree, node.id).size - 1} inside it. Nothing you have kept is deleted.`
+                    : `Deletes “${node.name}”. Nothing you have kept is deleted.`}{' '}
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => setArmedStash(null)}
+                  >
+                    Never mind
+                  </button>
+                </span>
+              ) : null}
             </span>
           ))}
-          <button
-            type="button"
-            className="btn btn--plain"
-            onClick={() => void addStash()}
-            disabled={busy}
-          >
-            New collection{nestTarget ? ` inside ${nestTarget.name}` : ''}
-          </button>
+          {naming ? (
+            <span className="library__collection">
+              <label className="meta" htmlFor="new-stash-name">
+                Name it
+              </label>{' '}
+              <input
+                id="new-stash-name"
+                className="field__input library__name"
+                value={newStashName}
+                maxLength={200}
+                /*
+                  Focused when it appears, through a ref rather than `autoFocus`.
+                  The rule that forbids the prop is about a control that steals
+                  focus on page load; this one exists because the reader has just
+                  pressed a button asking for it, and leaving focus behind on a
+                  button that is no longer there is the worse outcome — it is the
+                  one thing `window.prompt` did right, and losing it would make
+                  this replacement worse for exactly the keyboard readers the
+                  replacement is for.
+                */
+                ref={(el) => el?.focus()}
+                onChange={(e) => setNewStashName(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter keeps it and Escape abandons it, because a field that can
+                  // only be committed with the pointer is worse than the prompt it
+                  // replaced for exactly the readers the prompt was worst for.
+                  if (e.key === 'Enter') void addStash(newStashName);
+                  if (e.key === 'Escape') {
+                    setNaming(false);
+                    setNewStashName('');
+                  }
+                }}
+              />{' '}
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !newStashName.trim()}
+                onClick={() => void addStash(newStashName)}
+              >
+                Keep it
+              </button>{' '}
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => {
+                  setNaming(false);
+                  setNewStashName('');
+                }}
+              >
+                Never mind
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => setNaming(true)}
+              disabled={busy}
+            >
+              New collection{nestTarget ? ` inside ${nestTarget.name}` : ''}
+            </button>
+          )}
           {/*
             Told, not silently corrected. The alternative was to disable this
             button, which would mean a reader who has selected their deepest
