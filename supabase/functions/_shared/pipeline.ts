@@ -1215,7 +1215,16 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       try {
         await db.reserveBudget(job.id, 'synthesize', RESERVE_CENTS.synthesize);
       } catch (e) {
-        if (e instanceof BudgetExhaustedError) await db.releaseSourceHash(job.id);
+        // The recovery must not replace the refusal. A `releaseSourceHash` that rejects
+        // transiently would propagate instead of `BudgetExhaustedError`, and the worker
+        // decides whether to requeue as a budget wait by exactly that type: the job
+        // would burn an attempt on a failure it did not have, still holding the claim
+        // this was trying to give back. Logged, and the lease expires on its own.
+        if (e instanceof BudgetExhaustedError) {
+          await db.releaseSourceHash(job.id).catch((release: unknown) => {
+            console.error('synthesize: could not release the source claim', release);
+          });
+        }
         throw e;
       }
 
@@ -1563,10 +1572,17 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       try {
         await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
       } catch (e) {
+        // Swallowed for the reason `synthesize` gives at its own recovery: a re-claim
+        // that fails transiently must not take the place of the refusal, or the worker
+        // stops seeing a budget wait and starts seeing a failed attempt.
         if (e instanceof BudgetExhaustedError) {
           const held = priorOutputs.acquire as { hash?: unknown } | undefined;
           const hash = asString(held?.hash);
-          if (hash) await db.claimSourceHash(job.id, hash);
+          if (hash) {
+            await db.claimSourceHash(job.id, hash).catch((renew: unknown) => {
+              console.error('embed: could not renew the source claim', renew);
+            });
+          }
         }
         throw e;
       }

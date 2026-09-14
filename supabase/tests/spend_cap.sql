@@ -41,6 +41,7 @@ declare
   job_c       uuid;
   job_d       uuid;
   job_e       uuid;
+  job_f       uuid;
   some_work   uuid;
   other_work  uuid;
   cap         numeric := public.daily_spend_cap_cents();
@@ -124,11 +125,15 @@ begin
     raise exception 'reserve_budget reported % left after filling the cap exactly', left_over;
   end if;
 
-  -- ------------------------------------------- 2. a redelivery is not a second bill
+  -- ----------------------------------- 2. a RETRY re-reserves rather than stacking
   --
-  -- pgmq can hand the same message out twice. The reservation is keyed (job, step)
-  -- and the re-reservation must be measured against a total that excludes the hold
-  -- it is replacing, or a redelivered step is refused by its own earlier self.
+  -- pgmq can hand the same message out twice, and the two cases are not the same. A
+  -- step that has finished -- failed or billed -- settled its hold on the way out, so
+  -- the delivery that retries it finds a dead row and takes it over: one row, and the
+  -- total where it was. Stacking there would refuse a retry against money nobody is
+  -- spending. The other case, where the earlier call is still OPEN, is a second call
+  -- and is asserted at 5b-ii below.
+  perform public.settle_budget(job_b, 'synthesize');
   perform public.reserve_budget(job_b, 'synthesize', 1);
   select count(*) into held from public.budget_reservations br
    where br.job_id = job_b and br.step = 'synthesize';
@@ -137,7 +142,7 @@ begin
   end if;
   if public.spend_today() <> cap then
     raise exception
-      're-reserving the same step moved the total to % rather than leaving it at %',
+      're-reserving a settled step moved the total to % rather than leaving it at %',
       public.spend_today(), cap;
   end if;
 
@@ -237,6 +242,45 @@ begin
     raise exception
       'a job that failed outside the sweep kept % cents held. During a provider outage '
       'that is how a cap nobody spent closes for an hour.', public.spend_today() - 10;
+  end if;
+
+  -- ------------------- 5b-ii. two calls of ONE step are two holds, not one
+  --
+  -- pgmq redelivers on a visibility timeout, not on a proof that the last attempt died,
+  -- so a `synthesize` call that runs past the worker's 180 s message hold is run a
+  -- second time while the first is still inside the provider. `reserve_budget` used to
+  -- upsert onto `(job, step)` while excluding that same key from the total it checked,
+  -- so the second call was free -- and then the first to return stamped the row settled,
+  -- leaving the second call's spend held by nothing.
+  insert into public.generation_jobs (requester_id, target, status)
+  values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job_f;
+  perform public.reserve_budget(job_f, 'synthesize', 6);
+  perform public.reserve_budget(job_f, 'synthesize', 6);
+  if public.spend_today() <> 22 then
+    raise exception
+      'two concurrent calls of one step came to % cents of hold, not 12. The cap cannot '
+      'see money it is not counting.', public.spend_today() - 10;
+  end if;
+
+  -- The first call returns: its share goes back, the other call's does not.
+  perform public.settle_budget(job_f, 'synthesize');
+  if public.spend_today() <> 16 then
+    raise exception
+      'settling one of two outstanding calls left % held; the other call is still inside '
+      'its provider and its six cents must stay held.', public.spend_today() - 10;
+  end if;
+  if (select br.settled_at from public.budget_reservations br
+       where br.job_id = job_f and br.step = 'synthesize') is not null then
+    raise exception 'the hold was stamped settled while a call was still outstanding';
+  end if;
+
+  perform public.settle_budget(job_f, 'synthesize');
+  if public.spend_today() <> 10 then
+    raise exception 'the last settle left % held', public.spend_today() - 10;
+  end if;
+  if (select br.settled_at from public.budget_reservations br
+       where br.job_id = job_f and br.step = 'synthesize') is null then
+    raise exception 'the last call released its share and the hold was left open';
   end if;
 
   -- --------------------- 5c. and two holds on one job are two independent holds

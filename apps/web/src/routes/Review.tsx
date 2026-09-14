@@ -951,8 +951,13 @@ export function Review() {
        */
       const owner = getCurrentUserId();
       if (owner !== null) {
-        void removeFromPack(owner, card.pullId);
-        setPack((p) => (p === null ? p : { ...p, count: Math.max(0, p.count - 1) }));
+        // Decremented only when a card actually left the device. `removeFromPack` is a
+        // no-op for a card that was never downloaded, and counting those took the label
+        // to "Nothing downloaded yet" over a pack that was still there — on the one
+        // screen whose job is saying what can be practised without a connection.
+        void removeFromPack(owner, card.pullId).then((removed) => {
+          if (removed) setPack((p) => (p === null ? p : { ...p, count: Math.max(0, p.count - 1) }));
+        });
       }
 
       setAnsweredCount((n) => n + 1);

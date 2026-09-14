@@ -1,4 +1,5 @@
 import type { RecallGrade } from './grades.js';
+import { MAX_ROWS } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 import type { DueReview, FeedResponse, LibraryItem, SourceDelta } from './types.js';
@@ -318,19 +319,25 @@ export async function fetchSavedPullIds(userId: string): Promise<Set<string>> {
  * Bounded by the page rather than by the library, which is what separates it from
  * `fetchSavedPullIds`. That one walks all of `saved_items` — law 3 promises unlimited
  * stashing, so a reader with 5,000 saves pays fifty sequential round trips — and a
- * screen showing eighteen ideas needs the answer for eighteen ids. One request, and
- * the `in` list is the page.
+ * screen showing eighteen ideas needs the answer for eighteen ids.
+ *
+ * In batches of `MAX_ROWS`, though, because the cap bounds the ROWS a response may
+ * carry and not the length of the filter. An `in` list of 140 ids is a perfectly valid
+ * request that comes back with 100 rows and nothing saying the rest were dropped — and
+ * a summary with more than a hundred Pulls would render every kept idea past the
+ * hundredth with an unpressed Save. A page is usually one batch; a long source is two.
  */
 export async function fetchSavedAmong(userId: string, pullIds: string[]): Promise<Set<string>> {
-  if (pullIds.length === 0) return new Set();
-  const { data, error } = await supabase
-    .from('saved_items')
-    .select('pull_id')
-    .eq('user_id', userId)
-    .in('pull_id', pullIds);
-  if (error) throw rpcError(error);
   const ids = new Set<string>();
-  for (const r of data ?? []) if (r.pull_id !== null) ids.add(r.pull_id);
+  for (let i = 0; i < pullIds.length; i += MAX_ROWS) {
+    const { data, error } = await supabase
+      .from('saved_items')
+      .select('pull_id')
+      .eq('user_id', userId)
+      .in('pull_id', pullIds.slice(i, i + MAX_ROWS));
+    if (error) throw rpcError(error);
+    for (const r of data ?? []) if (r.pull_id !== null) ids.add(r.pull_id);
+  }
   return ids;
 }
 

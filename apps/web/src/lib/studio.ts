@@ -60,6 +60,20 @@ export const STUDIO_KINDS = [
 ] as const satisfies readonly WorkKind[];
 export type StudioKind = (typeof STUDIO_KINDS)[number];
 
+/**
+ * The kind to send for an imported book, which is the one the IMPORT recorded.
+ *
+ * `commit_import` writes a `work_kind` per work and `fetchImportedWorks` carries it, and
+ * the Studio hardcoded `'book'` for every picked source while hiding the kind selector on
+ * that branch — so a reader who imported a podcast or a lecture had no way to say so and
+ * no way to correct it. Narrowed rather than trusted, because the column is the database's
+ * enum and this list is the subset the Studio offers: anything outside it falls back to
+ * `book`, which is what the picker is for.
+ */
+export function studioKindFor(kind: string | null): StudioKind {
+  return STUDIO_KINDS.includes(kind as StudioKind) ? (kind as StudioKind) : 'book';
+}
+
 /** What each of them is called on the screen, since the enum members are not copy. */
 export const STUDIO_KIND_LABEL: Record<StudioKind, string> = {
   book: 'Book',
@@ -135,6 +149,11 @@ export function buildImportSource(items: readonly ImportedItem[]): string {
   return items
     .map((item) => {
       const body = item.body.trim();
+      // An empty body drops the row, LOCATOR AND ALL. Filtering the joined part instead
+      // kept `"Location 412\n"` — a citation with no passage under it — because that is
+      // not the empty string; it went to the model as context and into the bytes that
+      // decide `works.content_hash`.
+      if (body === '') return '';
       const locator = item.locator?.trim();
       return locator ? `${locator}\n${body}` : body;
     })
@@ -181,11 +200,16 @@ export function isWorthPolling(job: StudioJob, now: number = Date.now()): boolea
  * nearly four hours, and the job is `queued` for all of it. A tab left open issued
  * roughly fourteen hundred requests against a row that could not change.
  *
- * Four hours covers the whole stagger, so a job that started the day queued is still
- * being watched when its turn comes. Past that the reader sees the answer on their next
- * visit, which is when it will have changed.
+ * Four hours covers the whole stagger EXACTLY — the 50th job of the day is delayed by
+ * `(50 - 3 + 1) * 300` seconds, which is four hours to the second — so four hours on the
+ * nose stopped watching on the same tick the job was due to start, and the reader would
+ * have sat through the whole wait to miss the one moment it changed. The quarter hour is
+ * the slack that makes the bound cover its own worst case rather than meet it.
+ *
+ * Past that the reader sees the answer on their next visit, which is when it will have
+ * changed.
  */
-export const POLL_FOR_MS = 4 * 60 * 60 * 1000;
+export const POLL_FOR_MS = 4 * 60 * 60 * 1000 + 15 * 60 * 1000;
 
 /**
  * What a job is doing, in the reader's terms rather than the queue's.

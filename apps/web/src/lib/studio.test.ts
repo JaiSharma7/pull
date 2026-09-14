@@ -114,6 +114,15 @@ describe('buildImportSource', () => {
       'One.\n\nTwo.',
     );
   });
+
+  // The locator survived the empty body, because `"Location 412\n"` is not the empty
+  // string — so a citation with no passage under it was sent to the model and hashed
+  // into `works.content_hash`.
+  it('drops an empty highlight that still has a locator', () => {
+    expect(
+      buildImportSource([highlight('One.'), highlight('  ', 'Location 412'), highlight('Two.')]),
+    ).toBe('One.\n\nTwo.');
+  });
 });
 
 describe('describeJob', () => {
@@ -180,6 +189,12 @@ describe('isWorthPolling', () => {
     const at = (ms: number) => Date.parse(queued.createdAt) + ms;
     expect(isWorthPolling(queued, at(3 * 60 * 60 * 1000))).toBe(true);
     expect(isWorthPolling(queued, at(POLL_FOR_MS + 1))).toBe(false);
+
+    // The stagger's own worst case, and the reason the window is not four hours flat:
+    // `enqueue_generation_job` delays the 50th job of the day by `(50 - 3 + 1) * 300`
+    // seconds, which is four hours exactly. A window of four hours stopped watching on
+    // the tick the job was due to start.
+    expect(isWorthPolling(queued, at(48 * 300 * 1000))).toBe(true);
   });
 
   it('stops asking long before a budget wait could run out', () => {

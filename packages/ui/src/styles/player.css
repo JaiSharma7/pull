@@ -92,15 +92,18 @@
  * otherwise. `base.css` already flattens every animation under
  * `prefers-reduced-motion: reduce`; this states it as a condition rather than
  * relying on a 0.01ms duration to be imperceptible.
+ *
+ * `prefers-reduced-motion` and nothing else, on purpose. There was a
+ * `:root[data-motion='reduced']` rule here too, copied from the one in `base.css`
+ * — and nothing in this repository has ever set a `data-motion` attribute, so
+ * both are selectors that cannot match. A second copy of a dead rule reads as an
+ * in-app motion preference the player honours, which would be a promise to a
+ * reader who has no way to make it.
  */
 @media (prefers-reduced-motion: no-preference) {
   .player {
     animation: player-rise var(--transition) both;
   }
-}
-
-:root[data-motion='reduced'] .player {
-  animation: none;
 }
 
 @keyframes player-rise {

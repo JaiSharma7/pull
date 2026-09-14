@@ -42,6 +42,7 @@ import {
   requestPrivateSummary,
   STUDIO_KIND_LABEL,
   STUDIO_KINDS,
+  studioKindFor,
   type BudgetState,
   type StudioJob,
   type StudioKind,
@@ -94,6 +95,16 @@ export function Studio({
    * slot needed exactly that clear, and it is the cascading render lint forbids.
    */
   const [booksFailed, setBooksFailed] = useState<number | null>(null);
+  /*
+   * Which attempt at the book list has LANDED, failure included.
+   *
+   * Without it there is no in-flight state between the two: pressing Try again derived
+   * the alert away on the next render — `booksFailed` names the attempt before — while
+   * `books` was still `[]` and the refetch had not resolved, so the screen told a reader
+   * with four hundred imported highlights that they had imported nothing, then flickered
+   * back to the alert if the retry failed too.
+   */
+  const [booksAnswered, setBooksAnswered] = useState<number | null>(null);
   const [itemsFailed, setItemsFailed] = useState<string | null>(null);
   /*
    * TWO COUNTERS, because there are two things that can fail independently.
@@ -129,13 +140,18 @@ export function Studio({
         console.error('Could not read the budget', e);
         if (live) setBudget('open');
       });
+    const attempt = reloads;
     fetchImportedWorks(userId)
       .then((found) => {
-        if (live) setBooks(found);
+        if (!live) return;
+        setBooks(found);
+        setBooksAnswered(attempt);
       })
       .catch((e: unknown) => {
         console.error('Could not read your imports', e);
-        if (live) setBooksFailed(reloads);
+        if (!live) return;
+        setBooksFailed(attempt);
+        setBooksAnswered(attempt);
       });
     reloadJobs();
     return () => {
@@ -241,7 +257,7 @@ export function Studio({
       const queued = await requestPrivateSummary({
         title: check.title,
         text: check.text,
-        kind: picked ? 'book' : kind,
+        kind: picked ? studioKindFor(picked.kind) : kind,
         author: author.trim() || null,
         // Only for an imported book, and the server checks it twice: the target
         // keeps it only if this reader authored a summary on that work, and
@@ -330,6 +346,10 @@ export function Studio({
             >
               Try again
             </button>
+          </p>
+        ) : booksAnswered !== reloads ? (
+          <p className="meta" role="status">
+            Looking for your imported books…
           </p>
         ) : books.length === 0 ? (
           <p className="meta">

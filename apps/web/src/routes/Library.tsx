@@ -1458,7 +1458,19 @@ function Imported({ userId }: { userId: string }) {
       {open && state === 'failed' && (
         <p className="meta" role="alert">
           Could not read your imports just now.{' '}
-          <button type="button" className="btn btn--plain" onClick={() => setReloads((n) => n + 1)}>
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => {
+              // Back to `null` first, so the retry has a loading state and a second
+              // failure is something the reader can see. Bumping the counter alone left
+              // `state` at `'failed'`: the same alert stayed on screen, and when the
+              // retry failed too React bailed out of re-rendering an identical value —
+              // so the button appeared to do nothing at all.
+              setState(null);
+              setReloads((n) => n + 1);
+            }}
+          >
             Try again
           </button>
         </p>

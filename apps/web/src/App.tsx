@@ -592,6 +592,20 @@ export function App() {
   const withPlayer = (node: ReactNode) => (
     <PlayerProvider userId={session?.user.id ?? null} durable={!!session && !isGuest(session)}>
       {node}
+      {/*
+        THE BAR TRAVELS WITH THE ENGINE, and the two came apart once already. Wrapping
+        the provider around every return kept the voice alive across a navigation and
+        left the bar inside `shell` — so a reader who tapped Privacy from under the bar
+        kept the reading and lost Pause, Next, Stop, Done and Sleep, which is a worse
+        answer than the silence it replaced. Anywhere the engine can be speaking, the
+        controls for it are on screen.
+
+        Last in reading order rather than above the Colophon, which is what moving it
+        here costs: the bar is `position: fixed`, so nothing moves on screen, and a
+        screen reader now meets it after the footer instead of before. `:root
+        [data-listening]` still keeps the footer out from under it.
+      */}
+      <PlayerBar />
     </PlayerProvider>
   );
 
@@ -803,11 +817,11 @@ export function App() {
     return withPlayer(<SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />);
 
   /*
-   * The player is wrapped around this by `withPlayer` at the end, along with every
-   * other screen this function can return: the bar has to survive a tab change, a
-   * navigation, and the two legal pages the Colophon links to from directly under it,
-   * and every screen that can hand it something — Feed, Library, Source, Appearance —
-   * has to reach the same one.
+   * The player and its bar are wrapped around this by `withPlayer` at the end, along
+   * with every other screen this function can return: both have to survive a tab
+   * change, a navigation, and the two legal pages the Colophon links to from directly
+   * under the bar, and every screen that can hand the player something — Feed, Library,
+   * Source, Appearance — has to reach the same one.
    *
    * `durable` is false for a guest. A guest's queue is a reading list belonging to
    * an anonymous account that the sweep deletes, kept in this tab and no longer.
@@ -1397,14 +1411,6 @@ export function App() {
           </aside>
         )}
       </div>
-
-      {/*
-          Above the Colophon in reading order, and over it on screen. The bar is
-          fixed to the window, so this is where a screen reader meets it — after
-          the reading and before the footer — while `:root[data-listening]` keeps
-          the footer itself out from under it.
-        */}
-      <PlayerBar />
 
       <Colophon onNavigate={navigate} />
     </div>

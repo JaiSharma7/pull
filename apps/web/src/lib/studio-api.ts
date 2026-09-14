@@ -15,6 +15,7 @@ export {
   MIN_TEXT_CHARS,
   STUDIO_KIND_LABEL,
   STUDIO_KINDS,
+  studioKindFor,
 } from './studio.js';
 export type { BudgetState, StudioJob, StudioKind, SubmitCheck } from './studio.js';
 

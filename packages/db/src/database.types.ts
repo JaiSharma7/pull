@@ -78,6 +78,7 @@ export type Database = {
         Row: {
           created_at: string
           job_id: string
+          open_calls: number
           reserved_cents: number
           settled_at: string | null
           step: string
@@ -85,6 +86,7 @@ export type Database = {
         Insert: {
           created_at?: string
           job_id: string
+          open_calls?: number
           reserved_cents: number
           settled_at?: string | null
           step: string
@@ -92,6 +94,7 @@ export type Database = {
         Update: {
           created_at?: string
           job_id?: string
+          open_calls?: number
           reserved_cents?: number
           settled_at?: string | null
           step?: string
