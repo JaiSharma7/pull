@@ -116,3 +116,61 @@ There is no paid tier, so quotas exist for sustainability, not monetisation:
 Nobody has to pay, and no knowledge feature is ever behind the ad. The quota exists to
 stop someone scripting 100,000 image generations against the public instance — not to
 convert users.
+
+### A cap for the day, because a per-requester quota is not one
+
+The quotas above count rows belonging to **one identity**: three fast jobs a day, a
+stagger past that, a hard ceiling of fifty. That is exactly the right shape for stopping
+one reader running away with the budget, and no shape at all for stopping a hundred
+readers each spending their allowance on the same afternoon. Fifty jobs at $0.056 is
+$2.80 for one account and $280 for a hundred, and nothing in the schema noticed.
+
+Studio makes that worth fixing rather than theoretical — a private summary of a reader's
+own text means everybody can spend, not only whoever asks for a canonical work — so
+`20260914010000` adds the bound the per-requester quotas cannot express: a **global
+ceiling on provider spend in one UTC day**, `daily_spend_cap_cents()`, currently 200
+cents. The two compose. A reader is still bounded by their own quota; the product is
+bounded by the cap whatever the quotas allow.
+
+**Checking a number before spending is not a cap.** Two workers read `spend_today()` at
+the same moment, both see the same figure, both decide they are under the cap, and both
+spend — and the overshoot grows with the number of workers, not by one job. So the cap is
+a **reservation**: under one global advisory lock, the worst case of the step about to run
+is written to `budget_reservations`, counted against the cap by everyone who looks, and
+replaced by the real charge when the `cost_ledger` row lands. `record_job_step` and
+`record_failed_job_step` settle in the same transaction as the charge, so there is no
+instant in which the money is counted twice and none in which it is counted at all.
+
+A step that dies holding a reservation is released twice over: the stranded-job sweep
+settles what it fails, and a reservation older than an hour is ignored by the sum whether
+anything settled it or not.
+
+`spend_today()` is the ledger plus open reservations and **nothing else**. Never
+`generation_jobs.cost_cents`: `record_job_step` already rolls every ledgered charge into
+that column, so a sum over both reports double the real spend and slams the cap at half of
+it — a cap of $1 that claims to be $2, which is worse than either.
+
+| Step         | Reserved, worst case |
+| ------------ | -------------------: |
+| `synthesize` |              6 cents |
+| `embed`      |               1 cent |
+| `artwork`    |              5 cents |
+
+Those are the constants `8b` reserves with, rounded up from the cost shape above so a
+reservation is never smaller than the charge that replaces it.
+
+### The private tier
+
+`generation_jobs.kind` has existed since the table was created and was written by nothing,
+so every row said `canonical_summary` whatever it actually was. `enqueue_generation_job`
+now writes it, narrowed to two values:
+
+| `kind`              | What it is                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `canonical_summary` | A work for the catalogue. Published, public, generated once and read by thousands — the whole      |
+|                     | economics of law 2.                                                                                |
+| `private_summary`   | A reader's own text, summarised for them. Published nothing, visible to its requester, and counted |
+|                     | against the same daily cap and the same per-requester quota.                                       |
+
+A private summary is the one place a reader's own content reaches a model provider, and
+it happens because they asked. `docs/privacy.md` says so in the reader's words.

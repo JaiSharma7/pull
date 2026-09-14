@@ -175,6 +175,14 @@ that they have to be listed somewhere, which is here.
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
 | `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever              |
 
+`enable_generation_sweeper()` carries a second job since `20260914010000`, and it is worth
+naming because nothing else does it in the common case: `sweep_stranded_generation_jobs`
+settles the **budget reservations** of every job it fails. A step that dies between
+reserving and recording is holding part of the daily spend cap against a charge that will
+never arrive, and without the sweep that hold stands until the one-hour TTL expires. The
+TTL is the backstop; the sweeper is what makes the usual case ten minutes rather than
+sixty.
+
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
 deletes anonymous accounts after a day of disuse, and that retention promise is
 load-bearing: `docs/privacy.md` states it to readers, the sign-in screen prints it before

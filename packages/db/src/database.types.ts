@@ -74,6 +74,38 @@ export type Database = {
         }
         Relationships: []
       }
+      budget_reservations: {
+        Row: {
+          created_at: string
+          job_id: string
+          reserved_cents: number
+          settled_at: string | null
+          step: string
+        }
+        Insert: {
+          created_at?: string
+          job_id: string
+          reserved_cents: number
+          settled_at?: string | null
+          step: string
+        }
+        Update: {
+          created_at?: string
+          job_id?: string
+          reserved_cents?: number
+          settled_at?: string | null
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "budget_reservations_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       citation_anchors: {
         Row: {
           confidence: number
@@ -2304,6 +2336,7 @@ export type Database = {
         Args: { p_author: string; p_work_id: string }
         Returns: undefined
       }
+      budget_reservation_ttl: { Args: never; Returns: string }
       claim_generation_messages: {
         Args: { p_count?: number; p_visibility_seconds?: number }
         Returns: {
@@ -2330,6 +2363,7 @@ export type Database = {
         Returns: boolean
       }
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
+      daily_spend_cap_cents: { Args: never; Returns: number }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
@@ -2563,6 +2597,10 @@ export type Database = {
         }
         Returns: number
       }
+      reserve_budget: {
+        Args: { p_cents: number; p_job_id: string; p_step: string }
+        Returns: number
+      }
       resume_path: { Args: { p_path_id: string }; Returns: Json }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
@@ -2616,7 +2654,12 @@ export type Database = {
         Args: { p_name: string; p_value: string }
         Returns: string
       }
+      settle_budget: {
+        Args: { p_job_id: string; p_step: string }
+        Returns: undefined
+      }
       settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
+      spend_today: { Args: never; Returns: number }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean
