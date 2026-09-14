@@ -1561,16 +1561,10 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        * A cap that only bounded the expensive step would be a cap on synthesis
        * rather than on spend.
        *
-       * AND THE CLAIM IS RENEWED IF THE BUDGET REFUSES -- the opposite of what
-       * `synthesize` does with the same refusal, because the job is in the opposite
-       * position. There, nothing has been synthesised yet, so a job that is merely
-       * early has no business holding a source other jobs could be working on. Here
-       * the text HAS been synthesised and its Pulls are written; the summary is a
-       * draft, so `findPublishedSummaryByHash` cannot offer it to anybody, and a
-       * second job that took the source over would pay the full synthesis price for
-       * work already done and paid for. The wait re-sends this step every 900 s and
-       * the lease is 30 minutes, so renewing on each refusal keeps the source
-       * through a wait that may last until midnight.
+       * AND THE CLAIM GOES BACK IF THE BUDGET REFUSES, as it does in `synthesize`.
+       * The catch below is where that decision is argued, including the answer this
+       * header used to give -- that a job whose text is already synthesised should hold
+       * the source so nobody pays for it twice -- and why it was wrong.
        */
       try {
         await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);

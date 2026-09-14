@@ -119,50 +119,32 @@ export function checkSubmission(input: { title: string; text: string }): SubmitC
 }
 
 /**
- * The text of an imported source, built from the highlights themselves.
+ * The text of an imported source, built from the highlights themselves — and only as
+ * much of it as one summary can take.
  *
- * DETERMINISTIC, which is why this is a function rather than a template literal at
- * the call site. The same highlights must produce byte-identical text on two presses:
- * the pipeline hashes what it is given and dedupes canonical work on
- * `works.content_hash`, and a screen that shuffled its own input would make every
- * property keyed on that hash meaningless.
+ * DETERMINISTIC, which is why this is a function rather than a template literal at the
+ * call site. The same highlights must produce byte-identical text on two presses: the
+ * pipeline hashes what it is given and dedupes canonical work on `works.content_hash`,
+ * and a screen that shuffled its own input would make every property keyed on that hash
+ * meaningless. Order comes from the rows as they were kept — the caller hands them in
+ * that order and this does not re-sort — and the locator rides on its own line so the
+ * model can cite where a passage came from without it running into the passage.
+ * Highlights are joined by a blank line rather than a separator glyph: they are passages
+ * from one book, not a list, and the pipeline's own segmentation reads paragraphs.
  *
- * WHAT IT DOES NOT BUY, on the path this function's output actually takes: reuse.
- * `template` adopts the reader's existing work rather than calling `upsertWork`, so
- * no `works` row ever carries this text's hash and `findPublishedSummaryByHash` cannot
- * find it — a second generation of the same book runs the full paid walk again. That
- * is a real gap rather than a subtlety, and closing it is a design question the adopt
- * path raises and does not answer: the reader's work already carries TWO readable
- * summaries by then (the import's and the generated one), so a hash lookup has to be
- * told which of them it is looking for. Named here rather than implied away; the
- * screen warns instead, which is the honest interim.
+ * WHAT IT DOES NOT BUY, on the path this output actually takes: reuse. `template` adopts
+ * the reader's existing work rather than calling `upsertWork`, so no `works` row ever
+ * carries this text's hash and `findPublishedSummaryByHash` cannot find it — a second
+ * generation of the same book runs the full paid walk again. That is a real gap rather
+ * than a subtlety, and closing it is a design question the adopt path raises and does not
+ * answer: the reader's work already carries TWO readable summaries by then (the import's
+ * and the generated one), so a hash lookup has to be told which of them it is looking
+ * for. Named here rather than implied away; the screen warns instead, which is the honest
+ * interim.
  *
- * Order comes from the rows as they were kept — the caller hands them in that order and
- * this does not re-sort — and the locator rides on its own line so the model can cite
- * where a passage came from without it running into the passage.
- *
- * Highlights are joined by a blank line rather than a separator glyph. They are
- * passages from one book, not a list, and the pipeline's own segmentation reads
- * paragraphs.
- */
-export function buildImportSource(items: readonly ImportedItem[]): string {
-  return items
-    .map((item) => {
-      const body = item.body.trim();
-      // An empty body drops the row, LOCATOR AND ALL. Filtering the joined part instead
-      // kept `"Location 412\n"` — a citation with no passage under it — because that is
-      // not the empty string; it went to the model as context and into the bytes that
-      // decide `works.content_hash`.
-      if (body === '') return '';
-      const locator = item.locator?.trim();
-      return locator ? `${locator}\n${body}` : body;
-    })
-    .filter((part) => part !== '')
-    .join('\n\n');
-}
-
-/**
- * As much of a book as one summary can take, and how much that was.
+ * It was two functions until a review pointed out that the second reproduced the first
+ * inline: two copies of the code whose bytes decide `works.content_hash`, held together
+ * by a test asserting they agree.
  *
  * `checkSubmission` refuses anything over `MAX_TEXT_CHARS` with "Send it in parts",
  * which the paste box can act on and the picker cannot: the only granularity it offers
@@ -187,12 +169,9 @@ export function fitImportSource(
    * Grown one highlight at a time rather than sliced at a character, because half a
    * passage sent to a model is a passage that says something its author did not.
    *
-   * ONE PASS, accumulating parts and a running length. The first version called
-   * `buildImportSource(items.slice(0, i))` per prefix, which rebuilds and re-joins the
-   * whole string every time — quadratic in characters, on the render path, for exactly
-   * the four-thousand-highlight book this function exists to handle. The parts are what
-   * `buildImportSource` would produce, joined the same way, so the text is byte-identical
-   * and the hash is the same.
+   * ONE PASS, accumulating parts and a running length. The first version rebuilt and
+   * re-joined the whole string for every prefix — quadratic in characters, on the render
+   * path, for exactly the four-thousand-highlight book this function exists to handle.
    */
   const parts: string[] = [];
   let length = 0;

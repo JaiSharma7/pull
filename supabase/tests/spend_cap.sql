@@ -9,10 +9,11 @@
 --   * a reservation is counted against the cap by everybody, not only by the worker
 --     that took it -- which is what makes two workers unable to both fit in the same
 --     remaining budget
---   * a redelivered step reuses its reservation rather than opening a second one, so a
---     message the queue hands out twice does not cost twice
+--   * a step whose earlier hold is SETTLED takes that row over rather than stacking, so a
+--     retry is not refused against money nobody is spending -- while a step redelivered
+--     while its first call is still open adds to the hold, because both calls spend
 --   * `record_job_step` replaces the hold with the charge in one transaction, so there
---     is no instant where the money is counted twice and none where it is counted at all
+--     is no instant where the money is counted twice and none where it goes uncounted
 --   * a step that dies holding a reservation is released by the stranded sweep, and by
 --     the TTL if the sweep never runs
 --   * `spend_today()` never counts `generation_jobs.cost_cents`, which `record_job_step`

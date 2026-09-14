@@ -14,7 +14,12 @@ import {
   readCachedPulls,
 } from '../lib/offline.js';
 import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
-import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import {
+  isPlaying,
+  isQueued,
+  usePlayerActions,
+  usePlayerSelection,
+} from '../components/PlayerProvider.js';
 import type { Track } from '../lib/player.js';
 import { IN_VIEW_THRESHOLDS, isGenuinelyInView } from '../lib/in-view.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
@@ -129,7 +134,8 @@ export function Feed({
    * would have orphaned it entirely. The queue now lives above the shell
    * (`components/PlayerProvider.tsx`) and the feed only hands it tracks.
    */
-  const player = usePlayer();
+  const player = usePlayerActions();
+  const listening = usePlayerSelection();
 
   /*
    * Sources this reader has just asked to see less of.
@@ -673,13 +679,13 @@ export function Feed({
    */
   const onListen = useCallback(
     (row: FeedRow) => {
-      if (isPlaying(player.state, row.id)) {
+      if (isPlaying(listening, row.id)) {
         player.stop();
         return;
       }
       player.playNow(trackFor(row));
     },
-    [player, trackFor],
+    [player, trackFor, listening],
   );
 
   /*
@@ -689,10 +695,10 @@ export function Feed({
    */
   const onQueue = useCallback(
     (row: FeedRow) => {
-      if (isQueued(player.state, row.id)) player.remove(row.id);
+      if (isQueued(listening, row.id)) player.remove(row.id);
       else player.enqueue([trackFor(row)]);
     },
-    [player, trackFor],
+    [player, trackFor, listening],
   );
 
   /*
@@ -1098,9 +1104,9 @@ export function Feed({
             onRead={() => onRead(item.row, item.index)}
             onVisible={(visible) => onCardVisible(item.row.id, visible)}
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
-            listening={isPlaying(player.state, item.row.id)}
+            listening={isPlaying(listening, item.row.id)}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
-            queued={isQueued(player.state, item.row.id)}
+            queued={isQueued(listening, item.row.id)}
             onQueue={CAN_SPEAK ? () => onQueue(item.row) : undefined}
             reason={item.row.reason ?? null}
             onMute={userId ? () => void onMute(item.row, item.index) : undefined}
@@ -1195,15 +1201,21 @@ function PullCardInView({
    * The callbacks, held rather than depended on.
    *
    * The observer effect used to list `[onRead, onVisible]`, and both are fresh arrow
-   * closures minted at the call site on every render of `Feed` — which now re-renders
-   * on every player transition, because `usePlayer()` subscribes it to the whole
-   * reducer. So pressing Pause on the bar, or dragging the sleep timer, tore down and
+   * closures minted at the call site on every render of `Feed` — which at the time
+   * re-rendered on every player transition, because it consumed the whole player
+   * context. So pressing Pause on the bar, or dragging the sleep timer, tore down and
    * rebuilt every visible card's `IntersectionObserver`: the cleanup cleared the
    * pending `MIN_DWELL_MS` timer, reset `fired`, and fired `onVisible(false)`, which
    * stops the dwell clock until the new observer's first callback arrives
    * asynchronously. A reader using the player while the feed was on screen lost dwell
    * measurement and could lose the read event entirely — which this file spends a
    * great deal of effort not getting wrong in the other direction.
+   *
+   * `usePlayerActions` and `usePlayerSelection` have since taken that re-render away at
+   * the source: the actions never change identity and the selection changes only when
+   * what is playing or queued does. This stays regardless — the callbacks are still
+   * fresh closures on every render of this component, for every other reason a
+   * component re-renders.
    *
    * Refs read at call time instead, so the observer outlives a re-render and the
    * effect depends on nothing that changes.

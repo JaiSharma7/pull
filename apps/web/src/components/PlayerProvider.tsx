@@ -122,14 +122,74 @@ export function usePlayer(): PlayerApi {
   return api;
 }
 
+/**
+ * The two questions a card asks the player, as their own context.
+ *
+ * Separate from `PlayerApi` because they change far less often than it does: the api's
+ * identity moves on every reducer transition, and a list of cards that re-renders on a
+ * rate change is a list re-rendering for an answer that did not move.
+ */
+export interface PlayerSelection {
+  /** The Pull being spoken right now, if any. */
+  playingId: string | null;
+  /** Every Pull anywhere in the queue. */
+  queuedIds: ReadonlySet<string>;
+}
+
+const SelectionContext = createContext<PlayerSelection | null>(null);
+
+/**
+ * The things a screen DOES to the player, with an identity that does not move.
+ *
+ * Every one is a `useCallback` over refs, so this object is built once and outlives
+ * every transition — which is what lets a list of cards subscribe to the two answers it
+ * draws (`PlayerSelection`) without also subscribing to the state it does not.
+ */
+export type PlayerActions = Pick<
+  PlayerApi,
+  | 'supported'
+  | 'enqueue'
+  | 'playNow'
+  | 'next'
+  | 'prev'
+  | 'pause'
+  | 'resume'
+  | 'stop'
+  | 'remove'
+  | 'clear'
+>;
+
+const ActionsContext = createContext<PlayerActions | null>(null);
+
+/** What a screen may ask the player to do. Throws outside a provider, as `usePlayer` does. */
+export function usePlayerActions(): PlayerActions {
+  const actions = useContext(ActionsContext);
+  if (actions === null) throw new Error('usePlayerActions must be used inside a PlayerProvider');
+  return actions;
+}
+
+const NOTHING_SELECTED: PlayerSelection = { playingId: null, queuedIds: new Set() };
+
+/**
+ * What is playing and what is queued, for a screen that draws a list of cards.
+ *
+ * Does NOT throw outside a provider, unlike `usePlayer`: this answers a question about
+ * appearance, and a card rendered in a test or a specimen with no player around it is
+ * simply a card with nothing playing. `usePlayer` throws because a Listen button that
+ * silently swallows a queue is the bug the whole module exists to prevent.
+ */
+export function usePlayerSelection(): PlayerSelection {
+  return useContext(SelectionContext) ?? NOTHING_SELECTED;
+}
+
 /** Whether a Pull is the one being spoken right now — for a card's own label. */
-export function isPlaying(state: PlayerState, pullId: string): boolean {
-  return state.status === 'playing' && currentTrack(state)?.id === pullId;
+export function isPlaying(selection: PlayerSelection, pullId: string): boolean {
+  return selection.playingId === pullId;
 }
 
 /** Whether a Pull is anywhere in the queue — for a Queue button's `aria-pressed`. */
-export function isQueued(state: PlayerState, pullId: string): boolean {
-  return state.queue.some((t) => t.id === pullId);
+export function isQueued(selection: PlayerSelection, pullId: string): boolean {
+  return selection.queuedIds.has(pullId);
 }
 
 interface ProviderProps {
@@ -526,5 +586,55 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
     ],
   );
 
-  return <PlayerContext.Provider value={api}>{children}</PlayerContext.Provider>;
+  /*
+   * What a CARD needs, and nothing that changes without it.
+   *
+   * `api` carries the whole reducer state, so its identity changes on every transition —
+   * a track ending, a step of the rate slider, a sleep timer armed. Feed, Library and
+   * Source consume it only to ask two questions per card, `isPlaying` and `isQueued`,
+   * and they were being re-rendered wholesale for answers that had not moved: four
+   * hundred `PullCard`s, each re-running `depthLevels` and `textAtDepth`, ten times
+   * while somebody dragged the rate through its steps. The `onReadRef`/`onVisibleRef`
+   * dance in `Feed.tsx` exists because those re-renders were tearing down every card's
+   * `IntersectionObserver`; that is the symptom, and this is the cause.
+   *
+   * Memoised on the three fields the answers actually depend on, so a rate or voice
+   * change publishes the same object and the lists do not re-render at all.
+   */
+  const { status, index, queue } = state;
+  const selection = useMemo<PlayerSelection>(
+    () => ({
+      playingId: status === 'playing' ? (queue[index]?.id ?? null) : null,
+      queuedIds: new Set(queue.map((t) => t.id)),
+    }),
+    // The three fields the two answers depend on, and not `state` — which is the whole
+    // point: depending on the object would publish a new selection on every transition,
+    // which is the re-render this exists to stop. `currentTrack` is `queue[index]`, so
+    // it is inlined rather than reached for through the state it came from.
+    [status, index, queue],
+  );
+
+  const actions = useMemo<PlayerActions>(
+    () => ({
+      supported: CAN_SPEAK,
+      enqueue,
+      playNow,
+      next,
+      prev,
+      pause,
+      resume,
+      stop,
+      remove,
+      clear,
+    }),
+    [enqueue, playNow, next, prev, pause, resume, stop, remove, clear],
+  );
+
+  return (
+    <PlayerContext.Provider value={api}>
+      <ActionsContext.Provider value={actions}>
+        <SelectionContext.Provider value={selection}>{children}</SelectionContext.Provider>
+      </ActionsContext.Provider>
+    </PlayerContext.Provider>
+  );
 }

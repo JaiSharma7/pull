@@ -187,9 +187,12 @@ service-role only. That is deliberate, not an oversight: the invariant check
 requires _a_ policy to exist, not that it grants anything.
 
 **The daily spend cap is a reservation, not a reading.** `budget_reservations` is
-keyed `(job_id, step)` so a redelivered message reuses its hold rather than opening
-a second one, and `reserve_budget` takes one **global** advisory lock before it
-counts — two different jobs must not both read the same total and both proceed,
+keyed `(job_id, step)` and counts the calls standing behind that row: a step whose
+earlier hold is settled takes the row over, so a retry is not refused against money
+nobody is spending, while a step the queue hands out again while its first call is
+still inside the provider ADDS to the hold — two calls spend twice, and a cap that
+cannot see the second is not a cap. `reserve_budget` takes one **global** advisory
+lock before it counts — two different jobs must not both read the same total and both proceed,
 which is precisely the case a per-job lock would leave in contention.
 `record_job_step` settles in the same transaction as the ledger row, so the hold and
 the charge are never both counted. `spend_today()` sums the ledger and open

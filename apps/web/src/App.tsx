@@ -3,7 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Settings } from './routes/Settings.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
-import { clearReviewPack } from './lib/offline.js';
+import { clearCachedPulls, clearReviewPack } from './lib/offline.js';
 import { PlayerBar } from './components/PlayerBar.js';
 import { PlayerProvider } from './components/PlayerProvider.js';
 import { Daily } from './routes/Daily.js';
@@ -439,16 +439,22 @@ export function App() {
        * the next reader — `readReviewPack` asks for one id and gets one id. What it
        * would still be is a copy of one person's fading ideas sitting in IndexedDB
        * on a machine they have signed out of, and `docs/privacy.md` says site data
-       * is cleared by signing out. The cached feed has the same shape and is dealt
-       * with by the same rule; this is the store 4a added, and this is where the
-       * rule reaches it.
+       * is cleared by signing out. The cached feed has the same shape and the same
+       * rule, and both are cleared here — the pack is the store 4a added, and the
+       * cache is the one the feed writes on every page.
        *
        * Read from the ref rather than from `session`: this closure is created once,
        * inside an effect with no dependencies, so `session` here is forever null.
        */
       const leaving = signedInAs.current;
       signedInAs.current = s?.user.id ?? null;
-      if (leaving !== null && leaving !== signedInAs.current) void clearReviewPack(leaving);
+      if (leaving !== null && leaving !== signedInAs.current) {
+        void clearReviewPack(leaving);
+        // And the cached feed, which the comment above claimed was covered by the same
+        // rule while nothing cleared it. Scoping a store by user keeps one reader's rows
+        // out of the next reader's screen; it does not take them off the machine.
+        void clearCachedPulls(leaving);
+      }
 
       setSession(s);
       if (!s) return;

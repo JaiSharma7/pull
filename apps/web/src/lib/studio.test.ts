@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   budgetLine,
-  buildImportSource,
   checkSubmission,
   describeJob,
   fitImportSource,
@@ -91,41 +90,40 @@ describe('checkSubmission', () => {
   });
 });
 
-describe('buildImportSource', () => {
+describe('fitImportSource: the text it builds', () => {
+  /** What the whole book comes out as, since every assertion here is about the text. */
+  const built = (items: Parameters<typeof fitImportSource>[0]) => fitImportSource(items).text;
+
   it('is deterministic, so two presses do not pay for one book twice', () => {
     // The pipeline hashes what it is given and reuses a summary of the same hash.
     const items = [highlight('One passage.'), highlight('Another passage.')];
-    expect(buildImportSource(items)).toBe(buildImportSource(items));
+    expect(built(items)).toBe(built(items));
   });
 
   it('keeps the order it was handed, which is the order they were kept', () => {
-    const out = buildImportSource([highlight('First.'), highlight('Second.')]);
+    const out = built([highlight('First.'), highlight('Second.')]);
     expect(out.indexOf('First.')).toBeLessThan(out.indexOf('Second.'));
   });
 
   it('puts the locator on its own line, so it does not run into the passage', () => {
-    expect(buildImportSource([highlight('The passage.', 'Location 412')])).toBe(
-      'Location 412\nThe passage.',
-    );
+    expect(built([highlight('The passage.', 'Location 412')])).toBe('Location 412\nThe passage.');
   });
 
   it('separates passages by a blank line rather than a glyph', () => {
-    expect(buildImportSource([highlight('One.'), highlight('Two.')])).toBe('One.\n\nTwo.');
+    expect(built([highlight('One.'), highlight('Two.')])).toBe('One.\n\nTwo.');
   });
 
   it('drops an empty highlight rather than emitting a gap', () => {
-    expect(buildImportSource([highlight('One.'), highlight('   '), highlight('Two.')])).toBe(
-      'One.\n\nTwo.',
-    );
+    expect(built([highlight('One.'), highlight('   '), highlight('Two.')])).toBe('One.\n\nTwo.');
   });
 
   // The locator survived the empty body, because `"Location 412\n"` is not the empty
   // string — so a citation with no passage under it was sent to the model and hashed
   // into `works.content_hash`.
   it('drops an empty highlight that still has a locator', () => {
-    expect(
-      buildImportSource([highlight('One.'), highlight('  ', 'Location 412'), highlight('Two.')]),
-    ).toBe('One.\n\nTwo.');
+    expect(built([highlight('One.'), highlight('  ', 'Location 412'), highlight('Two.')])).toBe(
+      'One.\n\nTwo.',
+    );
   });
 });
 
@@ -163,11 +161,11 @@ describe('fitImportSource', () => {
   });
 
   /*
-   * The prefix this returns has to be what `buildImportSource` would have produced for
-   * the same prefix, byte for byte — the pipeline hashes it, and a text assembled by a
-   * second code path that drifts is a second summary bought for one book.
+   * A cut book is a PREFIX of the whole one, byte for byte — the pipeline hashes what it
+   * is given, so text assembled one way when it fits and another way when it does not
+   * would be two documents wearing one hash.
    */
-  it('produces exactly what buildImportSource would for the highlights it kept', () => {
+  it('cuts to a prefix of the text it would have sent whole', () => {
     const items = [
       highlight(long(50), 'Location 1'),
       highlight(long(50), 'Location 3'),
@@ -175,7 +173,8 @@ describe('fitImportSource', () => {
     ];
     const fitted = fitImportSource(items, 140);
     expect(fitted.used).toBe(2);
-    expect(fitted.text).toBe(buildImportSource(items.slice(0, fitted.used)));
+    expect(fitted.text).toBe(fitImportSource(items.slice(0, 2)).text);
+    expect(fitImportSource(items).text.startsWith(fitted.text)).toBe(true);
   });
 
   /*

@@ -3,7 +3,12 @@ import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
 import { RememberThis } from '../components/RememberThis.js';
 import { fetchSavedAmong, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
-import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import {
+  isPlaying,
+  isQueued,
+  usePlayerActions,
+  usePlayerSelection,
+} from '../components/PlayerProvider.js';
 import type { Track } from '../lib/player.js';
 import { speechSupported } from '../lib/speech.js';
 import { anchoredPullId } from '../lib/routes.js';
@@ -233,7 +238,8 @@ export function Source({
   const [highlightHint, setHighlightHint] = useState<string | null>(null);
 
   /** The listening queue, which lives above the shell and outlives this page. */
-  const player = usePlayer();
+  const player = usePlayerActions();
+  const listening = usePlayerSelection();
 
   /*
    * Whether each idea's claim is on screen at the current depth, computed once.
@@ -760,20 +766,20 @@ export function Source({
                   onDepthChange={setDepth}
                   saved={saved.has(p.id)}
                   onSave={userId ? () => void onSave(p.id) : undefined}
-                  listening={isPlaying(player.state, p.id)}
+                  listening={isPlaying(listening, p.id)}
                   onListen={
                     CAN_SPEAK
                       ? () => {
-                          if (isPlaying(player.state, p.id)) player.stop();
+                          if (isPlaying(listening, p.id)) player.stop();
                           else player.playNow(track());
                         }
                       : undefined
                   }
-                  queued={isQueued(player.state, p.id)}
+                  queued={isQueued(listening, p.id)}
                   onQueue={
                     CAN_SPEAK
                       ? () => {
-                          if (isQueued(player.state, p.id)) player.remove(p.id);
+                          if (isQueued(listening, p.id)) player.remove(p.id);
                           else player.enqueue([track()]);
                         }
                       : undefined

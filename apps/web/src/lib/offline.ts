@@ -732,6 +732,28 @@ export async function removeFromPack(userId: string, pullId: string): Promise<bo
   }
 }
 
+/**
+ * The cached feed this account left behind.
+ *
+ * Same argument as `clearReviewPack`, and it was being made about this store without
+ * anything doing it: a copy of one reader's Pulls — headline and body — sitting in
+ * IndexedDB on a machine they have signed out of. `docs/privacy.md` says site data is
+ * cleared by signing out, and scoping by user is what makes a cache invisible to the
+ * next reader, not what removes it.
+ */
+export async function clearCachedPulls(userId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    const tx = database.transaction('pulls', 'readwrite');
+    const keys = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(keys.map((key) => tx.store.delete(key)));
+    await tx.done;
+  } catch {
+    /* best effort, as above */
+  }
+}
+
 /** Everything this account downloaded — and nothing another account did. */
 export async function clearReviewPack(userId: string): Promise<void> {
   try {

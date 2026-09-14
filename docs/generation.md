@@ -139,7 +139,7 @@ a **reservation**: under one global advisory lock, the worst case of the step ab
 is written to `budget_reservations`, counted against the cap by everyone who looks, and
 replaced by the real charge when the `cost_ledger` row lands. `record_job_step` and
 `record_failed_job_step` settle in the same transaction as the charge, so there is no
-instant in which the money is counted twice and none in which it is counted at all.
+instant in which the money is counted twice and none in which it goes uncounted.
 
 A step that dies holding a reservation is released twice over: the stranded-job sweep
 settles what it fails, and a reservation older than an hour is ignored by the sum whether
@@ -154,10 +154,12 @@ it — a cap of $1 that claims to be $2, which is worse than either.
 | ------------ | -------------------: |
 | `synthesize` |              6 cents |
 | `embed`      |               1 cent |
-| `artwork`    |              5 cents |
 
 Those are the constants the pipeline reserves with, rounded up from the cost shape above
-so a reservation is never smaller than the charge that replaces it. The hold is taken
+so a reservation is never smaller than the charge that replaces it. Two rows, not three:
+`artwork` calls no provider today and reserves nothing, and carrying a price for it here
+would put the worst case of a job at 12 cents when `enqueue_generation_job` pins its own
+door check at 7 — which is what a reader reconciling the two would then widen. The hold is taken
 **after** the source claim — a job that is only ever going to wait on a source another job
 is synthesising should not take a hold it will not use — and **immediately before** the
 provider, because a reservation taken afterwards is a receipt rather than a cap.

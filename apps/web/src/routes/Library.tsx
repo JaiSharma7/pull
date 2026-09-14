@@ -17,7 +17,12 @@ import { countHighlights, fetchExportData } from '../lib/highlights-api.js';
 import { graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
 import { queueIfOffline } from '../lib/offline.js';
-import { isPlaying, isQueued, usePlayer } from '../components/PlayerProvider.js';
+import {
+  isPlaying,
+  isQueued,
+  usePlayerActions,
+  usePlayerSelection,
+} from '../components/PlayerProvider.js';
 import { RememberThis } from '../components/RememberThis.js';
 import {
   countImportedItems,
@@ -195,7 +200,8 @@ export function Library({ userId }: { userId: string }) {
    * becomes worth having: a reader with fourteen kept ideas from one book has a
    * walk's worth of material and, until now, fourteen presses to hear it.
    */
-  const player = usePlayer();
+  const player = usePlayerActions();
+  const listening = usePlayerSelection();
   const trackFor = (item: LibraryItem, title: string): Track => ({
     id: item.id,
     title,
@@ -1126,6 +1132,12 @@ export function Library({ userId }: { userId: string }) {
                 nothing the second time and pressing it after queueing two cards by hand
                 adds only the twelve that were not already there. Withheld when the
                 browser cannot speak, like every other Listen control.
+
+                "This source", not "this collection". `groups` comes from `groupByWork`,
+                so what this queues is every idea kept from one book — and a collection
+                on this screen is a `stashes` row, the thing the New collection button
+                above makes and the filter row selects. A reader who has filed their
+                saves into collections read that label as the one they had picked.
               */}
               {CAN_SPEAK && group.items.length > 0 && (
                 <button
@@ -1135,7 +1147,7 @@ export function Library({ userId }: { userId: string }) {
                     player.enqueue(group.items.map((item) => trackFor(item, group.title)))
                   }
                 >
-                  Listen to this collection
+                  Listen to this source
                 </button>
               )}
 
@@ -1153,20 +1165,20 @@ export function Library({ userId }: { userId: string }) {
                       saved
                       depth={depth}
                       onDepthChange={setDepth}
-                      listening={isPlaying(player.state, item.id)}
+                      listening={isPlaying(listening, item.id)}
                       onListen={
                         CAN_SPEAK
                           ? () => {
-                              if (isPlaying(player.state, item.id)) player.stop();
+                              if (isPlaying(listening, item.id)) player.stop();
                               else player.playNow(trackFor(item, group.title));
                             }
                           : undefined
                       }
-                      queued={isQueued(player.state, item.id)}
+                      queued={isQueued(listening, item.id)}
                       onQueue={
                         CAN_SPEAK
                           ? () => {
-                              if (isQueued(player.state, item.id)) player.remove(item.id);
+                              if (isQueued(listening, item.id)) player.remove(item.id);
                               else player.enqueue([trackFor(item, group.title)]);
                             }
                           : undefined

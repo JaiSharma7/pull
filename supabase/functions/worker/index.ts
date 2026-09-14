@@ -520,49 +520,29 @@ Deno.serve(async (req) => {
       // leaving the job stuck in `running` with nothing to retry it.
       try {
         /*
-         * The hold first, then the status.
+         * NO SETTLE HERE. The sweep does it, and it is the only thing that can.
          *
-         * This path fails the JOB and archives the message, so nothing downstream will
-         * ever record a step for it -- and `record_failed_job_step`, which is what
-         * normally settles, is never called. Left open, a reservation taken for this
-         * step stands against the global cap until the one-hour TTL. Before the update,
-         * so the money is released first if the writes below fail.
+         * This path fails the JOB without having run the step, so it knows nothing about
+         * what is in flight -- and with a hold counting the calls behind it, releasing a
+         * share is releasing somebody's money. A message redelivered past MAX_ATTEMPTS is
+         * the case where the first call HUNG: it is still inside the provider, its hold
+         * is stacked with the deliveries that followed, and taking a share back here
+         * means a concurrent `reserve_budget` fits work into money that is about to be
+         * charged.
          *
-         * THIS STEP, not the job, and that is a correction rather than a nicety. It
-         * called `settle_job_budget` — now dropped — on the reasoning that a failed job ends
-         * every step it has -- which is not true at the moment this runs. `graph.ts`
-         * dispatches `extract_evidence` beside `synthesize` and `artwork` beside
-         * `embed`, in separate invocations, so exhausting one step's retries can
-         * release a sibling's hold while that sibling is still inside its provider
-         * call. The charge then arrives after the money was given back, concurrent
-         * workers reserve against a total short by exactly that amount, and the cap is
-         * overshot -- verbatim the failure `failUnbilled` above was narrowed to avoid,
-         * left standing on the path that looked like it had the better claim to
-         * job-wide scope.
+         * Two earlier versions of this line each released too much. It called
+         * `settle_job_budget` (dropped in 20260914050000), which let go of a parallel
+         * step's hold -- `graph.ts` runs `extract_evidence` beside `synthesize` and
+         * `artwork` beside `embed`. Narrowing it to `(job, step)` kept the same fault on
+         * a smaller scale, because the step this is failing is the one most likely to
+         * still be running.
          *
-         * A hold belonging to a step that crashed before it could settle is covered:
-         * `sweep_stranded_generation_jobs` settles every open reservation on a terminal
-         * job, which this row is about to become, and the TTL is behind that.
+         * `sweep_stranded_generation_jobs` settles every open hold on a terminal job --
+         * which this row is about to become -- and refuses to touch one younger than its
+         * own threshold, precisely so a call still in flight keeps its money. That guard
+         * is the thing this inline settle was going around, so the settle goes and the
+         * sweep is left to do it, with the TTL behind that.
          */
-        const released = await supabase.rpc('settle_budget', {
-          p_job_id: jobId,
-          p_step: step,
-        });
-        /*
-         * Logged, not thrown, which `failUnbilled` above got right and this did not.
-         *
-         * Under `must`, a settle that failed for any transient reason -- a pooler reset,
-         * a statement timeout -- threw before the two writes that actually matter: the
-         * job was never marked failed and the message was never archived, so the next
-         * tick redelivered it into this same branch and threw again, for ever. The
-         * sweep cannot rescue that either, since its selection requires that NO message
-         * is queued for the job. A held cent is bounded by the TTL; a job that can never
-         * reach a terminal state is not bounded by anything.
-         */
-        if (released.error) {
-          console.error('settle budget for an exhausted step', jobId, step, released.error);
-        }
-
         must(
           await supabase
             .from('generation_jobs')
