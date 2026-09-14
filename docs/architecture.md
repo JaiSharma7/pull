@@ -271,12 +271,16 @@ since nothing in them said whose they were.
 Two limits, stated because "offline" is one of the five things law 3 promises and a
 vaguer sentence would be doing work it has not earned. **Nothing caches audio** — it is
 synthesised on the device by `speechSynthesis`, so there is nothing to cache and it works
-offline for free. And **one screen writes to it**: the feed caches the pages it loads
-(`cachePulls`, called from `Feed.tsx`). The pack store (`storeReviewPack`) exists with no
-caller yet — Review fills it in the next PR of the same package, so that the cards due
-today can be answered without a connection and drained as grades on reconnect. The
-Library, Source, Search, Daily and History screens read through to the network and fail
-without it. Widening that is the obvious next piece of offline work.
+offline for free. And **two screens write to it**: the feed caches the pages it loads
+(`cachePulls`, called from `Feed.tsx`), and Review stores every page it successfully
+fetches (`storeReviewPack`), so the cards due today can be answered without a connection
+and drained as grades on reconnect. Review's pack is written without being asked for — a
+feature that works only for readers who remembered to press a button before losing signal
+is free the way a locked door is open — and a card leaves it as soon as it is graded, from
+the device or the server. Only a network failure falls back to it (`isOfflineFailure`); a
+500 or an expired token is reported as what it is rather than answered with stale cards.
+The Library, Source, Search, Daily and History screens read through to the network and
+fail without it. Widening that is the obvious next piece of offline work.
 
 ## Why Vite and not a server framework
 

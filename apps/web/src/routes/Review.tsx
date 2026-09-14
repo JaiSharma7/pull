@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Meter } from '@wap/ui';
 import * as api from '../lib/api.js';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
-import { isOfflineFailure, pendingRecallPullIds, queueMutation } from '../lib/offline.js';
+import {
+  isOfflineFailure,
+  onReconnect,
+  pendingRecallPullIds,
+  queueMutation,
+  readReviewPack,
+  removeFromPack,
+  storeReviewPack,
+} from '../lib/offline.js';
+import { mergePack, packLabel, practisingLabel } from '../lib/review-pack.js';
 import {
   elapsedSince,
   mutationId as newMutationId,
@@ -555,6 +564,22 @@ export function Review() {
   const [sessionTotal, setSessionTotal] = useState<number | null>(null);
 
   /*
+   * The downloaded copy: what is on this device, and whether it is what the reader
+   * is currently answering.
+   *
+   * Two facts rather than one, because they are independently true. A pack exists
+   * whenever a page has been fetched — every successful fetch writes one, so a
+   * reader who opens Review on the train already has today's practice with them
+   * without having asked. `practisingFrom` is the narrower fact: the network was
+   * not there, and these cards came off the disk. Only the second earns the
+   * banner, because only then is the reader answering something that may have
+   * moved on.
+   */
+  const [pack, setPack] = useState<{ count: number; syncedAt: number } | null>(null);
+  const [practisingFrom, setPractisingFrom] = useState<number | null>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  /*
    * ONE FETCH PER PAGE, NOT PER ANSWER.
    *
    * This effect used to depend on `answeredCount` as well, so every graded card refired
@@ -578,29 +603,130 @@ export function Review() {
   useEffect(() => {
     let cancelled = false;
     const userId = getCurrentUserId();
-    Promise.all([
-      api.fetchDueReviews(),
-      userId === null ? Promise.resolve(new Set<string>()) : pendingRecallPullIds(userId),
-    ])
-      .then(([rows, queuedFor]) => {
+
+    void (async () => {
+      /*
+       * Fetched before the page rather than beside it, which is what makes the
+       * offline branch possible: `Promise.all` rejects on the network failure and
+       * throws away the queue's answer with it, and the queue is exactly what the
+       * pack has to be filtered against.
+       */
+      const queuedFor = userId === null ? null : await pendingRecallPullIds(userId);
+      if (cancelled) return;
+      const answered = new Set([...graded.current, ...(queuedFor ?? [])]);
+
+      try {
+        const rows = await api.fetchDueReviews();
         if (cancelled) return;
-        const filtered = rows.filter(
-          (row) => !graded.current.has(row.pullId) && !(queuedFor?.has(row.pullId) ?? false),
-        );
+        const filtered = rows.filter((row) => !answered.has(row.pullId));
         setDue(filtered);
         setSessionTotal((prev) => nextSessionTotal(prev, filtered.length));
         setOffline(false);
-      })
-      .catch((e: unknown) => {
+        setPractisingFrom(null);
+
+        /*
+         * Every successful page is downloaded, without being asked for. Law 3
+         * promises offline practice free forever, and a feature that only works
+         * for readers who remembered to press a button before losing signal is
+         * free in the same way a locked door is open.
+         *
+         * The unfiltered `rows` are stored, not `filtered`: the filter drops what
+         * this device has already answered, and those answers are queued writes
+         * the server has not seen. A pack written from the filtered list would
+         * lose those cards from the device the moment the queue drained.
+         */
+        if (userId !== null) {
+          const syncedAt = Date.now();
+          const stored = await storeReviewPack(userId, rows, syncedAt);
+          if (!cancelled && stored) setPack({ count: rows.length, syncedAt });
+        }
+      } catch (e: unknown) {
         if (cancelled) return;
         console.error('Due reviews request failed', e);
-        setOffline(isOfflineFailure(e));
+        const wasOffline = isOfflineFailure(e);
+
+        /*
+         * The whole point of 4a. A page that cannot be fetched is not the end of a
+         * review session if a copy of it is sitting on the device — and only a
+         * NETWORK failure may fall back, for the reason `isOfflineFailure` is a
+         * function rather than a boolean: answering a 500 or an expired token with
+         * stale cards would be a confident wrong diagnosis over content the reader
+         * cannot tell is stale.
+         */
+        if (wasOffline && userId !== null) {
+          const downloaded = await readReviewPack(userId);
+          if (cancelled) return;
+          const left = downloaded ? mergePack(downloaded.items, answered) : [];
+          if (downloaded && left.length > 0) {
+            setDue(left);
+            setSessionTotal((prev) => nextSessionTotal(prev, left.length));
+            setPractisingFrom(downloaded.syncedAt);
+            setPack({ count: left.length, syncedAt: downloaded.syncedAt });
+            setOffline(true);
+            return;
+          }
+        }
+
+        setOffline(wasOffline);
         setError(e instanceof Error ? e.message : String(e));
-      });
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
   }, [reloads]);
+
+  /*
+   * One refetch when the connection comes back, and only while it would change
+   * anything.
+   *
+   * Unconditionally re-fetching on `online` would replace the page the reader is
+   * halfway through — the exact failure the comment above this effect describes,
+   * arriving by a different door. So it is armed only when the screen is showing
+   * the downloaded copy or an offline error, which are the two states a returning
+   * connection actually answers.
+   */
+  const stranded = practisingFrom !== null || offline;
+  useEffect(() => {
+    if (!stranded) return;
+    return onReconnect(() => setReloads((n) => n + 1));
+  }, [stranded]);
+
+  /** Take today's practice with you, deliberately, before the signal goes. */
+  const download = useCallback(() => {
+    const userId = getCurrentUserId();
+    if (userId === null || downloading) return;
+    setDownloading(true);
+    api
+      .fetchDueReviews()
+      .then(async (rows) => {
+        const syncedAt = Date.now();
+        if (await storeReviewPack(userId, rows, syncedAt)) {
+          setPack({ count: rows.length, syncedAt });
+        }
+      })
+      .catch((e: unknown) => {
+        // Nothing is lost by a download that did not happen: whatever was on the
+        // device before is still there, and the label still describes it.
+        console.error('Could not download the practice pack', e);
+      })
+      .finally(() => setDownloading(false));
+  }, [downloading]);
+
+  /*
+   * The offline copy, and the offer to refresh it. Rendered under every state of
+   * this screen that has room for it, because the moment a reader wants it is the
+   * moment before they lose signal, which is not a moment this screen can predict.
+   */
+  const offlineCopy = (
+    <p className="meta" style={{ marginTop: 'var(--space-4)' }}>
+      {packLabel(pack?.count ?? 0, pack?.syncedAt ?? null)}{' '}
+      <button type="button" className="btn btn--plain" onClick={download} disabled={downloading}>
+        {downloading ? 'Downloading…' : 'Download today’s practice'}
+      </button>
+    </p>
+  );
 
   /* Try again fetches the next page; it does not start the session over. The error
      screen is only reachable before the first page or at a boundary, so what was
@@ -613,6 +739,17 @@ export function Review() {
 
   const notices = (
     <>
+      {/*
+        Said before anything else on the screen, because it changes what every
+        answer below it means: these questions came off the disk, and the schedule
+        may have moved since. `role="status"` rather than `alert` — nothing has
+        gone wrong, and practice is still practice.
+      */}
+      {practisingFrom !== null ? (
+        <p className="meta" role="status">
+          {practisingLabel(practisingFrom)}
+        </p>
+      ) : null}
       {signedOut ? (
         <p className="meta" role="alert">
           Your session ended before that grade could be saved. Sign in again and those ideas will
@@ -659,6 +796,7 @@ export function Review() {
         <button type="button" className="btn btn--primary" onClick={retry}>
           Try again
         </button>
+        {offlineCopy}
       </section>
     );
   }
@@ -684,6 +822,7 @@ export function Review() {
             ? 'Nothing else is due. The idea above will come round again.'
             : 'Everything you have saved is still solid. Come back when something slips.'}
         </p>
+        {offlineCopy}
       </section>
     );
   }
@@ -751,6 +890,20 @@ export function Review() {
     } finally {
       setGrading(false);
       graded.current.add(card.pullId);
+
+      /*
+       * An answered card leaves the downloaded copy, whether it was answered from
+       * it or not. Offline this is what stops the same question being asked twice
+       * in one sitting; online it is what stops a card the reader graded this
+       * morning coming back at them on tonight's train, off a pack that still
+       * lists it as due.
+       */
+      const owner = getCurrentUserId();
+      if (owner !== null) {
+        void removeFromPack(owner, card.pullId);
+        setPack((p) => (p === null ? p : { ...p, count: Math.max(0, p.count - 1) }));
+      }
+
       setAnsweredCount((n) => n + 1);
       const rest = (due ?? []).slice(1);
       setDue(rest.length === 0 ? null : rest);
@@ -773,6 +926,8 @@ export function Review() {
         grading={grading}
         onGrade={(g, latencyMs, extra) => void grade(g, latencyMs, extra)}
       />
+
+      {offlineCopy}
     </section>
   );
 }

@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Settings } from './routes/Settings.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
+import { clearReviewPack } from './lib/offline.js';
 import { PlayerBar } from './components/PlayerBar.js';
 import { PlayerProvider } from './components/PlayerProvider.js';
 import { Daily } from './routes/Daily.js';
@@ -379,6 +380,15 @@ export function App() {
     return () => root.removeAttribute('data-reading');
   }, [tab, path]);
 
+  /*
+   * Who this tab is signed in as, for the one listener that cannot see it.
+   *
+   * `arrive` is created inside an effect with an empty dependency list, so every
+   * piece of state it closes over is frozen at the first render. A ref is the
+   * only thing in that closure that can tell it who is leaving.
+   */
+  const signedInAs = useRef<string | null>(null);
+
   useEffect(() => {
     /*
      * A session arriving is also the moment `?next=` is spent.
@@ -419,6 +429,25 @@ export function App() {
        * null-on-both-sides still adopts and a real sign-out is unaffected.
        */
       if (!tabAdopts(s?.user.id ?? null)) return;
+
+      /*
+       * A reader leaving takes their downloaded practice with them.
+       *
+       * `reviewPack` is keyed per account, so a pack left behind is never SHOWN to
+       * the next reader — `readReviewPack` asks for one id and gets one id. What it
+       * would still be is a copy of one person's fading ideas sitting in IndexedDB
+       * on a machine they have signed out of, and `docs/privacy.md` says site data
+       * is cleared by signing out. The cached feed has the same shape and is dealt
+       * with by the same rule; this is the store 4a added, and this is where the
+       * rule reaches it.
+       *
+       * Read from the ref rather than from `session`: this closure is created once,
+       * inside an effect with no dependencies, so `session` here is forever null.
+       */
+      const leaving = signedInAs.current;
+      signedInAs.current = s?.user.id ?? null;
+      if (leaving !== null && leaving !== signedInAs.current) void clearReviewPack(leaving);
+
       setSession(s);
       if (!s) return;
       /*

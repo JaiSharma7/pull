@@ -282,12 +282,12 @@ What the app does put on your device, all of it first-party and all of it necess
   queue, and a signed-out visitor's, live in `sessionStorage` instead, so the next person
   to open the browser on a shared machine does not find it waiting.
 - **Your offline library**, in IndexedDB — the Pulls cached for reading without a
-  connection and a queue of writes made while disconnected — which is how offline reading
-  is free rather than a paid tier. The cached Pulls are keyed to the account that fetched
-  them; the queued writes carry their owner and are only ever sent for them. Two
-  mechanisms, one promise: a shared browser never shows one reader another's copy. (A
-  downloadable practice pack is being built; when it lands it goes here too, and this
-  line will say so once it is something you can actually do.)
+  connection, today's practice downloaded so a review session survives losing signal, and
+  a queue of writes made while disconnected — which is how offline reading and offline
+  practice are free rather than a paid tier. All three are keyed to the account that
+  fetched them, and the queued writes carry their owner and are only ever sent for them.
+  Two mechanisms, one promise: a shared browser never shows one reader another's copy.
+  The downloaded practice is deleted when you sign out, rather than only being hidden.
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all of it, and signs you out.
