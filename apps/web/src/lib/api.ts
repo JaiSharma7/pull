@@ -227,6 +227,59 @@ export async function unsavePull(pullId: string, userId: string) {
 }
 
 /**
+ * See less of a source, and record the card that provoked it.
+ *
+ * Two writes, and only the first one matters. `muted_works` is what `get_feed`
+ * and `get_daily_pulls` read — a muted work is dropped from the pool before
+ * anything is scored — so the mute is durable the moment that row lands, and a
+ * duplicate is the reader asking twice for something they already have rather
+ * than an error.
+ *
+ * The impression is telemetry: WHICH card was in front of them when they asked.
+ * It is written on the muted card alone, not on every remaining card of that
+ * work, because the others were never rejected — they were withdrawn. The update
+ * comes first because the card has almost always been shown already today, and
+ * `feed_impressions_once_per_day` makes a second insert for it a conflict; the
+ * insert is the case where it has not, and a race between two tabs lands back on
+ * the same conflict and is swallowed there.
+ *
+ * A failed impression never fails the mute. The reader asked for less of a
+ * source, and they have it.
+ */
+export async function muteWork(workId: string, pullId: string, userId: string) {
+  const { error } = await supabase.from('muted_works').insert({ user_id: userId, work_id: workId });
+  if (error && error.code !== '23505') throw rpcError(error);
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data } = await supabase
+      .from('feed_impressions')
+      .update({ action: 'muted' })
+      .eq('user_id', userId)
+      .eq('pull_id', pullId)
+      .eq('shown_on', today)
+      .select('id');
+    if ((data ?? []).length === 0) {
+      await supabase
+        .from('feed_impressions')
+        .insert({ user_id: userId, pull_id: pullId, action: 'muted' });
+    }
+  } catch {
+    // Telemetry, and the mute is already recorded.
+  }
+}
+
+/** Hear from this source again. */
+export async function unmuteWork(workId: string, userId: string) {
+  const { error } = await supabase
+    .from('muted_works')
+    .delete()
+    .eq('user_id', userId)
+    .eq('work_id', workId);
+  if (error) throw rpcError(error);
+}
+
+/**
  * Every saved pull, paged.
  *
  * PostgREST caps a response at `max_rows` (100), so a single unpaged select

@@ -327,3 +327,48 @@ describe('renderBody', () => {
     expect(html).not.toContain('<mark');
   });
 });
+
+/**
+ * `reason` and `onMute` — why this card, and the answer to it.
+ *
+ * The pair is one gesture, so the assertions are mostly about the pair: a reason
+ * with nothing to do about it is provenance nobody asked for, and a mute with no
+ * reason beside it is a control arriving without its question.
+ */
+describe('why this card', () => {
+  const reason = 'Close to what you have been reading';
+
+  it('draws the reason faint, in the metadata face', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, reason }));
+    expect(html).toContain('class="pull-card__reason"');
+    expect(html).toContain(`<span class="pull-card__why">${reason}</span>`);
+  });
+
+  it('draws nothing where nothing about the card was measured', () => {
+    for (const value of [undefined, null, '']) {
+      const html = renderToStaticMarkup(createElement(PullCard, { ...base, reason: value }));
+      expect(html).not.toContain('pull-card__reason');
+    }
+  });
+
+  it('offers the mute beside the reason, named for the source', () => {
+    const html = renderToStaticMarkup(
+      createElement(PullCard, { ...base, reason, onMute: () => {} }),
+    );
+    expect(html).toContain(`aria-label="See less from ${base.source.title}"`);
+    expect(html).toContain('Less like this');
+  });
+
+  it('withholds the mute where no reason explains the card', () => {
+    const html = renderToStaticMarkup(createElement(PullCard, { ...base, onMute: () => {} }));
+    expect(html).not.toContain('Less like this');
+  });
+
+  it('keeps the mute out of the action row, where the reader acts on the idea', () => {
+    const html = renderToStaticMarkup(
+      createElement(PullCard, { ...base, reason, onMute: () => {} }),
+    );
+    const footer = html.slice(html.indexOf('pull-card__footer'));
+    expect(footer).not.toContain('Less like this');
+  });
+});

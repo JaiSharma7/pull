@@ -132,6 +132,26 @@ export function Feed({
   const player = usePlayer();
 
   /*
+   * Sources this reader has just asked to see less of.
+   *
+   * Local, and deliberately not a refetch. `muted_works` is what `get_feed` reads,
+   * so the mute is already durable and the next page will not carry the source at
+   * all; re-fetching page 0 to prove it would throw away the reader's place in a
+   * feed they are halfway through — the same reasoning the render site gives for
+   * keeping `Feed` mounted across a tab change.
+   *
+   * The card the reader pressed on stays in place as a line they can undo, and the
+   * rest of that source's cards go quietly. Those were never rejected; they were
+   * withdrawn, and a column of "you muted this" notices for cards nobody had
+   * reached yet would be the app arguing with itself.
+   */
+  const [muted, setMuted] = useState<{ works: Set<string>; from: string | null }>({
+    works: new Set(),
+    from: null,
+  });
+  const [muteError, setMuteError] = useState<string | null>(null);
+
+  /*
    * What the share control actually did, which was previously unobservable.
    *
    * `shareOrCopy` has always returned an outcome and all three callers threw it
@@ -671,6 +691,46 @@ export function Feed({
     [player, trackFor],
   );
 
+  /*
+   * Less like this.
+   *
+   * Optimistic, and rolled back on failure: the reader is looking at the card they
+   * pressed on, and a source that visibly stays after being muted reads as a
+   * control that does not work. A signed-out visitor has no row to write, so the
+   * control is not offered to one.
+   */
+  const onMute = useCallback(
+    async (row: FeedRow) => {
+      if (!userId) return;
+      setMuteError(null);
+      setMuted({ works: new Set(muted.works).add(row.work.id), from: row.id });
+      try {
+        await api.muteWork(row.work.id, row.id, userId);
+      } catch {
+        setMuted(muted);
+        setMuteError('Could not mute that source just now. It is still in your feed.');
+      }
+    },
+    [muted, userId],
+  );
+
+  const onUnmute = useCallback(
+    async (row: FeedRow) => {
+      if (!userId) return;
+      setMuteError(null);
+      const restored = new Set(muted.works);
+      restored.delete(row.work.id);
+      setMuted({ works: restored, from: null });
+      try {
+        await api.unmuteWork(row.work.id, userId);
+      } catch {
+        setMuted(muted);
+        setMuteError('Could not undo that just now.');
+      }
+    },
+    [muted, userId],
+  );
+
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
       // A question is answered once. Without this guard the card stays mounted
@@ -963,7 +1023,25 @@ export function Feed({
         )}
 
       {items.map((item) =>
-        item.type === 'interrupt' ? (
+        muted.works.has(item.row.work.id) ? (
+          /*
+            The card that was pressed on becomes the notice; every other card of
+            the same source goes. `item.row.id === muted.from` is true for exactly
+            one item, so the feed loses a column of cards and gains one line.
+          */
+          item.type === 'pull' && item.row.id === muted.from ? (
+            <p key={item.row.id} className="meta feed__muted" role="status">
+              You will see less of {item.row.work.title}.{' '}
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void onUnmute(item.row)}
+              >
+                Undo
+              </button>
+            </p>
+          ) : null
+        ) : item.type === 'interrupt' ? (
           // An answered question is done with. Leaving it mounted would let a
           // second click write another interrupt event and another grade.
           handledSlots.has(`${item.index}-${item.row.id}`) ? null : (
@@ -988,6 +1066,8 @@ export function Feed({
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
             queued={isQueued(player.state, item.row.id)}
             onQueue={CAN_SPEAK ? () => onQueue(item.row) : undefined}
+            reason={item.row.reason ?? null}
+            onMute={userId ? () => void onMute(item.row) : undefined}
             onShare={() => void share(item.row)}
             shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}
@@ -995,6 +1075,12 @@ export function Feed({
             onDepthChange={setDepth}
           />
         ),
+      )}
+
+      {muteError && (
+        <p className="meta" role="status">
+          {muteError}
+        </p>
       )}
 
       {moreError && (
@@ -1033,6 +1119,8 @@ function PullCardInView({
   listening,
   onQueue,
   queued,
+  reason,
+  onMute,
   onShare,
   shareNote: shareOutcomeNote,
   shareLabel: shareControlLabel,
@@ -1052,6 +1140,10 @@ function PullCardInView({
   /** Absent for the same reason `onListen` is. */
   onQueue?: () => void;
   queued: boolean;
+  /** Why this card, from `get_feed`; null where nothing about it was measured. */
+  reason: string | null;
+  /** Absent for a visitor, who has no row to write a mute into. */
+  onMute?: () => void;
   onShare: () => void;
   /** What the last share attempt did, or null when there is nothing to say. */
   shareNote: string | null;
@@ -1154,6 +1246,8 @@ function PullCardInView({
         listening={listening}
         onQueue={onQueue}
         queued={queued}
+        reason={reason}
+        onMute={onMute}
         onOpenSource={onOpenSource}
         onShare={onShare}
         shareLabel={shareControlLabel}

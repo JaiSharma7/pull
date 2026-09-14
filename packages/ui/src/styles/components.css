@@ -35,6 +35,40 @@
 }
 
 /*
+ * Why this card, and the way to see less of it.
+ *
+ * Faint, in the metadata face, sitting between the rule and the headline: it is
+ * provenance, so it has to be findable when the reader wonders and invisible
+ * when they do not. The mute is set in the same face at the same size, because a
+ * control that shouts next to the sentence explaining itself turns an answer into
+ * an argument.
+ */
+.pull-card__reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: calc(var(--space-5) * -1) 0 var(--space-5);
+}
+
+.pull-card__why {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.pull-card__mute {
+  padding-inline: 0;
+  color: var(--text-faint);
+}
+
+.pull-card__mute:hover {
+  color: var(--accent);
+}
+
+/*
  * Size is set with the dial, in the Depth dial section below — a fixed step and a
  * container query cannot express a headline that shrinks as the card grows.
  */
@@ -1265,4 +1299,16 @@
   :root:not([data-theme='light']) .shell__logo {
     filter: grayscale(1) invert(1);
   }
+}
+
+/*
+ * A muted source, in place of the card that was pressed on.
+ *
+ * A line, not a card: what is left after a mute is an acknowledgement and a way
+ * back, and drawing it with a card's furniture would keep the source visually
+ * present after the reader asked for the opposite.
+ */
+.feed__muted {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
 }
