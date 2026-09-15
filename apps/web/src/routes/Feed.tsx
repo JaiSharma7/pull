@@ -14,12 +14,19 @@ import {
   readCachedPulls,
 } from '../lib/offline.js';
 import { createDwellTracker, MIN_DWELL_MS } from '../lib/dwell.js';
+import {
+  isPlaying,
+  isQueued,
+  usePlayerActions,
+  usePlayerSelection,
+} from '../components/PlayerProvider.js';
+import type { Track } from '../lib/player.js';
 import { IN_VIEW_THRESHOLDS, isGenuinelyInView } from '../lib/in-view.js';
 import { appendPage, weave, type Item, type LoadedFeed } from '../lib/feed-items.js';
 import { type ReplayPort, replayWrite } from '../lib/replay.js';
 import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
-import { speak, speechSupported, stopSpeaking } from '../lib/speech.js';
+import { speechSupported } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
 import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
@@ -118,8 +125,41 @@ export function Feed({
    */
   const [moreError, setMoreError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  /** The card being read aloud, if any. Null is silence. */
-  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  /*
+   * Listening is the player's, not the feed's.
+   *
+   * This screen used to hold a `speakingId` and call `speak` directly, which made
+   * playback a property of a mounted card: scrolling on left the voice running with
+   * no control that could reach it, and the tab switch that hides this component
+   * would have orphaned it entirely. The queue now lives above the shell
+   * (`components/PlayerProvider.tsx`) and the feed only hands it tracks.
+   */
+  const player = usePlayerActions();
+  const listening = usePlayerSelection();
+
+  /*
+   * Sources this reader has just asked to see less of.
+   *
+   * Local, and deliberately not a refetch. `muted_works` is what `get_feed` reads,
+   * so the mute is already durable and the next page will not carry the source at
+   * all; re-fetching page 0 to prove it would throw away the reader's place in a
+   * feed they are halfway through — the same reasoning the render site gives for
+   * keeping `Feed` mounted across a tab change.
+   *
+   * The card the reader pressed on stays in place as a line they can undo, and the
+   * rest of that source's cards go quietly. Those were never rejected; they were
+   * withdrawn, and a column of "you muted this" notices for cards nobody had
+   * reached yet would be the app arguing with itself.
+   */
+  /*
+   * Keyed by WORK, both halves. `from` was one card id for the whole feed, so muting a
+   * second source silently replaced the first source's notice: its cards stayed hidden
+   * and its Undo went with the notice, leaving no way back from a mute the reader had
+   * just made. A map from work id to the card that was pressed on is what "the card
+   * that was pressed on becomes the notice" actually requires.
+   */
+  const [muted, setMuted] = useState<Map<string, string>>(new Map());
+  const [muteError, setMuteError] = useState<string | null>(null);
 
   /*
    * What the share control actually did, which was previously unobservable.
@@ -612,38 +652,117 @@ export function Feed({
   );
 
   /*
+   * A card, as something to hear.
+   *
+   * The text is taken at the reader's CURRENT depth, which is why this is built at
+   * the moment of the press rather than stored with the queue: "Listen" on a card
+   * showing the claim should read the claim, and on the same card opened to the
+   * full argument should read the argument.
+   */
+  const trackFor = useCallback(
+    (row: FeedRow): Track => ({
+      id: row.id,
+      title: row.work.title,
+      text: textAtDepth({ ...row, hasSource: Boolean(onOpenSource) }, depth),
+    }),
+    [depth, onOpenSource],
+  );
+
+  /*
    * Listen, and stop listening.
    *
-   * `speechSupported()` and `stopSpeaking()` were exported from `lib/speech.ts` and
-   * called from nowhere, so playback was a one-way door: start a card reading, scroll
-   * on, and it kept talking with no control that could stop it. Audio is one of the
-   * five capabilities law 3 promises free forever, and free is exactly when it has to
-   * work properly.
-   *
-   * One card speaks at a time — `speak` cancels whatever is already running, so
-   * tracking a single id matches what the browser actually does.
+   * Pressing Listen on the card that is already playing stops the player rather than
+   * restarting it, which is the toggle `PullCard`'s `listening` prop describes.
+   * Pressing it on any other card plays that one next — `playNow` keeps the queue
+   * and puts the card after the current track, so a reader who has queued five
+   * things and then hears one they want now does not lose the other four.
    */
   const onListen = useCallback(
     (row: FeedRow) => {
-      if (speakingId === row.id) {
-        stopSpeaking();
-        setSpeakingId(null);
+      if (isPlaying(listening, row.id)) {
+        player.stop();
         return;
       }
-      speak(textAtDepth({ ...row, hasSource: Boolean(onOpenSource) }, depth), {
-        // Guarded on the id: cancelling the previous utterance fires *its* `onend`,
-        // and without the check that ending would clear the card that just started.
-        onEnd: () => setSpeakingId((id) => (id === row.id ? null : id)),
-      });
-      setSpeakingId(row.id);
+      player.playNow(trackFor(row));
     },
-    [speakingId, depth, onOpenSource],
+    [player, trackFor, listening],
   );
 
-  // Speech outlives the component — `speechSynthesis` is global — so a reader who
-  // signs out mid-sentence would otherwise be followed by a voice with no UI left to
-  // stop it.
-  useEffect(() => () => stopSpeaking(), []);
+  /*
+   * Queue, and unqueue. The queue is the reader's list, so the same press takes a
+   * card back out of it; `remove` on the track being spoken moves the player on
+   * rather than leaving it reading something the reader just removed.
+   */
+  const onQueue = useCallback(
+    (row: FeedRow) => {
+      if (isQueued(listening, row.id)) player.remove(row.id);
+      else player.enqueue([trackFor(row)]);
+    },
+    [player, trackFor, listening],
+  );
+
+  /*
+   * Less like this.
+   *
+   * Optimistic, and rolled back on failure: the reader is looking at the card they
+   * pressed on, and a source that visibly stays after being muted reads as a
+   * control that does not work. A signed-out visitor has no row to write, so the
+   * control is not offered to one.
+   */
+  /*
+   * ROLLED BACK FUNCTIONALLY, undoing one work rather than restoring a snapshot.
+   *
+   * Both handlers used to close over `muted` and write that object back on failure,
+   * which discards everything that happened while the request was in flight: mute A,
+   * mute B successfully, A fails, and B's mute is wiped from the screen while its row
+   * sits on the server -- so the feed disagrees with itself until the next page, which
+   * will not carry B. Touching only the work this call is about cannot do that.
+   */
+  const onMute = useCallback(
+    async (row: FeedRow, position: number) => {
+      if (!userId) return;
+      setMuteError(null);
+      setMuted((prev) => new Map(prev).set(row.work.id, row.id));
+      try {
+        // The position travels with the pull, as it does for `onRead`. The impression
+        // a mute leaves is the whole point of writing one — which card was in front of
+        // the reader when they asked for less of this source — and half of that answer
+        // is where in the feed it was. `record_mute_impression` takes it and was being
+        // sent nothing, so every mute recorded position 0.
+        await api.muteWork(row.work.id, row.id, userId, position);
+      } catch (e: unknown) {
+        console.error('Could not mute the source', e);
+        setMuted((prev) => {
+          const next = new Map(prev);
+          next.delete(row.work.id);
+          return next;
+        });
+        setMuteError('Could not mute that source just now. It is still in your feed.');
+      }
+    },
+    [userId],
+  );
+
+  const onUnmute = useCallback(
+    async (row: FeedRow) => {
+      if (!userId) return;
+      setMuteError(null);
+      const shown = muted.get(row.work.id) ?? row.id;
+      setMuted((prev) => {
+        const next = new Map(prev);
+        next.delete(row.work.id);
+        return next;
+      });
+      try {
+        await api.unmuteWork(row.work.id, userId);
+      } catch (e: unknown) {
+        console.error('Could not unmute the source', e);
+        setMuted((prev) => new Map(prev).set(row.work.id, shown));
+        setMuteError('Could not undo that just now.');
+      }
+    },
+    [muted, userId],
+  );
 
   const onInterrupt = useCallback(
     async (item: Extract<Item, { type: 'interrupt' }>, answer: InterruptAnswer | null) => {
@@ -937,7 +1056,34 @@ export function Feed({
         )}
 
       {items.map((item) =>
-        item.type === 'interrupt' ? (
+        item.type === 'pull' && muted.has(item.row.work.id) ? (
+          /*
+            The card that was pressed on becomes the notice; every other card of the
+            same source goes. One entry per muted work, so a reader who mutes three
+            sources keeps three notices and three ways back — which a single `from`
+            could not do, and did not.
+
+            THE TYPE IS TESTED FIRST, and that is not a tidy-up. With the mute checked
+            ahead of it, an interrupt whose idea came from the muted source fell into
+            this branch, failed the inner `item.type === 'pull'` test and rendered as
+            `null` — a scheduled recall question silently dropped, with no grade, no
+            `handledSlots` entry and nothing recording that it went. "See less of this
+            source" is about what the feed PICKS; a question about something the reader
+            has already learned from it is the one thing the product is measured on.
+          */
+          muted.get(item.row.work.id) === item.row.id ? (
+            <p key={item.row.id} className="meta feed__muted" role="status">
+              You will see less of {item.row.work.title}.{' '}
+              <button
+                type="button"
+                className="btn btn--plain"
+                onClick={() => void onUnmute(item.row)}
+              >
+                Undo
+              </button>
+            </p>
+          ) : null
+        ) : item.type === 'interrupt' ? (
           // An answered question is done with. Leaving it mounted would let a
           // second click write another interrupt event and another grade.
           handledSlots.has(`${item.index}-${item.row.id}`) ? null : (
@@ -958,8 +1104,12 @@ export function Feed({
             onRead={() => onRead(item.row, item.index)}
             onVisible={(visible) => onCardVisible(item.row.id, visible)}
             onOpenSource={onOpenSource ? () => onOpenSource(item.row.work.id) : undefined}
-            listening={speakingId === item.row.id}
+            listening={isPlaying(listening, item.row.id)}
             onListen={CAN_SPEAK ? () => onListen(item.row) : undefined}
+            queued={isQueued(listening, item.row.id)}
+            onQueue={CAN_SPEAK ? () => onQueue(item.row) : undefined}
+            reason={item.row.reason ?? null}
+            onMute={userId ? () => void onMute(item.row, item.index) : undefined}
             onShare={() => void share(item.row)}
             shareNote={shareStatus?.pullId === item.row.id ? shareStatus.note : null}
             shareLabel={SHARE_LABEL}
@@ -967,6 +1117,12 @@ export function Feed({
             onDepthChange={setDepth}
           />
         ),
+      )}
+
+      {muteError && (
+        <p className="meta" role="status">
+          {muteError}
+        </p>
       )}
 
       {moreError && (
@@ -1003,6 +1159,10 @@ function PullCardInView({
   onOpenSource,
   onListen,
   listening,
+  onQueue,
+  queued,
+  reason,
+  onMute,
   onShare,
   shareNote: shareOutcomeNote,
   shareLabel: shareControlLabel,
@@ -1019,6 +1179,13 @@ function PullCardInView({
   /** Absent where the browser cannot speak, so no dead control is rendered. */
   onListen?: () => void;
   listening: boolean;
+  /** Absent for the same reason `onListen` is. */
+  onQueue?: () => void;
+  queued: boolean;
+  /** Why this card, from `get_feed`; null where nothing about it was measured. */
+  reason: string | null;
+  /** Absent for a visitor, who has no row to write a mute into. */
+  onMute?: () => void;
   onShare: () => void;
   /** What the last share attempt did, or null when there is nothing to say. */
   shareNote: string | null;
@@ -1029,6 +1196,36 @@ function PullCardInView({
   onDepthChange: (depth: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+
+  /*
+   * The callbacks, held rather than depended on.
+   *
+   * The observer effect used to list `[onRead, onVisible]`, and both are fresh arrow
+   * closures minted at the call site on every render of `Feed` — which at the time
+   * re-rendered on every player transition, because it consumed the whole player
+   * context. So pressing Pause on the bar, or dragging the sleep timer, tore down and
+   * rebuilt every visible card's `IntersectionObserver`: the cleanup cleared the
+   * pending `MIN_DWELL_MS` timer, reset `fired`, and fired `onVisible(false)`, which
+   * stops the dwell clock until the new observer's first callback arrives
+   * asynchronously. A reader using the player while the feed was on screen lost dwell
+   * measurement and could lose the read event entirely — which this file spends a
+   * great deal of effort not getting wrong in the other direction.
+   *
+   * `usePlayerActions` and `usePlayerSelection` have since taken that re-render away at
+   * the source: the actions never change identity and the selection changes only when
+   * what is playing or queued does. This stays regardless — the callbacks are still
+   * fresh closures on every render of this component, for every other reason a
+   * component re-renders.
+   *
+   * Refs read at call time instead, so the observer outlives a re-render and the
+   * effect depends on nothing that changes.
+   */
+  const onReadRef = useRef(onRead);
+  const onVisibleRef = useRef(onVisible);
+  useEffect(() => {
+    onReadRef.current = onRead;
+    onVisibleRef.current = onVisible;
+  });
 
   /*
    * Both edges now, not just the first one.
@@ -1083,14 +1280,14 @@ function PullCardInView({
               timer = setTimeout(() => {
                 fired = true;
                 timer = undefined;
-                onRead();
+                onReadRef.current();
               }, MIN_DWELL_MS);
             }
           } else if (timer !== undefined) {
             clearTimeout(timer);
             timer = undefined;
           }
-          onVisible(e.isIntersecting);
+          onVisibleRef.current(e.isIntersecting);
         }
       },
       { threshold: [...IN_VIEW_THRESHOLDS] },
@@ -1099,9 +1296,11 @@ function PullCardInView({
     return () => {
       if (timer !== undefined) clearTimeout(timer);
       io.disconnect();
-      onVisible(false);
+      onVisibleRef.current(false);
     };
-  }, [onRead, onVisible]);
+    // Nothing: the observer is set up once per mounted card and reads its callbacks
+    // through refs. See the block above.
+  }, []);
 
   return (
     // `feed__item` is the scroll-snap target. It wraps the card rather than being the
@@ -1119,6 +1318,10 @@ function PullCardInView({
         onSave={onSave}
         onListen={onListen}
         listening={listening}
+        onQueue={onQueue}
+        queued={queued}
+        reason={reason}
+        onMute={onMute}
         onOpenSource={onOpenSource}
         onShare={onShare}
         shareLabel={shareControlLabel}

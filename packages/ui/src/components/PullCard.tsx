@@ -67,6 +67,27 @@ export interface PullCardProps {
   onQueue?: () => void;
   queued?: boolean;
   /**
+   * Why this card, in the reader's terms — one of the six sentences `get_feed`
+   * picks from the scoring term that lifted the card furthest.
+   *
+   * Drawn faint, under the rule, because it is provenance rather than content:
+   * the reader should be able to find it when they wonder, and never have it
+   * compete with the idea. Null or absent where nothing was measured, which is
+   * the honest answer for a reader's first card and is drawn as nothing at all
+   * rather than as "Recommended for you" — a reason exists so it can be acted
+   * on, and a reason that fits every card is not one.
+   */
+  reason?: string | null;
+  /**
+   * See less of this source.
+   *
+   * Optional for the reason `onListen` is: the control belongs where a mute has
+   * somewhere to go. It sits beside the reason because the two are one gesture —
+   * "this is why you are seeing it" and "stop" — and the pair is the whole of
+   * what makes a feed answerable to the person reading it.
+   */
+  onMute?: () => void;
+  /**
    * Render a body of text in place of the plain string.
    *
    * The source page keeps a reader's highlight marks inside the text, which is
@@ -145,6 +166,8 @@ export function PullCard({
   onAsk,
   onQueue,
   queued = false,
+  reason,
+  onMute,
   renderBody,
   onShare,
   shareLabel = 'Share',
@@ -252,6 +275,34 @@ export function PullCard({
         </p>
       )}
       <hr className="pull-card__rule" />
+
+      {/*
+        Provenance, and the answer to it, on one line under the rule.
+
+        Either half alone is enough to draw the line. The first version required a
+        reason, on the grounds that a mute without one arrives without its question
+        — and that withheld the control on exactly the pages where it does the most
+        good: a new reader's first feed, where `get_feed` has measured nothing and
+        returns `reason = null` for every row, and every offline card, whose cached
+        row predates the column. The reader least served by the ranking had no way
+        to say so. The empty span keeps the mute at the end of the line, where it
+        is when there is a reason beside it.
+      */}
+      {reason || onMute ? (
+        <p className="pull-card__reason">
+          {reason ? <span className="pull-card__why">{reason}</span> : <span />}
+          {onMute && (
+            <button
+              type="button"
+              className="btn btn--plain pull-card__mute"
+              onClick={onMute}
+              aria-label={`See less from ${source.title}`}
+            >
+              Less like this
+            </button>
+          )}
+        </p>
+      ) : null}
 
       <div className="pull-card__spread">
         <div className="pull-card__reading">

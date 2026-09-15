@@ -68,6 +68,19 @@
   padding-right: var(--space-1);
 }
 
+/*
+ * The field that replaced `window.prompt`.
+ *
+ * Sized to the row it sits in rather than to the column: it appears inline among
+ * the collection chips, and a full-width input there would push every chip onto
+ * its own line for as long as the field is open.
+ */
+.library__name {
+  width: auto;
+  max-width: 18rem;
+  display: inline-block;
+}
+
 .library__item {
   padding-bottom: var(--space-4);
 }

@@ -116,3 +116,115 @@ There is no paid tier, so quotas exist for sustainability, not monetisation:
 Nobody has to pay, and no knowledge feature is ever behind the ad. The quota exists to
 stop someone scripting 100,000 image generations against the public instance — not to
 convert users.
+
+### A cap for the day, because a per-requester quota is not one
+
+The quotas above count rows belonging to **one identity**: three fast jobs a day, a
+stagger past that, a hard ceiling of fifty. That is exactly the right shape for stopping
+one reader running away with the budget, and no shape at all for stopping a hundred
+readers each spending their allowance on the same afternoon. Fifty jobs at $0.056 is
+$2.80 for one account and $280 for a hundred, and nothing in the schema noticed.
+
+Studio makes that worth fixing rather than theoretical — a private summary of a reader's
+own text means everybody can spend, not only whoever asks for a canonical work — so
+`20260914010000` adds the bound the per-requester quotas cannot express: a **global
+ceiling on provider spend in one UTC day**, `daily_spend_cap_cents()`, currently 200
+cents. The two compose. A reader is still bounded by their own quota; the product is
+bounded by the cap whatever the quotas allow.
+
+**Checking a number before spending is not a cap.** Two workers read `spend_today()` at
+the same moment, both see the same figure, both decide they are under the cap, and both
+spend — and the overshoot grows with the number of workers, not by one job. So the cap is
+a **reservation**: under one global advisory lock, the worst case of the step about to run
+is written to `budget_reservations`, counted against the cap by everyone who looks, and
+replaced by the real charge when the `cost_ledger` row lands. `record_job_step` and
+`record_failed_job_step` settle in the same transaction as the charge, so there is no
+instant in which the money is counted twice and none in which it goes uncounted.
+
+A step that dies holding a reservation is released twice over: the stranded-job sweep
+settles what it fails, and a reservation older than an hour is ignored by the sum whether
+anything settled it or not.
+
+`spend_today()` is the ledger plus open reservations and **nothing else**. Never
+`generation_jobs.cost_cents`: `record_job_step` already rolls every ledgered charge into
+that column, so a sum over both reports double the real spend and slams the cap at half of
+it — a cap of $1 that claims to be $2, which is worse than either.
+
+| Step         | Reserved, worst case                                      |
+| ------------ | --------------------------------------------------------- |
+| `synthesize` | `deps.summary.worstCaseCentsFor(input)` — 16 cents and up |
+| `embed`      | 1 cent                                                    |
+
+`synthesize` is not a constant. `worstCaseCentsFor` prices the call that is about to be
+made: the output half is the provider's configured ceiling (49,152 tokens for Gemini at
+$3.00/MTok, 24,576 for Anthropic at $5.00/MTok), and the input half is the UTF-8 **byte**
+length of the prompt, because a byte is the most a token can be worth and characters are
+not bytes — the constant this replaced assumed four characters to a token and was short by
+two thirds on any source not written in Latin script. The floor, a one-line source through
+the 3,669-byte prompt template, is 16 cents; a 200,000-character book is about 30.
+
+It was a flat 6 — the expected cost of a Gemini call — which is an estimate and not a
+ceiling, and a reservation smaller than the charge that replaces it lets the cap be
+overshot by the difference once per call in flight.
+
+Two rows, not three: `artwork` calls no provider today and reserves nothing, and carrying
+a price for it here would inflate every hold for a step that spends nothing.
+
+`enqueue_generation_job`'s door asks `public.min_job_cents()` — 17, the floor above plus
+`embed` — and `generation_budget_state()` reports `spent` at exactly the same point, so
+the screen never offers room the door will refuse. A floor rather than the ceiling for the
+largest source: a door pinned to the book would turn away an essay with 30 cents of the day
+unspent. The hold is taken
+**after** the source claim — a job that is only ever going to wait on a source another job
+is synthesising should not take a hold it will not use — and **immediately before** the
+provider, because a reservation taken afterwards is a receipt rather than a cap.
+
+A step that cannot reserve **waits**, it does not fail. Nothing was sent, so nothing is
+owed and the attempt must not count against `MAX_ATTEMPTS`: the worker re-sends the step
+with a delay, exactly as it does for a held source, and bounds the waiting itself. The two
+kinds of waiting carry separate counts, because they are bounded by different facts — a
+source claim survives minutes, so thirty minutes of waiting means something is wrong,
+while the daily cap refills at 00:00 UTC, so a job arriving at 08:00 on a day that filled
+early waits sixteen hours and is perfectly healthy.
+
+| Waiting on    | Between asks | For up to |
+| ------------- | -----------: | --------: |
+| A held source |         60 s |    30 min |
+| The daily cap |        900 s |      24 h |
+
+### The private tier
+
+`generation_jobs.kind` has existed since the table was created and was written by nothing,
+so every row said `canonical_summary` whatever it actually was. `enqueue_generation_job`
+now writes it, narrowed to two values:
+
+| `kind`              | What it describes                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `canonical_summary` | A work for the catalogue: published, public, generated once and read by thousands. |
+| `private_summary`   | A reader's own text, summarised for them and published nowhere.                    |
+
+**The column is descriptive, and it is worth being exact about that**, because the table
+above reads like an enforcement mechanism and is not one yet. Nothing in
+`supabase/functions` branches on `kind`. What actually keeps a private summary private is
+`generation_jobs.visibility` — which defaults to `private`, which `enqueue_generation_job`
+refuses to take from the client, and which `template` passes to `summaries.visibility` —
+plus the `moderate` step, which re-checks rights immediately before publication and
+refuses an uncleared job. Those three hold the line. `kind` records which sort of job it
+is, so a spend report can tell canonical work from private and so the pipeline has
+somewhere to branch when `embed_private` and `relate_only` arrive. Validating it today
+buys a refusal for a typo rather than a job nothing will ever pick up, which is worth
+having and is not the same as enforcement.
+
+A private summary is the one place a reader's own content reaches a model provider, and
+it happens because they asked. `docs/privacy.md` says so in the reader's words.
+
+**An imported book gains a summary, not a second `works` row.** `upsertWork` keys on
+`content_hash`, which is the right identity for a canonical source and the wrong one for
+an import: a reader's imported highlights already have a work of their own, created per
+reader by `commit_import`, and the text they later send to Studio is not the text that row
+was hashed from. So `template` adopts `target.work_id` instead — but only where the
+requester has authored a summary on it, checked against the row at the moment of the
+write. `enqueue_generation_job` strips a `work_id` that fails the same test at the moment
+of the request; the two together are what stop a private generation attaching itself to a
+work its requester has nothing to do with. The adopted row's `rights_status`, `owner_id`
+and `byline` are left exactly as the import wrote them.

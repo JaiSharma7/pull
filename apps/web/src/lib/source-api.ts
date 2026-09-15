@@ -52,21 +52,27 @@ export interface SourcePull {
   body: string;
   whyItMatters: string | null;
   /**
-   * The longer form of the idea, and how long it takes.
+   * The longer form of the idea.
    *
-   * Both are already fetched by the feed and rendered nowhere: `FeedRow` carries
-   * `explanation` and `estimatedReadSeconds` and the card shows neither. A card is
-   * the wrong surface for them — it is meant to be one idea at a glance — but a
-   * source page is exactly the place a reader has chosen to go deeper.
+   * Already fetched by the feed and rendered nowhere: `FeedRow` carries it and the
+   * card does not show it. A card is the wrong surface for it — it is meant to be one
+   * idea at a glance — but a source page is exactly the place a reader has chosen to
+   * go deeper.
+   *
+   * `estimatedReadSeconds` used to sit beside it and is gone, along with the column
+   * from the select. The depth dial computes its durations from the words actually on
+   * screen at 210wpm — `packages/ui/src/depth.ts` raises that to a law so two
+   * durations cannot disagree in front of a reader — so the stored number has no
+   * surface left, and a field nothing renders is a column fetched on every source page
+   * for nobody.
    */
   explanation: string | null;
-  estimatedReadSeconds: number | null;
 }
 
 /** Both summary queries select the same columns; drift between them is a silent bug. */
 const SUMMARY_COLUMNS =
   'id, title, elevator_pitch, why_it_matters, ' +
-  'pulls(id, ordinal, headline, body, why_it_matters, explanation, estimated_read_seconds)';
+  'pulls(id, ordinal, headline, body, why_it_matters, explanation)';
 
 interface SummaryRow {
   title: string | null;
@@ -80,7 +86,6 @@ interface SummaryRow {
         body: string;
         why_it_matters: string | null;
         explanation: string | null;
-        estimated_read_seconds: number | null;
       }[]
     | null;
 }
@@ -103,7 +108,6 @@ function shapeSummary(row: SummaryRow): Omit<SourceDetail, 'work'> {
         body: p.body,
         whyItMatters: p.why_it_matters,
         explanation: p.explanation,
-        estimatedReadSeconds: p.estimated_read_seconds,
       })),
   };
 }

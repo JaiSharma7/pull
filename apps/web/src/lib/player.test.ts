@@ -69,6 +69,40 @@ describe('enqueue', () => {
     expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
   });
 
+  /*
+   * The same failure `playNow` was corrected for, on the other path. A Track carries the
+   * text to speak at the reader's current depth, so "Listen to this source" pressed at
+   * the claim and again at the full argument hands over the same ids with different
+   * words — and dropping them kept the short ones while the screen showed the long ones.
+   */
+  it('refreshes a queued track rather than dropping the press', () => {
+    const claim = { id: 'b', title: 'Meditations', text: 'The claim.' };
+    const argument = { id: 'b', title: 'Meditations', text: 'The claim, and the argument.' };
+    const s = run([
+      { type: 'enqueue', tracks: [track('a'), claim] },
+      { type: 'enqueue', tracks: [track('a'), argument] },
+    ]);
+    expect(s.queue.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(s.queue[1]!.text).toBe(argument.text);
+  });
+
+  /*
+   * Except the one being spoken. Replacing its text without bumping the epoch leaves
+   * the effect layer resuming rather than re-speaking — the voice finishes the old
+   * words while the queue holds the new — and bumping the epoch would restart the
+   * passage mid-sentence because the reader queued a source.
+   */
+  it('leaves the track being spoken exactly as it is being spoken', () => {
+    const claim = { id: 'a', title: 'Meditations', text: 'The claim.' };
+    const argument = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+    const playing = run([{ type: 'enqueue', tracks: [claim] }]);
+    expect(playing.status).toBe('playing');
+
+    const after = playerReducer(playing, { type: 'enqueue', tracks: [argument] });
+    expect(after).toBe(playing);
+    expect(after.queue[0]!.text).toBe(claim.text);
+  });
+
   it('returns the same state when nothing new arrives', () => {
     const before = run([{ type: 'enqueue', tracks: [track('a')] }]);
     expect(playerReducer(before, { type: 'enqueue', tracks: [track('a')] })).toBe(before);
@@ -142,6 +176,32 @@ describe('playNow', () => {
     const s = run([{ type: 'playNow', track: track('a') }]);
     expect(s.queue.map((t) => t.id)).toEqual(['a']);
     expect(s.status).toBe('playing');
+  });
+
+  /*
+   * A Track is an id, a title and TEXT, and the text is the reader's current depth.
+   * Every caller builds one at the moment of the press — a card queued at the claim
+   * and then played at full depth hands over a different track with the same id — so
+   * matching on the id and keeping the queued copy read the short version aloud while
+   * the screen showed the long one.
+   */
+  it('speaks the track it was handed, not the copy already queued', () => {
+    const queued = { id: 'a', title: 'Meditations', text: 'The claim.' };
+    const deeper = { id: 'a', title: 'Meditations', text: 'The claim, and the argument.' };
+
+    const moved = run([
+      { type: 'enqueue', tracks: [queued, track('b')] },
+      { type: 'next' },
+      { type: 'playNow', track: deeper },
+    ]);
+    expect(currentTrack(moved)?.text).toBe(deeper.text);
+
+    const restarted = run([
+      { type: 'enqueue', tracks: [queued] },
+      { type: 'playNow', track: deeper },
+    ]);
+    expect(restarted.queue).toHaveLength(1);
+    expect(currentTrack(restarted)?.text).toBe(deeper.text);
   });
 });
 

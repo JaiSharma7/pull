@@ -1,7 +1,13 @@
 # Privacy Policy
 
-**Effective 30 August 2026.** Every revision of this document is a commit in this
+**Effective 15 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
+
+What changed on this date: **Anthropic** was added to the processors below. A deployment
+may configure it as the fallback that writes a Studio summary when Google is unavailable,
+so text you submit to the Studio may reach a second provider. Nothing else about what is
+collected, kept or shared has changed. Under "Changes" at the foot of this document this
+is a material change, which is why the date above moved rather than staying at 30 August.
 
 ## Scope
 
@@ -207,11 +213,18 @@ into a canonical summary that thousands of readers then share. What that call co
 the source material and our prompt — not you, not your history, and not your library.
 
 **The exception is a document you submit yourself.** If you ask the Studio to generate a
-summary of your own text or a URL, that text is the source, and the pipeline sends it to
-Google as the context for the summary it writes. You are doing that deliberately, but it is
-your content reaching a model provider, and it deserves stating plainly rather than leaving
-as an implication: what never reaches a model is your **reading** — not something you
-supplied to be summarised.
+summary of your own text, a URL, or highlights you have imported, that text is the source,
+and the pipeline sends it to a model provider as the context for the summary it writes —
+Google, or Anthropic where a deployment configures the fallback that answers when Gemini
+is unavailable. You are doing that deliberately, but it is your content reaching a model
+provider, and it deserves stating plainly rather than leaving as an implication: what
+never reaches a model is your **reading** — not something you supplied to be summarised.
+
+The Studio says that sentence on the screen, above the box, before you have typed anything
+— not in this policy alone. The summary it writes is **private**: it is readable by you,
+it is not published, it never enters the catalogue or anybody else's feed, and it is
+deleted with your account like everything else keyed to you. Asking for one needs an
+account, because generation costs real money and a guest session costs nothing to create.
 
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
@@ -237,6 +250,7 @@ The app uses these services:
 | **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
 | **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
 | **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
+| **Anthropic** (Claude API)            | The same, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
 | **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
 
 Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your
@@ -274,16 +288,23 @@ What the app does put on your device, all of it first-party and all of it necess
 
 - **Your sign-in token**, in `localStorage`, so you stay signed in.
 - **A small amount of interface state**, in `localStorage`.
+- **Your listening settings and your listening queue.** The three settings — speed, voice
+  and sleep timer — are in `localStorage`, because they describe the machine rather than
+  you: a voice is an engine installed on _this_ device and means nothing on another one.
+  The queue is what you have lined up to hear, so it is a reading list rather than a
+  setting, and it is kept under your own id and cleared when you sign out. A guest's
+  queue, and a signed-out visitor's, live in `sessionStorage` instead, so the next person
+  to open the browser on a shared machine does not find it waiting.
 - **Your offline library**, in IndexedDB — the Pulls cached for reading without a
-  connection and a queue of writes made while disconnected — which is how offline reading
-  is free rather than a paid tier. The cached Pulls are keyed to the account that fetched
-  them; the queued writes carry their owner and are only ever sent for them. Two
-  mechanisms, one promise: a shared browser never shows one reader another's copy. (A
-  downloadable practice pack is being built; when it lands it goes here too, and this
-  line will say so once it is something you can actually do.)
+  connection, today's practice downloaded so a review session survives losing signal, and
+  a queue of writes made while disconnected — which is how offline reading and offline
+  practice are free rather than a paid tier. All three are keyed to the account that
+  fetched them, and the queued writes carry their owner and are only ever sent for them.
+  Two mechanisms, one promise: a shared browser never shows one reader another's copy.
+  The downloaded practice is deleted when you sign out, rather than only being hidden.
 - **The app itself**, cached by a service worker.
 
-Clearing your browser's site data removes all four, and signs you out.
+Clearing your browser's site data removes all of it, and signs you out.
 
 Read-aloud uses your browser's built-in speech synthesis. **No audio is recorded, and nothing
 is sent to us.**

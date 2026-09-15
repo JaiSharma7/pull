@@ -194,6 +194,13 @@ limited and quotas apply. We may adjust them, decline a request, or refuse a sou
 altogether — a source whose rights status is unresolved is not publishable and will not be
 published.
 
+There are two limits and they are different in kind. **Yours** is per account: a few fast
+generations a day, slower ones after that, and a daily ceiling. **Ours** is for everybody
+at once: the service spends at most a fixed amount on generation in a day, and when that is
+gone, generation stops for the rest of the day and resumes at 00:00 UTC. You will be told
+which one you have hit. Neither is a sales tactic — there is no tier that lifts either, and
+nothing you have already generated or saved becomes unavailable when a limit is reached.
+
 Generating a summary of a document you supply does not make it public. It stays private to
 you unless you publish it, and it is subject to the same rights rules as everything else.
 

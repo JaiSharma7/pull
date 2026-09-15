@@ -41,6 +41,7 @@ Work                                              ← the thing itself
 paths ─── path_steps                              ← curated sequences answering one question
 
 generation_jobs ─── job_steps ─── cost_ledger
+                └── budget_reservations           ← what a step is about to spend
 generation_dispatches · generation_hash_claims
 reports ─── moderation_decisions · rights_requests
 daily_pulls · daily_pull_selections · interleave_config · rate_limits
@@ -180,10 +181,23 @@ reader's journey and allow testing out of ideas already held solid. `apply_path_
 writes a private reflection note, pulls forward the next due date within 3 days, and
 advances the path idempotently via `client_mutation_id`.
 
-**Cost data is not user-facing.** `cost_ledger` and `moderation_decisions` have
-RLS enabled with a policy of `using (false)` — service-role only. That is
-deliberate, not an oversight: the invariant check requires _a_ policy to exist,
-not that it grants anything.
+**Cost data is not user-facing.** `cost_ledger`, `budget_reservations` and
+`moderation_decisions` have RLS enabled with a policy of `using (false)` —
+service-role only. That is deliberate, not an oversight: the invariant check
+requires _a_ policy to exist, not that it grants anything.
+
+**The daily spend cap is a reservation, not a reading.** `budget_reservations` is
+keyed `(job_id, step)` and counts the calls standing behind that row: a step whose
+earlier hold is settled takes the row over, so a retry is not refused against money
+nobody is spending, while a step the queue hands out again while its first call is
+still inside the provider ADDS to the hold — two calls spend twice, and a cap that
+cannot see the second is not a cap. `reserve_budget` takes one **global** advisory
+lock before it counts — two different jobs must not both read the same total and both proceed,
+which is precisely the case a per-job lock would leave in contention.
+`record_job_step` settles in the same transaction as the ledger row, so the hold and
+the charge are never both counted. `spend_today()` sums the ledger and open
+reservations and never `generation_jobs.cost_cents`, which is a second copy of every
+ledgered charge. See `20260914010000` and `docs/generation.md`.
 
 ## Indexes on the hot path
 

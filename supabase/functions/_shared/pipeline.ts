@@ -53,6 +53,52 @@ export class SourceHeldError extends Error {
 }
 
 /**
+ * The day's generation budget is spent; ask again later.
+ *
+ * A sibling of `SourceHeldError`, and for the same reason: nothing has been sent
+ * to a provider, so this is not a failure and must not count against
+ * `MAX_ATTEMPTS`. The difference is the timescale. A source claim is held for
+ * minutes, so thirty minutes of waiting means something really is wrong; the
+ * daily cap refills at 00:00 UTC, so a job that arrives at 08:00 on a day that
+ * filled early is waiting sixteen hours and is still perfectly healthy.
+ *
+ * The message deliberately says the budget rather than the amount. It lands in
+ * `job_steps.error` when the wait runs out, which the requester can read, and how
+ * close the product is to its own ceiling is not a number to publish per job.
+ */
+export class BudgetExhaustedError extends Error {
+  constructor(step: string) {
+    super(`${step}: the day's generation budget is spent; will ask again`);
+    this.name = 'BudgetExhaustedError';
+  }
+}
+
+/**
+ * What each provider step holds against the cap before it calls anything.
+ *
+ * WORST CASE, not expected case, and rounded up from the table in
+ * `docs/generation.md`: a reservation smaller than the charge that replaces it
+ * lets the cap be overshot by the difference, once per step in flight, which is
+ * the exact hole the reservation exists to close. Overshooting the other way
+ * costs a little unused headroom for the seconds a call takes.
+ *
+ * ONE ENTRY NOW. `synthesize` reserves `deps.summary.worstCaseCentsFor(input)`, which
+ * each provider derives from its configured prices, its output ceiling and the byte
+ * length of the prompt about to be sent — a constant here was the expected cost of a
+ * Gemini call, and the Anthropic fallback can charge nearly three times it, so a day at
+ * 194 cents admitted a call that took the ledger past 200.
+ * `artwork` was here too, at 5, for a step that calls nothing and reserves nothing.
+ *
+ * `embed` stays a constant because it is bounded by something this file does know: one
+ * call embeds the Pulls of one summary, a few thousand tokens at
+ * `GEMINI_EMBEDDING_USD_PER_MTOK` (0.15 by default), which is a fraction of a cent. The
+ * cent is the rounding, not an estimate of the bill.
+ */
+export const RESERVE_CENTS = {
+  embed: 1,
+} as const satisfies Record<string, number>;
+
+/**
  * A step that failed *after* a provider had already been billed.
  *
  * The provider meters the call when it answers, not when we like the answer. So
@@ -250,6 +296,13 @@ export interface PipelineDb {
     contentHash: string;
     rightsStatus: RightsStatus;
     /**
+     * The JOB's visibility, which decides what this call may do to a row it did not
+     * create. A private generation may adopt an existing `works` row and must not
+     * re-attribute or re-score it: the Studio puts an Author field in front of every
+     * signed-in reader, and `attribute_work` has no ownership test of its own.
+     */
+    visibility: string;
+    /**
      * Already narrowed by `narrowTopics`. Written to `work_topics` only for a work
      * this call actually creates: an existing work has been classified once already,
      * and re-filing it on every reuse would let one job's classification overwrite
@@ -348,6 +401,25 @@ export interface PipelineDb {
   publishSummary(summaryId: string): Promise<void>;
   attachSummaryToJob(jobId: string, summaryId: string, workId: string): Promise<void>;
   /**
+   * Write a generated summary on a work the requester owns AND point the job at it,
+   * in one transaction.
+   *
+   * Not `createSummary` followed by `attachSummaryToJob`: between those two calls is a
+   * network, and a lost response after the first leaves a summary nothing references
+   * with a job that cannot tell a retry from a fresh start. See
+   * `20260914050000_a_summary_and_its_job_are_written_together.sql`, which is where the
+   * two failed answers that preceded this one are written down.
+   */
+  attachGeneratedSummary(input: {
+    jobId: string;
+    workId: string;
+    title: string;
+    elevatorPitch: string | null;
+    whyItMatters: string | null;
+    sections: unknown;
+    visibility: string;
+  }): Promise<{ summaryId: string; version: number | null; created: boolean }>;
+  /**
    * Reserve a source for this job's synthesis.
    *
    * `claimed` means go; `held` means another live job is synthesising the same
@@ -356,7 +428,41 @@ export interface PipelineDb {
    * hostage -- see 20260902200000.
    */
   claimSourceHash(jobId: string, contentHash: string): Promise<'claimed' | 'held'>;
+  /**
+   * Extend the lease on whatever source this job already claimed.
+   *
+   * For the job parked on the day's budget with its summary already written: releasing
+   * the claim there lets a second job overwrite or duplicate that summary, and
+   * `claimSourceHash` needs a hash the waiting step does not have. Answers false when
+   * there was nothing of this job's to renew.
+   */
+  renewSourceClaim(jobId: string): Promise<boolean>;
   releaseSourceHash(jobId: string): Promise<void>;
+  /**
+   * Hold `cents` against the day's cap for this step, or refuse.
+   *
+   * Throws `BudgetExhaustedError` when the day is spent -- the implementation
+   * translates Postgres's 53400 -- and returns normally otherwise. Every other
+   * failure is a real failure and propagates: a reservation that cannot be
+   * written is not a reservation, and calling a provider anyway would be spending
+   * money with nothing counting it.
+   *
+   * Called immediately before the provider, not at the top of the step. The gap
+   * between the hold and the call is the window in which the hold is wrong about
+   * the future, and it should be as small as the code can make it.
+   */
+  reserveBudget(jobId: string, step: string, cents: number): Promise<void>;
+  /**
+   * Whether this requester has authored a summary on that work.
+   *
+   * The one question that decides whether `template` may adopt `target.work_id`
+   * rather than keying a work off the content hash. `enqueue_generation_job`
+   * already strips a `work_id` the caller has no summary on, so this is the
+   * second of two checks -- and it is the one that runs against the row at the
+   * moment of the write rather than at the moment of the request, which is the
+   * gap a summary deleted in between would otherwise leave open.
+   */
+  requesterOwnsWork(requesterId: string | null, workId: string): Promise<boolean>;
 }
 
 /**
@@ -1114,6 +1220,55 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       }
 
       /*
+       * The day's budget, held immediately before the call and settled by the ledger
+       * row `record_job_step` writes for it. After the claim, so a job that is only
+       * ever going to wait on a held source does not take a hold it will not use --
+       * and before the provider, because a reservation taken afterwards would be a
+       * receipt rather than a cap.
+       *
+       * AND THE CLAIM IS RELEASED IF THE BUDGET REFUSES. A budget wait can last 24
+       * hours, and every redelivery re-runs this step from the top and renews the
+       * lease -- so a job that is merely early would hold the source hash for a day
+       * while every other job on the same text got `held`, burned its own 30 minutes
+       * of waiting, and then failed TERMINALLY for doing nothing wrong. This job is
+       * not synthesising anything, so it has no business holding the source; it takes
+       * the claim again on the delivery that finds budget.
+       */
+      /*
+       * Built before the hold, and the same object is sent below.
+       *
+       * The hold is a ceiling over THIS prompt — its UTF-8 byte length bounds the input
+       * tokens — so it has to be the prompt that is actually going, not a stand-in. Two
+       * calls to `buildSummaryPrompt` for one summary is the price of that, and it is a
+       * string concatenation against a provider round trip.
+       */
+      const summaryInput = {
+        workTitle: acquired.title,
+        kind: acquired.kind,
+        context: acquired.text,
+      };
+
+      try {
+        // The PROVIDER's ceiling for THIS call, not a constant. `RESERVE_CENTS.synthesize`
+        // was the expected cost of a Gemini call, and a reservation smaller than the charge
+        // that replaces it is the overshoot this whole mechanism exists to stop — the
+        // Anthropic fallback at its configured ceiling charges nearly three times it.
+        await db.reserveBudget(job.id, 'synthesize', deps.summary.worstCaseCentsFor(summaryInput));
+      } catch (e) {
+        // The recovery must not replace the refusal. A `releaseSourceHash` that rejects
+        // transiently would propagate instead of `BudgetExhaustedError`, and the worker
+        // decides whether to requeue as a budget wait by exactly that type: the job
+        // would burn an attempt on a failure it did not have, still holding the claim
+        // this was trying to give back. Logged, and the lease expires on its own.
+        if (e instanceof BudgetExhaustedError) {
+          await db.releaseSourceHash(job.id).catch((release: unknown) => {
+            console.error('synthesize: could not release the source claim', release);
+          });
+        }
+        throw e;
+      }
+
+      /*
        * Two ways to be billed and get nothing, and both have to reach the ledger.
        *
        *   provider answered, answer unusable   → BilledProviderError, caught here
@@ -1132,11 +1287,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       let usage: Usage;
       let model: string;
       try {
-        ({ summary, usage, model } = await deps.summary.generateSummary({
-          workTitle: acquired.title,
-          kind: acquired.kind,
-          context: acquired.text,
-        }));
+        ({ summary, usage, model } = await deps.summary.generateSummary(summaryInput));
       } catch (e) {
         if (e instanceof BilledProviderError) {
           throw new BilledStepError(`synthesize: ${e.message}`, {
@@ -1210,9 +1361,85 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       // work is linked to and scored on the same URL.
       const sourceUrl = (acquired.url ?? asString(job.target.url)) || null;
 
+      /*
+       * An imported book gains a summary rather than a second `works` row.
+       *
+       * `upsertWork` keys on `content_hash`, which is the right identity for a
+       * canonical source and the wrong one for an import: a reader's imported
+       * highlights already have a work of their own, created per reader by
+       * `commit_import`, and the text they later send to Studio is not the text
+       * that work was hashed from. Keyed on the hash, the same book would acquire
+       * a second row and the reader would find their highlights under one title
+       * and their summary under another.
+       *
+       * Adopted only where the requester has authored a summary on it, checked
+       * here against the row rather than trusted from the target --
+       * `enqueue_generation_job` strips a `work_id` that fails the same test, and
+       * this is the check that runs at the moment of the write. The work's own
+       * `rights_status`, `owner_id` and `byline` are left exactly as the import
+       * wrote them: nothing about a private generation should re-score or
+       * re-attribute a row the reader owns.
+       */
+      const adopting = asString(job.target.work_id) || null;
+      if (adopting && (await db.requesterOwnsWork(job.requester_id, adopting))) {
+        /*
+         * Idempotent before anything else. A retry of this step after
+         * `attachSummaryToJob` committed would otherwise write a SECOND generated
+         * summary at the next version and leave the first orphaned — the failure
+         * `createSummary`'s own comment describes, which its adopt-on-collision
+         * cannot catch here because each attempt asks for a different version.
+         */
+        if (job.summary_id) {
+          return {
+            output: {
+              workId: adopting,
+              summaryId: job.summary_id,
+              reused: false,
+              adopted: true,
+            },
+          };
+        }
+
+        /*
+         * ONE CALL, because the row and the reference have to land together.
+         *
+         * The guard above catches a retry whose attach committed. It cannot catch the
+         * retry whose INSERT committed and whose attach did not: `job.summary_id` is
+         * still null, so this branch runs again, and what it does then decides whether
+         * the reader ends up with one summary or several. Both answers written in this
+         * file were wrong in opposite directions — "the next free version" wrote a
+         * fresh draft per attempt, since the orphan is what makes the next version
+         * higher; a constant version made a genuine SECOND generation collide with the
+         * first one's published summary, and `cards` then rewrote part of a live
+         * document. `attach_generated_summary` does both writes inside one transaction
+         * with the job row locked, so there is no window to be on the wrong side of,
+         * and the version is chosen under that lock: never 1, which is the reader's
+         * import, and never a version another job is already using.
+         */
+        const written = await db.attachGeneratedSummary({
+          jobId: job.id,
+          workId: adopting,
+          title: summary.title,
+          elevatorPitch: summary.elevatorPitch,
+          whyItMatters: summary.whyItMatters,
+          sections: { elevatorPitch: summary.elevatorPitch, whyItMatters: summary.whyItMatters },
+          visibility: job.visibility,
+        });
+        return {
+          output: {
+            workId: adopting,
+            summaryId: written.summaryId,
+            reused: false,
+            adopted: true,
+            version: written.version,
+          },
+        };
+      }
+
       const { workId } = await db.upsertWork({
         title: summary.title || acquired.title,
         kind: acquired.kind,
+        visibility: job.visibility,
         contentHash: acquired.hash,
         rightsStatus: acquired.rights,
         sourceUrl,
@@ -1363,21 +1590,92 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
         return { id: row.id, text: `${p.headline}\n\n${p.body}` };
       });
 
+      /*
+       * Embedding is cheap and is still a provider call, so it is still counted.
+       * A cap that only bounded the expensive step would be a cap on synthesis
+       * rather than on spend.
+       *
+       * AND THE CLAIM IS KEPT IF THE BUDGET REFUSES, which is the opposite of what
+       * `synthesize` does with the same refusal. The catch below is where that is
+       * argued, all three ways it has been argued.
+       */
+      try {
+        await db.reserveBudget(job.id, 'embed', RESERVE_CENTS.embed);
+      } catch (e) {
+        /*
+         * THE CLAIM IS KEPT, and this line has now been argued three ways. The decision
+         * of record, with the evidence, so it stops being re-litigated:
+         *
+         *   RELEASE (what `synthesize` does). There, nothing has been written yet, so a
+         *   job that is merely early has no business holding a source. HERE the summary
+         *   exists: a draft, with its Pulls. Giving the claim back lets a second job
+         *   synthesise the same text — `findPublishedSummaryByHash` cannot offer a draft
+         *   — and then either publish a SECOND public summary of one work (two rows,
+         *   `get_feed` serving the same ideas twice, `get_source_delta` over-counting),
+         *   or, for the same requester, collide into this job's draft and have `cards`
+         *   upsert over its Pull bodies at `(summary_id, ordinal)` while this job is
+         *   still parked — after which this job's `embed` writes vectors computed from
+         *   ITS text onto rows now holding the other one's.
+         *
+         *   RENEW, on every pass of the wait. A second job on the same text gets `held`,
+         *   waits its own bounded thirty minutes, and fails terminally for doing nothing
+         *   wrong. That is a bad outcome for that reader and it is LOUD, bounded, and
+         *   destroys nothing.
+         *
+         * Between corrupting one work and failing one job, the job fails. The wait
+         * re-sends this step every 900 s and the lease is 30 minutes, so renewing on
+         * each refusal is what holds the source across a wait that may last until
+         * midnight.
+         *
+         * Swallowed for the reason `synthesize` gives at its own recovery: a renewal
+         * that fails transiently must not take the place of the refusal, or the worker
+         * stops seeing a budget wait and starts seeing a failed attempt.
+         */
+        if (e instanceof BudgetExhaustedError) {
+          await db.renewSourceClaim(job.id).catch((renew: unknown) => {
+            console.error('embed: could not renew the source claim', renew);
+          });
+        }
+        throw e;
+      }
+
       const { vectors, usage } = await deps.embedding.embed(pairs.map((p) => p.text));
+
+      /*
+       * PAST THIS LINE THE PROVIDER HAS BEEN BILLED, and law 2 says every call reaches
+       * the ledger — not every successful one.
+       *
+       * Both failures below happen after the embedding was metered: a short vector
+       * list, and a write of the vectors that does not land. Thrown plainly, the worker
+       * routes them to `failUnbilled`, which writes a `job_steps` row with no usage and
+       * settles the hold — so a real charge is replaced by nothing at all, and each
+       * retry buys another one that `spend_today()` cannot see. `BilledStepError`
+       * carries the usage through the failure, which is what `synthesize` does with
+       * exactly this situation directly above.
+       */
+      const billed = { usage, model: deps.embedding.name, provider: deps.embedding.name };
 
       // A short vector list means some Pulls would publish unembedded — invisible
       // to ranking and to the Delta. Fail the step instead: a retry costs one
       // embedding call, and the alternative is a summary that is quietly missing
       // from search with nothing recording why.
       if (vectors.length !== pairs.length) {
-        throw new Error(
+        throw new BilledStepError(
           `embed: provider returned ${vectors.length} vectors for ${pairs.length} pulls`,
+          billed,
         );
       }
 
-      await db.setPullEmbeddings(
-        pairs.map((p, i) => ({ id: p.id, embedding: vectors[i] as number[] })),
-      );
+      try {
+        await db.setPullEmbeddings(
+          pairs.map((p, i) => ({ id: p.id, embedding: vectors[i] as number[] })),
+        );
+      } catch (e) {
+        throw new BilledStepError(
+          `embed: could not store vectors: ${e instanceof Error ? e.message : String(e)}`,
+          billed,
+        );
+      }
 
       return {
         output: { embedded: pairs.length },

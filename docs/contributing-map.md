@@ -33,12 +33,6 @@ and there is no route announcer, so a screen-reader user activating "Read it in 
 source" gets focus dumped to `<body>` with no indication anything changed. The
 `role="status"` sweep is done; this is the other half.
 
-**The five native dialogs.** `Library.tsx` uses `prompt()` to name a collection and to
-edit a note — a multi-sentence note, in a single-line box — and `confirm()` before a
-destructive delete. `Source.tsx` uses `alert()`. All five are unstylable, cannot be
-read in the app's voice, and on a phone look like they came from somewhere else. The
-patterns to follow are in `Account.tsx`, which does its confirmations inline.
-
 ## Needs the local stack
 
 **Sections have no URLs.** Library, Review, History and Preferences are component
@@ -71,11 +65,6 @@ candidate pool while the reader is looking at twenty cards, so a well-read reade
 be told "skipped 240 ideas you already know" above twenty. It is a true statement about
 what the ranker considered and a false one about the page. A counting-scope decision
 rather than a bug, and it needs a product answer before a patch.
-
-**The Conviction Ledger has no read surface.** Stances are recorded by `Interrupt.tsx`
-and read back by nothing, so the README feature — "you agreed with this in March; here
-is the strongest case against it" — has data and no screen. `docs/roadmap.md` puts
-resurfacing in round 3.
 
 ## What not to send
 
