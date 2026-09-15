@@ -188,6 +188,28 @@
 }
 
 /*
+ * A status sentence in an actions row goes last, on its own line.
+ *
+ * The row holds controls and, sometimes, a sentence about one of them: "Link
+ * copied", or "Select some words in this idea first". Left where it falls in the
+ * markup it reflows the row -- the reader presses a control and the ones after it
+ * jump to the next line, under the finger that just tapped -- and as an ordinary
+ * flex item it stretches to the buttons' height, so its glyphs sit above their
+ * labels rather than on them.
+ *
+ * `order: 1` is what fixes that, and `flex-basis: 100%` is what makes it a line of
+ * its own. Together they say: however many sentences the row ends up holding and
+ * wherever they sit in the DOM, they follow every control. So no control moves
+ * when one appears, and nothing has to remember to render them last -- which was
+ * the first attempt, and it left the share note mid-row while claiming otherwise.
+ */
+.source__pull-actions > .meta {
+  order: 1;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/*
  * The byline and the outbound link to the original, under the title.
  *
  * No new colour and no new weight: it is `.meta` like the kind-and-year line above the
