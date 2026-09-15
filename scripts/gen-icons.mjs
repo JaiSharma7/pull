@@ -60,10 +60,16 @@ for (const [name, size, fraction] of [
   ['apple-touch-icon.png', 180, 0.84],
 ])
   await writeFile(new URL(name, output), await icon(size, fraction));
-await writeFile(new URL('favicon-hat.png', output), await icon(64));
-const favicon = Array.from(await icon(64), (byte) => '%' + byte.toString(16).padStart(2, '0')).join(
-  '',
-);
+/*
+ * Rendered ONCE and written twice, which is also what makes the two provably the same
+ * image: `favicon-hat.png` is what `index.html` points at, and `favicon.svg` is the same
+ * bytes wrapped for anything that asks for an SVG. Two calls to `icon(64)` ran the whole
+ * resize-and-composite pipeline twice for a result that has to be identical, and left
+ * nothing saying it was.
+ */
+const small = await icon(64);
+await writeFile(new URL('favicon-hat.png', output), small);
+const favicon = Array.from(small, (byte) => '%' + byte.toString(16).padStart(2, '0')).join('');
 await writeFile(
   new URL('favicon.svg', output),
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><image width="64" height="64" href="data:image/png,${favicon}"/></svg>\n`,

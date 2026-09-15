@@ -1234,10 +1234,6 @@
   background: var(--surface);
   opacity: 0.85;
 }
-.auth {
-  margin: var(--space-6) auto;
-  padding-inline: var(--space-4);
-}
 
 .shell__logo {
   display: block;

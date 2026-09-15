@@ -52,12 +52,17 @@ one ellipse subtracted from the same ellipse lifted above it, which raises its t
 clear of the crown. Drawn as a flat rectangle it reads as a plinth, not a hat.
 
 It is written twice and neither copy is decorative. `scripts/gen-icons.mjs` generates
-`favicon.svg` and the PWA icons — this repo has no rasteriser, so the PNGs are encoded
+the PWA icons and the tab icon — this repo has no rasteriser, so the PNGs are encoded
 from a pixel buffer — and `packages/ui/src/components/Mark.tsx` draws the same hat in
-the top bar. `Mark.test.ts` compares the component against the _generated_ favicon, so
-neither a divergent tweak nor a stale icon in `public/` gets through. Re-run
-`node scripts/gen-icons.mjs` after any change to either, and look at the result at 16px
-rather than reasoning about it.
+the top bar. `Mark.test.ts` pins every one of those files, so neither a divergent tweak
+nor a stale icon in `public/` gets through. Re-run `node scripts/gen-icons.mjs` after any
+change to either, and look at the result at 16px rather than reasoning about it.
+
+The tab icon is **`favicon-hat.png`**, which is what `index.html` points at.
+`favicon.svg` is the same 64px render percent-encoded into an `<image>`, kept for
+anything that asks for an SVG and precached with the rest; the generator writes one
+buffer to both and the test asserts they are the same bytes. Inspect the PNG — it is
+the file a browser actually draws.
 
 ## Laws
 

@@ -6,6 +6,20 @@
   display: flex;
   flex-direction: column;
 }
+
+/*
+ * A full viewport MINUS the room the player bar is holding.
+ *
+ * `player.css` reserves `--space-8` on `body` rather than on the shell, and says why:
+ * the bar is drawn beside every screen the app can return, and the sign-in page has no
+ * shell to pad. A screen that then claims the whole viewport for itself adds that room
+ * back on, so a signed-out visitor listening to something queued from `/explore` gets
+ * 64px of scroll under a page with nothing below the fold. Audio is free and reaches a
+ * visitor with no account -- law 3 -- so this is a real pairing, not a hypothetical one.
+ */
+:root[data-listening='on'] .welcome {
+  min-height: calc(100svh - var(--space-8) - env(safe-area-inset-bottom));
+}
 .welcome__masthead,
 .welcome__brand,
 .welcome__preview-top,
@@ -95,7 +109,16 @@
 .welcome__hero h1 {
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: clamp(2.25rem, 1.4rem + 3vw, 4.25rem);
+  /*
+   * Both ends of the clamp are tokens, so focus mode reaches this heading.
+   * `tokens.css` remaps `--step-3` through `--step-5` under `:root[data-focus='on']`,
+   * which is how every other heading in the product grows when a reader asks for it --
+   * and a literal `clamp(2.25rem, ..., 4.25rem)` is a size no token block can touch, so
+   * the one screen that ignored the setting was the first one anybody sees. The
+   * multiplier keeps the display size this screen was designed at; it is the scale's
+   * top note, not a second scale.
+   */
+  font-size: clamp(var(--step-4), 1.4rem + 3vw, calc(var(--step-5) * 1.4));
   line-height: 1.08;
   letter-spacing: -0.045em;
   margin: 0;
@@ -243,6 +266,23 @@
     grid-template-rows: none;
     row-gap: clamp(2rem, 6vw, 6rem);
   }
+  /* One column, so the `row-gap` above is what separates the four regions; the
+     margins these two carry for the two-column stack would double it. */
+  .welcome__features {
+    margin-top: 0;
+    /*
+     * Reflowed from here down, rather than held at three until 30rem. Below 55rem the
+     * page is one column, and three fixed cards in it squeezed to about 137px each at
+     * 32rem -- a large phone in landscape, or a split window -- laddering three cards
+     * to three different heights. `auto-fit` takes two and then one as the room goes,
+     * with no second breakpoint to keep in step with this one. Above 55rem the left
+     * column is the design's three-up and stays exactly that.
+     */
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  }
+  .welcome__lede {
+    margin-bottom: 0;
+  }
   .welcome__entry {
     border-left: 0;
     border-top: 1px solid var(--rule-strong);
@@ -264,20 +304,20 @@
     border-bottom: 1px solid var(--rule);
     padding-bottom: var(--space-4);
   }
-  .welcome__preview-top {
+  /*
+   * The footer is the same shape as the header -- two items, `space-between`, no wrap --
+   * with several times the text in it, and only the header was being stacked. On a
+   * 360px phone both spans shrank into ragged three- and four-line stacks against each
+   * other, and `.welcome__source`'s right alignment made the second one ragged-left too.
+   */
+  .welcome__preview-top,
+  .welcome__preview footer {
     align-items: flex-start;
     flex-direction: column;
     gap: var(--space-2);
   }
-}
-@media (max-width: 55rem) {
-  /* One column, so `row-gap` above is what separates the four regions; the
-     margins these two carry for the two-column stack would double it. */
-  .welcome__features {
-    margin-top: 0;
-  }
-  .welcome__lede {
-    margin-bottom: 0;
+  .welcome__source {
+    text-align: left;
   }
 }
 @media (min-width: 55.001rem) and (max-height: 48rem) {

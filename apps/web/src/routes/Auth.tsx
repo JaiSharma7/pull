@@ -42,16 +42,45 @@ export function Auth({
       setBusy(false);
     }
   }
+  /*
+   * A left click is the router's; everything else is the browser's.
+   *
+   * `Legal.tsx`'s helper, for the same reason it has one: neither route renders the
+   * shell, and `App.tsx` listens for `popstate` and nothing else, so a bare `<a>` here
+   * is a full document reload -- the bundle re-downloaded, `onAuthStateChange`
+   * re-registered, and any guest sign-in in flight abandoned. The "Browse the library"
+   * button below goes to this same destination through `onNavigate`, so without this
+   * one screen had two controls to one place behaving differently.
+   */
+  function go(to: string) {
+    return (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      onNavigate(to);
+    };
+  }
+
+  /*
+   * `header` and `footer` are OUTSIDE `main`, which is what makes them landmarks at
+   * all: `banner` and `contentinfo` are only mapped when the element is not inside
+   * `article`, `aside`, `main`, `nav` or `section`. Nested, as they were, a screen
+   * reader met one unnamed `main` and no way to jump between the parts of a page that
+   * is now four regions of content. `Legal.tsx` -- this app's other shell-less route --
+   * already had the shape, skip link included.
+   */
   return (
-    <main className="welcome">
+    <div className="welcome">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <header className="welcome__masthead">
-        <a className="welcome__brand" href="/explore">
+        <a className="welcome__brand" href="/explore" onClick={go('/explore')}>
           <Mark className="shell__mark" />
-          <span>What a Pull</span>
+          <span className="shell__wordmark">What a Pull</span>
         </a>
         <span className="meta welcome__edition">A little curiosity. A lasting idea.</span>
       </header>
-      <div className="welcome__layout">
+      <main id="main" className="welcome__layout" aria-labelledby="welcome-heading">
         <div className="welcome__hero">
           <p className="meta welcome__eyebrow">For the endlessly curious</p>
           <h1 id="welcome-heading">
@@ -72,7 +101,15 @@ export function Auth({
           </p>
           {redirectError && <p role="alert">{redirectError}</p>}
           <OAuthButtons next={next} />
-          <p className="welcome__note">One account. Your ideas, wherever you read.</p>
+          {/*
+            Restored. The rewrite replaced "Email and password sign-in is unavailable."
+            with a line that reads well and says nothing, and a reader who has neither
+            a Google nor a Microsoft account was left hunting for a "more options"
+            control that does not exist.
+          */}
+          <p className="welcome__note">
+            One account. Your ideas, wherever you read. Email and password sign-in is unavailable.
+          </p>
           <div className="welcome__divider">
             <span>Or take a look first</span>
           </div>
@@ -135,11 +172,11 @@ export function Auth({
             <p>Save the ideas that stay with you. Return whenever curiosity calls.</p>
           </li>
         </ol>
-      </div>
+      </main>
       <footer className="welcome__footer">
         <span className="meta">Less scrolling. More understanding.</span>
         <span>Enough for today. Something for tomorrow.</span>
       </footer>
-    </main>
+    </div>
   );
 }
