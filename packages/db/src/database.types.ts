@@ -2482,6 +2482,7 @@ export type Database = {
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
+      min_job_cents: { Args: never; Returns: number }
       my_sessions: {
         Args: never
         Returns: {
