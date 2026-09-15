@@ -77,7 +77,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Using the hosted service
 
-The hosted app at whatapull.com is governed by two documents, and both are in this
+The hosted app at whatapull.vercel.app is governed by two documents, and both are in this
 repository rather than on a landing page nobody can diff:
 
 - **[Privacy Policy](./docs/privacy.md)** — what is collected, which three processors

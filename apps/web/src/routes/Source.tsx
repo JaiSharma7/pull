@@ -744,6 +744,173 @@ export function Source({
               title: work.title,
               text: textAtDepth({ ...p, hasSource: false }, depth),
             });
+            /*
+             * Everything a reader can do with the idea above, in ONE row.
+             *
+             * Share, Highlight and Remember this were three sibling paragraphs and a
+             * component, each a flex row of its own with its own top margin, so the page
+             * stacked four short lines of mono down the left edge where the brief asks
+             * for a line of controls under the rule. They are one set of choices about
+             * one idea, and they now read as one.
+             *
+             * Held here rather than written inline below, because the row itself belongs
+             * to `RememberThis`: the form it opens is a block element and cannot be
+             * nested inside a `<p>`, so the component that owns the form owns the row. A
+             * signed-out visitor has no form and no highlights, and gets the same row
+             * with Share alone in it.
+             */
+            const ideaActions = (
+              <>
+                {/*
+                  Share is offered to everyone, including a signed-out visitor:
+                  the link they would send opens on the idea now, and handing
+                  one along needs no account. Highlighting does — a highlight is
+                  a row keyed to a user, and there is no anonymous version of it.
+                */}
+                <button
+                  type="button"
+                  className="btn btn--plain"
+                  onClick={() => void share(p.id, p.headline)}
+                >
+                  {shareLabel(shareCapability(navigator))}
+                </button>
+                {/* No `{' '}` before it: a whitespace-only anonymous flex item is not
+                    rendered (Flexbox 4), so the space did nothing and `gap` is the
+                    separation. The row orders this past the controls, as it does the
+                    Highlight sentence below. */}
+                {shareStatus?.pullId === p.id ? (
+                  <span className="meta" role="status">
+                    {shareStatus.note}
+                  </span>
+                ) : null}
+                {/*
+                  TWO CONTROLS, ONE GATE TOO MANY.
+
+                  Highlighting needs a body on screen: it measures a selection against
+                  the rendered element, so at a depth stop that does not show the claim
+                  there is nothing to select. Removing a mark needs no such thing — the
+                  marks are stored, and they come back the moment the dial goes up. They
+                  were behind the same `bodyShown`, so a reader who turned the dial down
+                  lost the only way to clear a highlight they had just made, with nothing
+                  on screen saying why the button had gone.
+                */}
+                {userId && bodyShown && (
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => {
+                      const el = bodyRefs.current.get(p.id);
+                      if (!el) return;
+                      const range = selectionOffsetsIn(el);
+                      if (!range) {
+                        // On the screen, beside the control, not in a modal. The
+                        // last of the five native dialogs `docs/contributing-map.md`
+                        // lists: `window.alert` blocks, cannot be read in the app's
+                        // voice, and on a phone is a system sheet that looks like it
+                        // came from somewhere else — over a message whose whole
+                        // content is "look at the thing behind me".
+                        setHighlightHint(p.id);
+                        return;
+                      }
+                      setHighlightHint(null);
+                      const id = globalThis.crypto.randomUUID();
+                      // Optimistic, then sent. A highlight that takes a round
+                      // trip to appear feels broken at the exact moment the
+                      // reader is still looking at what they selected — and
+                      // any load already in flight predates this mark, so it
+                      // is no longer allowed to answer for the array.
+                      claimHighlightLoad();
+                      setHighlights((prev) => [
+                        ...prev,
+                        // The reader's own clock for the optimistic row: it has to sort
+                        // after everything already on screen, and the server's
+                        // `created_at` replaces it on the next load.
+                        {
+                          id,
+                          pullId: p.id,
+                          field: 'body',
+                          createdAt: new Date().toISOString(),
+                          ...range,
+                        },
+                      ]);
+                      window.getSelection()?.removeAllRanges();
+                      createHighlight(userId, {
+                        id,
+                        pullId: p.id,
+                        field: 'body',
+                        ...range,
+                      }).catch((e: unknown) => {
+                        console.error('Could not save the highlight', e);
+                        reloadHighlights();
+                      });
+                    }}
+                  >
+                    Highlight the selection
+                  </button>
+                )}
+
+                {/*
+                  `field === 'body'`, because that is what the card draws.
+                  `HIGHLIGHTABLE_FIELDS` has three members and the fetch filters by none
+                  of them, so a mark on `explanation` -- which nothing writes today and
+                  the card does not render -- put this button under an idea with no
+                  visible mark, and pressing it deleted something the reader could not
+                  see while the mark they could see stayed put.
+                */}
+                {userId && highlights.some((h) => h.pullId === p.id && h.field === 'body') && (
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    onClick={() => {
+                      // Same predicate as the gate above, and `shapeHighlights` now
+                      // returns marks in the order they were made -- so "the last one" is
+                      // the one the reader made last, not the one whose random UUID
+                      // happens to sort highest.
+                      const mine = highlights.filter(
+                        (h) => h.pullId === p.id && h.field === 'body',
+                      );
+                      const last = mine[mine.length - 1];
+                      if (!last) return;
+                      // Same reasoning as the insert: a load in flight would
+                      // otherwise put this one back.
+                      claimHighlightLoad();
+                      setHighlights((prev) => prev.filter((h) => h.id !== last.id));
+                      deleteHighlight(last.id).catch((e: unknown) => {
+                        console.error('Could not remove the highlight', e);
+                        reloadHighlights();
+                      });
+                    }}
+                  >
+                    Remove the last one
+                  </button>
+                )}
+
+                {/*
+                  The sentence about Highlight, inside the row.
+
+                  Behind the same gate as the button it points at: turning the dial below
+                  the claim takes Highlight off the screen, and an instruction naming a
+                  button that is not there and a passage that is not shown is worse than
+                  silence.
+
+                  It has to come before the form `RememberThis` opens -- rendered after
+                  the component, a reader with the Keep form open met this sentence below
+                  two text areas, far enough down a phone to look like the button had done
+                  nothing (Codex, #121). Inside the row it always does.
+
+                  Where it sits among the controls is the stylesheet's business, not this
+                  file's: `.meta` in an actions row is ordered past every control and onto
+                  its own line, so no control moves when this appears. A `<span>` rather
+                  than a `<p>` because the row is a paragraph and cannot hold one.
+                */}
+                {userId && bodyShown && highlightHint === p.id ? (
+                  <span className="meta" role="status">
+                    Select some words in this idea first, then press Highlight.
+                  </span>
+                ) : null}
+              </>
+            );
+
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
                 {/*
@@ -827,135 +994,16 @@ export function Source({
                   }
                 />
 
-                <p className="source__pull-actions">
-                  {/*
-                    Share is offered to everyone, including a signed-out visitor:
-                    the link they would send opens on the idea now, and handing
-                    one along needs no account. Highlighting does — a highlight is
-                    a row keyed to a user, and there is no anonymous version of it.
-                  */}
-                  <button
-                    type="button"
-                    className="btn btn--plain"
-                    onClick={() => void share(p.id, p.headline)}
-                  >
-                    {shareLabel(shareCapability(navigator))}
-                  </button>
-                  {shareStatus?.pullId === p.id ? (
-                    <>
-                      {' '}
-                      <span className="meta" role="status">
-                        {shareStatus.note}
-                      </span>
-                    </>
-                  ) : null}
-                </p>
-
-                {/*
-                  TWO CONTROLS, ONE GATE TOO MANY.
-                
-                  Highlighting needs a body on screen: it measures a selection against
-                  the rendered element, so at a depth stop that does not show the claim
-                  there is nothing to select. Removing a mark needs no such thing — the
-                  marks are stored, and they come back the moment the dial goes up. They
-                  were behind the same `bodyShown`, so a reader who turned the dial down
-                  lost the only way to clear a highlight they had just made, with nothing
-                  on screen saying why the button had gone.
-                */}
-                {userId && bodyShown && (
-                  <p className="source__pull-actions">
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      onClick={() => {
-                        const el = bodyRefs.current.get(p.id);
-                        if (!el) return;
-                        const range = selectionOffsetsIn(el);
-                        if (!range) {
-                          // On the screen, beside the control, not in a modal. The
-                          // last of the five native dialogs `docs/contributing-map.md`
-                          // lists: `window.alert` blocks, cannot be read in the app's
-                          // voice, and on a phone is a system sheet that looks like it
-                          // came from somewhere else — over a message whose whole
-                          // content is "look at the thing behind me".
-                          setHighlightHint(p.id);
-                          return;
-                        }
-                        setHighlightHint(null);
-                        const id = globalThis.crypto.randomUUID();
-                        // Optimistic, then sent. A highlight that takes a round
-                        // trip to appear feels broken at the exact moment the
-                        // reader is still looking at what they selected — and
-                        // any load already in flight predates this mark, so it
-                        // is no longer allowed to answer for the array.
-                        claimHighlightLoad();
-                        setHighlights((prev) => [
-                          ...prev,
-                          { id, pullId: p.id, field: 'body', ...range },
-                        ]);
-                        window.getSelection()?.removeAllRanges();
-                        createHighlight(userId, {
-                          id,
-                          pullId: p.id,
-                          field: 'body',
-                          ...range,
-                        }).catch((e: unknown) => {
-                          console.error('Could not save the highlight', e);
-                          reloadHighlights();
-                        });
-                      }}
-                    >
-                      Highlight the selection
-                    </button>
-                  </p>
+                {userId ? (
+                  <RememberThis
+                    pullId={p.id}
+                    onKept={reloadQuestions}
+                    idPrefix="ask"
+                    actions={ideaActions}
+                  />
+                ) : (
+                  <p className="source__pull-actions">{ideaActions}</p>
                 )}
-
-                {userId && highlights.some((h) => h.pullId === p.id) && (
-                  <p className="source__pull-actions">
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      onClick={() => {
-                        const mine = highlights.filter((h) => h.pullId === p.id);
-                        const last = mine[mine.length - 1];
-                        if (!last) return;
-                        // Same reasoning as the insert: a load in flight would
-                        // otherwise put this one back.
-                        claimHighlightLoad();
-                        setHighlights((prev) => prev.filter((h) => h.id !== last.id));
-                        deleteHighlight(last.id).catch((e: unknown) => {
-                          console.error('Could not remove the highlight', e);
-                          reloadHighlights();
-                        });
-                      }}
-                    >
-                      Remove the last one
-                    </button>
-                  </p>
-                )}
-
-                {/*
-                  Behind the same gate as the button it points at. Turning the dial below
-                  the claim takes the Highlight control off the screen, and this was
-                  outside the gate — so the instruction stayed, naming a button that was
-                  not there and a passage that was not shown.
-                */}
-                {userId && bodyShown && highlightHint === p.id ? (
-                  <p className="meta" role="status">
-                    Select some words in this idea first, then press Highlight.
-                  </p>
-                ) : null}
-
-                {/* REMEMBER THIS. The other half of what a reader can do with an
-                    idea they are looking at: mark the words, or write the question
-                    they want to be asked about them later.
-
-                    Lifted into `components/RememberThis.tsx` so the Library can offer
-                    the same thing on an imported highlight. Everything that made this
-                    careful -- the submission id that goes with the wording, the
-                    not-optimistic save, the transport error that is not a constraint
-                    message -- moved with it. */}
-                {userId && <RememberThis pullId={p.id} onKept={reloadQuestions} idPrefix="ask" />}
 
                 {userId && questionsFailed && mine.length === 0 && (
                   <p className="meta">Could not load your questions for this idea.</p>

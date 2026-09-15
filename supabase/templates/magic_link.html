@@ -134,10 +134,23 @@
         the property the comment above is defending — the link does not depend on
         Site URL being configured correctly — while making "change it in two places"
         into "change it in one".
+
+        AND IT MUST BE A DOMAIN WE ACTUALLY CONTROL. This line held whatapull.com,
+        which nobody here has ever owned: it is registered to a third party and served
+        by Squarespace. That is not a broken button, because the URL carries
+        `.TokenHash` in its query string — so every magic-link email handed a valid,
+        single-use sign-in token to a stranger's access log. Whoever reads those logs
+        can spend the token before the reader clicks.
+
+        That is the whole reason this literal is dangerous in a way the preview-host
+        mistake above was not. A wrong-but-ours domain strands a reader on a dead page.
+        A wrong-and-theirs domain is an account-takeover path. So when this changes
+        again, check the registration, not just that the page loads — a domain that
+        404s is still a domain that logs.
       -->
       <p style="margin: 0 0 32px">
         <a
-          href="https://whatapull.com/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink"
+          href="https://whatapull.vercel.app/auth/confirm?token_hash={{ .TokenHash }}&amp;type=magiclink"
           style="
             font-family: system-ui, sans-serif;
             font-size: 16px;
@@ -157,7 +170,7 @@
 
       <p style="font-family: system-ui, sans-serif; font-size: 15px; line-height: 1.6; margin: 0">
         Still stuck? Enter the code above at
-        <a href="https://whatapull.com" style="color: #8c2f26">whatapull.com</a>
+        <a href="https://whatapull.vercel.app" style="color: #8c2f26">whatapull.vercel.app</a>
         in the browser you started from.
       </p>
 

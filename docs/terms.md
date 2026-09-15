@@ -20,17 +20,17 @@ history are the notice — which is why the pointer to that history is the first
 above.
 
 These terms are a contract between you and the operator of **What a Pull** ("we", "us")
-covering the hosted service at whatapull.com and its apps. By using the service you accept
+covering the hosted service at whatapull.vercel.app and its apps. By using the service you accept
 them. If you do not, do not use the service.
 
 **Three different things live in this repository, and only one of them is governed here.**
 Confusing them is the easiest mistake to make now that the source is public, so:
 
-|                                                                                               | Governed by                                                                                                                                                                        |
-| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **The hosted service** at whatapull.com — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                                                 |
-| **The code** — everything in this repository                                                  | The [GNU AGPL v3](../LICENSE). Do what it permits, including running your own instance — but if you modify it and let others use it over a network, you must offer them its source |
-| **Your own instance** — what you get when you deploy it                                       | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones                             |
+|                                                                                                      | Governed by                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The hosted service** at whatapull.vercel.app — the account you sign into, the Pulls you read there | These Terms and the [Privacy Policy](./privacy.md)                                                                                                                                 |
+| **The code** — everything in this repository                                                         | The [GNU AGPL v3](../LICENSE). Do what it permits, including running your own instance — but if you modify it and let others use it over a network, you must offer them its source |
+| **Your own instance** — what you get when you deploy it                                              | Nothing here. You become the operator, and the obligations these Terms describe become yours toward your own users, including the data-protection ones                             |
 
 Running your own copy does not make you our user and does not make us your processor. If
 you offer it to other people, the Privacy Policy in this repository describes _our_
@@ -179,9 +179,9 @@ Do not:
 
 **Security research is welcome**, and [`SECURITY.md`](../SECURITY.md) says what is in
 scope, what is not, and what we already know about. Testing against your own account and
-reporting what you find in good faith — to **security@whatapull.com** or through GitHub's
-private vulnerability reporting — is not a breach of these terms, and we will not pursue
-you for it. Give us reasonable time to fix an issue before publishing it, and do not
+reporting what you find in good faith — to **whatapull@proton.me** or through GitHub's private
+vulnerability reporting — is not a breach of these terms, and we will not pursue you for
+it. Give us reasonable time to fix an issue before publishing it, and do not
 access, alter or exfiltrate anyone else's data while you look.
 
 The source, the schema and every policy are public, and a local stack is one command
@@ -247,7 +247,12 @@ claim is checkable.
 6. A statement, **under penalty of perjury**, that your notice is accurate and that you are
    the owner or authorised to act for them
 
-**Designated agent:** copyright@whatapull.com
+**Designated agent:** whatapull@proton.me
+
+Note that safe harbour under 17 U.S.C. §512(c) additionally requires an agent registered
+with the US Copyright Office, which has not been done. So this section describes the
+process we intend to follow and the address that will reach us, not a completed
+registration.
 
 **Counter-notice.** If your material was removed and you believe that was a mistake or a
 misidentification, you may send a counter-notice with your signature, identification of the
@@ -327,12 +332,17 @@ things end there, and we would rather resolve a problem than litigate it.
 
 ## 15. Contact
 
-| Address                     | For                                                                          |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| **legal@whatapull.com**     | Legal notices and anything about these Terms                                 |
-| **copyright@whatapull.com** | Copyright complaints and counter-notices — the designated agent in section 8 |
-| **privacy@whatapull.com**   | Data requests and anything in the [Privacy Policy](./privacy.md)             |
-| **security@whatapull.com**  | Vulnerability reports — see [`SECURITY.md`](../SECURITY.md)                  |
+**whatapull@proton.me**, for all of the following:
 
-Role addresses rather than a personal mailbox, because this repository is public and an
-address written here is indexed permanently.
+- Legal notices and anything about these Terms
+- Copyright complaints and counter-notices — the designated agent in section 8
+- Data requests and anything in the [Privacy Policy](./privacy.md)
+- Vulnerability reports — see [`SECURITY.md`](../SECURITY.md), which also accepts them
+  through GitHub's private vulnerability reporting
+
+One project mailbox rather than the four role addresses this section used to list. Those
+were at a domain the project does not own, so a legal notice or a takedown reached a
+stranger rather than the operator — worse than naming nothing at all. Separate role
+addresses return when there is a domain to host them on; the argument for them still
+holds, that a contact which is one person's inbox stops working the moment that person is
+unreachable.

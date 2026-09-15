@@ -22,7 +22,66 @@ const h = (over: Partial<Highlight> = {}): Highlight => ({
   start: 0,
   end: 4,
   text: 'test',
+  createdAt: '2026-01-01T00:00:00.000Z',
   ...over,
+});
+
+/**
+ * The order the reader made them in, which is what "the last one" means.
+ *
+ * `fetchHighlights` walks by `id` so the keyset partitions the set, and the ids are
+ * client-minted UUIDv4s -- so the rows arrive in an order that has nothing to do with
+ * when anything was marked. `highlights-api.ts` has always justified that walk by
+ * saying this function sorts what it is given; until now it did not, and the source
+ * page's "Remove the last one" deleted the highest id rather than the newest mark.
+ */
+describe('shapeHighlights', () => {
+  const row = (id: string, createdAt: string) => ({
+    id,
+    pullId: 'p1',
+    field: 'body',
+    start: 0,
+    end: 4,
+    text: 'test',
+    createdAt,
+  });
+
+  it('returns marks oldest first, whatever order they arrive in', () => {
+    const shaped = shapeHighlights([
+      row('h-z', '2026-01-03T00:00:00.000Z'),
+      row('h-a', '2026-01-01T00:00:00.000Z'),
+      row('h-m', '2026-01-02T00:00:00.000Z'),
+    ]);
+    expect(shaped.map((h) => h.id)).toEqual(['h-a', 'h-m', 'h-z']);
+  });
+
+  it('does not let the id decide, when the id disagrees with the clock', () => {
+    // 'h-a' sorts first by id and was made last. Before the sort existed, a caller
+    // taking the final element got 'h-z' -- a mark made two days earlier.
+    //
+    // The newest goes FIRST in the input, which is the whole test: written the other
+    // way round it passed against an unsorted `shapeHighlights`, because the arrival
+    // order already happened to put 'h-a' last and nothing had to sort to agree.
+    const shaped = shapeHighlights([
+      row('h-a', '2026-01-03T00:00:00.000Z'),
+      row('h-z', '2026-01-01T00:00:00.000Z'),
+    ]);
+    expect(shaped[shaped.length - 1]?.id).toBe('h-a');
+  });
+
+  it('breaks a tie on the same instant by id, so the order is total', () => {
+    const shaped = shapeHighlights([
+      row('h-b', '2026-01-01T00:00:00.000Z'),
+      row('h-a', '2026-01-01T00:00:00.000Z'),
+    ]);
+    expect(shaped.map((h) => h.id)).toEqual(['h-a', 'h-b']);
+  });
+
+  it('drops a row whose field is not one the card can draw', () => {
+    expect(
+      shapeHighlights([{ ...row('h-1', '2026-01-01T00:00:00.000Z'), field: 'headline' }]),
+    ).toEqual([]);
+  });
 });
 
 describe('anchor', () => {

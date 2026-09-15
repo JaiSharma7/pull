@@ -20,7 +20,7 @@ date above moved rather than staying at 30 August.
 
 ## Scope
 
-This policy covers the **hosted service** at whatapull.com and its apps — the account you
+This policy covers the **hosted service** at whatapull.vercel.app and its apps — the account you
 sign into, and the data that account accumulates.
 
 It does not cover the open-source repository. Running your own copy of this code makes you
@@ -497,13 +497,21 @@ write about ourselves.
 
 ## Contact
 
-**privacy@whatapull.com** — privacy questions, requests and complaints, and anything under
-"Your rights" above.
+**whatapull@proton.me** — privacy questions, requests and complaints, anything under "Your
+rights" above, and vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for what to
+expect on a security report and how quickly, and for GitHub's private vulnerability
+reporting as an alternative.
 
-**security@whatapull.com** — vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for
-what to expect and how quickly.
+Monitored by the operator named in the [Terms](./terms.md). It is a project mailbox rather
+than a personal one, and it is new: this section named `privacy@whatapull.com` until
+recently, at a domain the project does not own, so a privacy request reached a stranger
+rather than the operator — which defeats the point of having a privacy contact at all.
 
-Both are monitored by the operator named in the [Terms](./terms.md). They are role addresses
-rather than a personal mailbox on purpose: a privacy contact that is one person's inbox is a
-contact that stops working the moment that person is unreachable, and this repository is
-public, which makes anything written here permanently indexed.
+Worth knowing either way: every right under "Your rights" above is exercisable without
+reaching us. Export and deletion are both self-service from your account. Nothing you are
+entitled to depends on us answering mail.
+
+Separate role addresses return when there is a domain to host them on. The argument for
+them still holds: a privacy contact that is one person's inbox stops working the moment
+that person is unreachable, and this repository is public, which makes anything written
+here permanently indexed.
