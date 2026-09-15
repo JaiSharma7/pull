@@ -262,7 +262,7 @@ npx cap add ios && npx cap sync
 ```
 
 Then selectively: native share sheet, background audio, haptics, camera page-scanning,
-push notifications, universal links so `whatapull.com/pull/abc123` opens in-app, and a
+push notifications, universal links so `whatapull.vercel.app/pull/abc123` opens in-app, and a
 native ad SDK.
 
 ## Known gaps carried out of round 1

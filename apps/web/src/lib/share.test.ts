@@ -10,12 +10,18 @@ import {
 
 describe('pullUrl', () => {
   it('builds the canonical address', () => {
-    expect(pullUrl('https://whatapull.com', 'abc')).toBe('https://whatapull.com/pull/abc');
+    expect(pullUrl('https://whatapull.vercel.app', 'abc')).toBe(
+      'https://whatapull.vercel.app/pull/abc',
+    );
   });
 
   it('does not double the slash when the origin carries one', () => {
-    expect(pullUrl('https://whatapull.com/', 'abc')).toBe('https://whatapull.com/pull/abc');
-    expect(pullUrl('https://whatapull.com///', 'abc')).toBe('https://whatapull.com/pull/abc');
+    expect(pullUrl('https://whatapull.vercel.app/', 'abc')).toBe(
+      'https://whatapull.vercel.app/pull/abc',
+    );
+    expect(pullUrl('https://whatapull.vercel.app///', 'abc')).toBe(
+      'https://whatapull.vercel.app/pull/abc',
+    );
   });
 
   it('encodes the id rather than trusting it', () => {

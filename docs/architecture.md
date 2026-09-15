@@ -299,5 +299,5 @@ fail without it. Widening that is the obvious next piece of offline work.
 
 The interactive app is built client-side so the identical bundle can later go into
 Capacitor with `npx cap add ios && npx cap sync`. Share pages still need real Open Graph
-metadata for the growth loop, so `whatapull.com/pull/:id` is served by the `og` Edge
+metadata for the growth loop, so `whatapull.vercel.app/pull/:id` is served by the `og` Edge
 Function — SSR for the one route that needs it, rather than for the whole app.

@@ -30,7 +30,7 @@ const APP_ORIGIN = Deno.env.get('APP_ORIGIN');
 if (!APP_ORIGIN) {
   throw new Error(
     'og: APP_ORIGIN is not set. Set it to the public origin of the app ' +
-      '(for example https://whatapull.com) — every share link this function emits ' +
+      '(for example https://whatapull.vercel.app) — every share link this function emits ' +
       'is built from it.',
   );
 }

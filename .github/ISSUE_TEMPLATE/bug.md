@@ -6,7 +6,7 @@ labels: bug
 
 **What happened, and what you expected instead.**
 
-**Where.** The hosted app at whatapull.com, or a local stack? If local: the output of
+**Where.** The hosted app at whatapull.vercel.app, or a local stack? If local: the output of
 `pnpm --version && node --version`, and whether `pnpm db:reset` completed.
 
 **How to see it again.** The smallest sequence you know of. If it involves data — a
