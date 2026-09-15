@@ -49,29 +49,16 @@ export interface RememberThisProps {
    * row rather than sit under it, because the form it opens is a block element and
    * cannot live inside the caller's `<p>`. The Library passes nothing and gets the
    * toggle alone, exactly as before.
+   *
+   * Order within the row is the caller's, with one exception the stylesheet owns: a
+   * `.meta` status sentence ("Link copied", "Select some words first") is ordered
+   * past every control by `remember.css`, so it lands on its own line at the end
+   * wherever it sits here and no control moves when it appears.
    */
   actions?: ReactNode;
-  /**
-   * A sentence about one of those controls -- "Link copied", "Select some words
-   * first" -- rendered LAST in the row, after the toggle.
-   *
-   * Separate from `actions` rather than left to the caller's ordering because the
-   * position is the point. `.meta` in an actions row takes the whole line, so a
-   * status sentence anywhere but last pushes whatever follows it onto the next
-   * line at the moment it appears -- which is the moment of the press that
-   * produced it, with the reader's finger still on a control that has just moved.
-   * Last, nothing follows it to move.
-   */
-  status?: ReactNode;
 }
 
-export function RememberThis({
-  pullId,
-  onKept,
-  idPrefix = 'ask',
-  actions,
-  status,
-}: RememberThisProps) {
+export function RememberThis({ pullId, onKept, idPrefix = 'ask', actions }: RememberThisProps) {
   /*
    * The reducer from `lib/questions.ts`, driven with one key.
    *
@@ -161,7 +148,6 @@ export function RememberThis({
         >
           {open ? 'Never mind' : 'Remember this'}
         </button>
-        {status}
       </p>
 
       {open && (

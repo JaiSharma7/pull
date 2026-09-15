@@ -188,22 +188,23 @@
 }
 
 /*
- * A status sentence in an actions row takes the whole line.
+ * A status sentence in an actions row goes last, on its own line.
  *
  * The row holds controls and, sometimes, a sentence about one of them: "Link
- * copied", or "Select some words in this idea first". As an ordinary flex item a
- * sentence appearing mid-row reflows everything after it -- the reader presses
- * Highlight with nothing selected and the two controls to its right move under
- * their finger -- and it stretches to the buttons' height, so its glyphs sit
- * above their labels rather than on them.
+ * copied", or "Select some words in this idea first". Left where it falls in the
+ * markup it reflows the row -- the reader presses a control and the ones after it
+ * jump to the next line, under the finger that just tapped -- and as an ordinary
+ * flex item it stretches to the buttons' height, so its glyphs sit above their
+ * labels rather than on them.
  *
- * `flex-basis: 100%` puts it on its own line at the point it occupies, so the
- * controls keep their positions and the sentence sits under the control it is
- * about. `align-self: baseline` is moot once it is alone on a line and is left
- * off rather than written for a case that cannot happen.
+ * `order: 1` is what fixes that, and `flex-basis: 100%` is what makes it a line of
+ * its own. Together they say: however many sentences the row ends up holding and
+ * wherever they sit in the DOM, they follow every control. So no control moves
+ * when one appears, and nothing has to remember to render them last -- which was
+ * the first attempt, and it left the share note mid-row while claiming otherwise.
  */
-.source__pull-actions > .meta,
-.remember__actions > .meta {
+.source__pull-actions > .meta {
+  order: 1;
   flex-basis: 100%;
   margin: 0;
 }

@@ -17,6 +17,14 @@ const PULL = '77777777-7777-4777-8777-777777777777';
  * reducer's behaviour under every action is `lib/questions.test.ts`'s subject and
  * is not restated here.
  */
+const ROW = '<p class="remember__actions">';
+
+/** The row's markup: from its opening tag to the `</p>` that closes IT. */
+function rowOf(html: string): string {
+  const start = html.indexOf(ROW);
+  return html.slice(start, html.indexOf('</p>', start));
+}
+
 describe('RememberThis', () => {
   it('offers the control closed, pointing at the form it would open', () => {
     const html = renderToStaticMarkup(createElement(RememberThis, { pullId: PULL }));
@@ -54,7 +62,7 @@ describe('RememberThis', () => {
         actions: createElement('button', { type: 'button' }, 'Share'),
       }),
     );
-    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    const row = rowOf(html);
     expect(row).toContain('Share');
     expect(row).toContain('Remember this');
     expect(row.indexOf('Share')).toBeLessThan(row.indexOf('Remember this'));
@@ -62,32 +70,12 @@ describe('RememberThis', () => {
 
   it('draws the row with the toggle alone when nothing is passed', () => {
     const html = renderToStaticMarkup(createElement(RememberThis, { pullId: PULL }));
-    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    const row = rowOf(html);
     // The count, not the absence of a string: `not.toContain('<button type="button">')`
     // passed whatever the component did, because React never serialises a bare
     // `<button type="button">` -- the toggle carries a class and two aria attributes.
     expect(row.match(/<button/g)).toHaveLength(1);
     expect(row).toContain('Remember this');
-  });
-
-  /**
-   * `status` is a separate slot from `actions` because its POSITION is the point:
-   * `.meta` in an actions row takes the whole line, so a sentence anywhere but last
-   * pushes what follows onto the next line at the moment it appears -- under the
-   * finger of the reader who just pressed the control it is about. Last, nothing
-   * follows it to move. This asserts the order that makes that true.
-   */
-  it('renders status after the toggle, and actions before it', () => {
-    const html = renderToStaticMarkup(
-      createElement(RememberThis, {
-        pullId: PULL,
-        actions: createElement('button', { type: 'button', className: 'btn' }, 'Share'),
-        status: createElement('span', { className: 'meta', role: 'status' }, 'Pick some words'),
-      }),
-    );
-    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
-    expect(row.indexOf('Share')).toBeLessThan(row.indexOf('Remember this'));
-    expect(row.indexOf('Remember this')).toBeLessThan(row.indexOf('Pick some words'));
   });
 
   it('says nothing about having kept anything before anything is kept', () => {

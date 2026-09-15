@@ -774,13 +774,14 @@ export function Source({
                 >
                   {shareLabel(shareCapability(navigator))}
                 </button>
+                {/* No `{' '}` before it: a whitespace-only anonymous flex item is not
+                    rendered (Flexbox 4), so the space did nothing and `gap` is the
+                    separation. The row orders this past the controls, as it does the
+                    Highlight sentence below. */}
                 {shareStatus?.pullId === p.id ? (
-                  <>
-                    {' '}
-                    <span className="meta" role="status">
-                      {shareStatus.note}
-                    </span>
-                  </>
+                  <span className="meta" role="status">
+                    {shareStatus.note}
+                  </span>
                 ) : null}
                 {/*
                   TWO CONTROLS, ONE GATE TOO MANY.
@@ -860,35 +861,32 @@ export function Source({
                     Remove the last one
                   </button>
                 )}
+
+                {/*
+                  The sentence about Highlight, inside the row.
+
+                  Behind the same gate as the button it points at: turning the dial below
+                  the claim takes Highlight off the screen, and an instruction naming a
+                  button that is not there and a passage that is not shown is worse than
+                  silence.
+
+                  It has to come before the form `RememberThis` opens -- rendered after
+                  the component, a reader with the Keep form open met this sentence below
+                  two text areas, far enough down a phone to look like the button had done
+                  nothing (Codex, #121). Inside the row it always does.
+
+                  Where it sits among the controls is the stylesheet's business, not this
+                  file's: `.meta` in an actions row is ordered past every control and onto
+                  its own line, so no control moves when this appears. A `<span>` rather
+                  than a `<p>` because the row is a paragraph and cannot hold one.
+                */}
+                {userId && bodyShown && highlightHint === p.id ? (
+                  <span className="meta" role="status">
+                    Select some words in this idea first, then press Highlight.
+                  </span>
+                ) : null}
               </>
             );
-
-            /*
-             * The sentence about Highlight, rendered LAST in the row -- after the toggle,
-             * through `RememberThis`'s `status` slot.
-             *
-             * Behind the same gate as the button it points at: turning the dial below the
-             * claim takes Highlight off the screen, and an instruction naming a button
-             * that is not there and a passage that is not shown is worse than silence.
-             *
-             * It has to come before the form that component opens -- rendered after it, a
-             * reader with the Keep form open met this sentence below two text areas, far
-             * enough down a phone to look like the button had done nothing (Codex, #121).
-             * And it has to come after every control: `.meta` in an actions row takes the
-             * whole line, so anywhere else it pushes what follows onto the next line at
-             * the instant of the press that produced it, moving a control under the
-             * reader's finger. Measured both ways in Chromium; last is the only position
-             * where nothing moves.
-             *
-             * A `<span>` rather than a `<p>`: the row is a paragraph and cannot hold one.
-             * `role="status"` is what carries it to a screen reader either way.
-             */
-            const highlightNeedsSelection =
-              userId && bodyShown && highlightHint === p.id ? (
-                <span className="meta" role="status">
-                  Select some words in this idea first, then press Highlight.
-                </span>
-              ) : null;
 
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
@@ -979,13 +977,9 @@ export function Source({
                     onKept={reloadQuestions}
                     idPrefix="ask"
                     actions={ideaActions}
-                    status={highlightNeedsSelection}
                   />
                 ) : (
-                  <p className="source__pull-actions">
-                    {ideaActions}
-                    {highlightNeedsSelection}
-                  </p>
+                  <p className="source__pull-actions">{ideaActions}</p>
                 )}
 
                 {userId && questionsFailed && mine.length === 0 && (
