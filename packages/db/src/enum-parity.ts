@@ -10,7 +10,14 @@
  *
  * The file exports nothing at runtime; it exists to be type-checked.
  */
-import type { RelationKind, RightsStatus, Stance, WorkKind, InterruptKind } from '@wap/schemas';
+import type {
+  RelationKind,
+  RightsStatus,
+  Stance,
+  WorkKind,
+  InterruptKind,
+  FeedbackSubject,
+} from '@wap/schemas';
 import type { Database } from './database.types.js';
 
 type Enums = Database['public']['Enums'];
@@ -27,4 +34,5 @@ export type EnumParityChecks = [
   Assert<Equal<Stance, Enums['stance']>>,
   Assert<Equal<RelationKind, Enums['relation_kind']>>,
   Assert<Equal<InterruptKind, Enums['interrupt_kind']>>,
+  Assert<Equal<FeedbackSubject, Enums['feedback_subject']>>,
 ];
