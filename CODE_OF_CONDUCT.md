@@ -37,12 +37,12 @@ Examples of unacceptable behaviour:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be reported to
-the maintainers. All complaints will be reviewed and investigated promptly and fairly.
+the maintainers at **whatapull@proton.me**. All complaints will be reviewed and investigated
+promptly and fairly.
 
-**No address is published for this at the moment.** The one that stood here was at a
-domain the project does not own, so a report would have gone to a stranger — and for a
-conduct report in particular that is worse than having no address at all. A project
-mailbox is being set up and will be named here.
+This is a project mailbox rather than a personal one. The address that stood here before
+was at a domain the project does not own, so a conduct report would have gone to a
+stranger — which for this of all reports is worse than publishing nothing.
 
 All maintainers are obligated to respect the privacy and security of the reporter of
 any incident.

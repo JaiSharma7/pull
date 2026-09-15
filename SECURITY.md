@@ -2,15 +2,15 @@
 
 ## Reporting a vulnerability
 
-GitHub's [private vulnerability
+**whatapull@proton.me**, or GitHub's [private vulnerability
 reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-on this repository. It needs a GitHub account, but not one with this service.
+on this repository. Either is fine; neither needs an account with the service.
 
-**There is deliberately no email address here for now.** This file named
-`security@whatapull.com`, at a domain the project does not own — so a report sent in good
-faith reached a stranger rather than a maintainer, which is the opposite of what a
-security contact is for. A project mailbox is being set up and will be named here. Until
-then private reporting above is the whole channel, and it works.
+The address is a project mailbox, not a personal one, and it is new. Until recently this
+file named `security@whatapull.com` — at a domain the project does not own — so a report
+sent in good faith reached a stranger rather than a maintainer, which is the opposite of
+what a security contact is for. If you would rather not rely on an address that has only
+just started working, private reporting above needs no mailbox at all.
 
 Please do not open a public issue for something exploitable. `docs/terms.md` invites
 security research and until now gave no channel for it, which is the gap this file

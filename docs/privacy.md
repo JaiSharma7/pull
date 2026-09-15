@@ -477,23 +477,21 @@ write about ourselves.
 
 ## Contact
 
-**Vulnerability reports** — GitHub's private vulnerability reporting on the repository.
-See [`SECURITY.md`](../SECURITY.md) for what to expect and how quickly.
+**whatapull@proton.me** — privacy questions, requests and complaints, anything under "Your
+rights" above, and vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for what to
+expect on a security report and how quickly, and for GitHub's private vulnerability
+reporting as an alternative.
 
-**Privacy questions, requests and complaints, and anything under "Your rights" above** —
-there is no published address at the moment, and you should know why rather than be left
-guessing. This section named `privacy@whatapull.com`, at a domain the project does not
-own, so a privacy request sent to it reached a stranger rather than the operator named in
-the [Terms](./terms.md) — which defeats the point of having a privacy contact, and is
-worse than naming none. It has been removed while a project mailbox is set up, and that
-address will be published here.
+Monitored by the operator named in the [Terms](./terms.md). It is a project mailbox rather
+than a personal one, and it is new: this section named `privacy@whatapull.com` until
+recently, at a domain the project does not own, so a privacy request reached a stranger
+rather than the operator — which defeats the point of having a privacy contact at all.
 
-If you need to exercise a right under "Your rights" before then: the service is in closed
-beta, and every route described there — export and deletion — is available from inside
-your account without needing to ask anyone. Nothing you are entitled to depends on
-reaching us by mail.
+Worth knowing either way: every right under "Your rights" above is exercisable without
+reaching us. Export and deletion are both self-service from your account. Nothing you are
+entitled to depends on us answering mail.
 
-Role addresses return when there is a domain to host them on. The argument for them over a
-personal mailbox still holds: a privacy contact that is one person's inbox stops working
-the moment that person is unreachable, and this repository is public, which makes anything
-written here permanently indexed.
+Separate role addresses return when there is a domain to host them on. The argument for
+them still holds: a privacy contact that is one person's inbox stops working the moment
+that person is unreachable, and this repository is public, which makes anything written
+here permanently indexed.

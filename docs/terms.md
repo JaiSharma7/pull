@@ -179,9 +179,9 @@ Do not:
 
 **Security research is welcome**, and [`SECURITY.md`](../SECURITY.md) says what is in
 scope, what is not, and what we already know about. Testing against your own account and
-reporting what you find in good faith — through GitHub's private vulnerability reporting,
-which [`SECURITY.md`](../SECURITY.md) links — is not a breach of these terms, and we will
-not pursue you for it. Give us reasonable time to fix an issue before publishing it, and do not
+reporting what you find in good faith — to **whatapull@proton.me** or through GitHub's private
+vulnerability reporting — is not a breach of these terms, and we will not pursue you for
+it. Give us reasonable time to fix an issue before publishing it, and do not
 access, alter or exfiltrate anyone else's data while you look.
 
 The source, the schema and every policy are public, and a local stack is one command
@@ -247,12 +247,12 @@ claim is checkable.
 6. A statement, **under penalty of perjury**, that your notice is accurate and that you are
    the owner or authorised to act for them
 
-**Designated agent:** none is published at the moment. The address that stood here was at
-a domain the project does not own, so a takedown notice sent to it reached a stranger. A
-contact is being set up and will be named here. Note also that safe harbour under 17
-U.S.C. §512(c) requires an agent registered with the US Copyright Office, which has not
-been done — so this section describes the process we intend to follow, not one already
-established.
+**Designated agent:** whatapull@proton.me
+
+Note that safe harbour under 17 U.S.C. §512(c) additionally requires an agent registered
+with the US Copyright Office, which has not been done. So this section describes the
+process we intend to follow and the address that will reach us, not a completed
+registration.
 
 **Counter-notice.** If your material was removed and you believe that was a mistake or a
 misidentification, you may send a counter-notice with your signature, identification of the
@@ -332,18 +332,17 @@ things end there, and we would rather resolve a problem than litigate it.
 
 ## 15. Contact
 
-**No contact address is published at the moment, and that is a gap rather than a
-policy.** This section listed role addresses at a domain the project does not own, so a
-legal notice, a data request or a copyright claim sent to one of them reached a stranger
-rather than the operator — which is worse than naming nothing at all. They have been
-removed while a project mailbox is set up, and it will be named here.
+**whatapull@proton.me**, for all of the following:
 
-Until then, **vulnerability reports** go through GitHub's private vulnerability reporting
-on the repository, as [`SECURITY.md`](../SECURITY.md) describes. For legal notices, data
-requests and copyright claims there is currently no published channel; the service is in
-closed beta and this will be corrected before it is open to the public.
+- Legal notices and anything about these Terms
+- Copyright complaints and counter-notices — the designated agent in section 8
+- Data requests and anything in the [Privacy Policy](./privacy.md)
+- Vulnerability reports — see [`SECURITY.md`](../SECURITY.md), which also accepts them
+  through GitHub's private vulnerability reporting
 
-Role addresses return when there is a domain to host them on. The argument for them over
-a personal mailbox still holds: a contact that is one person's inbox stops working the
-moment that person is unreachable, and this repository is public, so an address written
-here is indexed permanently.
+One project mailbox rather than the four role addresses this section used to list. Those
+were at a domain the project does not own, so a legal notice or a takedown reached a
+stranger rather than the operator — worse than naming nothing at all. Separate role
+addresses return when there is a domain to host them on; the argument for them still
+holds, that a contact which is one person's inbox stops working the moment that person is
+unreachable.
