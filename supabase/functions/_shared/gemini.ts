@@ -16,6 +16,7 @@ import {
   BilledProviderError,
   buildSummaryPrompt,
   ProviderUnavailableError,
+  assertPricing,
   worstCaseCentsFor,
 } from './providers.ts';
 import type {
@@ -332,12 +333,17 @@ const isUnavailable = (status: number | undefined) =>
   status === 404 || status === 429 || status === 503;
 
 export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvider {
+  // Refused here rather than on the first job: see `assertPricing`.
+  assertPricing('gemini', config);
+  // Counted as input because the API bills it as input. `SUMMARY_SCHEMA` is a module
+  // constant, so this is measured once for the life of the provider.
+  const schemaBytes = JSON.stringify(SUMMARY_SCHEMA);
   return {
     // Not the first configured model: a fallback makes that a lie, and the run above
     // proved it — the chain led with 3.7, answered on 3.6, and a name pinned to the
     // head would have labelled it wrongly. The model that ran is returned per call.
     name: 'gemini',
-    worstCaseCentsFor: (input) => worstCaseCentsFor(config, input),
+    worstCaseCentsFor: (input) => worstCaseCentsFor(config, input, schemaBytes),
 
     async generateSummary(input: SummaryInput) {
       const body = {

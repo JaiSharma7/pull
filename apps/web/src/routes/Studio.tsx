@@ -360,7 +360,7 @@ export function Studio({
       setError(
         imported.complete
           ? 'There is no text in this book’s highlights to summarise.'
-          : 'The first highlight in this book is on its own longer than one summary can take.',
+          : 'The first highlight in this book with any text in it is on its own longer than one summary can take.',
       );
       return;
     }

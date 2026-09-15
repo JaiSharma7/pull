@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGeminiSummaryProvider, type GeminiConfig } from './gemini.ts';
+import { worstCaseCentsFor } from './providers.ts';
 
 /**
  * The provider's wall clock.
@@ -227,14 +228,38 @@ describe('the model chain under an exhausted quota', () => {
     expect(dense - short).toBeGreaterThanOrEqual(3 * (long - short) - 1);
   });
 
-  it('refuses to build a price from a number an operator mistyped', () => {
-    // `numberFrom` accepts any finite number, zero and negatives included, and this
-    // figure is the only thing between the ledger and the daily cap. Reserving too
-    // little quietly is worse than failing loudly at construction.
-    const provider = createGeminiSummaryProvider(configWith({ outputUsdPerMTok: 0 }));
-    expect(() =>
-      provider.worstCaseCentsFor({ workTitle: 'W', kind: 'essay', context: 'text' }),
-    ).toThrow(/positive finite number/);
+  it('refuses to be built at all on a price an operator mistyped', () => {
+    /*
+     * At construction, and this is the whole point of moving it there. The check used to
+     * live in `worstCaseCentsFor`, which `synthesize` calls to size its hold -- and the
+     * plain `Error` it threw is not a `BudgetExhaustedError`, so it went past the catch
+     * that returns the source claim. One mistyped variable then failed every job in the
+     * deployment, three attempts each, leaving a claim behind every time.
+     */
+    expect(() => createGeminiSummaryProvider(configWith({ outputUsdPerMTok: -1 }))).toThrow(
+      /gemini: outputUsdPerMTok/,
+    );
+    expect(() => createGeminiSummaryProvider(configWith({ maxOutputTokens: 0 }))).toThrow(
+      /gemini: maxOutputTokens/,
+    );
+    // But zero is a real price, not a mistake: free costs nothing and holds nothing.
+    expect(() => createGeminiSummaryProvider(configWith({ inputUsdPerMTok: 0 }))).not.toThrow();
+  });
+
+  it('prices the response schema it sends, not only the prompt', () => {
+    // `responseSchema` goes with every request and the API bills it as input. Omitting
+    // it made the number the daily cap treats as a ceiling into one that is merely close.
+    const dear = createGeminiSummaryProvider(
+      configWith({ inputUsdPerMTok: 100_000, outputUsdPerMTok: 0.000001, maxOutputTokens: 1 }),
+    );
+    const input = { workTitle: 'W', kind: 'essay', context: 'x' };
+    // The bare prompt alone; the provider's figure has to exceed it by the schema.
+    expect(dear.worstCaseCentsFor(input)).toBeGreaterThan(
+      worstCaseCentsFor(
+        { inputUsdPerMTok: 100_000, outputUsdPerMTok: 0.000001, maxOutputTokens: 1 },
+        input,
+      ),
+    );
   });
 
   it('does not retry a 429 against the same model', async () => {

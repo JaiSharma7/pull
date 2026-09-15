@@ -220,6 +220,20 @@ describe('truncationNote', () => {
   it('says what is wrong when not one highlight fits', () => {
     expect(truncationNote({ used: 0, total: 3, complete: false })).toContain('on its own longer');
   });
+
+  /*
+   * And it does not name a row it is not talking about. `fitImportSource` skips a blank
+   * highlight WITHOUT counting it, so a book whose first row is empty and whose second
+   * is over the bound arrives here with `used === 0` -- and the row that did not fit is
+   * the second one. The sentence said "the first highlight in this book".
+   */
+  it('does not call the blank row the one that was too long', () => {
+    const fitted = fitImportSource([highlight('   '), highlight('x'.repeat(400))], 100);
+    expect(fitted.used).toBe(0);
+    expect(truncationNote(fitted)).toBe(
+      'The first highlight in this book with any text in it is on its own longer than one summary can take.',
+    );
+  });
 });
 
 describe('waitMinutes', () => {

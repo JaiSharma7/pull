@@ -225,23 +225,53 @@ export interface ProviderPricing {
  *
  * Rounded up because a hold that rounds down is a hold that can be exceeded.
  */
-export function worstCaseCentsFor(config: ProviderPricing, input: SummaryInput): number {
-  /*
-   * Checked rather than trusted. Every one of these arrives through `numberFrom`,
-   * which accepts any finite number an operator typed — including zero and negatives.
-   * This figure is the only thing standing between the ledger and the daily cap, so a
-   * mistyped price must stop provider construction rather than quietly reserve less
-   * than the call will cost. `maxOutputTokens` of 0 would also be rejected by the API
-   * on every request, which is a worse way to find out.
-   */
-  for (const name of ['inputUsdPerMTok', 'outputUsdPerMTok', 'maxOutputTokens'] as const) {
-    const value = config[name];
-    if (!Number.isFinite(value) || value <= 0) {
-      throw new Error(`provider pricing: ${name} must be a positive finite number, got ${value}`);
+/**
+ * Checked at CONSTRUCTION, which is where the previous version's comment claimed it
+ * happened and where it actually has to.
+ *
+ * It ran inside `worstCaseCentsFor`, which `synthesize` calls to size its hold — and the
+ * `Error` it threw is not a `BudgetExhaustedError`, so it went straight past the catch
+ * that releases the source claim. A mistyped price therefore failed every job in the
+ * deployment three attempts at a time, each one leaving a claim behind for its lease to
+ * expire. Refusing to build the provider at all fails once, at start-up, naming the
+ * variable.
+ *
+ * Zero is ALLOWED for a price. `numberFrom` accepts it because it is a real answer: a
+ * free tier, or a model whose input is not billed, costs nothing and should hold nothing
+ * — `stubSummaryProvider` already reserves 0 on exactly that reasoning. Negative and
+ * non-finite are the mistakes. `maxOutputTokens` must be positive, because a request
+ * carrying 0 is rejected by the API on every call, which is a worse way to find out.
+ */
+export function assertPricing(name: string, config: ProviderPricing): ProviderPricing {
+  for (const field of ['inputUsdPerMTok', 'outputUsdPerMTok'] as const) {
+    const value = config[field];
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${name}: ${field} must be a finite number of zero or more, got ${value}`);
     }
   }
+  if (!Number.isFinite(config.maxOutputTokens) || config.maxOutputTokens <= 0) {
+    throw new Error(
+      `${name}: maxOutputTokens must be a positive finite number, got ${config.maxOutputTokens}`,
+    );
+  }
+  return config;
+}
+
+/**
+ * `extraInput` is everything the request carries besides the prompt and is billed with
+ * it: Anthropic's `tools[0].input_schema`, Gemini's `responseSchema`. Both are JSON the
+ * provider counts as input tokens, and leaving them out made a number the daily cap
+ * treats as a ceiling into one that is merely close. Small — about a tenth of a cent —
+ * but a ceiling that is nearly right is the defect this function was written to remove.
+ */
+export function worstCaseCentsFor(
+  config: ProviderPricing,
+  input: SummaryInput,
+  extraInput = '',
+): number {
+  const inputTokens = maxInputTokens(buildSummaryPrompt(input)) + maxInputTokens(extraInput);
   const usd =
-    (maxInputTokens(buildSummaryPrompt(input)) / 1_000_000) * config.inputUsdPerMTok +
+    (inputTokens / 1_000_000) * config.inputUsdPerMTok +
     (config.maxOutputTokens / 1_000_000) * config.outputUsdPerMTok;
   return Math.ceil(usd * 100);
 }

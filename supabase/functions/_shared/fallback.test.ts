@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertPricing,
   BilledProviderError,
   createFallbackSummaryProvider,
   ProviderUnavailableError,
@@ -101,15 +102,41 @@ describe('worstCaseCentsFor', () => {
     ).toBe(1);
   });
 
-  // A price is the only thing between the ledger and the daily cap, and `numberFrom`
-  // hands over whatever an operator typed. A mistyped one stops the call rather than
-  // quietly holding less than it will cost.
+  /*
+   * A price is the only thing between the ledger and the daily cap, and `numberFrom`
+   * hands over whatever an operator typed. A mistyped one refuses at CONSTRUCTION, not
+   * on the first job: the throw used to happen inside `worstCaseCentsFor`, which
+   * `synthesize` calls to size its hold, and a plain `Error` there is not a
+   * `BudgetExhaustedError` -- so it went straight past the catch that gives the source
+   * claim back, failing every job in the deployment three attempts at a time and
+   * leaving a claim behind each time for its lease to expire.
+   */
   it.each([
-    ['a zero price', { inputUsdPerMTok: 0, outputUsdPerMTok: 5, maxOutputTokens: 1_000 }],
+    ['a negative price', { inputUsdPerMTok: -1, outputUsdPerMTok: 5, maxOutputTokens: 1_000 }],
+    ['a non-number price', { inputUsdPerMTok: 1, outputUsdPerMTok: NaN, maxOutputTokens: 1_000 }],
     ['a negative ceiling', { inputUsdPerMTok: 1, outputUsdPerMTok: 5, maxOutputTokens: -1 }],
-    ['a non-number', { inputUsdPerMTok: 1, outputUsdPerMTok: NaN, maxOutputTokens: 1_000 }],
-  ])('refuses to build a hold from %s', (_label, pricing) => {
-    expect(() => worstCaseCentsFor(pricing, input)).toThrow(/positive finite number/);
+    ['a zero ceiling', { inputUsdPerMTok: 1, outputUsdPerMTok: 5, maxOutputTokens: 0 }],
+  ])('refuses to build a provider on %s', (_label, pricing) => {
+    expect(() => assertPricing('test', pricing)).toThrow(/test:/);
+  });
+
+  // And ZERO is a real answer, not a mistake. A free tier, or a model whose input is not
+  // billed, costs nothing and should hold nothing -- `stubSummaryProvider` reserves 0 on
+  // exactly that reasoning, and rejecting it here would have failed every job in a
+  // deployment that had legitimately set one.
+  it('accepts a price of zero, which is what free costs', () => {
+    const free = { inputUsdPerMTok: 0, outputUsdPerMTok: 0, maxOutputTokens: 1_000 };
+    expect(() => assertPricing('free', free)).not.toThrow();
+    expect(worstCaseCentsFor(free, input)).toBe(0);
+  });
+
+  // The schema goes with every request and is billed with the prompt. Leaving it out
+  // made a number the daily cap treats as a ceiling into one that is merely close.
+  it('counts what the request carries besides the prompt', () => {
+    const pricing = { inputUsdPerMTok: 1_000, outputUsdPerMTok: 0.000001, maxOutputTokens: 1 };
+    const bare = worstCaseCentsFor(pricing, input);
+    const withSchema = worstCaseCentsFor(pricing, input, 'x'.repeat(10_000));
+    expect(withSchema - bare).toBeGreaterThanOrEqual(1_000);
   });
 
   it('is the more expensive of the two when a chain may use either', () => {

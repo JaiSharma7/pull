@@ -213,7 +213,13 @@ export function truncationNote(fitted: {
 }): string | null {
   if (fitted.complete) return null;
   if (fitted.used === 0) {
-    return 'The first highlight in this book is on its own longer than one summary can take.';
+    /*
+     * "with any text in it", because a blank row is skipped WITHOUT counting and the
+     * sentence used to name the wrong one: a book whose first highlight is empty and
+     * whose second is over the bound reaches here with `used === 0`, and the row that
+     * did not fit is the second.
+     */
+    return 'The first highlight in this book with any text in it is on its own longer than one summary can take.';
   }
   return `This book is longer than one summary can take. The first ${fitted.used.toLocaleString()} of ${fitted.total.toLocaleString()} highlights will be sent.`;
 }
