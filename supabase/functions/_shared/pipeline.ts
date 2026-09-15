@@ -82,10 +82,11 @@ export class BudgetExhaustedError extends Error {
  * the exact hole the reservation exists to close. Overshooting the other way
  * costs a little unused headroom for the seconds a call takes.
  *
- * ONE ENTRY NOW. `synthesize` reserves `deps.summary.worstCaseCents`, which each
- * provider derives from its own configured prices and output ceiling — a constant here
- * was the expected cost of a Gemini call, and the Anthropic fallback can charge nearly
- * three times it, so a day at 194 cents admitted a call that took the ledger past 200.
+ * ONE ENTRY NOW. `synthesize` reserves `deps.summary.worstCaseCentsFor(input)`, which
+ * each provider derives from its configured prices, its output ceiling and the byte
+ * length of the prompt about to be sent — a constant here was the expected cost of a
+ * Gemini call, and the Anthropic fallback can charge nearly three times it, so a day at
+ * 194 cents admitted a call that took the ledger past 200.
  * `artwork` was here too, at 5, for a step that calls nothing and reserves nothing.
  *
  * `embed` stays a constant because it is bounded by something this file does know: one
@@ -1233,12 +1234,26 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
        * not synthesising anything, so it has no business holding the source; it takes
        * the claim again on the delivery that finds budget.
        */
+      /*
+       * Built before the hold, and the same object is sent below.
+       *
+       * The hold is a ceiling over THIS prompt — its UTF-8 byte length bounds the input
+       * tokens — so it has to be the prompt that is actually going, not a stand-in. Two
+       * calls to `buildSummaryPrompt` for one summary is the price of that, and it is a
+       * string concatenation against a provider round trip.
+       */
+      const summaryInput = {
+        workTitle: acquired.title,
+        kind: acquired.kind,
+        context: acquired.text,
+      };
+
       try {
-        // The PROVIDER's ceiling, not a constant. `RESERVE_CENTS.synthesize` was the
-        // expected cost of a Gemini call, and a reservation smaller than the charge that
-        // replaces it is the overshoot this whole mechanism exists to stop — the
+        // The PROVIDER's ceiling for THIS call, not a constant. `RESERVE_CENTS.synthesize`
+        // was the expected cost of a Gemini call, and a reservation smaller than the charge
+        // that replaces it is the overshoot this whole mechanism exists to stop — the
         // Anthropic fallback at its configured ceiling charges nearly three times it.
-        await db.reserveBudget(job.id, 'synthesize', deps.summary.worstCaseCents);
+        await db.reserveBudget(job.id, 'synthesize', deps.summary.worstCaseCentsFor(summaryInput));
       } catch (e) {
         // The recovery must not replace the refusal. A `releaseSourceHash` that rejects
         // transiently would propagate instead of `BudgetExhaustedError`, and the worker
@@ -1272,11 +1287,7 @@ export async function runPipelineStep(step: Step, deps: PipelineDeps): Promise<S
       let usage: Usage;
       let model: string;
       try {
-        ({ summary, usage, model } = await deps.summary.generateSummary({
-          workTitle: acquired.title,
-          kind: acquired.kind,
-          context: acquired.text,
-        }));
+        ({ summary, usage, model } = await deps.summary.generateSummary(summaryInput));
       } catch (e) {
         if (e instanceof BilledProviderError) {
           throw new BilledStepError(`synthesize: ${e.message}`, {

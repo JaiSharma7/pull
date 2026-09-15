@@ -124,6 +124,11 @@ The shapes in `supabase/functions/_shared/providers.ts`, as they actually are:
 ```ts
 interface SummaryProvider {
   name: string;
+  /** The most THIS call can cost, in cents. `reserve_budget` holds it before the call,
+   *  so it is a ceiling and not an estimate. `worstCaseCentsFor(config, input)` in
+   *  providers.ts derives one from a provider's prices, its output ceiling and the
+   *  prompt's UTF-8 byte length. */
+  worstCaseCentsFor(input: SummaryInput): number;
   generateSummary(input: SummaryInput): Promise<SummaryDraft>;
 }
 interface EmbeddingProvider {

@@ -337,7 +337,7 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
     // proved it — the chain led with 3.7, answered on 3.6, and a name pinned to the
     // head would have labelled it wrongly. The model that ran is returned per call.
     name: 'gemini',
-    worstCaseCents: worstCaseCentsFor(config),
+    worstCaseCentsFor: (input) => worstCaseCentsFor(config, input),
 
     async generateSummary(input: SummaryInput) {
       const body = {
@@ -352,9 +352,16 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
            * not know and a bill this code cannot bound — and `reserve_budget` holds
            * money against the daily cap BEFORE the call, so an unbounded output is a
            * hold that can always be exceeded. `anthropic.ts` has required `max_tokens`
-           * from the start and the same reasoning applies here; the default is set well
-           * above what a summary of `MAX_SOURCE_CHARS` has ever produced, so it bounds
-           * the charge without truncating an answer.
+           * from the start and the same reasoning applies here.
+           *
+           * THOUGHTS COME OUT OF THIS BUDGET, which is the part Anthropic's number does
+           * not have to cover. `computeUsage` bills thoughts as output because Gemini
+           * charges them that way, and the failure four hundred lines down — HTTP 200,
+           * full `usageMetadata`, no parts — is this budget going entirely on thinking.
+           * So the default is Anthropic's answer allowance doubled rather than copied:
+           * one allowance for the summary and one for the reasoning behind it. See
+           * `config.ts`. A ceiling sized for the visible answer alone would bound the
+           * bill by buying three billed retries, which is not a saving.
            */
           maxOutputTokens: config.maxOutputTokens,
         },

@@ -150,16 +150,31 @@ anything settled it or not.
 that column, so a sum over both reports double the real spend and slams the cap at half of
 it — a cap of $1 that claims to be $2, which is worse than either.
 
-| Step         | Reserved, worst case |
-| ------------ | -------------------: |
-| `synthesize` |              6 cents |
-| `embed`      |               1 cent |
+| Step         | Reserved, worst case                                      |
+| ------------ | --------------------------------------------------------- |
+| `synthesize` | `deps.summary.worstCaseCentsFor(input)` — 16 cents and up |
+| `embed`      | 1 cent                                                    |
 
-Those are the constants the pipeline reserves with, rounded up from the cost shape above
-so a reservation is never smaller than the charge that replaces it. Two rows, not three:
-`artwork` calls no provider today and reserves nothing, and carrying a price for it here
-would put the worst case of a job at 12 cents when `enqueue_generation_job` pins its own
-door check at 7 — which is what a reader reconciling the two would then widen. The hold is taken
+`synthesize` is not a constant. `worstCaseCentsFor` prices the call that is about to be
+made: the output half is the provider's configured ceiling (49,152 tokens for Gemini at
+$3.00/MTok, 24,576 for Anthropic at $5.00/MTok), and the input half is the UTF-8 **byte**
+length of the prompt, because a byte is the most a token can be worth and characters are
+not bytes — the constant this replaced assumed four characters to a token and was short by
+two thirds on any source not written in Latin script. The floor, a one-line source through
+the 3,669-byte prompt template, is 16 cents; a 200,000-character book is about 30.
+
+It was a flat 6 — the expected cost of a Gemini call — which is an estimate and not a
+ceiling, and a reservation smaller than the charge that replaces it lets the cap be
+overshot by the difference once per call in flight.
+
+Two rows, not three: `artwork` calls no provider today and reserves nothing, and carrying
+a price for it here would inflate every hold for a step that spends nothing.
+
+`enqueue_generation_job`'s door asks `public.min_job_cents()` — 17, the floor above plus
+`embed` — and `generation_budget_state()` reports `spent` at exactly the same point, so
+the screen never offers room the door will refuse. A floor rather than the ceiling for the
+largest source: a door pinned to the book would turn away an essay with 30 cents of the day
+unspent. The hold is taken
 **after** the source claim — a job that is only ever going to wait on a source another job
 is synthesising should not take a hold it will not use — and **immediately before** the
 provider, because a reservation taken afterwards is a receipt rather than a cap.

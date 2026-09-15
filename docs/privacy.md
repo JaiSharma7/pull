@@ -1,7 +1,13 @@
 # Privacy Policy
 
-**Effective 30 August 2026.** Every revision of this document is a commit in this
+**Effective 15 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
+
+What changed on this date: **Anthropic** was added to the processors below. A deployment
+may configure it as the fallback that writes a Studio summary when Google is unavailable,
+so text you submit to the Studio may reach a second provider. Nothing else about what is
+collected, kept or shared has changed. Under "Changes" at the foot of this document this
+is a material change, which is why the date above moved rather than staying at 30 August.
 
 ## Scope
 

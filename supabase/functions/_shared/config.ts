@@ -70,14 +70,29 @@ const DEFAULT_OUTPUT_USD_PER_MTOK = 3.0;
 const DEFAULT_EMBEDDING_USD_PER_MTOK = 0.15;
 
 /**
- * Gemini's output ceiling, matching the one `anthropic.ts` has always required.
+ * Gemini's output ceiling: the answer allowance `anthropic.ts` requires, DOUBLED.
  *
  * The request had none, so the bill had no bound this code knew — and the daily cap
- * holds money before the call. Set well above the longest summary this pipeline has
- * produced for a 200,000-character source, so it bounds the charge without truncating
- * an answer: the number exists to make a worst case computable, not to shorten output.
+ * holds money before the call. But the first number set here was Anthropic's, and the
+ * two ceilings do not mean the same thing. `computeUsage` bills
+ * `candidatesTokenCount + thoughtsTokenCount` because that is how Gemini charges, and
+ * a thinking model spends both out of `maxOutputTokens` — `gemini.ts` documents the
+ * failure that produces: HTTP 200, a full `usageMetadata`, and no parts at all,
+ * because the whole budget went on thoughts. Sizing this for the visible summary alone
+ * would have tightened a budget the answer shares, buying three billed retries on
+ * exactly the long sources worth having.
+ *
+ * So: one allowance for the summary, one for the reasoning that produces it. Derived
+ * from Anthropic's constant rather than repeated as a second literal, because the
+ * comment used to claim the two matched while nothing made them.
+ *
+ * The number exists to make a worst case computable, not to shorten output. An
+ * operator who sees `MAX_TOKENS` failures raises `GEMINI_MAX_OUTPUT_TOKENS` without a
+ * deploy; a `thinkingConfig.thinkingBudget` would let it come back down by bounding
+ * the two halves separately, which is worth doing against a live key rather than
+ * guessed at from here.
  */
-const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 24_576;
+const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = ANTHROPIC_DEFAULT_MAX_TOKENS * 2;
 
 export function anthropicConfigFrom(env: Env, apiKey: string) {
   return {

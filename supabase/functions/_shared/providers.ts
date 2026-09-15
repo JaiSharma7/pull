@@ -172,24 +172,76 @@ export class BilledProviderError extends Error {
 }
 
 /**
- * The largest number of input tokens one `synthesize` call can be handed.
+ * The most input tokens a prompt can be: one per UTF-8 byte.
  *
- * `MAX_SOURCE_CHARS` is 200,000 and `enqueue_generation_job` refuses more, so four
- * characters to a token — the conventional English ratio, and generous for prose —
- * puts the ceiling at 50,000. Rounded up to 64,000 so a denser script or a prompt
- * that grows does not quietly cross it, because this number's only job is to be an
- * upper bound that is never wrong in the cheap direction.
+ * A bound rather than a ratio, which is the whole difference. Every tokenizer these
+ * providers use is byte-level BPE with a byte fallback, so a byte is the smallest
+ * thing that can become a token and the count cannot exceed the byte length. English
+ * prose runs nearer four bytes to a token, so on Latin text the hold is comfortably
+ * above the charge; on a dense script it lands close to it. That asymmetry is the
+ * point — this number's only job is to be wrong in the expensive direction.
+ *
+ * It replaces a flat 64,000 derived from "200,000 characters at four characters a
+ * token". Characters are not bytes. A CJK character is three UTF-8 bytes and
+ * tokenizes at roughly one token each, so a 200,000-character Japanese document is
+ * on the order of 200,000 input tokens and not 50,000 — and the constant whose
+ * stated job was "an upper bound that is never wrong in the cheap direction" was
+ * wrong in the cheap direction, by about four times, for every reader who does not
+ * write in Latin script.
  */
-export const MAX_SUMMARY_INPUT_TOKENS = 64_000;
+function maxInputTokens(prompt: string): number {
+  let bytes = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    const code = prompt.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      // A surrogate pair is one code point in four bytes; skip its low half.
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
-/** Cents, rounded UP: a hold that rounds down is a hold that can be exceeded. */
-export function worstCaseCentsFor(config: {
+export interface ProviderPricing {
   inputUsdPerMTok: number;
   outputUsdPerMTok: number;
   maxOutputTokens: number;
-}): number {
+}
+
+/**
+ * The most THIS call can cost, in cents, rounded UP.
+ *
+ * Per call rather than per provider, because the input half is a property of the
+ * document and not of the configuration. A constant would have to be the ceiling for
+ * the largest source the pipeline accepts — around 33 cents of a 200-cent day — and
+ * every 2,000-word essay would hold it too, which turns the cap into a queue for no
+ * reason. Measured, the hold tracks what is actually about to be sent.
+ *
+ * `buildSummaryPrompt` is called rather than approximated: both providers send
+ * exactly that string, so the bound is over the real prompt including its template
+ * and not over the source text plus a guess at the wrapper.
+ *
+ * Rounded up because a hold that rounds down is a hold that can be exceeded.
+ */
+export function worstCaseCentsFor(config: ProviderPricing, input: SummaryInput): number {
+  /*
+   * Checked rather than trusted. Every one of these arrives through `numberFrom`,
+   * which accepts any finite number an operator typed — including zero and negatives.
+   * This figure is the only thing standing between the ledger and the daily cap, so a
+   * mistyped price must stop provider construction rather than quietly reserve less
+   * than the call will cost. `maxOutputTokens` of 0 would also be rejected by the API
+   * on every request, which is a worse way to find out.
+   */
+  for (const name of ['inputUsdPerMTok', 'outputUsdPerMTok', 'maxOutputTokens'] as const) {
+    const value = config[name];
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`provider pricing: ${name} must be a positive finite number, got ${value}`);
+    }
+  }
   const usd =
-    (MAX_SUMMARY_INPUT_TOKENS / 1_000_000) * config.inputUsdPerMTok +
+    (maxInputTokens(buildSummaryPrompt(input)) / 1_000_000) * config.inputUsdPerMTok +
     (config.maxOutputTokens / 1_000_000) * config.outputUsdPerMTok;
   return Math.ceil(usd * 100);
 }
@@ -197,7 +249,7 @@ export function worstCaseCentsFor(config: {
 export interface SummaryProvider {
   readonly name: string;
   /**
-   * The most one call can cost, in cents, under this provider's configuration.
+   * The most THIS call can cost, in cents, under this provider's configuration.
    *
    * `reserve_budget` holds this against the daily cap before the call, so it has to be
    * a CEILING and not an estimate: a reservation smaller than the charge that replaces
@@ -207,12 +259,16 @@ export interface SummaryProvider {
    * ceiling and prices can charge nearly three times that for one accepted source, so
    * a day at 194 cents admitted a call that took the ledger past 200.
    *
-   * Derived from the two things that actually bound a bill: the largest input the
-   * pipeline accepts, and the output ceiling the request itself sets. Both providers
-   * now set one — an unbounded `max_tokens` is an unbounded charge, which is not
-   * something a cap can be built on.
+   * Derived from the two things that actually bound a bill: the prompt that is about
+   * to be sent, bounded by its UTF-8 byte length, and the output ceiling the request
+   * itself sets. Both providers now set one — an unbounded `max_tokens` is an
+   * unbounded charge, which is not something a cap can be built on.
+   *
+   * A function of the input rather than a constant, because the constant would have to
+   * be the ceiling for the largest source the pipeline accepts and every short essay
+   * would hold that too.
    */
-  readonly worstCaseCents: number;
+  worstCaseCentsFor(input: SummaryInput): number;
   /**
    * `model` is returned rather than read off the provider because a provider may fall
    * back between models mid-run — the newest Flash returns 503 under load often enough
@@ -252,7 +308,7 @@ export const stubSummaryProvider: SummaryProvider = {
   name: 'stub',
   // Free, so it holds nothing. The documented no-key path must not be refused by a cap
   // for money it cannot spend.
-  worstCaseCents: 0,
+  worstCaseCentsFor: () => 0,
   async generateSummary(input) {
     const opening = input.context.trim().slice(0, 240);
     return {
@@ -395,8 +451,10 @@ export function createFallbackSummaryProvider(
 
     // The MORE expensive of the two, because either may answer and the hold is taken
     // before anybody knows which will. A chain that reserved the primary's ceiling and
-    // then fell back is the overshoot with an extra step in it.
-    worstCaseCents: Math.max(primary.worstCaseCents, fallback.worstCaseCents),
+    // then fell back is the overshoot with an extra step in it. Both are asked about the
+    // same input, so the comparison is between two ceilings for one document.
+    worstCaseCentsFor: (input) =>
+      Math.max(primary.worstCaseCentsFor(input), fallback.worstCaseCentsFor(input)),
 
     async generateSummary(input) {
       try {

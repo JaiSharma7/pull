@@ -15,8 +15,11 @@
  *
  * WHAT THE READER IS TOLD, in their words and before they press anything:
  *
- *   * the text goes to Google, which is the one exception to "nothing about your
- *     reading reaches a model" and is `docs/privacy.md`'s own sentence
+ *   * the text goes to Google, or to Anthropic if Google is unavailable — the set and
+ *     not the likely case, because this screen cannot read an Edge Function's
+ *     environment and a reader consenting to one processor has not consented to two.
+ *     It is the one exception to "nothing about your reading reaches a model", and is
+ *     `docs/privacy.md`'s own sentence
  *   * the summary is private and is not published
  *   * how much of today's shared budget is left, and how many of their own jobs
  *

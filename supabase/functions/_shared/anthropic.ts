@@ -216,11 +216,15 @@ export function createAnthropicSummaryProvider(config: AnthropicConfig): Summary
     // `maxTokens` is this provider's own required ceiling, so the worst case has always
     // been computable here — it was simply never asked for. At the default model prices
     // it is nearly three times the six cents that used to be reserved for every call.
-    worstCaseCents: worstCaseCentsFor({
-      inputUsdPerMTok: config.inputUsdPerMTok,
-      outputUsdPerMTok: config.outputUsdPerMTok,
-      maxOutputTokens: config.maxTokens,
-    }),
+    worstCaseCentsFor: (input) =>
+      worstCaseCentsFor(
+        {
+          inputUsdPerMTok: config.inputUsdPerMTok,
+          outputUsdPerMTok: config.outputUsdPerMTok,
+          maxOutputTokens: config.maxTokens,
+        },
+        input,
+      ),
 
     async generateSummary(input: SummaryInput) {
       const tool = summaryTool();

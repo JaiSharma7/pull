@@ -699,10 +699,14 @@ end $$;
 -- enqueued in the last few cents of a day behaved that way.
 --
 -- TEN CENTS LEFT, deliberately: enough that `spent >= cap` is false, more than the seven
--- the door used to ask for, and less than the twenty it asks for now that `synthesize`
+-- the door used to ask for, and less than the seventeen it asks for now that `synthesize`
 -- reserves the provider's own worst case rather than the expected cost of a Gemini call.
 -- Four cents -- what this used to wind the day back to -- is refused by both thresholds,
 -- so it could not tell them apart.
+--
+-- And the SCREEN has to say the same thing, which is the second half below. A door that
+-- refuses while `generation_budget_state()` still answers `low` is a live submit button
+-- over a day that is over: the reader finds out by being turned away, once per press.
 do $$
 declare
   reader uuid;
@@ -713,7 +717,7 @@ begin
    where u.email like 'spend-cap%' order by u.email limit 1;
 
   -- Wind the day back to ten cents left: `spent >= cap` is false, and ten is less than
-  -- the twenty a job reserves before it can run.
+  -- the seventeen a job reserves before it can run.
   delete from public.cost_ledger;
   insert into public.generation_jobs (requester_id, target, status)
   values (reader, '{"text":"x"}'::jsonb, 'running') returning id into job;
@@ -742,11 +746,22 @@ begin
   end;
   if not refused then
     raise exception
-      'a job was accepted with ten cents left, which is less than the twenty it will '
+      'a job was accepted with ten cents left, which is less than the seventeen it will '
       'reserve. It would park in a 24-hour wait under a screen saying it had started.';
   end if;
 
-  raise notice 'spend_cap.sql: the door refuses what the reservation could not grant';
+  -- The same moment, read by the client. `generation_budget_state()` is the only budget
+  -- figure a reader gets, and the Studio draws its submit button from it -- so if it
+  -- still answers `low` here, the screen is offering something the door will refuse.
+  if public.generation_budget_state() <> 'spent' then
+    raise exception
+      'the door refused this day but generation_budget_state() reported %. The Studio '
+      'would show "nearly used up" and a live button over a day that cannot fund a job.',
+      public.generation_budget_state();
+  end if;
+
+  raise notice 'spend_cap.sql: the door refuses what the reservation could not grant, '
+    'and the screen says so';
 end $$;
 
 -- ------------------------ 10. a malformed target is refused, not raised from within

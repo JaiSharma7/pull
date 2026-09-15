@@ -433,9 +433,10 @@ describe('reuse skips the paid work', () => {
     const deps = {
       summary: {
         name: 'fake',
-        // What `synthesize` now reserves: the provider's own ceiling rather than a
-        // constant, so the assertion below reads the number the pipeline actually holds.
-        worstCaseCents: 19,
+        // What `synthesize` now reserves: the provider's own ceiling for the prompt it
+        // is about to send, rather than a constant, so the assertion below reads the
+        // number the pipeline actually holds.
+        worstCaseCentsFor: () => 19,
         generateSummary: async () => {
           calls.summary++;
           return {
@@ -1254,9 +1255,10 @@ describe('reuse skips the paid work', () => {
     const deps = {
       summary: {
         name: 'fake',
-        // What `synthesize` now reserves: the provider's own ceiling rather than a
-        // constant, so the assertion below reads the number the pipeline actually holds.
-        worstCaseCents: 19,
+        // What `synthesize` now reserves: the provider's own ceiling for the prompt it
+        // is about to send, rather than a constant, so the assertion below reads the
+        // number the pipeline actually holds.
+        worstCaseCentsFor: () => 19,
         generateSummary: async () => {
           calls.summary++;
           return {
@@ -1564,16 +1566,28 @@ describe('reuse skips the paid work', () => {
       whyItMatters: string;
       pulls: { headline: string; body: string; whyItMatters: string }[];
     }) {
-      const { deps } = harness(null);
+      const { deps, calls } = harness(null);
       return {
-        ...deps,
-        summary: {
-          name: 'fake',
-          generateSummary: async () => ({
-            summary,
-            usage: { inputTokens: 900, outputTokens: 120, costCents: 7 },
-            model: 'fake-model-b',
-          }),
+        calls,
+        deps: {
+          ...deps,
+          summary: {
+            name: 'fake',
+            /*
+             * Present because the pipeline calls it. This override replaces `summary`
+             * wholesale, and without this field `synthesize` reserved `undefined` --
+             * `coalesce(p_cents, 0)` against the real RPC, which is a zero hold. The
+             * `as never` casts below are what let that compile, so the type system,
+             * which is the only guard on this member, was off at the one call site that
+             * exercises it. The test at the bottom of this block now asserts the number.
+             */
+            worstCaseCentsFor: () => 19,
+            generateSummary: async () => ({
+              summary,
+              usage: { inputTokens: 900, outputTokens: 120, costCents: 7 },
+              model: 'fake-model-b',
+            }),
+          },
         },
       };
     }
@@ -1590,7 +1604,7 @@ describe('reuse skips the paid work', () => {
         },
       ],
     ])('carries the usage when the provider returns %s', async (_label, summary) => {
-      const deps = harnessReturning(summary);
+      const { deps, calls } = harnessReturning(summary);
       const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
       const thrown = await runPipelineStep('synthesize', {
@@ -1606,6 +1620,17 @@ describe('reuse skips the paid work', () => {
       expect(billed.usage.inputTokens).toBe(900);
       expect(billed.model).toBe('fake-model-b');
       expect(billed.provider).toBe('fake');
+      /*
+       * And the hold that paid for it was the provider's number.
+       *
+       * This block reaches the pipeline through `as never`, so the one guard on
+       * `worstCaseCentsFor` -- that the interface requires it -- is switched off here.
+       * The override dropped the member for a while and `synthesize` reserved
+       * `undefined`, which `reserve_budget` reads as `coalesce(p_cents, 0)`: a call
+       * billed at 7 cents standing behind a hold of nothing, in the two tests written
+       * to prove a billed failure still reaches the ledger.
+       */
+      expect(calls.reserved).toEqual([{ step: 'synthesize', cents: 19 }]);
     });
   });
 
