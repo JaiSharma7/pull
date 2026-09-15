@@ -58,9 +58,13 @@ describe('shapeHighlights', () => {
   it('does not let the id decide, when the id disagrees with the clock', () => {
     // 'h-a' sorts first by id and was made last. Before the sort existed, a caller
     // taking the final element got 'h-z' -- a mark made two days earlier.
+    //
+    // The newest goes FIRST in the input, which is the whole test: written the other
+    // way round it passed against an unsorted `shapeHighlights`, because the arrival
+    // order already happened to put 'h-a' last and nothing had to sort to agree.
     const shaped = shapeHighlights([
-      row('h-z', '2026-01-01T00:00:00.000Z'),
       row('h-a', '2026-01-03T00:00:00.000Z'),
+      row('h-z', '2026-01-01T00:00:00.000Z'),
     ]);
     expect(shaped[shaped.length - 1]?.id).toBe('h-a');
   });
