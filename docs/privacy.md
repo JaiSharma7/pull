@@ -477,13 +477,23 @@ write about ourselves.
 
 ## Contact
 
-**privacy@whatapull.com** — privacy questions, requests and complaints, and anything under
-"Your rights" above.
+**Vulnerability reports** — GitHub's private vulnerability reporting on the repository.
+See [`SECURITY.md`](../SECURITY.md) for what to expect and how quickly.
 
-**security@whatapull.com** — vulnerability reports. See [`SECURITY.md`](../SECURITY.md) for
-what to expect and how quickly.
+**Privacy questions, requests and complaints, and anything under "Your rights" above** —
+there is no published address at the moment, and you should know why rather than be left
+guessing. This section named `privacy@whatapull.com`, at a domain the project does not
+own, so a privacy request sent to it reached a stranger rather than the operator named in
+the [Terms](./terms.md) — which defeats the point of having a privacy contact, and is
+worse than naming none. It has been removed while a project mailbox is set up, and that
+address will be published here.
 
-Both are monitored by the operator named in the [Terms](./terms.md). They are role addresses
-rather than a personal mailbox on purpose: a privacy contact that is one person's inbox is a
-contact that stops working the moment that person is unreachable, and this repository is
-public, which makes anything written here permanently indexed.
+If you need to exercise a right under "Your rights" before then: the service is in closed
+beta, and every route described there — export and deletion — is available from inside
+your account without needing to ask anyone. Nothing you are entitled to depends on
+reaching us by mail.
+
+Role addresses return when there is a domain to host them on. The argument for them over a
+personal mailbox still holds: a privacy contact that is one person's inbox stops working
+the moment that person is unreachable, and this repository is public, which makes anything
+written here permanently indexed.
