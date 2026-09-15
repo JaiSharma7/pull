@@ -104,6 +104,11 @@ export function Feedback({ userId, fromPath }: { userId: string; fromPath?: stri
         value={subject}
         aria-describedby="feedback-subject-hint"
         onChange={(e) => {
+          // The id goes with the whole message, not just its words. Without this, a
+          // send whose response was lost followed by a change of subject would retry
+          // under the OLD id, collide, be read as success, and clear the form — while
+          // the row on file still carried the subject the reader had just rejected.
+          submission.current = null;
           setSubject(e.target.value);
           setSent(false);
         }}

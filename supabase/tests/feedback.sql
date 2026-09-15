@@ -26,6 +26,7 @@ declare
   seen  int;
   state text;
   mine  uuid;
+  stored timestamptz;
 begin
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
                           email_confirmed_at, created_at, updated_at,
@@ -90,18 +91,31 @@ begin
 
   -- ------------------------------ 4. a sent message cannot be rewritten or withdrawn
   --
-  -- No update and no delete policy exists, so both match no rows rather than raising.
-  -- Asserting the row is UNCHANGED is the point: a silent no-op and a successful edit
-  -- look identical from the client, and only one of them is correct.
-  update public.feedback set message = 'Rewritten after the fact.' where id = mine;
+  -- TWO layers, and the test asserts the privilege one because it is the outer of them.
+  -- `revoke all` takes UPDATE and DELETE away, so these raise 42501 rather than matching
+  -- no rows. Before that revoke they were silent no-ops held back only by the absence of
+  -- a policy — which is one answer to the question where there should be two, and is why
+  -- an earlier version of this file asserted "the row is unchanged" and passed while the
+  -- reader still held the privilege.
+  begin
+    update public.feedback set message = 'Rewritten after the fact.' where id = mine;
+    raise exception 'a reader holds UPDATE on feedback they have already sent.';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  begin
+    delete from public.feedback where id = mine;
+    raise exception 'a reader holds DELETE on feedback they have already sent.';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  -- And the row is still there and still says what they wrote, which is the thing the
+  -- privilege check exists to protect rather than a restatement of it.
   if (select f.message from public.feedback f where f.id = mine)
      is distinct from 'A way to say what is wrong.' then
-    raise exception 'a reader edited feedback after sending it.';
-  end if;
-
-  delete from public.feedback where id = mine;
-  if not exists (select 1 from public.feedback f where f.id = mine) then
-    raise exception 'a reader deleted feedback after sending it.';
+    raise exception 'the refused edit changed the row anyway.';
   end if;
 
   -- --------------------------------------------------------- 5. the bounds hold
@@ -150,14 +164,101 @@ begin
     end if;
   end;
 
-  -- ------------------------ 7. and the limit is per reader, not a global ceiling
+  -- ------------------ 6b. and the ceiling cannot be walked around by backdating
   --
-  -- Bob is at one message, not eleven. A global ceiling would refuse him here, and
-  -- would mean one reader could silence everybody else.
+  -- The hole Codex found and this file did not: with a table-level INSERT grant the
+  -- client names every column, and `created_at` is what the ceiling counts on. Proved
+  -- against the hosted database before the fix at 500 rows of 4000 characters for one
+  -- reader -- two megabytes against a cap of ten -- every row also inserted as
+  -- 'closed' so it never appeared in the operator's queue.
+  begin
+    insert into public.feedback (user_id, subject, message, created_at)
+    values (alice, 'other', 'Backdated past the window.', now() - interval '2 hours');
+    raise exception
+      'a reader set created_at directly. The ceiling counts on that column, so this '
+      'is an unbounded write, not a cosmetic one.';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  begin
+    insert into public.feedback (user_id, subject, message, status)
+    values (alice, 'other', 'Filed pre-closed.', 'closed');
+    raise exception
+      'a reader set status directly, which decides whether the operator ever sees it.';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  begin
+    insert into public.feedback (id, user_id, subject, message)
+    values (extensions.gen_random_uuid(), alice, 'other', 'Choosing my own id.');
+    raise exception 'a reader set the primary key directly.';
+  exception when insufficient_privilege then
+    null;
+  end;
+
+  -- And the row the reader DID send carries a server timestamp, which is the positive
+  -- half of the three refusals above: the column is not merely unwritable, it holds
+  -- what the trigger stamped.
+  select f.created_at into stored from public.feedback f where f.id = mine;
+  if stored < now() - interval '5 minutes' then
+    raise exception 'created_at was not stamped by the server (row holds %).', stored;
+  end if;
+
+  -- ------------------ 6c. a retry at the ceiling is answered as a duplicate, not a
+  --                       refusal, because a retry is not a new message
+  --
+  -- Alice is at the ceiling. A message sent with a fresh mutation id is refused as
+  -- 53400 -- but a RETRY of one already stored has to reach the unique index, whose
+  -- 23505 is what the client reads as "it arrived". Without the early return in the
+  -- trigger this raises 53400 and the screen tells the reader their feedback was lost,
+  -- about a row sitting in the table.
   perform set_config('request.jwt.claims',
     json_build_object('sub', bob, 'role', 'authenticated')::text, true);
+
+  declare
+    mid uuid := extensions.gen_random_uuid();
+  begin
+    insert into public.feedback (user_id, subject, message, client_mutation_id)
+    values (bob, 'bug', 'Sent once.', mid);
+
+    -- Take Bob to exactly the ceiling so the retry below meets it. EIGHT, not nine:
+    -- Bob already holds the row written as owner at the top of this file, plus the one
+    -- just sent, so 1 + 1 + 8 = 10. Nine overshoots and the filler loop itself is what
+    -- gets refused, which tests nothing about retries.
+    for i in 1..8 loop
+      insert into public.feedback (user_id, subject, message)
+      values (bob, 'other', 'Filler ' || i);
+    end loop;
+
+    begin
+      insert into public.feedback (user_id, subject, message, client_mutation_id)
+      values (bob, 'bug', 'Sent once.', mid);
+      raise exception 'the retry inserted a second row rather than colliding.';
+    exception
+      when unique_violation then
+        null;
+      when others then
+        get stacked diagnostics state = returned_sqlstate;
+        raise exception
+          'a retry at the ceiling failed with % rather than 23505. The reader is told '
+          'their feedback did not arrive, about a row that is already stored.', state;
+    end;
+  end;
+
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', alice, 'role', 'authenticated')::text, true);
+
+  -- ------------------------ 7. and the limit is per reader, not a global ceiling
+  --
+  -- The guest has sent nothing. A global ceiling would refuse them here on Alice's
+  -- and Bob's spending, which would mean one reader could silence everybody else.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', ghost, 'role', 'authenticated', 'is_anonymous', true)::text,
+    true);
   insert into public.feedback (user_id, subject, message)
-  values (bob, 'content', 'Bob is not rate limited by Alice.');
+  values (ghost, 'content', 'Not rate limited by anybody else.');
 
   -- --------------------------------------------------------- 8. a guest may send
   --

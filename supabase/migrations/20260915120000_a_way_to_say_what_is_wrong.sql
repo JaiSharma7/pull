@@ -126,6 +126,59 @@ as $$
 declare
   recent int;
 begin
+  /*
+   * THE CLIENT DOES NOT GET TO SET THESE, and the first draft of this file let it.
+   *
+   * `grant insert on public.feedback` is table-level, so `authenticated` could name
+   * every column — `created_at` included. The ceiling below counts rows whose
+   * `created_at` is inside the last hour, so a caller who backdates every insert is
+   * never counted at all: demonstrated against the hosted database at 500 rows of
+   * 4000 characters, two megabytes from one reader, against a cap of ten. On a free
+   * tier a storage bill is an outage, which is the same conclusion 20260901130000
+   * reached about the rights intake.
+   *
+   * `status` was the second half. A row inserted as 'closed' never appears in the
+   * operator's queue, so the reader who files it is invisible rather than merely
+   * over quota.
+   *
+   * The column grant at the foot of this file is what actually closes both. These two
+   * assignments are belt and braces: a later migration that grants table-level INSERT
+   * for some other reason would silently reopen the hole, and this makes that harmless.
+   */
+  new.created_at := now();
+  new.status := 'open';
+
+  /*
+   * ONE READER AT A TIME. Two concurrent inserts from one account both read a count
+   * below the ceiling and both pass, so the bound is advisory exactly when it matters
+   * — under the load that motivates it. The lock is transaction-scoped and keyed on
+   * the reader, so it serialises one account's inserts and never blocks anybody else.
+   */
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(new.user_id::text, 0)
+  );
+
+  /*
+   * A RETRY IS NOT A NEW MESSAGE, and the quota must not be what refuses it.
+   *
+   * If the response to a reader's tenth message is lost, the retry carries the same
+   * `client_mutation_id` and arrives while `recent` is already ten. Without this the
+   * trigger raises 53400 before the unique index can raise the 23505 that
+   * `sendFeedback` treats as success — so the screen tells the reader their feedback
+   * did not arrive, about a row that is sitting in the table.
+   *
+   * Returning here lets the insert proceed into `feedback_mutation_idx`, which is
+   * what refuses it, with the code the client already understands.
+   */
+  if new.client_mutation_id is not null
+     and exists (
+       select 1 from public.feedback f
+        where f.user_id = new.user_id
+          and f.client_mutation_id = new.client_mutation_id
+     ) then
+    return new;
+  end if;
+
   select count(*) into recent
     from public.feedback f
    where f.user_id = new.user_id
@@ -152,8 +205,29 @@ create trigger feedback_rate_limit
 
 -- 3. Grants. -------------------------------------------------------------------------
 --
--- `authenticated` inserts and selects; the policies above decide which rows. `anon` gets
--- nothing: a visitor has no session, so `feedback_insert_own` would refuse them anyway,
--- and a grant that only ever resolves to a refusal is reach with no purpose — the same
--- argument 20260915020000 makes about `profiles`.
-grant select, insert on public.feedback to authenticated;
+-- REVOKE FIRST. A new table in `public` on this project is not born with no privileges:
+-- Supabase's default privileges hand `anon` AND `authenticated` the lot — SELECT, INSERT,
+-- UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER — before any statement here runs. Verified
+-- by creating a table in a rolled-back transaction and reading
+-- `information_schema.table_privileges` with no grant issued at all.
+--
+-- So writing `grant insert (…)` alone achieved exactly nothing: the table-level INSERT was
+-- already there, it authorises every column, and Postgres does not subtract a column grant
+-- from a table grant. 20260915020000 records that trap for `profiles`, this file cited it,
+-- and the first draft still walked into the inherited version of it — the backdating
+-- described in the trigger above was live until this revoke.
+--
+-- What the revoke also removes is UPDATE, DELETE and TRUNCATE, which nothing here ever
+-- wanted. They were unreachable in practice because no policy grants them, so RLS was the
+-- only thing standing between a reader and editing feedback somebody had already read.
+-- Privileges and policies are meant to be two answers to that question, not one.
+--
+-- `id` stays out of the insert list as well: the default mints one, and a client choosing
+-- its own could probe for collisions with rows it is not allowed to see.
+--
+-- `anon` gets nothing back. A visitor has no session, so `feedback_insert_own` refuses
+-- them anyway, and a grant that only ever resolves to a refusal is reach with no purpose.
+revoke all on public.feedback from anon, authenticated;
+grant select on public.feedback to authenticated;
+grant insert (user_id, subject, message, path, client_mutation_id)
+  on public.feedback to authenticated;
