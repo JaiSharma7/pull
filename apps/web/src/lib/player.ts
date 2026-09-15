@@ -188,16 +188,57 @@ function advance(state: PlayerState, now: number | undefined): PlayerState {
 export function playerReducer(state: PlayerState, action: PlayerAction): PlayerState {
   switch (action.type) {
     case 'enqueue': {
-      const seen = new Set(state.queue.map((t) => t.id));
+      /*
+       * A track already queued is REFRESHED, not dropped.
+       *
+       * A Track carries the text to speak, and every caller builds one from the reader's
+       * current depth at the moment of the press — so pressing "Listen to this source"
+       * at the claim and again at the full argument hands over the same fourteen ids
+       * with different text. Skipping them kept the claim-length copies and the player
+       * read the short version while the screen showed the long one, which is the
+       * failure `playNow` below was corrected for and the reason it takes
+       * `action.track` over the queued copy. The COUNT and the ORDER do not move —
+       * that is the idempotence the Library's button promises — only the words.
+       */
+      const queue = [...state.queue];
+      const at = new Map(queue.map((t, i) => [t.id, i]));
+      let replaced = false;
       const fresh: Track[] = [];
       for (const track of action.tracks) {
-        if (seen.has(track.id)) continue;
-        seen.add(track.id);
+        const already = at.get(track.id);
+        if (already !== undefined) {
+          // In the queue, or earlier in this same batch: one entry either way, and the
+          // newest text wins. Changed only when it actually differs, so an enqueue that
+          // alters nothing still returns the same state object.
+          /*
+           * EXCEPT THE ONE BEING SPOKEN, which is the other half of this.
+           *
+           * Replacing the current track's text without bumping the epoch leaves the
+           * effect layer on `sameUtterance`, so it resumes rather than re-speaks: the
+           * voice finishes the old words while the queue holds the new ones. Bumping
+           * the epoch instead would restart the passage mid-sentence because the reader
+           * queued a source. So the track being read is left exactly as it is being
+           * read, and the entry agrees with the utterance until it ends.
+           */
+          const speaking = state.status !== 'idle' && already === state.index;
+          const current = queue[already] ?? fresh[already - queue.length];
+          if (
+            !speaking &&
+            current &&
+            (current.text !== track.text || current.title !== track.title)
+          ) {
+            replaced = true;
+            if (already < queue.length) queue[already] = track;
+            else fresh[already - queue.length] = track;
+          }
+          continue;
+        }
+        at.set(track.id, queue.length + fresh.length);
         fresh.push(track);
       }
-      if (fresh.length === 0) return state;
+      if (fresh.length === 0) return replaced ? { ...state, queue } : state;
 
-      const queue = [...state.queue, ...fresh];
+      queue.push(...fresh);
       // Queueing onto silence is "listen, then keep going". Queueing onto a
       // paused player is just queueing — the reader paused for a reason.
       //
@@ -224,9 +265,14 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
     case 'playNow': {
       const at = state.queue.findIndex((t) => t.id === action.track.id);
 
-      // Already the one playing: start it again rather than reordering around it.
+      // Already the one playing: start it again rather than reordering around it —
+      // with the text the press just built, for the reason given below. A reader who
+      // turns the dial up and presses Listen on the track already playing is asking to
+      // hear the longer version, not the same one again.
       if (at >= 0 && at === state.index) {
-        return { ...state, status: 'playing', epoch: state.epoch + 1 };
+        const requeued = [...state.queue];
+        requeued[at] = action.track;
+        return { ...state, queue: requeued, status: 'playing', epoch: state.epoch + 1 };
       }
 
       // After the current track rather than at the head: the reader chose
@@ -234,15 +280,24 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
       // already further down the queue is MOVED here rather than jumped to —
       // moving the cursor instead would leave everything between skipped, and
       // since the end of the queue clears it, those tracks would never play.
+      /*
+       * The track as it was just built, not the copy already in the queue.
+       *
+       * A Track carries the TEXT to speak, and every caller builds one at the moment
+       * of the press from the reader's current depth — `Feed.tsx` says so directly
+       * above its `trackFor`. Reusing the queued copy discarded that: a card queued
+       * at the claim and then played at full depth was read as the claim, and the two
+       * screens disagreed with the comment explaining why they did not. Only the
+       * POSITION of an already-queued track is taken from the queue.
+       */
       const queue = [...state.queue];
       let anchor = state.index;
-      const existing = at >= 0 ? (state.queue[at] as Track) : action.track;
       if (at >= 0) {
         queue.splice(at, 1);
         if (at < anchor) anchor -= 1;
       }
       const position = Math.min(anchor + (state.queue.length === 0 ? 0 : 1), queue.length);
-      queue.splice(position, 0, existing);
+      queue.splice(position, 0, action.track);
       return { ...state, queue, index: position, status: 'playing', epoch: state.epoch + 1 };
     }
 

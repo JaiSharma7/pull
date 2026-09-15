@@ -69,6 +69,21 @@ pirated PDFs or ripped media. This is enforced socially in review and stated in
 
 ## User-generated content
 
+**A private summary is not publication, and the distinction is the whole of why the Studio
+is shippable today.** A reader may ask for a summary of their own document — pasted text, a
+URL, or the highlights they imported — and what comes back is `visibility = 'private'` with
+`rights_status = 'user_owned'`: readable by its requester through `summary_is_readable`,
+never in `get_feed`, never in the catalogue, never unfurled by the Open Graph function
+(which reads with the anon key), and deleted with the account. Nobody else can reach it, so
+the service is not hosting it for anybody.
+
+Three things hold that line rather than one comment: `enqueue_generation_job` refuses to
+carry a `visibility` the client sent, the job's own column defaults to private, and the
+pipeline's `moderate` step re-checks rights immediately before publication — so a job that
+is not cleared cannot become public even if something earlier said it could. A reader's
+private document is theirs to summarise; the same summary made public is a different act,
+and it is the act this section's machinery is for.
+
 Once users publish generated summaries or uploads, the hosted service becomes a host of
 third-party material and needs the §512 machinery before that launches:
 

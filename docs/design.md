@@ -52,12 +52,18 @@ one ellipse subtracted from the same ellipse lifted above it, which raises its t
 clear of the crown. Drawn as a flat rectangle it reads as a plinth, not a hat.
 
 It is written twice and neither copy is decorative. `scripts/gen-icons.mjs` generates
-`favicon.svg` and the PWA icons — this repo has no rasteriser, so the PNGs are encoded
+the PWA icons and the tab icon — this repo has no rasteriser, so the PNGs are encoded
 from a pixel buffer — and `packages/ui/src/components/Mark.tsx` draws the same hat in
-the top bar. `Mark.test.ts` compares the component against the _generated_ favicon, so
-neither a divergent tweak nor a stale icon in `public/` gets through. Re-run
-`node scripts/gen-icons.mjs` after any change to either, and look at the result at 16px
-rather than reasoning about it.
+the top bar. `Mark.test.ts` pins the dimensions of every PNG that generator writes --
+the icons, the tab icon and the two under `brand/` -- so neither a divergent tweak nor a
+stale icon in `public/` gets through. Re-run `node scripts/gen-icons.mjs` after any
+change to either, and look at the result at 16px rather than reasoning about it.
+
+The tab icon is **`favicon-hat.png`**, which is what `index.html` points at.
+`favicon.svg` is the same 64px render percent-encoded into an `<image>`, kept for
+anything that asks for an SVG and precached with the rest; the generator writes one
+buffer to both and the test asserts they are the same bytes. Inspect the PNG — it is
+the file a browser actually draws.
 
 ## Laws
 
@@ -101,6 +107,21 @@ by layout. So:
 - **Never slide the next card into frame.** Advancing is the reader's act.
 - **The end is a screen, not an absence.** `Enough` exists because a feed that merely
   runs out of content has told the reader nothing.
+- **The listening queue advances itself, and that is not an exception.** A queue is
+  built by the reader one press at a time, is finite, never refills itself, and ends —
+  the bar disappears with it. That is a playlist. What law 7 forbids is an infinite
+  runway nobody asked for, and reading is still never advanced for anyone.
+
+The player bar is held to the same rules as everything else on screen. It is a hairline
+rule and a line of mono over the same paper: **never a full-bleed band of colour, never a
+shadow to lift it, and never a scrubber** — `speechSynthesis` has no timeline, so a
+progress bar would be a control that lies about what it can do. It tracks the reading
+column rather than the window, it says where the reader is in the queue in words
+("Listening · 2 of 5 · Meditations"), it rises once and does not under
+`prefers-reduced-motion`, and the page reserves room at its foot so `Enough` and the
+Colophon — the two visible edges of a session — are never underneath it. The room is
+reserved on `body` rather than on the shell, because the bar is drawn beside every
+screen the app can return, and the sign-in page and the 404 have no shell to pad.
 
 A useful test: if a screenshot of this app could be mistaken for a video feed with the
 sound off, the layout is wrong.

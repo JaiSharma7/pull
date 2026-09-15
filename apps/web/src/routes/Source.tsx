@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { fetchSourceDelta } from '../lib/api.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
+import { RememberThis } from '../components/RememberThis.js';
+import { fetchSavedAmong, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
+import {
+  isPlaying,
+  isQueued,
+  usePlayerActions,
+  usePlayerSelection,
+} from '../components/PlayerProvider.js';
+import type { Track } from '../lib/player.js';
+import { speechSupported } from '../lib/speech.js';
 import { anchoredPullId } from '../lib/routes.js';
-import { isSchemaMismatch, TRANSPORT_ERROR } from '../lib/rpc-error.js';
+import { isSchemaMismatch } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
 import { relationLabel } from '../lib/relations.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
-import { askReducer, draftFor, draftQuestion, EMPTY_ASK } from '../lib/questions.js';
-import {
-  fetchUserQuestions,
-  rememberPull,
-  retireQuestion,
-  type UserQuestion,
-} from '../lib/questions-api.js';
+import { fetchUserQuestions, retireQuestion, type UserQuestion } from '../lib/questions-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
-import { mutationId } from '../lib/submission.js';
 import type { SourceDelta } from '../lib/types.js';
 
 /**
@@ -65,11 +68,29 @@ function selectionOffsetsIn(
   return { start, end: start + text.length, text };
 }
 
-/** Minutes, from the estimate the pipeline stored per Pull. */
-function readingMinutes(seconds: number | null): number | null {
-  if (seconds === null || seconds <= 0) return null;
-  return Math.max(1, Math.round(seconds / 60));
-}
+/**
+ * Whether this browser can speak, decided once — as `Feed` and `Library` decide
+ * it. A control that cannot work is withheld rather than drawn dead.
+ */
+const CAN_SPEAK = speechSupported();
+
+/**
+ * How deep a source page opens.
+ *
+ * The feed opens at the claim, because a feed of full arguments is not a feed.
+ * A reader who has navigated to a source has already said they want the long
+ * version, so this opens at the deepest stop the card has; `clampDepth` inside
+ * `PullCard` brings it in for a Pull with fewer.
+ *
+ * The stored `estimated_read_seconds` is no longer printed beside the idea. The
+ * dial's labels are computed from the words actually on screen at 210wpm, which
+ * `packages/ui/src/depth.ts` raises to a law precisely so that two durations
+ * cannot disagree in front of a reader.
+ */
+const READING_DEPTH = 3;
+
+/** Shared, because a new Set every render would be a new identity every render. */
+const EMPTY_SAVED: ReadonlySet<string> = new Set();
 
 /**
  * The way out of this page, which is not the same door for everyone.
@@ -176,38 +197,116 @@ export function Source({
     userId: null,
     rows: [],
   });
-  /*
-   * KEYED BY IDEA, all of it, which it was not.
-   *
-   * `asking` was a pull id and `askPrompt`, `askAnswer`, `askError` and `askBusy` were
-   * one value each for the whole page -- so the open flag was per-idea and every value
-   * carrying the reader's words was shared. Opening a second idea's form ran the toggle,
-   * which cleared the boxes, and a question composed under the first was gone. A save
-   * landing while another form was open closed it and wiped it. A refusal on one idea
-   * rendered under whichever form happened to be open, or nowhere at all. All three were
-   * demonstrated in review.
-   *
-   * The machine is in `lib/questions.ts` so it can be driven by a test: this suite runs
-   * in `environment: 'node'` with no React harness, so a state machine inside a component
-   * is one nothing can check, which is exactly how three of these shipped.
-   */
-  const [ask, dispatchAsk] = useReducer(askReducer, EMPTY_ASK);
   const [questionsFailed, setQuestionsFailed] = useState(false);
   /*
-   * THE MUTATION ID BELONGS TO THE DRAFT, NOT TO THE ATTEMPT.
+   * A retire that was refused, and which idea it was about.
    *
-   * Review finding. It was minted inside the send, so a retry after a lost response
-   * carried a NEW id -- and `remember_pull` deduplicates on `(user_id,
-   * client_mutation_id)`, so a first write it could not report back was invisible to the
-   * second. The reader presses Keep twice and owns two copies of one question, which
-   * then splits their per-question history in half.
-   *
-   * Held until the write is confirmed, and cleared when the reader EDITS. An id that
-   * outlived an edit would be worse than a fresh one: the RPC would answer with the
-   * FIRST question and silently discard the new wording.
+   * It used to be reported through the ask form's own error slot, which the form
+   * no longer owns -- `components/RememberThis.tsx` holds one draft and knows
+   * nothing about a question that already exists. Said rather than only logged: a
+   * row that silently reappears reads as a bug rather than as a refusal, and if
+   * the reload fails too the reader is left believing a question is retired while
+   * Review keeps asking it.
    */
-  const askMutations = useRef<Record<string, string>>({});
-  const bodyRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
+  const [retireFailed, setRetireFailed] = useState<string | null>(null);
+  /*
+   * The element a selection is measured against, per idea.
+   *
+   * It used to be the page's own `<p class="source__pull-body">`. The body now
+   * lives inside `PullCard`, which owns that paragraph, so the mark-bearing span
+   * `renderBody` returns is what carries the ref instead. `selectionOffsetsIn`
+   * measures against `textContent` from the element it is handed, so a span
+   * wrapping exactly the body text gives exactly the same offsets the paragraph
+   * did — and a Pull whose dial is turned below the claim has no such element,
+   * which is why the highlight control checks for one before offering itself.
+   */
+  const bodyRefs = useRef<Map<string, HTMLElement>>(new Map());
+
+  /*
+   * A source page is a reading view, so it reads at the deepest stop and keeps one
+   * depth for the screen — the reasoning `Feed` and `Library` give for keeping one:
+   * it is a preference about how to read, not a property of any single idea.
+   */
+  const [depth, setDepth] = useState(READING_DEPTH);
+
+  /**
+   * The idea whose Highlight control was pressed with nothing selected.
+   *
+   * One at a time, and cleared by the next successful mark: two ideas cannot both
+   * be waiting for a selection, because there is one selection.
+   */
+  const [highlightHint, setHighlightHint] = useState<string | null>(null);
+
+  /** The listening queue, which lives above the shell and outlives this page. */
+  const player = usePlayerActions();
+  const listening = usePlayerSelection();
+
+  /*
+   * Whether each idea's claim is on screen at the current depth, computed once.
+   *
+   * Highlighting measures a selection against the body, and the dial can turn the body
+   * off — the shortest stop is the headline alone — so the control is withheld there
+   * rather than left to fail silently on a missing ref. `depthLevels` tokenises every
+   * field of every Pull, and doing it inside the map ran it per card on every render,
+   * including renders about a share note or a saved id. Keyed on the two things it
+   * actually depends on.
+   *
+   * Above the early returns, with the other hooks: `pulls` only exists after `detail`
+   * has loaded, and a hook that runs only on the renders where it does is a hook that
+   * changes order.
+   */
+  const shownAtDepth = useMemo(() => {
+    const shown = new Map<string, boolean>();
+    for (const p of detail?.pulls ?? []) {
+      const levels = depthLevels({ ...p, hasSource: false });
+      shown.set(
+        p.id,
+        levels.slice(0, clampDepth(depth, levels) + 1).some((l) => l.key === 'claim'),
+      );
+    }
+    return shown;
+  }, [detail, depth]);
+
+  /*
+   * What this reader has already kept, so the card's Save control says which way
+   * it points. Fetched once per reader rather than per idea; a failure is silent
+   * and leaves every card unsaved, which is recoverable in one press and is the
+   * right way for a non-essential decoration to fail.
+   */
+  const [savedIds, setSaved] = useState<Set<string>>(new Set());
+  /*
+   * Read through the signed-in check rather than cleared on sign-out. Emptying it
+   * in the effect would be a `setState` synchronously inside one — a cascading
+   * render the lint rule refuses, and for good reason — and there is nothing to
+   * clear: a visitor is offered no Save control at all, so a set left over from a
+   * previous session is never consulted.
+   */
+  const saved = userId ? savedIds : EMPTY_SAVED;
+  useEffect(() => {
+    const ids = detail?.pulls.map((p) => p.id) ?? [];
+    if (!userId || ids.length === 0) return;
+    let cancelled = false;
+    /*
+     * Asked for THESE ideas, not for the whole library. `fetchSavedPullIds` walks all
+     * of `saved_items` a hundred rows at a time — law 3 promises unlimited stashing, so
+     * a reader with five thousand saves paid fifty sequential round trips to decorate
+     * eighteen Save controls.
+     */
+    fetchSavedAmong(userId, ids)
+      .then((kept) => {
+        if (!cancelled) setSaved(kept);
+      })
+      .catch((e: unknown) => {
+        // Logged, then degraded. A Save control that opens unpressed is wrong about a
+        // kept idea until the next press, and pressing it is idempotent (`savePull`
+        // swallows 23505) — but an empty catch made this the one read on the page that
+        // could fail with nothing anywhere saying it had.
+        console.error('Could not read which of these ideas you have kept', e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, detail]);
   /*
    * Four states, not two. `null` detail with no error is loading; a resolved `null`
    * from `fetchSource` is a work that does not exist; an error is an error. Review
@@ -411,63 +510,6 @@ export function Source({
 
   useEffect(reloadQuestions, [reloadQuestions]);
 
-  /**
-   * Write the question in the box, and put the idea into review.
-   *
-   * NOT OPTIMISTIC, unlike the highlight above it, and the difference is what failure
-   * costs. A highlight that fails to save is a mark that disappears from text still on
-   * screen; the reader sees it go and can select again. A question is a sentence they
-   * composed, and showing it as saved before it is would let them navigate away from
-   * words that were never stored. So the box holds what they typed until the row exists.
-   *
-   * The mutation id is minted BEFORE the send, which is what makes a retry after a
-   * timeout safe: `remember_pull` matches on `(user_id, client_mutation_id)` and returns
-   * the first call's question rather than writing a second one.
-   */
-  const saveQuestion = useCallback(
-    async (pullId: string) => {
-      if (ask.busyFor) return;
-      const draft = draftQuestion(draftFor(ask, pullId));
-      if (!draft.ok) {
-        dispatchAsk({ type: 'failed', pullId, message: draft.error });
-        return;
-      }
-
-      dispatchAsk({ type: 'sending', pullId });
-      try {
-        await rememberPull(pullId, {
-          prompt: draft.prompt,
-          answer: draft.answer,
-          kind: draft.kind,
-          mutationId: (askMutations.current[pullId] ??= mutationId()),
-        });
-        delete askMutations.current[pullId];
-        dispatchAsk({ type: 'kept', pullId });
-        reloadQuestions();
-      } catch (e: unknown) {
-        /*
-         * A REQUEST THAT NEVER LEFT THE DEVICE IS NOT A CONSTRAINT MESSAGE. postgrest-js
-         * resolves rather than rejects on a dead connection, so `rpcError` hands back an
-         * Error whose `message` is the verbatim "TypeError: Failed to fetch" -- which is
-         * what a reader on a train was shown under a form they had just filled in. The
-         * name is what tells the two apart, and every other write path in this app
-         * branches on it. Review finding.
-         */
-        dispatchAsk({
-          type: 'failed',
-          pullId,
-          message:
-            e instanceof Error && e.name === TRANSPORT_ERROR
-              ? 'That has not reached your account — you look offline. It stays in the box.'
-              : e instanceof Error
-                ? e.message
-                : 'That question did not reach your account.',
-        });
-      }
-    },
-    [ask, reloadQuestions],
-  );
-
   /*
    * Ideas close to the one the reader actually came for.
    *
@@ -522,6 +564,36 @@ export function Source({
     );
     const note = shareNote(outcome);
     setShareStatus(note ? { pullId, note } : null);
+  }
+
+  /*
+   * Keep an idea, or stop keeping it.
+   *
+   * Optimistic, and rolled back on failure, for the reason a highlight is: the
+   * reader is looking at the control they just pressed. `savePull` treats a
+   * duplicate as success, so a Save that raced a stale `saved` set still ends in
+   * the state the press asked for.
+   */
+  async function onSave(pullId: string) {
+    if (!userId) return;
+    const wasSaved = saved.has(pullId);
+    setSaved((prev) => {
+      const next = new Set(prev);
+      if (wasSaved) next.delete(pullId);
+      else next.add(pullId);
+      return next;
+    });
+    try {
+      if (wasSaved) await unsavePull(pullId, userId);
+      else await savePull(pullId, userId);
+    } catch {
+      setSaved((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.add(pullId);
+        else next.delete(pullId);
+        return next;
+      });
+    }
   }
 
   if (missing) {
@@ -656,7 +728,6 @@ export function Source({
       ) : (
         <ol className="source__pulls">
           {pulls.map((p) => {
-            const minutes = readingMinutes(p.estimatedReadSeconds);
             // Filtered once. This used to be a `.some()` guard followed by a `.filter()`
             // inside an immediately-invoked function -- and that IIFE runs during render,
             // so `react-hooks/refs` traced the ticket ref `reloadQuestions` now touches
@@ -667,45 +738,94 @@ export function Source({
               myQuestions.userId === userId
                 ? myQuestions.rows.filter((q) => q.pullId === p.id)
                 : [];
+            const bodyShown = shownAtDepth.get(p.id) ?? false;
+            const track = (): Track => ({
+              id: p.id,
+              title: work.title,
+              text: textAtDepth({ ...p, hasSource: false }, depth),
+            });
             return (
               <li key={p.id} id={`p-${p.id}`} className="source__pull">
-                <h3 className="source__pull-headline">{p.headline}</h3>
                 {/*
-                  Re-anchored on every render rather than trusting the stored
-                  offsets: a highlight whose text has moved follows its words,
-                  and one whose text is gone is dropped rather than drawn over
-                  whatever now occupies those characters.
+                  The same card the feed draws, because this is the same idea.
+
+                  The page used to render its own headline and paragraphs, so a
+                  reader who arrived from a shared link met a different object from
+                  the one they had been reading a moment earlier — no dial, no
+                  Listen, no Save, and a body they could highlight but not keep.
+
+                  `onOpenSource` is deliberately absent: the reader is already on
+                  the source, so the dial stops at the full argument rather than
+                  offering a door to the page it is on.
                 */}
-                <p
-                  className="source__pull-body"
-                  ref={(el) => {
-                    if (el) bodyRefs.current.set(p.id, el);
-                    else bodyRefs.current.delete(p.id);
-                  }}
-                >
-                  {splitByRanges(
-                    p.body,
-                    highlights
-                      .filter((h) => h.pullId === p.id && h.field === 'body')
-                      .map((h) => anchor(p.body, h))
-                      .filter((r): r is { start: number; end: number } => r !== null),
-                  ).map((seg, i) =>
-                    seg.marked ? (
-                      <mark key={i} className="source__mark">
-                        {seg.text}
-                      </mark>
+                <PullCard
+                  source={{ title: work.title, kind: work.kind, year: work.year }}
+                  headline={p.headline}
+                  body={p.body}
+                  whyItMatters={p.whyItMatters}
+                  explanation={p.explanation}
+                  sourceTrail={detail.summaryTitle}
+                  depth={depth}
+                  onDepthChange={setDepth}
+                  saved={saved.has(p.id)}
+                  onSave={userId ? () => void onSave(p.id) : undefined}
+                  listening={isPlaying(listening, p.id)}
+                  onListen={
+                    CAN_SPEAK
+                      ? () => {
+                          if (isPlaying(listening, p.id)) player.stop();
+                          else player.playNow(track());
+                        }
+                      : undefined
+                  }
+                  queued={isQueued(listening, p.id)}
+                  onQueue={
+                    CAN_SPEAK
+                      ? () => {
+                          if (isQueued(listening, p.id)) player.remove(p.id);
+                          else player.enqueue([track()]);
+                        }
+                      : undefined
+                  }
+                  /*
+                    Re-anchored on every render rather than trusting the stored
+                    offsets: a highlight whose text has moved follows its words,
+                    and one whose text is gone is dropped rather than drawn over
+                    whatever now occupies those characters.
+
+                    Inline content only — this is rendered inside the card's own
+                    paragraph — so the marks come back wrapped in a span, which is
+                    also what carries the ref the selection is measured against.
+                  */
+                  renderBody={(text, field) =>
+                    field === 'body' ? (
+                      <span
+                        ref={(el) => {
+                          if (el) bodyRefs.current.set(p.id, el);
+                          else bodyRefs.current.delete(p.id);
+                        }}
+                      >
+                        {splitByRanges(
+                          text,
+                          highlights
+                            .filter((h) => h.pullId === p.id && h.field === 'body')
+                            .map((h) => anchor(text, h))
+                            .filter((r): r is { start: number; end: number } => r !== null),
+                        ).map((seg, i) =>
+                          seg.marked ? (
+                            <mark key={i} className="source__mark">
+                              {seg.text}
+                            </mark>
+                          ) : (
+                            <span key={i}>{seg.text}</span>
+                          ),
+                        )}
+                      </span>
                     ) : (
-                      <span key={i}>{seg.text}</span>
-                    ),
-                  )}
-                </p>
-                {p.explanation ? <p className="source__pull-more">{p.explanation}</p> : null}
-                {p.whyItMatters ? (
-                  <p className="source__pull-why">
-                    <span className="meta">Why it matters</span> {p.whyItMatters}
-                  </p>
-                ) : null}
-                {minutes ? <p className="meta">{minutes} min</p> : null}
+                      text
+                    )
+                  }
+                />
 
                 <p className="source__pull-actions">
                   {/*
@@ -731,7 +851,18 @@ export function Source({
                   ) : null}
                 </p>
 
-                {userId && (
+                {/*
+                  TWO CONTROLS, ONE GATE TOO MANY.
+                
+                  Highlighting needs a body on screen: it measures a selection against
+                  the rendered element, so at a depth stop that does not show the claim
+                  there is nothing to select. Removing a mark needs no such thing — the
+                  marks are stored, and they come back the moment the dial goes up. They
+                  were behind the same `bodyShown`, so a reader who turned the dial down
+                  lost the only way to clear a highlight they had just made, with nothing
+                  on screen saying why the button had gone.
+                */}
+                {userId && bodyShown && (
                   <p className="source__pull-actions">
                     <button
                       type="button"
@@ -741,9 +872,16 @@ export function Source({
                         if (!el) return;
                         const range = selectionOffsetsIn(el);
                         if (!range) {
-                          window.alert('Select some words in this idea first.');
+                          // On the screen, beside the control, not in a modal. The
+                          // last of the five native dialogs `docs/contributing-map.md`
+                          // lists: `window.alert` blocks, cannot be read in the app's
+                          // voice, and on a phone is a system sheet that looks like it
+                          // came from somewhere else — over a message whose whole
+                          // content is "look at the thing behind me".
+                          setHighlightHint(p.id);
                           return;
                         }
+                        setHighlightHint(null);
                         const id = globalThis.crypto.randomUUID();
                         // Optimistic, then sent. A highlight that takes a round
                         // trip to appear feels broken at the exact moment the
@@ -768,162 +906,65 @@ export function Source({
                       }}
                     >
                       Highlight the selection
-                    </button>{' '}
-                    {/* REMEMBER THIS. The other half of what a reader can do with an
-                        idea they are looking at: mark the words, or write the question
-                        they want to be asked about them later.
+                    </button>
+                  </p>
+                )}
 
-                        `remember_pull` does three things at once, and the copy below
-                        says all three, because a button that silently schedules
-                        something is a button that surprises people: it stores the
-                        question, saves the idea, and puts it into review. */}
+                {userId && highlights.some((h) => h.pullId === p.id) && (
+                  <p className="source__pull-actions">
                     <button
                       type="button"
                       className="btn btn--plain"
-                      aria-expanded={ask.openFor === p.id}
-                      aria-controls={`ask-form-${p.id}`}
                       onClick={() => {
-                        /*
-                         * A DISMISSAL DROPS THIS IDEA'S DRAFT AND ITS ID TOGETHER, and
-                         * opening a different idea drops neither -- which is the whole
-                         * correction. The id has to go with the words for the reason the
-                         * ref carries: a Keep whose response was lost may still have
-                         * committed, so an id that outlives the sentence it was minted
-                         * for makes the RPC answer with the FIRST question and discard
-                         * the new wording.
-                         */
-                        if (ask.openFor === p.id) delete askMutations.current[p.id];
-                        dispatchAsk({ type: 'toggle', pullId: p.id });
+                        const mine = highlights.filter((h) => h.pullId === p.id);
+                        const last = mine[mine.length - 1];
+                        if (!last) return;
+                        // Same reasoning as the insert: a load in flight would
+                        // otherwise put this one back.
+                        claimHighlightLoad();
+                        setHighlights((prev) => prev.filter((h) => h.id !== last.id));
+                        deleteHighlight(last.id).catch((e: unknown) => {
+                          console.error('Could not remove the highlight', e);
+                          reloadHighlights();
+                        });
                       }}
                     >
-                      {ask.openFor === p.id ? 'Never mind' : 'Remember this'}
+                      Remove the last one
                     </button>
-                    {highlights.some((h) => h.pullId === p.id) && (
-                      <button
-                        type="button"
-                        className="btn btn--plain"
-                        onClick={() => {
-                          const mine = highlights.filter((h) => h.pullId === p.id);
-                          const last = mine[mine.length - 1];
-                          if (!last) return;
-                          // Same reasoning as the insert: a load in flight would
-                          // otherwise put this one back.
-                          claimHighlightLoad();
-                          setHighlights((prev) => prev.filter((h) => h.id !== last.id));
-                          deleteHighlight(last.id).catch((e: unknown) => {
-                            console.error('Could not remove the highlight', e);
-                            reloadHighlights();
-                          });
-                        }}
-                      >
-                        Remove the last one
-                      </button>
-                    )}
                   </p>
                 )}
 
-                {userId && ask.openFor === p.id && (
-                  <div className="source__ask" id={`ask-form-${p.id}`}>
-                    <label className="field__label" htmlFor={`ask-prompt-${p.id}`}>
-                      What should this idea ask you?
-                    </label>
-                    <textarea
-                      id={`ask-prompt-${p.id}`}
-                      className="field__textarea"
-                      rows={2}
-                      value={draftFor(ask, p.id).prompt}
-                      aria-invalid={Boolean(ask.errors[p.id])}
-                      aria-describedby={ask.errors[p.id] ? `ask-error-${p.id}` : undefined}
-                      onChange={(e) => {
-                        // The id goes with the wording it was minted for. Editing after a
-                        // failed Keep is a NEW question, and reusing the id would have the
-                        // RPC answer with the old one.
-                        delete askMutations.current[p.id];
-                        dispatchAsk({
-                          type: 'edit',
-                          pullId: p.id,
-                          field: 'prompt',
-                          value: e.target.value,
-                        });
-                      }}
-                      placeholder="What does an obstacle become?"
-                    />
-                    <label className="field__label" htmlFor={`ask-answer-${p.id}`}>
-                      The answer
-                    </label>
-                    {/* Sentence case and not `.meta`, which is mono and UPPERCASED. A
-                        label is two or three words and reads fine shouted; this is a
-                        sentence, and CLAUDE.md's law 1 leaves typography to do the work
-                        rather than raising the app's voice at the reader mid-explanation.
-                        (Named, because `docs/design.md` numbers its own laws differently
-                        and a PR in this series was already pulled up for citing the
-                        wrong one.) */}
-                    <p className="source__ask-hint" id={`ask-answer-hint-${p.id}`}>
-                      Optional, and kept with the question so you can read it back here. Review
-                      shows you the idea and you mark yourself either way.
-                    </p>
-                    <textarea
-                      id={`ask-answer-${p.id}`}
-                      className="field__textarea"
-                      aria-describedby={`ask-answer-hint-${p.id}`}
-                      rows={2}
-                      value={draftFor(ask, p.id).answer}
-                      onChange={(e) => {
-                        delete askMutations.current[p.id];
-                        dispatchAsk({
-                          type: 'edit',
-                          pullId: p.id,
-                          field: 'answer',
-                          value: e.target.value,
-                        });
-                      }}
-                    />
-                    {/* `.source__ask-error`, not `.meta`. The hint two elements up argues
-                        that reader-facing prose must not be mono and uppercased, and the
-                        refusal was rendering in exactly that — so an error looked
-                        identical to the neutral sentence beside it and `role="alert"` was
-                        the only thing distinguishing them, which is a signal for screen
-                        readers and none at all for everyone else. The accent plus a rule,
-                        so it differs by more than hue. */}
-                    {ask.errors[p.id] && (
-                      <p className="source__ask-error" id={`ask-error-${p.id}`} role="alert">
-                        {ask.errors[p.id]}
-                      </p>
-                    )}
-                    <p>
-                      <button
-                        type="button"
-                        className="btn"
-                        aria-disabled={ask.busyFor === p.id}
-                        aria-describedby={`ask-consequence-${p.id}`}
-                        onClick={() => void saveQuestion(p.id)}
-                      >
-                        {ask.busyFor === p.id ? 'Keeping…' : 'Keep this question'}
-                      </button>{' '}
-                      {/* Described BY the button, not merely next to it: a screen-reader
-                          user tabbing here heard "Keep this question, button" and none of
-                          what it silently does. */}
-                      <span className="meta" id={`ask-consequence-${p.id}`}>
-                        Keeping it also saves this idea and puts it in your review.
-                      </span>
-                    </p>
-                  </div>
-                )}
-
-                {userId && ask.keptFor === p.id && ask.openFor !== p.id && (
+                {/*
+                  Behind the same gate as the button it points at. Turning the dial below
+                  the claim takes the Highlight control off the screen, and this was
+                  outside the gate — so the instruction stayed, naming a button that was
+                  not there and a passage that was not shown.
+                */}
+                {userId && bodyShown && highlightHint === p.id ? (
                   <p className="meta" role="status">
-                    {/* NOT "from tomorrow", and not "here". `remember_pull` inserts
-                        `knowledge_states` with `on conflict do nothing`, so an idea
-                        already in review keeps the schedule it had -- which may be two
-                        months out. `questions-api.ts` says so in as many words while this
-                        line promised otherwise, and the RPC returns nothing the screen
-                        could use to tell. And it is Review that asks, not this page. */}
-                    Kept. It will come up in your reviews.
+                    Select some words in this idea first, then press Highlight.
                   </p>
-                )}
+                ) : null}
+
+                {/* REMEMBER THIS. The other half of what a reader can do with an
+                    idea they are looking at: mark the words, or write the question
+                    they want to be asked about them later.
+
+                    Lifted into `components/RememberThis.tsx` so the Library can offer
+                    the same thing on an imported highlight. Everything that made this
+                    careful -- the submission id that goes with the wording, the
+                    not-optimistic save, the transport error that is not a constraint
+                    message -- moved with it. */}
+                {userId && <RememberThis pullId={p.id} onKept={reloadQuestions} idPrefix="ask" />}
 
                 {userId && questionsFailed && mine.length === 0 && (
                   <p className="meta">Could not load your questions for this idea.</p>
+                )}
+
+                {retireFailed === p.id && (
+                  <p className="source__ask-error" role="alert">
+                    That question is still in your review.
+                  </p>
                 )}
 
                 {userId && mine.length > 0 && (
@@ -967,6 +1008,7 @@ export function Source({
                               // local change to the array has to claim one too -- which is
                               // what both highlight mutations do, ten lines apart.
                               claimQuestionLoad();
+                              setRetireFailed(null);
                               setMyQuestions((prev) => ({
                                 ...prev,
                                 rows: prev.rows.filter((x) => x.id !== q.id),
@@ -977,11 +1019,7 @@ export function Source({
                                 // reads as the bug above rather than as a refusal, and if
                                 // the reload fails too the reader is left believing a
                                 // question is retired while Review keeps asking it.
-                                dispatchAsk({
-                                  type: 'failed',
-                                  pullId: p.id,
-                                  message: 'That question is still in your review.',
-                                });
+                                setRetireFailed(p.id);
                                 reloadQuestions();
                               });
                             }}

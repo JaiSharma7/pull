@@ -707,12 +707,48 @@ export async function readReviewPack(userId: string): Promise<ReviewPack | null>
   }
 }
 
-/** A card answered offline leaves the pack, so it is not asked twice before the next sync. */
-export async function removeFromPack(userId: string, pullId: string): Promise<void> {
+/**
+ * A card answered offline leaves the pack, so it is not asked twice before the next sync.
+ *
+ * Reports whether it actually removed one. The caller keeps a count of what is on the
+ * device beside the pack, and decrementing it for a card that was never downloaded made
+ * the label drift: a reader with five stored cards working through a forty-card online
+ * session was told "Nothing downloaded yet" after five answers, over five cards still
+ * sitting in IndexedDB.
+ */
+export async function removeFromPack(userId: string, pullId: string): Promise<boolean> {
+  try {
+    const database = await db();
+    if (!database) return false;
+    const key = scopedKey(userId, pullId);
+    // Read first, because `delete` resolves the same way whether or not a row was there.
+    const stored = await database.getKey('reviewPack', key);
+    if (stored === undefined) return false;
+    await database.delete('reviewPack', key);
+    return true;
+  } catch {
+    /* best effort, as above */
+    return false;
+  }
+}
+
+/**
+ * The cached feed this account left behind.
+ *
+ * Same argument as `clearReviewPack`, and it was being made about this store without
+ * anything doing it: a copy of one reader's Pulls — headline and body — sitting in
+ * IndexedDB on a machine they have signed out of. `docs/privacy.md` says site data is
+ * cleared by signing out, and scoping by user is what makes a cache invisible to the
+ * next reader, not what removes it.
+ */
+export async function clearCachedPulls(userId: string): Promise<void> {
   try {
     const database = await db();
     if (!database) return;
-    await database.delete('reviewPack', scopedKey(userId, pullId));
+    const tx = database.transaction('pulls', 'readwrite');
+    const keys = await tx.store.index('by-user').getAllKeys(userId);
+    await Promise.all(keys.map((key) => tx.store.delete(key)));
+    await tx.done;
   } catch {
     /* best effort, as above */
   }

@@ -3,11 +3,13 @@ import {
   asRightsStatus,
   asWorkKind,
   BilledStepError,
+  BudgetExhaustedError,
   jumpFor,
   narrowTopics,
   SourceHeldError,
   NO_USAGE,
   type QuizQuestionRow,
+  RESERVE_CENTS,
   RIGHTS_STATUSES,
   runPipelineStep,
   WORK_KINDS,
@@ -394,15 +396,20 @@ describe('reuse skips the paid work', () => {
   function harness(
     reuse: { workId: string; summaryId: string } | null,
     claim: 'claimed' | 'held' = 'claimed',
+    budget: 'available' | 'spent' = 'available',
+    ownsWork = false,
   ) {
     const calls = {
       summary: 0,
       embedding: 0,
       createSummary: 0,
+      attachGenerated: 0,
       insertPulls: 0,
       insertQuizQuestions: 0,
       claim: 0,
       release: 0,
+      /** Every hold taken, in order, so a test can assert what was reserved and when. */
+      reserved: [] as { step: string; cents: number }[],
     };
     // What the fakes were handed, so the tests can assert on the values that
     // actually reach Postgres rather than only on how often it was called.
@@ -413,14 +420,23 @@ describe('reuse skips the paid work', () => {
         topics: string[];
         qualityScore: number | null;
         trustScore: number | null;
+        visibility: string;
       };
       createSummary?: { authorId: string | null; visibility: string };
+      attachGenerated?: { jobId: string; workId: string; visibility: string; title: string };
       insertQuizQuestions?: readonly QuizQuestionRow[];
     } = {};
+
+    /** One generated summary per job, as `attach_generated_summary` guarantees. */
+    const attached = new Map<string, { summaryId: string; version: number }>();
 
     const deps = {
       summary: {
         name: 'fake',
+        // What `synthesize` now reserves: the provider's own ceiling for the prompt it
+        // is about to send, rather than a constant, so the assertion below reads the
+        // number the pipeline actually holds.
+        worstCaseCentsFor: () => 19,
         generateSummary: async () => {
           calls.summary++;
           return {
@@ -466,6 +482,7 @@ describe('reuse skips the paid work', () => {
           topics: string[];
           qualityScore: number | null;
           trustScore: number | null;
+          visibility: string;
         }) => {
           received.upsertWork = input;
           return { workId: 'w1', existing: false };
@@ -504,6 +521,28 @@ describe('reuse skips the paid work', () => {
         setPullEmbeddings: async () => undefined,
         publishSummary: async () => undefined,
         attachSummaryToJob: async () => undefined,
+        /*
+         * A STORE, not a stub. The property this stands in for is that the summary and
+         * the job's reference to it are written together, so the fake keeps the one it
+         * wrote per job and hands the same id back on a second call — which is what the
+         * real function does under a row lock, and what a stub returning a fresh id
+         * every time would have hidden.
+         */
+        attachGeneratedSummary: async (input: {
+          jobId: string;
+          workId: string;
+          visibility: string;
+          title: string;
+        }) => {
+          calls.attachGenerated++;
+          received.attachGenerated = input;
+          const held = attached.get(input.jobId);
+          if (held) return { ...held, created: false };
+          const made = { summaryId: `s-gen-${attached.size + 1}`, version: 2 };
+          attached.set(input.jobId, made);
+          return { ...made, created: true };
+        },
+        renewSourceClaim: async () => true,
         claimSourceHash: async () => {
           calls.claim++;
           return claim;
@@ -511,6 +550,11 @@ describe('reuse skips the paid work', () => {
         releaseSourceHash: async () => {
           calls.release++;
         },
+        reserveBudget: async (_jobId: string, step: string, cents: number) => {
+          calls.reserved.push({ step, cents });
+          if (budget === 'spent') throw new BudgetExhaustedError(step);
+        },
+        requesterOwnsWork: async () => ownsWork,
       },
     };
     return { deps, calls, received };
@@ -609,6 +653,223 @@ describe('reuse skips the paid work', () => {
     expect(err).not.toBeInstanceOf(BilledStepError);
     expect(calls.claim).toBe(1);
     expect(calls.summary).toBe(0);
+  });
+
+  /*
+   * The daily cap, from the pipeline's side.
+   *
+   * What matters here is ORDER and COST. The hold is taken after the source claim
+   * -- a job that is only going to wait on a held source should not take a hold it
+   * will not use -- and before the provider, because a reservation taken afterwards
+   * is a receipt rather than a cap. And a refusal is a wait: nothing was sent, so
+   * it is neither a billed failure nor an attempt the worker should record.
+   */
+  it('holds the budget before it calls the provider, and after the claim', async () => {
+    const { deps, calls } = harness(null);
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    /*
+     * THE PROVIDER'S CEILING. It was `RESERVE_CENTS.synthesize`, a hand-pinned 6 — the
+     * expected cost of a Gemini call — and a reservation smaller than the charge that
+     * replaces it lets the cap be overshot by the difference. The Anthropic fallback at
+     * its configured `max_tokens` and prices charges nearly three times that.
+     */
+    expect(calls.reserved).toEqual([{ step: 'synthesize', cents: 19 }]);
+    expect(calls.claim).toBe(1);
+    expect(calls.summary).toBe(1);
+  });
+
+  it('takes no hold for a source it is only going to wait on', async () => {
+    const { deps, calls } = harness(null, 'held');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never).catch(() => undefined);
+    expect(calls.reserved).toEqual([]);
+  });
+
+  it('waits rather than fails when the day is spent, and calls nothing', async () => {
+    const { deps, calls } = harness(null, 'claimed', 'spent');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+
+    const err = await attempt.catch((e) => e);
+    expect(err).toBeInstanceOf(BudgetExhaustedError);
+    // Not a billed failure: nothing was sent, so nothing is owed and the worker
+    // must not spend an attempt on it.
+    expect(err).not.toBeInstanceOf(BilledStepError);
+    expect(calls.summary).toBe(0);
+  });
+
+  it('lets go of the source when the budget refuses, so no one else waits on it', async () => {
+    /*
+     * A budget wait can last 24 hours and every redelivery re-runs this step from the
+     * top, renewing the lease. Held through that, a job that is merely early would
+     * starve every other job on the same text: each gets `held`, burns its own 30
+     * minutes of waiting, and then fails terminally for doing nothing wrong.
+     */
+    const { deps, calls } = harness(null, 'claimed', 'spent');
+
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const err = await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never).catch((e) => e);
+
+    expect(err).toBeInstanceOf(BudgetExhaustedError);
+    expect(calls.claim).toBe(1);
+    expect(calls.release).toBe(1);
+  });
+
+  it('keeps the source when the provider is what failed, since that is a real attempt', async () => {
+    // Only a budget refusal releases. A billed failure is an attempt on this source and
+    // the claim is what stops a second job paying for the same text alongside it.
+    const { deps, calls } = harness(null);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    await runPipelineStep('synthesize', {
+      ...deps,
+      priorOutputs: { acquire: acquired.output },
+    } as never);
+    expect(calls.release).toBe(0);
+  });
+
+  it('holds against the cap for embedding too, since a cheap call is still a call', async () => {
+    const { deps, calls } = harness(null);
+
+    await runPipelineStep('embed', {
+      ...deps,
+      priorOutputs: {
+        cards: { pulls: [{ ordinal: 0, id: 'p0' }] },
+        synthesize: SYNTHESIZED,
+      },
+    } as never);
+
+    expect(calls.reserved).toEqual([{ step: 'embed', cents: RESERVE_CENTS.embed }]);
+    expect(calls.embedding).toBe(1);
+  });
+
+  /*
+   * An imported book gains a summary, not a second `works` row.
+   *
+   * `upsertWork` keys on the content hash, which is the right identity for a
+   * canonical source and the wrong one for an import: the reader's work already
+   * exists, created per reader by `commit_import`, and the text they send to
+   * Studio is not what that row was hashed from. Adopted only where they authored
+   * a summary on it -- and the negative case matters at least as much, because
+   * adopting somebody else's work would attach a private generation to a row the
+   * requester has nothing to do with.
+   */
+  it('adopts a work the requester authored a summary on rather than keying on the hash', async () => {
+    const { deps, calls, received } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-imported' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { workId: string; adopted?: boolean; version?: number } };
+
+    expect(out.output.workId).toBe('w-imported');
+    expect(out.output.adopted).toBe(true);
+    expect(calls.attachGenerated).toBe(1);
+
+    /*
+     * THROUGH THE ATOMIC WRITE, and never through `createSummary`.
+     *
+     * The plain insert cannot be made to land with the job's reference to it, and the
+     * version it would have to be given has no right answer from out here — see
+     * 20260914050000. What this asserts is that the adopt path does not take that
+     * route at all, and that what comes back is never version 1: an imported book
+     * already carries the reader's version 1, the summary `commit_import` hangs the
+     * highlights from, and `cards` would upsert model output over their own highlight
+     * text at every shared ordinal.
+     */
+    expect(calls.createSummary).toBe(0);
+    expect(out.output.version).toBe(2);
+
+    // The reader's own work and the JOB's visibility, not the target's: a client-sent
+    // visibility never survives `enqueue_generation_job`, and a private generation
+    // written public would be the reader's own book published on their behalf.
+    expect(received.attachGenerated?.workId).toBe('w-imported');
+    expect(received.attachGenerated?.visibility).toBe(
+      (deps as { job: { visibility: string } }).job.visibility,
+    );
+  });
+
+  it('writes one summary across a retry whose attach never landed', async () => {
+    /*
+     * The orphan case, and the one the `job.summary_id` guard CANNOT catch.
+     *
+     * The insert commits, the attach does not — a lost response is enough — so the
+     * retry arrives with `job.summary_id` still null and this branch runs again. Asking
+     * the database for "the next free version" wrote a second empty draft on the
+     * reader's own book, because the orphan is itself what makes the next version
+     * higher; a constant version collided with the first GENERATION's published
+     * summary instead. Neither is a problem the caller can solve, which is why the
+     * write and the reference now land in one transaction keyed on the job.
+     */
+    const { deps } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+    const attempt = {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-imported' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    };
+
+    const first = (await runPipelineStep('template', attempt as never)) as {
+      output: { summaryId: string };
+    };
+    const second = (await runPipelineStep('template', attempt as never)) as {
+      output: { summaryId: string };
+    };
+
+    expect(second.output.summaryId).toBe(first.output.summaryId);
+  });
+
+  it('writes no second summary when the step is retried after attaching one', async () => {
+    // A retry after `attachSummaryToJob` committed would otherwise ask for the NEXT
+    // version again and leave the first generated summary orphaned — and adopting on
+    // collision cannot catch it, because each attempt asks for a different version.
+    const { deps, calls } = harness(null, 'claimed', 'available', true);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: {
+        ...(deps as { job: Record<string, unknown> }).job,
+        target: { work_id: 'w-imported' },
+        summary_id: 's-already',
+      },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { summaryId: string } };
+
+    expect(out.output.summaryId).toBe('s-already');
+    expect(calls.createSummary).toBe(0);
+  });
+
+  it('keys on the hash when the work belongs to somebody else', async () => {
+    const { deps } = harness(null, 'claimed', 'available', false);
+    const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
+
+    const out = (await runPipelineStep('template', {
+      ...deps,
+      job: { ...(deps as { job: Record<string, unknown> }).job, target: { work_id: 'w-theirs' } },
+      priorOutputs: { acquire: acquired.output, synthesize: SYNTHESIZED },
+    } as never)) as { output: { workId: string; adopted?: boolean } };
+
+    expect(out.output.workId).not.toBe('w-theirs');
+    expect(out.output.adopted).toBeUndefined();
   });
 
   it('renews the claim once the summary is committed', async () => {
@@ -994,6 +1255,10 @@ describe('reuse skips the paid work', () => {
     const deps = {
       summary: {
         name: 'fake',
+        // What `synthesize` now reserves: the provider's own ceiling for the prompt it
+        // is about to send, rather than a constant, so the assertion below reads the
+        // number the pipeline actually holds.
+        worstCaseCentsFor: () => 19,
         generateSummary: async () => {
           calls.summary++;
           return {
@@ -1032,7 +1297,10 @@ describe('reuse skips the paid work', () => {
           attached.push({ jobId, summaryId, workId });
         },
         claimSourceHash: async () => 'claimed' as const,
+        renewSourceClaim: async () => true,
         releaseSourceHash: async () => undefined,
+        reserveBudget: async () => undefined,
+        requesterOwnsWork: async () => false,
       },
     };
     return { deps, calls, attached };
@@ -1298,16 +1566,28 @@ describe('reuse skips the paid work', () => {
       whyItMatters: string;
       pulls: { headline: string; body: string; whyItMatters: string }[];
     }) {
-      const { deps } = harness(null);
+      const { deps, calls } = harness(null);
       return {
-        ...deps,
-        summary: {
-          name: 'fake',
-          generateSummary: async () => ({
-            summary,
-            usage: { inputTokens: 900, outputTokens: 120, costCents: 7 },
-            model: 'fake-model-b',
-          }),
+        calls,
+        deps: {
+          ...deps,
+          summary: {
+            name: 'fake',
+            /*
+             * Present because the pipeline calls it. This override replaces `summary`
+             * wholesale, and without this field `synthesize` reserved `undefined` --
+             * `coalesce(p_cents, 0)` against the real RPC, which is a zero hold. The
+             * `as never` casts below are what let that compile, so the type system,
+             * which is the only guard on this member, was off at the one call site that
+             * exercises it. The test at the bottom of this block now asserts the number.
+             */
+            worstCaseCentsFor: () => 19,
+            generateSummary: async () => ({
+              summary,
+              usage: { inputTokens: 900, outputTokens: 120, costCents: 7 },
+              model: 'fake-model-b',
+            }),
+          },
         },
       };
     }
@@ -1324,7 +1604,7 @@ describe('reuse skips the paid work', () => {
         },
       ],
     ])('carries the usage when the provider returns %s', async (_label, summary) => {
-      const deps = harnessReturning(summary);
+      const { deps, calls } = harnessReturning(summary);
       const acquired = await runPipelineStep('acquire', { ...deps, priorOutputs: {} } as never);
 
       const thrown = await runPipelineStep('synthesize', {
@@ -1340,6 +1620,17 @@ describe('reuse skips the paid work', () => {
       expect(billed.usage.inputTokens).toBe(900);
       expect(billed.model).toBe('fake-model-b');
       expect(billed.provider).toBe('fake');
+      /*
+       * And the hold that paid for it was the provider's number.
+       *
+       * This block reaches the pipeline through `as never`, so the one guard on
+       * `worstCaseCentsFor` -- that the interface requires it -- is switched off here.
+       * The override dropped the member for a while and `synthesize` reserved
+       * `undefined`, which `reserve_budget` reads as `coalesce(p_cents, 0)`: a call
+       * billed at 7 cents standing behind a hold of nothing, in the two tests written
+       * to prove a billed failure still reaches the ledger.
+       */
+      expect(calls.reserved).toEqual([{ step: 'synthesize', cents: 19 }]);
     });
   });
 
@@ -1378,7 +1669,7 @@ describe('embed', () => {
           usage: { inputTokens: 0, outputTokens: 0, costCents: 0 },
         }),
       },
-      db: { setPullEmbeddings: async () => undefined },
+      db: { setPullEmbeddings: async () => undefined, reserveBudget: async () => undefined },
       job: { visibility: 'private' },
       priorOutputs: {
         cards: {
@@ -1399,6 +1690,66 @@ describe('embed', () => {
     await expect(runPipelineStep('embed', deps as never)).rejects.toThrow(/1 vectors for 2 pulls/);
   });
 
+  /*
+   * Both failures here happen AFTER the provider has answered, which means after it has
+   * metered the call. Thrown plainly they reach `failUnbilled`, which writes a step row
+   * with no usage and settles the hold -- a real charge replaced by nothing, and another
+   * on every retry, none of which `spend_today()` can see. Law 2 is that every call
+   * writes to the ledger, not every successful one.
+   */
+  it.each([
+    [
+      'the provider returns too few vectors',
+      {
+        embed: async (texts: string[]) => ({
+          vectors: texts.slice(0, -1).map(() => [1]),
+          usage: { inputTokens: 40, outputTokens: 0, costCents: 3 },
+        }),
+        setPullEmbeddings: async () => undefined,
+      },
+    ],
+    [
+      'the vectors cannot be stored',
+      {
+        embed: async (texts: string[]) => ({
+          vectors: texts.map(() => [1]),
+          usage: { inputTokens: 40, outputTokens: 0, costCents: 3 },
+        }),
+        setPullEmbeddings: async () => {
+          throw new Error('pgvector said no');
+        },
+      },
+    ],
+  ])('carries the embedding charge when %s', async (_label, fakes) => {
+    const deps = {
+      embedding: { name: 'fake-embedder', embed: fakes.embed },
+      db: { setPullEmbeddings: fakes.setPullEmbeddings, reserveBudget: async () => undefined },
+      job: { visibility: 'private' },
+      priorOutputs: {
+        cards: {
+          pulls: [
+            { ordinal: 0, id: 'p0' },
+            { ordinal: 1, id: 'p1' },
+          ],
+        },
+        synthesize: {
+          pulls: [
+            { headline: 'a', body: 'a' },
+            { headline: 'b', body: 'b' },
+          ],
+        },
+      },
+    };
+
+    const thrown = await runPipelineStep('embed', deps as never).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(BilledStepError);
+    const billed = thrown as InstanceType<typeof BilledStepError>;
+    expect(billed.usage.costCents).toBe(3);
+    expect(billed.model).toBe('fake-embedder');
+    expect(billed.provider).toBe('fake-embedder');
+  });
+
   it('pairs each vector with the Pull ordinal it belongs to, not its position', async () => {
     const stored: { id: string; embedding: number[] }[] = [];
     const deps = {
@@ -1413,6 +1764,7 @@ describe('embed', () => {
         setPullEmbeddings: async (rows: { id: string; embedding: number[] }[]) => {
           stored.push(...rows);
         },
+        reserveBudget: async () => undefined,
       },
       job: { visibility: 'private' },
       priorOutputs: {

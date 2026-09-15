@@ -38,6 +38,7 @@ const PATH_TITLES: Record<string, string> = {
   '/search': 'Search',
   '/graph': 'Synapse Graph',
   '/import': 'Import History',
+  '/studio': 'Studio',
   '/demo': 'Demo',
   '/metacognition': 'Metacognitive ROI',
 

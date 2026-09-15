@@ -13,7 +13,13 @@
  * result lands in `cost_ledger`.
  */
 
-import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
+import {
+  BilledProviderError,
+  buildSummaryPrompt,
+  ProviderUnavailableError,
+  assertPricing,
+  worstCaseCentsFor,
+} from './providers.ts';
 import { PROMPTS } from './prompts.ts';
 import type { CanonicalSummary, SummaryInput, SummaryProvider, Usage } from './providers.ts';
 
@@ -206,8 +212,22 @@ function toolInput(payload: Record<string, unknown>): Record<string, unknown> {
 }
 
 export function createAnthropicSummaryProvider(config: AnthropicConfig): SummaryProvider {
+  const pricing = {
+    inputUsdPerMTok: config.inputUsdPerMTok,
+    outputUsdPerMTok: config.outputUsdPerMTok,
+    maxOutputTokens: config.maxTokens,
+  };
+  // Refused here rather than on the first job: see `assertPricing`.
+  assertPricing('anthropic', pricing);
+  // The tool definition goes with every request and is billed as input. Built once,
+  // because `summaryTool()` returns the same object every time.
+  const toolBytes = JSON.stringify(summaryTool());
   return {
     name: 'anthropic',
+    // `maxTokens` is this provider's own required ceiling, so the worst case has always
+    // been computable here — it was simply never asked for. At the default model prices
+    // it is nearly three times the six cents that used to be reserved for every call.
+    worstCaseCentsFor: (input) => worstCaseCentsFor(pricing, input, toolBytes),
 
     async generateSummary(input: SummaryInput) {
       const tool = summaryTool();

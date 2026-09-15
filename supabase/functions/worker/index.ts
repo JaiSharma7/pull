@@ -4,6 +4,7 @@ import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
 import {
   BilledStepError,
+  BudgetExhaustedError,
   jumpFor,
   runPipelineStep,
   SourceHeldError,
@@ -65,6 +66,22 @@ const VISIBILITY_SECONDS = 180;
  */
 const WAIT_SECONDS = 60;
 const MAX_WAITS = 30;
+/**
+ * How a job waits on the day's generation budget.
+ *
+ * The same mechanism as a held source and a completely different timescale, which
+ * is why it has its own count rather than sharing one. A source claim is held for
+ * minutes, so thirty minutes of waiting means something is genuinely wrong; the
+ * daily cap (20260914010000) refills at 00:00 UTC, so a job arriving at 08:00 on a
+ * day that filled early waits sixteen hours and is still perfectly healthy.
+ *
+ * Fifteen minutes between asks, for twenty-four hours: long enough that a hundred
+ * waiting jobs are not a load, short enough that the first one through after
+ * midnight is through within the quarter hour. A wait that runs out really is a
+ * failure -- a day whose budget never reopened is not a queueing problem.
+ */
+const BUDGET_WAIT_SECONDS = 900;
+const MAX_BUDGET_WAITS = 96;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -74,9 +91,112 @@ const supabase = createClient(
   { auth: { persistSession: false } },
 );
 
+/**
+ * Record a failure that cost nothing, and let go of what it was holding.
+ *
+ * The billed path goes through `record_failed_job_step`, which writes the step, the
+ * ledger row and the settlement in one transaction. An UNBILLED failure has no ledger
+ * row to write, so it used to insert the `job_steps` row directly and call nothing --
+ * and a step that had already reserved against the daily cap (every provider step
+ * reserves immediately before the call) left its hold open for the full TTL.
+ *
+ * That is the failure a provider outage produces in bulk: ~34 unbilled failures inside
+ * an hour fill a 200-cent cap with holds for charges that never happened, and every
+ * reader is then told the day's budget is spent. So the settle rides with the insert
+ * here, the same way it rides with the ledger row there.
+ *
+ * RECORDED FIRST, AND SETTLED UNLESS THE STEP ALREADY SUCCEEDED -- which is the
+ * opposite of what this said, and the body below is where the reasoning lives. A
+ * collision with a `succeeded` row means `record_job_step` has already released this
+ * step's money in its own transaction; settling again would take a share belonging to
+ * another call. A collision with a FAILED row means nothing has been released, so it
+ * settles. The caller treats the collision as success either way.
+ */
+async function failUnbilled(
+  jobId: string,
+  step: Step,
+  attempt: number,
+  message: string,
+  durationMs: number,
+) {
+  /*
+   * THIS STEP'S HOLD, not the job's.
+   *
+   * `graph.ts` dispatches `extract_evidence` beside `synthesize` and `artwork` beside
+   * `embed`, in separate invocations — so a job can have two reservations open at once.
+   * The first version of this called `settle_job_budget` (since dropped), which released every open row
+   * for the job, so a transient failure of one step let go of a sibling's hold while
+   * that sibling was still inside its provider call. Concurrent workers then reserved
+   * against a total that was short by exactly the money about to be spent, which is the
+   * overshoot the whole reservation exists to prevent.
+   *
+   * `record_failed_job_step` settles `(job, step)` on the billed path; this is the same
+   * scope on the unbilled one, and so is the exhausted-retries path below -- a job
+   * being failed is not the same moment as every one of its steps being over.
+   *
+   * RECORDED FIRST, AND SETTLED UNLESS THE STEP ALREADY SUCCEEDED. The order used to be
+   * the other way round, on the reasoning that a 23505 collision should still release
+   * the money. That is backwards now that a hold counts its calls: a collision with a
+   * SUCCEEDED row means `record_job_step` already settled this step, so a second settle
+   * takes a share belonging to a concurrently redelivered call still inside its
+   * provider. A settle for a step that never held anything is a harmless no-op; a settle
+   * for a step that has already settled is the overshoot this mechanism exists to stop.
+   *
+   * Checked, not a bare await: supabase-js resolves rather than throws on a Postgres
+   * error, so an unchecked settle is a hold left open by exactly the transient
+   * conditions that produce the outage this path exists for. Logged rather than thrown —
+   * the caller still has to see the insert's own result, and the sweep's terminal pass
+   * and the TTL are the backstops.
+   */
+  const recorded = await supabase.from('job_steps').insert({
+    job_id: jobId,
+    step,
+    attempt,
+    status: 'failed',
+    error: message,
+    duration_ms: durationMs,
+    finished_at: new Date().toISOString(),
+  });
+
+  /*
+   * A collision is not proof that the money was released.
+   *
+   * 23505 means a `job_steps` row for `(job, step, attempt)` already exists, and there
+   * are two ways to get one. If it is a SUCCEEDED row, `record_job_step` wrote it and
+   * settled this step in the same transaction, and settling again would take a share
+   * belonging to a concurrently redelivered call. If it is a FAILED row -- two
+   * deliveries that both read the same `attempt` before either wrote, which is exactly
+   * what a redelivery storm produces -- then this call's own share has never been
+   * released, and skipping the settle strands it against the cap until the sweep or the
+   * TTL. So the row is read rather than assumed.
+   *
+   * A read that itself fails settles: an extra settle costs a share of one hold, a
+   * missed one costs the same share for an hour.
+   */
+  const collided = (recorded.error as { code?: string } | null)?.code === '23505';
+  let alreadySettled = false;
+  if (collided) {
+    const { data } = await supabase
+      .from('job_steps')
+      .select('status')
+      .eq('job_id', jobId)
+      .eq('step', step)
+      .eq('attempt', attempt)
+      .maybeSingle();
+    alreadySettled = (data as { status?: string } | null)?.status === 'succeeded';
+  }
+
+  if (!alreadySettled) {
+    const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
+    if (settled.error) console.error('could not settle budget for', jobId, step, settled.error);
+  }
+
+  return recorded;
+}
+
 interface QueueMessage {
   msg_id: number;
-  message: { jobId: string; step: Step; waits?: number };
+  message: { jobId: string; step: Step; waits?: number; budgetWaits?: number };
   /** pgmq's delivery count, incremented on every read of this message. */
   read_ct: number;
 }
@@ -414,7 +534,23 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    const attempt = (last?.attempt ?? 0) + 1;
+    /*
+     * ONE ATTEMPT NUMBER PER DELIVERY, not per row already written.
+     *
+     * `(last.attempt ?? 0) + 1` is the same number for two deliveries that race, and
+     * `job_steps` is unique on `(job_id, step, attempt)` — so when a long provider call
+     * is redelivered at the 180 s visibility timeout and both calls return, the second
+     * one's `record_job_step` violates that key and the WHOLE transaction rolls back,
+     * ITS `cost_ledger` ROW WITH IT. Six cents of real spend then exists nowhere the cap
+     * can see, for ever, and 20260914070000's header — which says both calls reach the
+     * ledger through their own `record_job_step` — is only true if they can.
+     *
+     * `read_ct` is pgmq's own delivery counter, incremented before this function runs,
+     * so two deliveries of one message never share it. Taking the larger of the two
+     * keeps the number monotonic when a failed attempt did not manage to record itself,
+     * which is the case the `read_ct` bound below exists for.
+     */
+    const attempt = Math.max(msg.read_ct, (last?.attempt ?? 0) + 1);
 
     // Two bounds, because the first one can be lost. `attempt` comes from
     // `job_steps`, which assumes every failed attempt manages to record itself;
@@ -427,6 +563,30 @@ Deno.serve(async (req) => {
       // update be followed by an archive that removes the only queue message,
       // leaving the job stuck in `running` with nothing to retry it.
       try {
+        /*
+         * NO SETTLE HERE. The sweep does it, and it is the only thing that can.
+         *
+         * This path fails the JOB without having run the step, so it knows nothing about
+         * what is in flight -- and with a hold counting the calls behind it, releasing a
+         * share is releasing somebody's money. A message redelivered past MAX_ATTEMPTS is
+         * the case where the first call HUNG: it is still inside the provider, its hold
+         * is stacked with the deliveries that followed, and taking a share back here
+         * means a concurrent `reserve_budget` fits work into money that is about to be
+         * charged.
+         *
+         * Two earlier versions of this line each released too much. It called
+         * `settle_job_budget` (dropped in 20260914050000), which let go of a parallel
+         * step's hold -- `graph.ts` runs `extract_evidence` beside `synthesize` and
+         * `artwork` beside `embed`. Narrowing it to `(job, step)` kept the same fault on
+         * a smaller scale, because the step this is failing is the one most likely to
+         * still be running.
+         *
+         * `sweep_stranded_generation_jobs` settles every open hold on a terminal job --
+         * which this row is about to become -- and refuses to touch one younger than its
+         * own threshold, precisely so a call still in flight keeps its money. That guard
+         * is the thing this inline settle was going around, so the settle goes and the
+         * sweep is left to do it, with the TTL behind that.
+         */
         must(
           await supabase
             .from('generation_jobs')
@@ -509,11 +669,24 @@ Deno.serve(async (req) => {
 
       const message = e instanceof Error ? e.message : String(e);
 
-      // A wait, not a failure -- unless it has waited long enough that something
-      // is wrong, in which case it falls through and is recorded like any other.
-      if (e instanceof SourceHeldError) {
-        const waits = (msg.message.waits ?? 0) + 1;
-        if (waits <= MAX_WAITS) {
+      /*
+       * A wait, not a failure -- unless it has waited long enough that something
+       * is wrong, in which case it falls through and is recorded like any other.
+       *
+       * Two kinds of waiting, each with its own count and its own bound. Both go
+       * through the same requeue, which carries both counts forward: a step that
+       * waited on a held source and later waits on the budget must not spend the
+       * source's allowance on the budget's problem, or vice versa.
+       */
+      const held = e instanceof SourceHeldError;
+      const broke = e instanceof BudgetExhaustedError;
+      if (held || broke) {
+        const waits = (msg.message.waits ?? 0) + (held ? 1 : 0);
+        const budgetWaits = (msg.message.budgetWaits ?? 0) + (broke ? 1 : 0);
+        const within = held ? waits <= MAX_WAITS : budgetWaits <= MAX_BUDGET_WAITS;
+        const delay = held ? WAIT_SECONDS : BUDGET_WAIT_SECONDS;
+
+        if (within) {
           try {
             // Null means the message was already gone: a delivery that outlived
             // its visibility timeout was redelivered, and the other delivery has
@@ -523,21 +696,28 @@ Deno.serve(async (req) => {
                 p_msg_id: msg.msg_id,
                 p_job_id: jobId,
                 p_step: step,
-                p_delay_seconds: WAIT_SECONDS,
+                p_delay_seconds: delay,
                 p_waits: waits,
+                p_budget_waits: budgetWaits,
               }),
               'requeue waiting step',
             ) as number | null;
             processed.push({
               jobId,
               step,
-              waiting: waits,
+              waiting: held ? waits : budgetWaits,
+              ...(broke ? { reason: 'budget' as const } : {}),
               ...(requeued === null ? { alreadyQueued: true } : {}),
             });
           } catch (requeueError) {
             // The message was left unarchived, so the visibility timeout redelivers
             // it; that costs a read_ct, which is the lesser evil next to losing it.
-            processed.push({ jobId, step, waiting: waits, error: String(requeueError) });
+            processed.push({
+              jobId,
+              step,
+              waiting: held ? waits : budgetWaits,
+              error: String(requeueError),
+            });
           }
           continue;
         }
@@ -571,15 +751,7 @@ Deno.serve(async (req) => {
             p_cost_cents: billed.usage.costCents,
             p_billable: PROVIDER_STEPS.has(step),
           })
-        : await supabase.from('job_steps').insert({
-            job_id: jobId,
-            step,
-            attempt,
-            status: 'failed',
-            error: message,
-            duration_ms: Date.now() - started,
-            finished_at: new Date().toISOString(),
-          });
+        : await failUnbilled(jobId, step, attempt, message, Date.now() - started);
       // A duplicate key means `record_job_step` already wrote a *succeeded* row
       // for this attempt and only the transition after it failed. There is
       // nothing to mark failed in that case — the resume path picks it up on

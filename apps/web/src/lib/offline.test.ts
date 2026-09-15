@@ -443,14 +443,27 @@ describe('review pack', () => {
   it('drops a card that was answered, and only that card', async () => {
     const user = 'pack-remove';
     await storeReviewPack(user, [due('answered'), due('waiting')]);
-    await removeFromPack(user, 'answered');
+    expect(await removeFromPack(user, 'answered')).toBe(true);
     expect((await readReviewPack(user))?.items.map((i) => i.pullId)).toEqual(['waiting']);
+  });
+
+  /*
+   * The screen keeps a count of what is on the device beside the pack and decrements it
+   * from here. A card answered in an ONLINE session was never downloaded, so this is a
+   * no-op — and counting it anyway walked the label down to "Nothing downloaded yet"
+   * over a pack that was still sitting there.
+   */
+  it('says so when there was nothing of that card to remove', async () => {
+    const user = 'pack-miss';
+    await storeReviewPack(user, [due('stored')]);
+    expect(await removeFromPack(user, 'never-downloaded')).toBe(false);
+    expect((await readReviewPack(user))?.items.map((i) => i.pullId)).toEqual(['stored']);
   });
 
   it('is null again once every card has been answered', async () => {
     const user = 'pack-done';
     await storeReviewPack(user, [due('only')]);
-    await removeFromPack(user, 'only');
+    expect(await removeFromPack(user, 'only')).toBe(true);
     expect(await readReviewPack(user)).toBeNull();
   });
 

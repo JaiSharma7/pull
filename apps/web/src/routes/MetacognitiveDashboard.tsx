@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeGraphStats, graphAbsence, personalGraph, undirectedEdges } from '../lib/graph.js';
 import { PROGRESS_COPY } from '../lib/progress.js';
 import { fetchKnowledgeGraph } from '../lib/graph-api.js';
@@ -9,6 +9,16 @@ import {
   type ConfidentlyWrongList,
 } from '../lib/confidently-wrong.js';
 import { fetchConfidentlyWrong } from '../lib/confidently-wrong-api.js';
+import {
+  BELIEF_COPY,
+  BELIEF_COPY_EMPTY,
+  changeLine,
+  fetchBeliefs,
+  fetchCaseAgainst,
+  mindsChanged,
+  type Belief,
+  type RelatedPull,
+} from '../lib/convictions-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
 export interface MetacognitiveDashboardProps {
@@ -408,6 +418,8 @@ export function MetacognitiveDashboard({
             )}
           </section>
 
+          <WhatYouBelieve userId={userId} onNavigate={onNavigate} />
+
           {/* Quick Actions */}
           <div
             style={{
@@ -436,5 +448,240 @@ export function MetacognitiveDashboard({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What you believe — the Conviction Ledger, finally readable.
+ *
+ * `docs/contributing-map.md` has carried this as an open item since the ledger was
+ * written: stances are recorded by `Interrupt.tsx` and read back by nothing, so the
+ * README's own feature — "you agreed with this in March; here is the strongest case
+ * against it" — had data and no screen.
+ *
+ * Its own component, with its own fetch, for the reason the graph and the lapses
+ * have theirs: three independent requests that each render as soon as they land
+ * beat one that makes the whole page wait for the slowest.
+ */
+function WhatYouBelieve({
+  userId,
+  onNavigate,
+}: {
+  userId: string | null;
+  onNavigate: (path: string) => void;
+}) {
+  /*
+   * Loading, failed, or loaded — the same three states the lapses list draws, and
+   * for the same reason: "nothing recorded yet" rendered while the request is in
+   * flight is a false statement about the reader's own record. Tagged with the
+   * session it was fetched for, so a change of reader shows "checking" again
+   * rather than the previous reader's beliefs.
+   */
+  const [state, setState] = useState<
+    | { forUser: string | null; beliefs: Belief[] }
+    | { forUser: string | null; failed: boolean; offline: boolean }
+    | null
+  >(null);
+
+  useEffect(() => {
+    let live = true;
+    fetchBeliefs(userId)
+      .then((beliefs) => {
+        if (live) setState({ forUser: userId, beliefs });
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        console.error('Failed to load convictions:', e);
+        setState({ forUser: userId, failed: true, offline: isOfflineFailure(e) });
+      });
+    return () => {
+      live = false;
+    };
+  }, [userId]);
+
+  const answer = state && state.forUser === userId ? state : null;
+  const beliefs = answer && 'beliefs' in answer ? answer.beliefs : [];
+  const changed = mindsChanged(beliefs);
+
+  return (
+    <section
+      style={{
+        border: '1px solid var(--rule)',
+        padding: 'var(--space-4)',
+        backgroundColor: 'var(--surface)',
+      }}
+      className="stack"
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h2 style={{ fontSize: 'var(--step-0)', margin: 0 }}>What you believe</h2>
+        {/*
+          Minds changed, not stances recorded. The second is a measure of how much
+          somebody has used the app, which `docs/product.md` lists as an anti-goal;
+          the first is the only number on this screen that is about thinking.
+        */}
+        {changed > 0 && (
+          <span className="meta" style={{ color: 'var(--accent)' }}>
+            {changed} {changed === 1 ? 'mind changed' : 'minds changed'}
+          </span>
+        )}
+      </div>
+      <p className="meta">
+        Every claim the feed put to you, and what you said. Changing your mind is the point of
+        keeping it, so a stance that moved says where it came from.
+      </p>
+
+      {answer === null ? (
+        <p className="meta" role="status" style={{ margin: 0 }}>
+          Checking what you have decided…
+        </p>
+      ) : 'failed' in answer ? (
+        <p className="meta" role="alert" style={{ margin: 0 }}>
+          {answer.offline
+            ? 'Offline, so your convictions could not be read. They are on the server, not on this device.'
+            : 'Could not read your convictions just now.'}
+        </p>
+      ) : beliefs.length === 0 ? (
+        <p className="meta" style={{ color: 'var(--text-faint)', margin: 0 }}>
+          {BELIEF_COPY_EMPTY}
+        </p>
+      ) : (
+        <ul
+          style={{
+            listStyle: 'none',
+            padding: 0,
+            margin: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-3)',
+          }}
+        >
+          {beliefs.map((belief) => (
+            <BeliefRow key={belief.pullId} belief={belief} onNavigate={onNavigate} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function BeliefRow({ belief, onNavigate }: { belief: Belief; onNavigate: (path: string) => void }) {
+  /*
+   * The case against, fetched when the reader asks for it and not before.
+   *
+   * One `related_pulls` call per belief on mount would be twenty round trips to
+   * render a screen — and the case against something is read one at a time, if at
+   * all. `null` is untouched, `'asking'` is in flight, and a settled answer is
+   * the opposing idea, the honest absence of one, or a failure to find out.
+   *
+   * `'failed'` is its own state because the first version had the catch set
+   * `'none'`, which renders "Nobody has written one down yet." — a positive claim
+   * about the catalogue, made from a request that never came back. Offline, or on a
+   * 500, the reader would be told an authored objection does not exist when it may
+   * well. The two are different answers and the screen says which one it has.
+   */
+  const [against, setAgainst] = useState<'asking' | RelatedPull | 'none' | 'failed' | null>(null);
+
+  /*
+   * One answer at a time, and none after this row is gone.
+   *
+   * Every other fetch on this screen carries a `live`/`cancelled` flag; this one had
+   * none, so a row unmounted mid-request — signing out re-runs `fetchBeliefs` and
+   * replaces the whole list — set state on a dead component, and a second press could
+   * land the older answer last, showing "Nobody has written one down yet." over a belief
+   * whose opposing edge had just been found.
+   */
+  const asking = useRef(0);
+  useEffect(
+    () => () => {
+      asking.current = -1;
+    },
+    [],
+  );
+
+  function ask() {
+    const attempt = asking.current + 1;
+    asking.current = attempt;
+    setAgainst('asking');
+    fetchCaseAgainst(belief.pullId)
+      .then((found) => {
+        if (asking.current === attempt) setAgainst(found ?? 'none');
+      })
+      .catch((e: unknown) => {
+        console.error('Could not look for the case against', e);
+        if (asking.current === attempt) setAgainst('failed');
+      });
+  }
+  const moved = changeLine(belief);
+
+  return (
+    <li style={{ paddingTop: 'var(--space-2)', borderTop: '1px solid var(--rule)' }}>
+      <button
+        type="button"
+        className="btn btn--plain"
+        style={{
+          textAlign: 'left',
+          padding: 0,
+          display: 'block',
+          width: '100%',
+          fontWeight: 500,
+          lineHeight: 'var(--line-tight)',
+        }}
+        onClick={() => onNavigate(`/pull/${belief.pullId}`)}
+      >
+        {belief.headline}
+      </button>
+      <p className="meta" style={{ marginTop: 'var(--space-1)', marginBottom: 0 }}>
+        {BELIEF_COPY[belief.stance].label} · {belief.workTitle}
+        {moved ? ` · ${moved}` : ''}
+      </p>
+
+      {/*
+        Offered where the reader agreed, which is the README's own sentence: "you
+        agreed with this in March; here is the strongest case against it." A case
+        against something you already reject is an argument you have made.
+      */}
+      {belief.stance === 'agree' && (
+        <p style={{ margin: 'var(--space-2) 0 0' }}>
+          {against === null ? (
+            <button type="button" className="btn btn--plain" style={{ padding: 0 }} onClick={ask}>
+              The case against
+            </button>
+          ) : against === 'asking' ? (
+            <span className="meta" role="status">
+              Looking…
+            </span>
+          ) : against === 'failed' ? (
+            <span className="meta" role="alert">
+              Could not look that up.{' '}
+              <button type="button" className="btn btn--plain" style={{ padding: 0 }} onClick={ask}>
+                Try again
+              </button>
+            </span>
+          ) : against === 'none' ? (
+            /*
+              Only an authored `opposes` edge counts, so this is a true statement
+              about the catalogue rather than a failure. A vector neighbour dressed
+              up as an objection is how a Counterpull surface starts lying.
+            */
+            <span className="meta" style={{ color: 'var(--text-faint)' }}>
+              Nobody has written one down yet.
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--plain"
+              style={{ padding: 0, textAlign: 'left' }}
+              onClick={() => onNavigate(`/pull/${against.id}`)}
+            >
+              <span className="meta" style={{ color: 'var(--accent)' }}>
+                Against ·{' '}
+              </span>
+              {against.headline}
+              <span className="meta"> · {against.workTitle}</span>
+            </button>
+          )}
+        </p>
+      )}
+    </li>
   );
 }

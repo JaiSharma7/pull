@@ -74,6 +74,41 @@ export type Database = {
         }
         Relationships: []
       }
+      budget_reservations: {
+        Row: {
+          created_at: string
+          job_id: string
+          open_calls: number
+          reserved_cents: number
+          settled_at: string | null
+          step: string
+        }
+        Insert: {
+          created_at?: string
+          job_id: string
+          open_calls?: number
+          reserved_cents: number
+          settled_at?: string | null
+          step: string
+        }
+        Update: {
+          created_at?: string
+          job_id?: string
+          open_calls?: number
+          reserved_cents?: number
+          settled_at?: string | null
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "budget_reservations_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       citation_anchors: {
         Row: {
           confidence: number
@@ -589,6 +624,7 @@ export type Database = {
       generation_jobs: {
         Row: {
           attempts: number
+          client_mutation_id: string | null
           cost_cents: number
           created_at: string
           current_step: string
@@ -606,6 +642,7 @@ export type Database = {
         }
         Insert: {
           attempts?: number
+          client_mutation_id?: string | null
           cost_cents?: number
           created_at?: string
           current_step?: string
@@ -623,6 +660,7 @@ export type Database = {
         }
         Update: {
           attempts?: number
+          client_mutation_id?: string | null
           cost_cents?: number
           created_at?: string
           current_step?: string
@@ -2300,10 +2338,23 @@ export type Database = {
         Args: { p_msg_id: number }
         Returns: boolean
       }
+      attach_generated_summary: {
+        Args: {
+          p_elevator_pitch: string
+          p_job_id: string
+          p_sections: Json
+          p_title: string
+          p_visibility: string
+          p_why_it_matters: string
+          p_work_id: string
+        }
+        Returns: Json
+      }
       attribute_work: {
         Args: { p_author: string; p_work_id: string }
         Returns: undefined
       }
+      budget_reservation_ttl: { Args: never; Returns: string }
       claim_generation_messages: {
         Args: { p_count?: number; p_visibility_seconds?: number }
         Returns: {
@@ -2330,6 +2381,7 @@ export type Database = {
         Returns: boolean
       }
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
+      daily_spend_cap_cents: { Args: never; Returns: number }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       disable_generation_dispatcher: { Args: never; Returns: string }
@@ -2359,8 +2411,12 @@ export type Database = {
         Returns: number
       }
       enable_log_retention: { Args: { p_cron?: string }; Returns: number }
-      enqueue_generation_job: { Args: { p_target: Json }; Returns: Json }
+      enqueue_generation_job: {
+        Args: { p_mutation_id?: string; p_target: Json }
+        Returns: Json
+      }
       generate_mfa_recovery_codes: { Args: never; Returns: string[] }
+      generation_budget_state: { Args: never; Returns: string }
       generation_secret: { Args: { p_name: string }; Returns: string }
       get_catalogue: { Args: never; Returns: Json }
       get_daily_pulls: { Args: { p_day: string }; Returns: Json }
@@ -2426,6 +2482,7 @@ export type Database = {
       knowledge_vector_cap: { Args: never; Returns: number }
       known_comparison_cap: { Args: never; Returns: number }
       known_retrievability_floor: { Args: never; Returns: number }
+      min_job_cents: { Args: never; Returns: number }
       my_sessions: {
         Args: never
         Returns: {
@@ -2525,6 +2582,10 @@ export type Database = {
         }
         Returns: string
       }
+      record_mute_impression: {
+        Args: { p_position?: number; p_pull_id: string }
+        Returns: undefined
+      }
       record_read: {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined
@@ -2553,14 +2614,23 @@ export type Database = {
         }
         Returns: Json
       }
+      renew_source_claim: {
+        Args: { p_job_id: string; p_lease?: string }
+        Returns: boolean
+      }
       requeue_generation_message: {
         Args: {
+          p_budget_waits?: number
           p_delay_seconds: number
           p_job_id: string
           p_msg_id: number
           p_step: string
           p_waits: number
         }
+        Returns: number
+      }
+      reserve_budget: {
+        Args: { p_cents: number; p_job_id: string; p_step: string }
         Returns: number
       }
       resume_path: { Args: { p_path_id: string }; Returns: Json }
@@ -2616,7 +2686,12 @@ export type Database = {
         Args: { p_name: string; p_value: string }
         Returns: string
       }
+      settle_budget: {
+        Args: { p_job_id: string; p_step: string }
+        Returns: undefined
+      }
       settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
+      spend_today: { Args: never; Returns: number }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean

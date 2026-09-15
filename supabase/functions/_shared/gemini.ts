@@ -12,7 +12,13 @@
  */
 
 import { PROMPTS, toGeminiSchema } from './prompts.ts';
-import { BilledProviderError, buildSummaryPrompt, ProviderUnavailableError } from './providers.ts';
+import {
+  BilledProviderError,
+  buildSummaryPrompt,
+  ProviderUnavailableError,
+  assertPricing,
+  worstCaseCentsFor,
+} from './providers.ts';
 import type {
   CanonicalSummary,
   EmbeddingProvider,
@@ -48,6 +54,13 @@ export interface GeminiConfig {
   inputUsdPerMTok: number;
   outputUsdPerMTok: number;
   embeddingUsdPerMTok: number;
+  /**
+   * The output ceiling the request sets, which is also what makes a worst case exist.
+   *
+   * See `generationConfig` below: without one, the bill has no upper bound this code
+   * knows, and `reserve_budget` holds money before the call rather than after it.
+   */
+  maxOutputTokens: number;
   /** Injectable so a test can drive the module without reaching the network. */
   fetchImpl?: typeof fetch;
   /** Below the platform's 150s wall clock, so a hung call fails the step rather than the worker. */
@@ -320,11 +333,17 @@ const isUnavailable = (status: number | undefined) =>
   status === 404 || status === 429 || status === 503;
 
 export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvider {
+  // Refused here rather than on the first job: see `assertPricing`.
+  assertPricing('gemini', config);
+  // Counted as input because the API bills it as input. `SUMMARY_SCHEMA` is a module
+  // constant, so this is measured once for the life of the provider.
+  const schemaBytes = JSON.stringify(SUMMARY_SCHEMA);
   return {
     // Not the first configured model: a fallback makes that a lie, and the run above
     // proved it — the chain led with 3.7, answered on 3.6, and a name pinned to the
     // head would have labelled it wrongly. The model that ran is returned per call.
     name: 'gemini',
+    worstCaseCentsFor: (input) => worstCaseCentsFor(config, input, schemaBytes),
 
     async generateSummary(input: SummaryInput) {
       const body = {
@@ -332,6 +351,25 @@ export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvid
         generationConfig: {
           responseMimeType: 'application/json',
           responseSchema: SUMMARY_SCHEMA,
+          /*
+           * A CEILING, which this request did not have.
+           *
+           * Without one the model's own limit applies, which is a number this code does
+           * not know and a bill this code cannot bound — and `reserve_budget` holds
+           * money against the daily cap BEFORE the call, so an unbounded output is a
+           * hold that can always be exceeded. `anthropic.ts` has required `max_tokens`
+           * from the start and the same reasoning applies here.
+           *
+           * THOUGHTS COME OUT OF THIS BUDGET, which is the part Anthropic's number does
+           * not have to cover. `computeUsage` bills thoughts as output because Gemini
+           * charges them that way, and the failure four hundred lines down — HTTP 200,
+           * full `usageMetadata`, no parts — is this budget going entirely on thinking.
+           * So the default is Anthropic's answer allowance doubled rather than copied:
+           * one allowance for the summary and one for the reasoning behind it. See
+           * `config.ts`. A ceiling sized for the visible answer alone would bound the
+           * bill by buying three billed retries, which is not a saving.
+           */
+          maxOutputTokens: config.maxOutputTokens,
         },
       };
 

@@ -1,10 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Settings } from './routes/Settings.js';
 import { Auth } from './routes/Auth.js';
 import { Colophon } from './components/Colophon.js';
+import { clearCachedPulls, clearReviewPack } from './lib/offline.js';
+import { PlayerBar } from './components/PlayerBar.js';
+import { PlayerProvider } from './components/PlayerProvider.js';
 import { Daily } from './routes/Daily.js';
 import { Explore } from './routes/Explore.js';
+import { Studio } from './routes/Studio.js';
 import { History } from './routes/History.js';
 
 /*
@@ -124,6 +128,7 @@ const DESTINATIONS: { path: string; label: string; signedIn?: true }[] = [
    */
   { path: '/graph', label: 'Graph', signedIn: true },
   { path: '/import', label: 'Import', signedIn: true },
+  { path: '/studio', label: 'Studio', signedIn: true },
   { path: '/metacognition', label: 'Progress', signedIn: true },
 
   { path: '/settings', label: 'Settings' },
@@ -377,6 +382,15 @@ export function App() {
     return () => root.removeAttribute('data-reading');
   }, [tab, path]);
 
+  /*
+   * Who this tab is signed in as, for the one listener that cannot see it.
+   *
+   * `arrive` is created inside an effect with an empty dependency list, so every
+   * piece of state it closes over is frozen at the first render. A ref is the
+   * only thing in that closure that can tell it who is leaving.
+   */
+  const signedInAs = useRef<string | null>(null);
+
   useEffect(() => {
     /*
      * A session arriving is also the moment `?next=` is spent.
@@ -417,6 +431,31 @@ export function App() {
        * null-on-both-sides still adopts and a real sign-out is unaffected.
        */
       if (!tabAdopts(s?.user.id ?? null)) return;
+
+      /*
+       * A reader leaving takes their downloaded practice with them.
+       *
+       * `reviewPack` is keyed per account, so a pack left behind is never SHOWN to
+       * the next reader — `readReviewPack` asks for one id and gets one id. What it
+       * would still be is a copy of one person's fading ideas sitting in IndexedDB
+       * on a machine they have signed out of, and `docs/privacy.md` says site data
+       * is cleared by signing out. The cached feed has the same shape and the same
+       * rule, and both are cleared here — the pack is the store 4a added, and the
+       * cache is the one the feed writes on every page.
+       *
+       * Read from the ref rather than from `session`: this closure is created once,
+       * inside an effect with no dependencies, so `session` here is forever null.
+       */
+      const leaving = signedInAs.current;
+      signedInAs.current = s?.user.id ?? null;
+      if (leaving !== null && leaving !== signedInAs.current) {
+        void clearReviewPack(leaving);
+        // And the cached feed, which the comment above claimed was covered by the same
+        // rule while nothing cleared it. Scoping a store by user keeps one reader's rows
+        // out of the next reader's screen; it does not take them off the machine.
+        void clearCachedPulls(leaving);
+      }
+
       setSession(s);
       if (!s) return;
       /*
@@ -539,6 +578,61 @@ export function App() {
    */
   const next = safeNext(queryParam(path, 'next'));
 
+  /*
+   * EVERY return, not only the shell.
+   *
+   * A queue outliving the screen it was started from is the whole of the feature, and
+   * the provider used to wrap the shell alone — so every screen this function returns
+   * BEFORE the shell unmounted the engine, and `PlayerEngine`'s cleanup calls
+   * `stopSpeaking`. `/privacy` and `/terms` are the ones a reader actually reaches:
+   * both are linked from the Colophon, which sits directly under the player bar, so
+   * tapping one mid-sentence cut the voice, took the bar off screen with every control
+   * on it, and left the queue to be rediscovered as "Stopped" on the way back. A 404,
+   * the loading state and the second-factor gate did the same.
+   *
+   * Wrapping each return rather than restructuring the guards keeps React's own answer:
+   * the same component type at the same position in the tree is the SAME instance, so
+   * the engine, the utterance and the queue survive a navigation between any two of
+   * these screens.
+   */
+  /*
+   * AND NOT WHILE A FACTOR IS OWED, which the first version of this got half right.
+   *
+   * The second-factor gate returns bare, further down — but every screen wrapped here
+   * is returned ABOVE it, so a session that owes a factor had only to type `/privacy`,
+   * or any unknown path, to be handed `PlayerProvider` with its own user id. The engine
+   * restores that reader's stored queue and the bar draws "Paused · 2 of 5" over the
+   * page with a Play button that reads the ideas aloud — which is exactly what somebody
+   * holding a password and not a factor must not reach. Read off `factorState` directly
+   * rather than off `owesFactor`, which is derived further down than this has to be
+   * used; an answer that is missing, or is about a different account, counts as owed.
+   */
+  const factorPending =
+    session !== null && (factorState?.userId !== session.user.id || factorState.owes !== false);
+
+  const withPlayer = (node: ReactNode) =>
+    factorPending ? (
+      node
+    ) : (
+      <PlayerProvider userId={session?.user.id ?? null} durable={!!session && !isGuest(session)}>
+        {node}
+        {/*
+        THE BAR TRAVELS WITH THE ENGINE, and the two came apart once already. Wrapping
+        the provider around every return kept the voice alive across a navigation and
+        left the bar inside `shell` — so a reader who tapped Privacy from under the bar
+        kept the reading and lost Pause, Next, Stop, Done and Sleep, which is a worse
+        answer than the silence it replaced. Anywhere the engine can be speaking, the
+        controls for it are on screen.
+
+        Last in reading order rather than above the Colophon, which is what moving it
+        here costs: the bar is `position: fixed`, so nothing moves on screen, and a
+        screen reader now meets it after the footer instead of before. `:root
+        [data-listening]` still keeps the footer out from under it.
+      */}
+        <PlayerBar />
+      </PlayerProvider>
+    );
+
   // Design specimen: no auth, no network. Development only.
   if (import.meta.env.DEV && window.location.search.includes('specimen')) {
     return <Specimen />;
@@ -551,10 +645,10 @@ export function App() {
    */
   const legal = legalDocFor(path);
   if (legal)
-    return (
+    return withPlayer(
       <Suspense fallback={<RouteFallback />}>
         <Legal doc={legal} onNavigate={navigate} />
-      </Suspense>
+      </Suspense>,
     );
 
   const sourceId = routeParam(path, '/source');
@@ -585,6 +679,7 @@ export function App() {
   const settingsOpen = isPath(path, '/settings');
   const graphOpen = isPath(path, '/graph');
   const importOpen = isPath(path, '/import');
+  const studioOpen = isPath(path, '/studio');
   const demoOpen = isPath(path, '/demo');
   const metacognitionOpen = isPath(path, '/metacognition');
   /*
@@ -631,6 +726,7 @@ export function App() {
     settingsOpen ||
     graphOpen ||
     importOpen ||
+    studioOpen ||
     demoOpen ||
     metacognitionOpen ||
     accountOpen ||
@@ -694,10 +790,10 @@ export function App() {
   const destinations = DESTINATIONS.filter((d) => !d.signedIn || (!visitor && !guest));
 
   if (!ready)
-    return (
+    return withPlayer(
       <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
         Loading…
-      </p>
+      </p>,
     );
   /*
    * Ahead of the auth gate, deliberately. A visitor who mistypes a URL was not asking
@@ -705,7 +801,7 @@ export function App() {
    * thing the app could say — it implies the page exists and is being withheld.
    */
   if (notFound)
-    return (
+    return withPlayer(
       <main className="stack measure" style={{ padding: 'var(--space-6)' }}>
         <p className="meta">404</p>
         <h1 className="display">There is nothing at this address.</h1>
@@ -721,10 +817,10 @@ export function App() {
             Browse everything
           </button>
         </div>
-      </main>
+      </main>,
     );
 
-  if (!session && !publicRoute) return <Auth onNavigate={navigate} next={next} />;
+  if (!session && !publicRoute) return withPlayer(<Auth onNavigate={navigate} next={next} />);
 
   /*
    * Ahead of everything a signed-in reader can see, and after the public routes.
@@ -735,6 +831,13 @@ export function App() {
    * (a recovery code) lives on the gate itself rather than in settings the locked-out
    * reader cannot reach.
    */
+  /*
+   * No player behind this gate — see `factorPending` above, which is what keeps it off
+   * the screens returned before this one as well. These two are bare for the same
+   * reason: a factor-owing session must not reach anything a signed-in reader can, and
+   * their last listening session is exactly that. The queue is still in storage when
+   * the factor is passed.
+   */
   if (session && owesFactor === null)
     return (
       <p className="meta" style={{ padding: 'var(--space-6)' }} role="status">
@@ -744,6 +847,16 @@ export function App() {
   if (session && owesFactor)
     return <SecondFactorGate onPassed={() => setFactorChecks((n) => n + 1)} />;
 
+  /*
+   * The player and its bar are wrapped around this by `withPlayer` at the end, along
+   * with every other screen this function can return: both have to survive a tab
+   * change, a navigation, and the two legal pages the Colophon links to from directly
+   * under the bar, and every screen that can hand the player something — Feed, Library,
+   * Source, Appearance — has to reach the same one.
+   *
+   * `durable` is false for a guest. A guest's queue is a reading list belonging to
+   * an anonymous account that the sweep deletes, kept in this tab and no longer.
+   */
   const shell = (
     <div className="shell">
       <a className="skip-link" href="#main">
@@ -1017,6 +1130,17 @@ export function App() {
                 suggests it did. */}
             {importOpen && !guest && <Ingestion />}
 
+            {/*
+                Signed in and not a guest, like the three beside it. A guest may not
+                enqueue at all -- `enqueue_generation_job` refuses an anonymous account
+                with 28000, because one canonical generation costs real money and a
+                guest session costs nothing -- so the screen is withheld rather than
+                rendered as a form that cannot complete.
+              */}
+            {studioOpen && !guest && session && (
+              <Studio userId={session.user.id} onNavigate={navigate} />
+            )}
+
             {demoOpen && (
               <OnboardingDemo onComplete={() => navigate('/')} onSkip={() => navigate('/')} />
             )}
@@ -1059,7 +1183,7 @@ export function App() {
               a rail and an entirely empty main — `routeOpen` hides the feed, and
               `isKnownPath` matches, so the 404 branch does not catch it either.
             */}
-            {(graphOpen || importOpen || metacognitionOpen) && guest && (
+            {(graphOpen || importOpen || studioOpen || metacognitionOpen) && guest && (
               <section className="stack measure">
                 <p className="meta">Reading as a guest</p>
                 <h1>This one needs an account.</h1>
@@ -1328,5 +1452,7 @@ export function App() {
    * whether the picker has been seen, so it can only wrap a session. A visitor
    * gets the shell directly — there is no preference to have not set yet.
    */
-  return session ? <OnboardingGate userId={session.user.id}>{shell}</OnboardingGate> : shell;
+  return withPlayer(
+    session ? <OnboardingGate userId={session.user.id}>{shell}</OnboardingGate> : shell,
+  );
 }

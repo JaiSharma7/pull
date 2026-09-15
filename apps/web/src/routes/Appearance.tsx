@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   APPEARANCE_COPY,
   CONTRAST,
@@ -11,9 +11,18 @@ import {
   storeAppearance,
   type Appearance as Choice,
 } from '../lib/appearance.js';
+import {
+  AUDIO_COPY,
+  RATE_STEPS,
+  SLEEP_TIMERS,
+  audioSummary,
+  type SleepTimer,
+} from '../lib/audio-prefs.js';
+import { listVoices, onVoicesChanged } from '../lib/speech.js';
+import { usePlayer } from '../components/PlayerProvider.js';
 
 /**
- * Appearance — the three display settings, finally reachable.
+ * Appearance — the display settings and the listening settings, finally reachable.
  *
  * `lib/appearance.ts` explains at length why these live in `localStorage` rather
  * than in the `preferences` row. This file is the consequence of that decision
@@ -29,7 +38,10 @@ import {
  *   * NO ACCOUNT. This is the only settings screen a signed-out visitor can
  *     open, and it has to be: somebody reading a shared Pull at two in the
  *     morning needs the dark theme more than the reader who has an account, not
- *     less. `App` lists it as a public route for that reason.
+ *     less. `App` lists it as a public route for that reason. The listening
+ *     settings belong here for the same reason twice over — read-aloud is free
+ *     forever under law 3, so it works signed out, and a voice is an engine
+ *     installed on this machine rather than a fact about a reader.
  *
  * RADIOS, NOT BUTTONS WITH A PRESSED STATE. The rest of the app uses
  * `.btn[aria-pressed]` for its choosers, and that is right where a choice is a
@@ -117,14 +129,122 @@ export function Appearance() {
           tab order when the screen happens to be in one particular state is a
           worse trade than a button that is occasionally a no-op.
         */}
+        {/*
+          Named for what it resets, now that the listening settings sit below it.
+          "Reset to defaults" beneath one half of a screen and above the other is a
+          button whose scope the reader has to guess at, and the guess that costs
+          them is the wrong one.
+        */}
         <button type="button" className="btn btn--plain" onClick={() => commit(DEFAULT_APPEARANCE)}>
-          Reset to defaults
+          Reset display to defaults
         </button>
       </div>
 
+      <Listening />
+
       {/* The end is a sentence, not the page simply stopping. */}
-      <p className="meta appearance__end">That is every display setting.</p>
+      <p className="meta appearance__end">That is every setting this device keeps.</p>
     </section>
+  );
+}
+
+/**
+ * Listening — speed, voice and a sleep timer.
+ *
+ * Set through the player rather than through `lib/audio-prefs.ts` directly, and
+ * that is the whole reason this is a component rather than three more `Group`s
+ * above. A rate changed while something is being read has to reach the utterance
+ * that is running — `adjustSpeaking` keeps the reader's place — and only the
+ * player knows whether anything is. Writing storage from here as well would give
+ * the same setting two owners, which is how a screen and a voice come to
+ * disagree about how fast to read.
+ */
+function Listening() {
+  const { supported, prefs, setRate, setVoice, setSleep } = usePlayer();
+
+  /*
+   * `getVoices()` is empty in Chrome until `voiceschanged` fires, often after the
+   * first paint, so the list is state rather than a render-time read. The
+   * subscription is what turns an empty dropdown into a populated one without a
+   * reload.
+   */
+  const [voices, setVoices] = useState(() => listVoices());
+  useEffect(() => onVoicesChanged(() => setVoices(listVoices())), []);
+
+  /*
+   * Withheld entirely where the browser cannot speak. A settings group for a
+   * capability the device does not have is worse than its absence: it implies
+   * the feature exists and is simply misconfigured.
+   */
+  if (!supported) return null;
+
+  const chosen = voices.find((v) => v.voiceURI === prefs.voiceURI) ?? null;
+
+  return (
+    <>
+      <h2>How this sounds</h2>
+
+      <p className="appearance__summary">{audioSummary(prefs, chosen?.name ?? null)}</p>
+
+      <p className="appearance__intro">
+        Read-aloud is free permanently and runs on this device — nothing about what you listen to is
+        sent to us. A voice marked local speaks entirely here; any other one is your browser sending
+        the text to its own vendor, which is why the list puts local voices first.
+      </p>
+
+      <Group
+        legend="Speed"
+        name="audio-rate"
+        options={RATE_STEPS.map((r) => String(r))}
+        copy={Object.fromEntries(RATE_STEPS.map((r) => [String(r), AUDIO_COPY.rate(r)]))}
+        value={String(prefs.rate)}
+        onChoose={(rate) => setRate(Number(rate))}
+      />
+
+      <fieldset className="appearance__set">
+        <legend className="prefs__legend">Voice</legend>
+        <div className="appearance__option">
+          {/*
+            A select rather than radios, unlike every other group on this screen.
+            The set is not three named options: it is whatever engines this machine
+            has installed, which on a laptop is routinely forty. Radios are right
+            for a small fixed set and wrong for a list of that length.
+          */}
+          <label className="appearance__label" htmlFor="audio-voice">
+            Reading voice
+          </label>
+          <select
+            id="audio-voice"
+            className="field__input"
+            value={prefs.voiceURI ?? ''}
+            aria-describedby="audio-voice-note"
+            onChange={(e) => setVoice(e.target.value || null)}
+          >
+            <option value="">Whatever this browser picks</option>
+            {voices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {v.name} · {v.lang}
+                {v.localService ? ' · on this device' : ''}
+              </option>
+            ))}
+          </select>
+          <p className="appearance__note" id="audio-voice-note">
+            {voices.length === 0
+              ? 'This browser has not reported its voices yet. It usually does a moment after the page loads.'
+              : 'Left alone, a local voice in your own language is preferred over one that speaks through a server.'}
+          </p>
+        </div>
+      </fieldset>
+
+      <Group
+        legend="Sleep timer"
+        name="audio-sleep"
+        options={SLEEP_TIMERS}
+        copy={AUDIO_COPY.sleep}
+        value={prefs.sleep}
+        onChoose={(sleep: SleepTimer) => setSleep(sleep)}
+      />
+    </>
   );
 }
 

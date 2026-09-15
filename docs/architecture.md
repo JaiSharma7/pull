@@ -124,6 +124,11 @@ The shapes in `supabase/functions/_shared/providers.ts`, as they actually are:
 ```ts
 interface SummaryProvider {
   name: string;
+  /** The most THIS call can cost, in cents. `reserve_budget` holds it before the call,
+   *  so it is a ceiling and not an estimate. `worstCaseCentsFor(config, input)` in
+   *  providers.ts derives one from a provider's prices, its output ceiling and the
+   *  prompt's UTF-8 byte length. */
+  worstCaseCentsFor(input: SummaryInput): number;
   generateSummary(input: SummaryInput): Promise<SummaryDraft>;
 }
 interface EmbeddingProvider {
@@ -174,6 +179,14 @@ that they have to be listed somewhere, which is here.
 | `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out      |
 | `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
 | `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever              |
+
+`enable_generation_sweeper()` carries a second job since `20260914010000`, and it is worth
+naming because nothing else does it in the common case: `sweep_stranded_generation_jobs`
+settles the **budget reservations** of every job it fails. A step that dies between
+reserving and recording is holding part of the daily spend cap against a charge that will
+never arrive, and without the sweep that hold stands until the one-hour TTL expires. The
+TTL is the backstop; the sweeper is what makes the usual case ten minutes rather than
+sixty.
 
 The last one is newer than the others and fails differently. `sweep_guest_accounts`
 deletes anonymous accounts after a day of disuse, and that retention promise is
@@ -271,12 +284,16 @@ since nothing in them said whose they were.
 Two limits, stated because "offline" is one of the five things law 3 promises and a
 vaguer sentence would be doing work it has not earned. **Nothing caches audio** — it is
 synthesised on the device by `speechSynthesis`, so there is nothing to cache and it works
-offline for free. And **one screen writes to it**: the feed caches the pages it loads
-(`cachePulls`, called from `Feed.tsx`). The pack store (`storeReviewPack`) exists with no
-caller yet — Review fills it in the next PR of the same package, so that the cards due
-today can be answered without a connection and drained as grades on reconnect. The
-Library, Source, Search, Daily and History screens read through to the network and fail
-without it. Widening that is the obvious next piece of offline work.
+offline for free. And **two screens write to it**: the feed caches the pages it loads
+(`cachePulls`, called from `Feed.tsx`), and Review stores every page it successfully
+fetches (`storeReviewPack`), so the cards due today can be answered without a connection
+and drained as grades on reconnect. Review's pack is written without being asked for — a
+feature that works only for readers who remembered to press a button before losing signal
+is free the way a locked door is open — and a card leaves it as soon as it is graded, from
+the device or the server. Only a network failure falls back to it (`isOfflineFailure`); a
+500 or an expired token is reported as what it is rather than answered with stale cards.
+The Library, Source, Search, Daily and History screens read through to the network and
+fail without it. Widening that is the obvious next piece of offline work.
 
 ## Why Vite and not a server framework
 

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
-import type { PipelineDb } from './pipeline.ts';
+import { BudgetExhaustedError, type PipelineDb } from './pipeline.ts';
 
 /**
  * The pipeline's database side, against a real Supabase client.
@@ -93,6 +93,7 @@ export function createPipelineDb(supabase: Db): PipelineDb {
       trustScore,
       sourceUrl,
       author,
+      visibility,
     }) {
       /*
        * File a newly created work under its topics.
@@ -270,11 +271,35 @@ export function createPipelineDb(supabase: Db): PipelineDb {
         );
       };
 
+      /*
+       * WHAT A PRIVATE JOB MAY DO TO A ROW IT DID NOT CREATE: nothing but read it.
+       *
+       * `rescore` was already gated on the scores being present, which the pipeline
+       * passes as null for a private job — and `creditAuthor` and `backfillSourceUrl`
+       * were not, on the reasoning that a missing credit is worth adding. That was
+       * written when only canonical jobs reached here with a caller-supplied author.
+       * The Studio put that field in front of every signed-in reader: paste the text of
+       * a work already in `works`, type any name, and `attribute_work` — `security
+       * definer`, no ownership test — files that name as the author of a shared
+       * catalogue row. `template`'s own adopt branch states the rule this follows:
+       * nothing about a private generation should re-score or re-attribute a row.
+       *
+       * A NEW work is not a different matter either, which is the correction to the
+       * correction: `works` is keyed by `content_hash`, so the row a private paste
+       * creates is the row a later CANONICAL generation of the same text adopts —
+       * inheriting the byline somebody typed into a text box and the `user_owned`
+       * rights posture along with it, on what is by then a public catalogue page.
+       * Identity here is the text, not the creator, so a private job credits nobody.
+       */
+      const mayAmendShared = visibility === 'public';
+
       const found = existing?.[0];
       if (found) {
         await fileUnderTopics(found.id, { onlyIfUnclassified: true });
-        await creditAuthor(found.id);
-        await backfillSourceUrl(found.id);
+        if (mayAmendShared) {
+          await creditAuthor(found.id);
+          await backfillSourceUrl(found.id);
+        }
         await rescore(found.id);
         return { workId: found.id, existing: true };
       }
@@ -329,15 +354,17 @@ export function createPipelineDb(supabase: Db): PipelineDb {
           'adopt concurrently created work',
         ) as { id: string };
         await fileUnderTopics(raced.id, { onlyIfUnclassified: true });
-        await creditAuthor(raced.id);
-        await backfillSourceUrl(raced.id);
+        if (mayAmendShared) {
+          await creditAuthor(raced.id);
+          await backfillSourceUrl(raced.id);
+        }
         await rescore(raced.id);
         return { workId: raced.id, existing: true };
       }
 
       const workId = (data as { id: string }).id;
       await fileUnderTopics(workId);
-      await creditAuthor(workId);
+      if (mayAmendShared) await creditAuthor(workId);
       return { workId, existing: false };
     },
 
@@ -363,14 +390,22 @@ export function createPipelineDb(supabase: Db): PipelineDb {
        * synthesise.
        *
        * Adopting on collision fixes both, because in both cases the existing row
-       * is exactly the row this step was trying to create. `version` is not sent
-       * and defaults to 1, so it is part of the key and is matched explicitly
-       * here rather than left implied.
+       * is exactly the row this step was trying to create.
+       *
+       * Version 1, always, and this is the CANONICAL path only. A summary on a work the
+       * requester already owns is the other case, where version 1 is the reader's
+       * import and adopting it would let `cards` overwrite their own highlights at
+       * every colliding ordinal — and that path does not come through here at all. It
+       * goes through `attachGeneratedSummary`, which chooses a version under a lock,
+       * for the reason a caller-supplied version could never be right: it made this
+       * function's collision handling depend on a number computed from rows an earlier
+       * attempt had written.
        */
       const insert = await supabase
         .from('summaries')
         .insert({
           work_id: workId,
+          version: SUMMARY_VERSION,
           title,
           elevator_pitch: elevatorPitch,
           why_it_matters: whyItMatters,
@@ -521,6 +556,123 @@ export function createPipelineDb(supabase: Db): PipelineDb {
 
     async releaseSourceHash(jobId) {
       must(await supabase.rpc('release_source_hash', { p_job_id: jobId }), 'release source hash');
+    },
+
+    /**
+     * Hold part of the day's budget, translating Postgres's refusal.
+     *
+     * `must` is deliberately not used: the one error code this has to recognise
+     * would arrive as a generic transport failure through it, and a budget
+     * refusal the worker cannot tell from a broken database is a job that fails
+     * terminally for being early. Everything that is NOT 53400 still throws, and
+     * throws with the message it came with.
+     *
+     * 53400 is `configuration_limit_exceeded`, which is what `reserve_budget`
+     * raises. Matched on the code rather than on the text, because the text names
+     * the amounts and those change.
+     */
+    async reserveBudget(jobId, step, cents) {
+      const { error } = await supabase.rpc('reserve_budget', {
+        p_job_id: jobId,
+        p_step: step,
+        p_cents: cents,
+      });
+      if (!error) return;
+      if ((error as { code?: string }).code === '53400') {
+        throw new BudgetExhaustedError(step);
+      }
+      throw new Error(`reserve budget: ${error.message ?? JSON.stringify(error)}`);
+    },
+
+    /**
+     * Whether the requester authored a summary on that work.
+     *
+     * `head: true` with an exact count rather than selecting a row: the question
+     * is existence, and the service role reads every summary there is, so pulling
+     * one back would be fetching a private row to learn a boolean about it.
+     *
+     * A null requester is never an owner. Canonical jobs have no requester, and
+     * `author_id is null` rows are exactly the canonical summaries a private job
+     * must not be able to attach itself to.
+     */
+    async requesterOwnsWork(requesterId, workId) {
+      if (!requesterId) return false;
+      const { count, error } = await supabase
+        .from('summaries')
+        .select('id', { count: 'exact', head: true })
+        .eq('work_id', workId)
+        .eq('author_id', requesterId);
+      // Thrown rather than answered `false`. A failed lookup is not evidence that
+      // the reader does not own the work, and answering false would silently key
+      // the work off the content hash instead -- giving an imported book a second
+      // `works` row because one query failed.
+      if (error) {
+        throw new Error(
+          `check work ownership: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      return (count ?? 0) > 0;
+    },
+
+    async renewSourceClaim(jobId) {
+      const { data, error } = await supabase.rpc('renew_source_claim', { p_job_id: jobId });
+      if (error) {
+        throw new Error(
+          `renew source claim: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      return data === true;
+    },
+
+    /**
+     * A generated summary on a work the requester owns, and the job's reference to it.
+     *
+     * Everything this used to reason about — which version is free, what a collision
+     * means, who wins a race — moved into `attach_generated_summary`, because none of
+     * it can be decided correctly from out here. `summaries` is unique on
+     * `(work_id, version, author_id)` and an imported book already carries the reader's
+     * version 1, so a generated summary has to be its own row; the version is chosen,
+     * the row written and the job pointed at it inside one transaction holding a lock,
+     * which is the only arrangement where a lost response cannot leave an orphan.
+     */
+    async attachGeneratedSummary({
+      jobId,
+      workId,
+      title,
+      elevatorPitch,
+      whyItMatters,
+      sections,
+      visibility,
+    }) {
+      /*
+       * One RPC, and the reason it is an RPC at all is that two statements cannot be
+       * made atomic from here. See the function's own migration: the insert and the
+       * update to `generation_jobs.summary_id` have to commit together, or a lost
+       * response leaves a summary nothing references and a retry that cannot tell.
+       */
+      const { data, error } = await supabase.rpc('attach_generated_summary', {
+        p_job_id: jobId,
+        p_work_id: workId,
+        p_title: title,
+        p_elevator_pitch: elevatorPitch,
+        p_why_it_matters: whyItMatters,
+        p_sections: sections as never,
+        p_visibility: visibility,
+      });
+      if (error) {
+        throw new Error(
+          `attach generated summary: ${(error as { message?: string }).message ?? JSON.stringify(error)}`,
+        );
+      }
+      const row = (data ?? {}) as { summaryId?: string; version?: number; created?: boolean };
+      if (!row.summaryId) {
+        throw new Error('attach generated summary: the function returned no summary id');
+      }
+      return {
+        summaryId: row.summaryId,
+        version: typeof row.version === 'number' ? row.version : null,
+        created: row.created === true,
+      };
     },
 
     async attachSummaryToJob(jobId, summaryId, workId) {

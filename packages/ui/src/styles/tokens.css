@@ -60,6 +60,23 @@
   --step-4: clamp(1.85rem, 1.55rem + 1.5vw, 2.4414rem);
   --step-5: clamp(2.1rem, 1.68rem + 2.1vw, 3.0518rem);
 
+  /*
+   * Leading — three named steps, because seven places already asked for them.
+   *
+   * `--line-tight`, `--line-snug` and `--line-normal` were referenced by
+   * `paths.css` and `MetacognitiveDashboard.tsx` and defined by nothing. A
+   * `line-height: var(--undefined)` is invalid at computed-value time, so every one
+   * of those rules silently fell back to `normal` — the leading the author asked for
+   * was never applied anywhere, and nothing said so.
+   *
+   * The values are the ones already hardcoded elsewhere rather than new opinions:
+   * 1.15 is what `base.css` sets on every heading, and 1.65 is its body. 1.35 is the
+   * step between them, which is what a two-line chip or a card headline wants.
+   */
+  --line-tight: 1.15;
+  --line-snug: 1.35;
+  --line-normal: 1.65;
+
   /* Space — a 4px base, used consistently rather than eyeballed. */
   --space-1: 0.25rem;
   --space-2: 0.5rem;

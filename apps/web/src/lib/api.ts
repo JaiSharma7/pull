@@ -1,4 +1,5 @@
 import type { RecallGrade } from './grades.js';
+import { MAX_ROWS } from './paging.js';
 import { rpcError } from './rpc-error.js';
 import { supabase } from './supabase.js';
 import type { DueReview, FeedResponse, LibraryItem, SourceDelta } from './types.js';
@@ -227,6 +228,61 @@ export async function unsavePull(pullId: string, userId: string) {
 }
 
 /**
+ * See less of a source, and record the card that provoked it.
+ *
+ * Two writes, and only the first one matters. `muted_works` is what `get_feed`
+ * and `get_daily_pulls` read — a muted work is dropped from the pool before
+ * anything is scored — so the mute is durable the moment that row lands, and a
+ * duplicate is the reader asking twice for something they already have rather
+ * than an error.
+ *
+ * The impression is telemetry: WHICH card was in front of them when they asked.
+ * It is written on the muted card alone, not on every remaining card of that
+ * work, because the others were never rejected — they were withdrawn. One
+ * statement does it: the card has almost always been shown already today, and
+ * `feed_impressions_once_per_day` makes a second insert for it a conflict, so the
+ * RPC below upserts on that conflict target rather than reading first and choosing
+ * between an update and an insert. Two tabs racing land on the same conflict and
+ * the later one wins, which is the right answer — both are the same mute.
+ *
+ * A failed impression never fails the mute. The reader asked for less of a
+ * source, and they have it.
+ */
+export async function muteWork(workId: string, pullId: string, userId: string, position = 0) {
+  const { error } = await supabase.from('muted_works').insert({ user_id: userId, work_id: workId });
+  if (error && error.code !== '23505') throw rpcError(error);
+
+  /*
+   * Through an RPC, because the day in `feed_impressions_once_per_day` is the SERVER's.
+   *
+   * `shown_on` is generated from `shown_at`, so computing today's date here put a
+   * device clock inside a unique key: skewed, or a request sent either side of
+   * midnight, matched no row, fell through to an insert, and collided — so the one
+   * piece of telemetry a mute exists to leave was silently never written.
+   * `record_mute_impression` does the upsert on the real conflict target, as the
+   * invoker, so `feed_impressions_own` still decides whose row it is.
+   */
+  const { error: noted } = await supabase.rpc('record_mute_impression', {
+    p_pull_id: pullId,
+    p_position: position,
+  });
+  // Telemetry, and the mute itself is already recorded. Logged rather than thrown,
+  // and not swallowed silently — a `try {}` around this would never have fired anyway,
+  // because postgrest-js resolves with `{ error }` instead of rejecting.
+  if (noted) console.error('Could not record the mute impression', noted);
+}
+
+/** Hear from this source again. */
+export async function unmuteWork(workId: string, userId: string) {
+  const { error } = await supabase
+    .from('muted_works')
+    .delete()
+    .eq('user_id', userId)
+    .eq('work_id', workId);
+  if (error) throw rpcError(error);
+}
+
+/**
  * Every saved pull, paged.
  *
  * PostgREST caps a response at `max_rows` (100), so a single unpaged select
@@ -255,6 +311,34 @@ export async function fetchSavedPullIds(userId: string): Promise<Set<string>> {
     for (const r of rows) if (r.pull_id !== null) ids.add(r.pull_id);
     if (rows.length < PAGE) return ids;
   }
+}
+
+/**
+ * Which of these Pulls this reader has kept.
+ *
+ * Bounded by the page rather than by the library, which is what separates it from
+ * `fetchSavedPullIds`. That one walks all of `saved_items` — law 3 promises unlimited
+ * stashing, so a reader with 5,000 saves pays fifty sequential round trips — and a
+ * screen showing eighteen ideas needs the answer for eighteen ids.
+ *
+ * In batches of `MAX_ROWS`, though, because the cap bounds the ROWS a response may
+ * carry and not the length of the filter. An `in` list of 140 ids is a perfectly valid
+ * request that comes back with 100 rows and nothing saying the rest were dropped — and
+ * a summary with more than a hundred Pulls would render every kept idea past the
+ * hundredth with an unpressed Save. A page is usually one batch; a long source is two.
+ */
+export async function fetchSavedAmong(userId: string, pullIds: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (let i = 0; i < pullIds.length; i += MAX_ROWS) {
+    const { data, error } = await supabase
+      .from('saved_items')
+      .select('pull_id')
+      .eq('user_id', userId)
+      .in('pull_id', pullIds.slice(i, i + MAX_ROWS));
+    if (error) throw rpcError(error);
+    for (const r of data ?? []) if (r.pull_id !== null) ids.add(r.pull_id);
+  }
+  return ids;
 }
 
 /**

@@ -171,8 +171,134 @@ export class BilledProviderError extends Error {
   }
 }
 
+/**
+ * The most input tokens a prompt can be: one per UTF-8 byte.
+ *
+ * A bound rather than a ratio, which is the whole difference. Every tokenizer these
+ * providers use is byte-level BPE with a byte fallback, so a byte is the smallest
+ * thing that can become a token and the count cannot exceed the byte length. English
+ * prose runs nearer four bytes to a token, so on Latin text the hold is comfortably
+ * above the charge; on a dense script it lands close to it. That asymmetry is the
+ * point — this number's only job is to be wrong in the expensive direction.
+ *
+ * It replaces a flat 64,000 derived from "200,000 characters at four characters a
+ * token". Characters are not bytes. A CJK character is three UTF-8 bytes and
+ * tokenizes at roughly one token each, so a 200,000-character Japanese document is
+ * on the order of 200,000 input tokens and not 50,000 — and the constant whose
+ * stated job was "an upper bound that is never wrong in the cheap direction" was
+ * wrong in the cheap direction, by about four times, for every reader who does not
+ * write in Latin script.
+ */
+function maxInputTokens(prompt: string): number {
+  let bytes = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    const code = prompt.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      // A surrogate pair is one code point in four bytes; skip its low half.
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+export interface ProviderPricing {
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+  maxOutputTokens: number;
+}
+
+/**
+ * The most THIS call can cost, in cents, rounded UP.
+ *
+ * Per call rather than per provider, because the input half is a property of the
+ * document and not of the configuration. A constant would have to be the ceiling for
+ * the largest source the pipeline accepts — around 33 cents of a 200-cent day — and
+ * every 2,000-word essay would hold it too, which turns the cap into a queue for no
+ * reason. Measured, the hold tracks what is actually about to be sent.
+ *
+ * `buildSummaryPrompt` is called rather than approximated: both providers send
+ * exactly that string, so the bound is over the real prompt including its template
+ * and not over the source text plus a guess at the wrapper.
+ *
+ * Rounded up because a hold that rounds down is a hold that can be exceeded.
+ */
+/**
+ * Checked at CONSTRUCTION, which is where the previous version's comment claimed it
+ * happened and where it actually has to.
+ *
+ * It ran inside `worstCaseCentsFor`, which `synthesize` calls to size its hold — and the
+ * `Error` it threw is not a `BudgetExhaustedError`, so it went straight past the catch
+ * that releases the source claim. A mistyped price therefore failed every job in the
+ * deployment three attempts at a time, each one leaving a claim behind for its lease to
+ * expire. Refusing to build the provider at all fails once, at start-up, naming the
+ * variable.
+ *
+ * Zero is ALLOWED for a price. `numberFrom` accepts it because it is a real answer: a
+ * free tier, or a model whose input is not billed, costs nothing and should hold nothing
+ * — `stubSummaryProvider` already reserves 0 on exactly that reasoning. Negative and
+ * non-finite are the mistakes. `maxOutputTokens` must be positive, because a request
+ * carrying 0 is rejected by the API on every call, which is a worse way to find out.
+ */
+export function assertPricing(name: string, config: ProviderPricing): ProviderPricing {
+  for (const field of ['inputUsdPerMTok', 'outputUsdPerMTok'] as const) {
+    const value = config[field];
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${name}: ${field} must be a finite number of zero or more, got ${value}`);
+    }
+  }
+  if (!Number.isFinite(config.maxOutputTokens) || config.maxOutputTokens <= 0) {
+    throw new Error(
+      `${name}: maxOutputTokens must be a positive finite number, got ${config.maxOutputTokens}`,
+    );
+  }
+  return config;
+}
+
+/**
+ * `extraInput` is everything the request carries besides the prompt and is billed with
+ * it: Anthropic's `tools[0].input_schema`, Gemini's `responseSchema`. Both are JSON the
+ * provider counts as input tokens, and leaving them out made a number the daily cap
+ * treats as a ceiling into one that is merely close. Small — about a tenth of a cent —
+ * but a ceiling that is nearly right is the defect this function was written to remove.
+ */
+export function worstCaseCentsFor(
+  config: ProviderPricing,
+  input: SummaryInput,
+  extraInput = '',
+): number {
+  const inputTokens = maxInputTokens(buildSummaryPrompt(input)) + maxInputTokens(extraInput);
+  const usd =
+    (inputTokens / 1_000_000) * config.inputUsdPerMTok +
+    (config.maxOutputTokens / 1_000_000) * config.outputUsdPerMTok;
+  return Math.ceil(usd * 100);
+}
+
 export interface SummaryProvider {
   readonly name: string;
+  /**
+   * The most THIS call can cost, in cents, under this provider's configuration.
+   *
+   * `reserve_budget` holds this against the daily cap before the call, so it has to be
+   * a CEILING and not an estimate: a reservation smaller than the charge that replaces
+   * it lets the cap be overshot by the difference, once per call in flight, which is
+   * the hole the reservation exists to close. It was a hand-pinned 6 — the expected
+   * cost of a Gemini summary — and the Anthropic fallback at its own configured
+   * ceiling and prices can charge nearly three times that for one accepted source, so
+   * a day at 194 cents admitted a call that took the ledger past 200.
+   *
+   * Derived from the two things that actually bound a bill: the prompt that is about
+   * to be sent, bounded by its UTF-8 byte length, and the output ceiling the request
+   * itself sets. Both providers now set one — an unbounded `max_tokens` is an
+   * unbounded charge, which is not something a cap can be built on.
+   *
+   * A function of the input rather than a constant, because the constant would have to
+   * be the ceiling for the largest source the pipeline accepts and every short essay
+   * would hold that too.
+   */
+  worstCaseCentsFor(input: SummaryInput): number;
   /**
    * `model` is returned rather than read off the provider because a provider may fall
    * back between models mid-run — the newest Flash returns 503 under load often enough
@@ -210,6 +336,9 @@ export interface ImageProvider {
  */
 export const stubSummaryProvider: SummaryProvider = {
   name: 'stub',
+  // Free, so it holds nothing. The documented no-key path must not be refused by a cap
+  // for money it cannot spend.
+  worstCaseCentsFor: () => 0,
   async generateSummary(input) {
     const opening = input.context.trim().slice(0, 240);
     return {
@@ -349,6 +478,13 @@ export function createFallbackSummaryProvider(
     // Both names, because `job_steps.provider` should say which chain ran, and the
     // model returned per call already says which one actually answered.
     name: `${primary.name}->${fallback.name}`,
+
+    // The MORE expensive of the two, because either may answer and the hold is taken
+    // before anybody knows which will. A chain that reserved the primary's ceiling and
+    // then fell back is the overshoot with an extra step in it. Both are asked about the
+    // same input, so the comparison is between two ceilings for one document.
+    worstCaseCentsFor: (input) =>
+      Math.max(primary.worstCaseCentsFor(input), fallback.worstCaseCentsFor(input)),
 
     async generateSummary(input) {
       try {

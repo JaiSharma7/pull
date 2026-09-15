@@ -1,0 +1,78 @@
+/*
+ * "Remember this" — the form a reader writes their own question in.
+ *
+ * Lifted out of `source.css` when the form itself was lifted out of
+ * `routes/Source.tsx`: the Library offers it on an imported highlight, and a
+ * component used on two screens must not be styled by one of them. The rules are
+ * that file's, unchanged apart from the prefix.
+ *
+ * No new controls. The label and the box are `.field__label` and
+ * `.field__textarea`, which is what every other form in the app uses, so this
+ * looks like the rest of the product rather than like a feature bolted to a page.
+ * What is left here is rhythm: the vertical gap between a label and its box, and
+ * the hairline that separates a form from the idea it belongs to.
+ *
+ * The hairline is `--rule`, one pixel, on the top only. Boxing the form would be
+ * a second container inside a page that is already a column of ideas separated by
+ * rules, and design.md law 2 spends its structure on hairlines rather than on
+ * cards inside cards.
+ */
+.remember {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+/* The row the control itself sits in, matching the actions row on a source page. */
+.remember__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+}
+
+/*
+ * The sentence under "The answer".
+ *
+ * `.meta` would have been the obvious class and is the wrong one: it uppercases,
+ * which is legible for two or three words and shouting for a sentence. Muted and
+ * small, in the body face, sentence case.
+ */
+.remember__hint {
+  margin: calc(var(--space-1) * -1) 0 0;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+/*
+ * A refusal, which must differ from the neutral sentence above it by more than
+ * hue.
+ *
+ * Not `.meta`: the hint argues that reader-facing prose must not be mono and
+ * uppercased, and a refusal rendered in exactly that looked identical to the
+ * sentence beside it, with `role="alert"` the only thing distinguishing them —
+ * a signal for screen readers and none at all for everyone else. The accent plus
+ * a rule, so colour is not carrying it alone.
+ */
+.remember__error {
+  margin: 0;
+  font-size: var(--step--1);
+  color: var(--accent);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent);
+}
+
+/*
+ * A label sits with the box it names.
+ *
+ * `.remember` is a flex column with `gap: var(--space-2)`, and `.field__label`
+ * carries `margin-bottom: var(--space-2)` of its own — so each label sat 1rem
+ * above its own textarea and 0.5rem below the field before it, grouping with the
+ * wrong one. The gap is the rhythm here; the label should not add to it.
+ */
+.remember .field__label {
+  margin-bottom: 0;
+}
