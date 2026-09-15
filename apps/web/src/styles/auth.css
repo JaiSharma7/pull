@@ -20,34 +20,79 @@
   padding-bottom: var(--space-5);
   border-bottom: 1px solid var(--rule-strong);
 }
+/*
+ * The same lockup the app shell shows, not a second one.
+ *
+ * The hat is `.shell__mark`, which sizes itself at 1.15em off the wordmark --
+ * roughly the word's cap height, which is what docs/design.md asks for and what
+ * every other screen already does. A fixed 2rem here was half again taller than
+ * the word beside it, and it did not track the reader's text-size setting, so
+ * the first screen a new reader sees carried a bigger mark than the product.
+ * `align-items: baseline` and the tighter gap are the shell's too.
+ */
 .welcome__brand {
   justify-content: flex-start;
+  align-items: baseline;
+  gap: var(--space-2);
   color: var(--text);
   text-decoration: none;
   font-family: var(--font-display);
   font-size: var(--step-1);
 }
-.welcome__brand img {
-  width: 2rem;
-  height: 2rem;
-  object-fit: contain;
-}
 .welcome__edition {
   color: var(--text-muted);
 }
+/*
+ * Placed by area, not by `order`.
+ *
+ * The four regions sit in the DOM in the order they are read -- hero, sign-in,
+ * the sample, the three features -- and that is the order a screen reader, a
+ * reader-mode view and a narrow viewport all get. `order` used to move the
+ * sign-in panel up on phones while leaving it last in the DOM, so what was
+ * announced and what was shown were two different pages. Two columns cannot
+ * match a single linear order by moving boxes around; they can only be an
+ * arrangement of one, which is what the areas below are.
+ *
+ * The two `1fr` rows are slack, not content. They split whatever height is left
+ * over equally above and below, so the left stack stays optically centred the
+ * way `align-items: center` centred it when it was one element -- while the
+ * three content rows stay at `min-content` and keep the internal rhythm that
+ * `.welcome__lede` and `.welcome__features` set in margins. Row gap is zero for
+ * the same reason: the spacing between them is already written.
+ */
 .welcome__layout {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: clamp(2rem, 6vw, 6rem);
-  align-items: center;
+  grid-template-areas:
+    '.        entry'
+    'hero     entry'
+    'preview  entry'
+    'features entry'
+    '.        entry';
+  grid-template-rows: 1fr min-content min-content min-content 1fr;
+  column-gap: clamp(2rem, 6vw, 6rem);
+  row-gap: 0;
   flex: 1;
   padding-block: clamp(2rem, 5vw, 5rem);
+}
+.welcome__hero {
+  grid-area: hero;
+}
+.welcome__preview {
+  grid-area: preview;
+}
+.welcome__features {
+  grid-area: features;
+}
+.welcome__entry {
+  grid-area: entry;
+  align-self: center;
 }
 .welcome__eyebrow {
   color: var(--accent);
   margin: 0 0 var(--space-5);
 }
-.welcome__story h1 {
+.welcome__hero h1 {
   font-family: var(--font-display);
   font-weight: 500;
   font-size: clamp(2.25rem, 1.4rem + 3vw, 4.25rem);
@@ -55,7 +100,7 @@
   letter-spacing: -0.045em;
   margin: 0;
 }
-.welcome__story h1 em {
+.welcome__hero h1 em {
   font-weight: 400;
   color: var(--accent);
 }
@@ -194,6 +239,9 @@
 @media (max-width: 55rem) {
   .welcome__layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'hero' 'entry' 'preview' 'features';
+    grid-template-rows: none;
+    row-gap: clamp(2rem, 6vw, 6rem);
   }
   .welcome__entry {
     border-left: 0;
@@ -223,20 +271,9 @@
   }
 }
 @media (max-width: 55rem) {
-  .welcome__story {
-    display: contents;
-  }
-  .welcome__hero {
-    order: 0;
-  }
-  .welcome__entry {
-    order: 1;
-  }
-  .welcome__preview {
-    order: 2;
-  }
+  /* One column, so `row-gap` above is what separates the four regions; the
+     margins these two carry for the two-column stack would double it. */
   .welcome__features {
-    order: 3;
     margin-top: 0;
   }
   .welcome__lede {
@@ -245,10 +282,11 @@
 }
 @media (min-width: 55.001rem) and (max-height: 48rem) {
   .welcome__layout {
+    /* `column-gap`, not `gap`: the row axis is load-bearing now, and zero. */
     padding-block: var(--space-6);
-    gap: var(--space-7);
+    column-gap: var(--space-7);
   }
-  .welcome__story h1 {
+  .welcome__hero h1 {
     font-size: var(--step-5);
   }
   .welcome__lede {

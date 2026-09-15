@@ -46,62 +46,24 @@ export function Auth({
     <main className="welcome">
       <header className="welcome__masthead">
         <a className="welcome__brand" href="/explore">
-          <Mark />
+          <Mark className="shell__mark" />
           <span>What a Pull</span>
         </a>
         <span className="meta welcome__edition">A little curiosity. A lasting idea.</span>
       </header>
       <div className="welcome__layout">
-        <section className="welcome__story" aria-labelledby="welcome-heading">
-          <div className="welcome__hero">
-            <p className="meta welcome__eyebrow">For the endlessly curious</p>
-            <h1 id="welcome-heading">
-              Follow your curiosity.
-              <br />
-              <em>Keep what matters.</em>
-            </h1>
-            <p className="welcome__lede">
-              Great ideas from books, films, papers and talks. A little reading today. A richer way
-              of seeing tomorrow.
-            </p>
-          </div>
-          <article className="welcome__preview" aria-label="An example Pull">
-            <div className="welcome__preview-top">
-              <span className="meta">Inside a Pull</span>
-              <span className="meta">Philosophy · 01</span>
-            </div>
-            <h2>The obstacle is part of the work.</h2>
-            <p>
-              An interruption can become material for the task itself. Instead of waiting for the
-              path to clear, ask what the difficulty makes possible.
-            </p>
-            <footer>
-              <span className="meta">
-                An idea from Meditations
-                <br />
-                Marcus Aurelius · Book 5
-              </span>
-              <span className="welcome__source">Ideas with a source.</span>
-            </footer>
-          </article>
-          <ol className="welcome__features">
-            <li>
-              <span className="meta">01 / Discover</span>
-              <h3>Find your next idea.</h3>
-              <p>Follow your interests across books, films, podcasts and more.</p>
-            </li>
-            <li>
-              <span className="meta">02 / Understand</span>
-              <h3>Go beyond the headline.</h3>
-              <p>Explore the argument, its context and the original source.</p>
-            </li>
-            <li>
-              <span className="meta">03 / Keep</span>
-              <h3>Make it yours.</h3>
-              <p>Save the ideas that stay with you. Return whenever curiosity calls.</p>
-            </li>
-          </ol>
-        </section>
+        <div className="welcome__hero">
+          <p className="meta welcome__eyebrow">For the endlessly curious</p>
+          <h1 id="welcome-heading">
+            Follow your curiosity.
+            <br />
+            <em>Keep what matters.</em>
+          </h1>
+          <p className="welcome__lede">
+            Great ideas from books, films, papers and talks. A little reading today. A richer way of
+            seeing tomorrow.
+          </p>
+        </div>
         <section className="welcome__entry" aria-labelledby="entry-heading">
           <p className="meta welcome__eyebrow">Your reading room awaits</p>
           <h2 id="entry-heading">Something worth keeping.</h2>
@@ -137,6 +99,42 @@ export function Auth({
             <a href="/privacy">Privacy Policy</a>.
           </p>
         </section>
+        <article className="welcome__preview" aria-label="An example Pull">
+          <div className="welcome__preview-top">
+            <span className="meta">Inside a Pull</span>
+            <span className="meta">Philosophy · 01</span>
+          </div>
+          <h2>The obstacle is part of the work.</h2>
+          <p>
+            An interruption can become material for the task itself. Instead of waiting for the path
+            to clear, ask what the difficulty makes possible.
+          </p>
+          <footer>
+            <span className="meta">
+              An idea from Meditations
+              <br />
+              Marcus Aurelius · Book 5
+            </span>
+            <span className="welcome__source">Ideas with a source.</span>
+          </footer>
+        </article>
+        <ol className="welcome__features">
+          <li>
+            <span className="meta">01 / Discover</span>
+            <h3>Find your next idea.</h3>
+            <p>Follow your interests across books, films, podcasts and more.</p>
+          </li>
+          <li>
+            <span className="meta">02 / Understand</span>
+            <h3>Go beyond the headline.</h3>
+            <p>Explore the argument, its context and the original source.</p>
+          </li>
+          <li>
+            <span className="meta">03 / Keep</span>
+            <h3>Make it yours.</h3>
+            <p>Save the ideas that stay with you. Return whenever curiosity calls.</p>
+          </li>
+        </ol>
       </div>
       <footer className="welcome__footer">
         <span className="meta">Less scrolling. More understanding.</span>
