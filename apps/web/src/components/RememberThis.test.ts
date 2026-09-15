@@ -40,6 +40,33 @@ describe('RememberThis', () => {
     expect(b).toContain(`aria-controls="imported-form-${PULL}"`);
   });
 
+  /**
+   * The row is the point of the `actions` prop, so the assertion is about the
+   * row rather than about the two controls existing: a caller's control and the
+   * toggle in ONE `remember__actions` paragraph, the caller's first. Rendered as
+   * siblings in two paragraphs -- which is what the source page did before -- the
+   * markup below would carry a `</p>` between them and this would fail.
+   */
+  it("puts the caller's controls in the same row as the toggle", () => {
+    const html = renderToStaticMarkup(
+      createElement(RememberThis, {
+        pullId: PULL,
+        actions: createElement('button', { type: 'button' }, 'Share'),
+      }),
+    );
+    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    expect(row).toContain('Share');
+    expect(row).toContain('Remember this');
+    expect(row.indexOf('Share')).toBeLessThan(row.indexOf('Remember this'));
+  });
+
+  it('draws the row with the toggle alone when no actions are passed', () => {
+    const html = renderToStaticMarkup(createElement(RememberThis, { pullId: PULL }));
+    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    expect(row).toContain('Remember this');
+    expect(row).not.toContain('<button type="button">');
+  });
+
   it('says nothing about having kept anything before anything is kept', () => {
     const html = renderToStaticMarkup(createElement(RememberThis, { pullId: PULL }));
     expect(html).not.toContain('Kept.');

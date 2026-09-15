@@ -20,7 +20,7 @@
  * the row exists.
  */
 
-import { useReducer, useRef } from 'react';
+import { useReducer, useRef, type ReactNode } from 'react';
 import { askReducer, draftFor, draftQuestion, EMPTY_ASK } from '../lib/questions.js';
 import { rememberPull } from '../lib/questions-api.js';
 import { TRANSPORT_ERROR } from '../lib/rpc-error.js';
@@ -42,9 +42,18 @@ export interface RememberThisProps {
    * screen shows the same idea twice.
    */
   idPrefix?: string;
+  /**
+   * The screen's own controls for this idea, rendered before the toggle in the
+   * SAME row. Everything a reader can do with an idea in front of them belongs on
+   * one line — Share, Highlight, Remember this — and this component has to own that
+   * row rather than sit under it, because the form it opens is a block element and
+   * cannot live inside the caller's `<p>`. The Library passes nothing and gets the
+   * toggle alone, exactly as before.
+   */
+  actions?: ReactNode;
 }
 
-export function RememberThis({ pullId, onKept, idPrefix = 'ask' }: RememberThisProps) {
+export function RememberThis({ pullId, onKept, idPrefix = 'ask', actions }: RememberThisProps) {
   /*
    * The reducer from `lib/questions.ts`, driven with one key.
    *
@@ -119,6 +128,7 @@ export function RememberThis({ pullId, onKept, idPrefix = 'ask' }: RememberThisP
   return (
     <>
       <p className="remember__actions">
+        {actions}
         <button
           type="button"
           className="btn btn--plain"
