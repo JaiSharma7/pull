@@ -89,11 +89,17 @@ const shellFiles = SHELL.flatMap((entry) =>
 /*
  * THE MARK AND THE CHROME, drawn outside every walk above.
  *
- * `public/favicon.svg` is the tab and install icon, and `docs/design.md` says the hat
- * "is drawn flat, with no gradient and no shadow, like everything else here".
+ * `public/favicon.svg` wraps the generated hat, and `docs/design.md` says the hat "is
+ * drawn flat, with no gradient and no shadow, like everything else here".
  * `Mark.test.ts` compares geometry attributes and not fills, so a `linearGradient`, an
  * `feDropShadow` and a 96px `rx` passed all 124 tests. `.svg` joins `shellFiles` for
  * that reason.
+ *
+ * What this no longer reaches is the tab icon itself: `index.html` points at
+ * `favicon-hat.png`, and a PNG is a buffer of pixels that the `/\.(?:css|html|svg)$/`
+ * filter cannot open and no law here can read. `Mark.test.ts` pins its dimensions and
+ * that it is the same render as the SVG's; the flat-fill law is enforced on the source
+ * both come from -- `scripts/gen-icons.mjs` -- and not on the PNG.
  *
  * `theme-color` and the PWA manifest are the other two: a `<meta name="theme-color">`
  * paints the mobile browser chrome and `vite.config.ts` sets the splash colours. Both

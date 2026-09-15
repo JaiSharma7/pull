@@ -1,0 +1,341 @@
+.welcome {
+  max-width: 90rem;
+  margin-inline: auto;
+  padding: clamp(1.25rem, 3vw, 3rem) clamp(1.25rem, 5vw, 5rem);
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+.welcome__masthead,
+.welcome__preview-top,
+.welcome__preview footer,
+.welcome__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+}
+.welcome__masthead {
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--rule-strong);
+}
+/*
+ * The app shell's lockup, not a second one: `.shell__mark` sizes the hat at 1.15em off
+ * the wordmark, which docs/design.md asks for -- roughly the word's cap height and no
+ * more -- and `.shell__wordmark` sets the tracking. Baseline alignment and `--space-2`
+ * are the shell's too, so the mark a reader meets here is the mark they keep seeing.
+ */
+.welcome__brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text);
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+}
+.welcome__edition {
+  color: var(--text-muted);
+}
+/*
+ * Placed by area, not by `order`.
+ *
+ * The four regions sit in the DOM in the order they are read -- hero, sign-in,
+ * the sample, the three features -- and that is the order a screen reader, a
+ * reader-mode view and a narrow viewport all get. Nothing here uses `order`, and that
+ * is deliberate: `order` can put the sign-in panel above the sample on a phone while
+ * leaving it last in the DOM, and then what is announced and what is shown are two
+ * different pages. Two columns cannot match a single linear order by moving boxes
+ * around; they can only be an arrangement of one, which is what the areas below are.
+ *
+ * The two `1fr` rows are slack, not content. They split whatever height is left
+ * over equally above and below, so the left stack stays optically centred the
+ * way `align-items: center` centred it when it was one element -- while the
+ * three content rows stay at `min-content` and keep the internal rhythm that
+ * `.welcome__lede` and `.welcome__features` set in margins. Row gap is zero for
+ * the same reason: the spacing between them is already written.
+ */
+.welcome__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-areas:
+    '.        entry'
+    'hero     entry'
+    'preview  entry'
+    'features entry'
+    '.        entry';
+  grid-template-rows: 1fr min-content min-content min-content 1fr;
+  column-gap: clamp(2rem, 6vw, 6rem);
+  row-gap: 0;
+  flex: 1;
+  padding-block: clamp(2rem, 5vw, 5rem);
+}
+.welcome__hero {
+  grid-area: hero;
+}
+.welcome__eyebrow {
+  color: var(--accent);
+  margin: 0 0 var(--space-5);
+}
+.welcome__hero h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  /*
+   * Both ends of the clamp are tokens, so focus mode reaches this heading.
+   * `tokens.css` remaps `--step-3` through `--step-5` under `:root[data-focus='on']`,
+   * which is how every other heading in the product grows when a reader asks for it --
+   * and a literal `clamp(2.25rem, ..., 4.25rem)` is a size no token block can touch, so
+   * the one screen that ignored the setting was the first one anybody sees. The
+   * multiplier keeps the display size this screen was designed at; it is the scale's
+   * top note, not a second scale.
+   */
+  font-size: clamp(var(--step-4), 1.4rem + 3vw, calc(var(--step-5) * 1.4));
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+  margin: 0;
+}
+.welcome__hero h1 em {
+  font-weight: 400;
+  color: var(--accent);
+}
+.welcome__lede {
+  font-size: var(--step-0);
+  line-height: 1.7;
+  color: var(--text-muted);
+  max-width: 49ch;
+  margin-block: var(--space-5) var(--space-6);
+}
+.welcome__preview {
+  grid-area: preview;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule-strong);
+  border-top: 3px solid var(--accent);
+  padding: clamp(1.25rem, 2.5vw, 2rem);
+}
+.welcome__preview-top {
+  color: var(--text-muted);
+}
+.welcome__preview h2 {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 500;
+  line-height: 1.2;
+  margin: var(--space-5) 0 var(--space-3);
+}
+.welcome__preview > p {
+  font-size: var(--step-0);
+  line-height: 1.7;
+  color: var(--text-soft);
+  margin: 0 0 var(--space-5);
+}
+.welcome__preview footer {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-4);
+  color: var(--text-muted);
+}
+.welcome__source {
+  font-family: var(--font-display);
+  font-style: italic;
+  text-align: right;
+}
+.welcome__features {
+  grid-area: features;
+  display: grid;
+  /*
+   * Reflowed, not held at three. Three fixed columns squeeze to about 132px each just
+   * above the 55rem breakpoint -- where the left column is at its narrowest before the
+   * page stacks -- and ladder to three different heights. `auto-fit` drops to two there
+   * and back to three once the column can hold them, with no width of its own to keep
+   * in step with the layout's.
+   *
+   * 10.5rem is chosen against the narrowest column the three-up design is drawn for:
+   * 168px x 3 plus two gaps is 552, and the left column passes that at about a 1100px
+   * viewport. Below it the cards reflow; above it they are the design's three.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: var(--space-5);
+  padding: 0;
+  margin: var(--space-6) 0 0;
+  list-style: none;
+}
+.welcome__features .meta {
+  color: var(--accent);
+}
+.welcome__features h3 {
+  font-family: var(--font-display);
+  font-size: var(--step-0);
+  font-weight: 500;
+  line-height: 1.35;
+  margin: var(--space-3) 0 var(--space-2);
+}
+.welcome__features p {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin: 0;
+}
+.welcome__entry {
+  grid-area: entry;
+  align-self: center;
+  border-left: 1px solid var(--rule-strong);
+  padding-left: clamp(1.5rem, 3vw, 3rem);
+}
+.welcome__entry h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--step-4);
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+  margin: 0;
+}
+.welcome__intro {
+  color: var(--text-muted);
+  line-height: 1.7;
+  margin-block: var(--space-4) var(--space-6);
+}
+.welcome__entry .btn {
+  width: 100%;
+  white-space: normal;
+  min-height: 3rem;
+  font-family: var(--font-body);
+  font-size: var(--step--1);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.welcome__entry > .stack {
+  display: grid;
+  gap: var(--space-3);
+}
+.welcome__entry > .stack > * {
+  margin: 0;
+}
+.welcome__note,
+.welcome__terms {
+  font-size: var(--step--1);
+  line-height: 1.65;
+  color: var(--text-muted);
+  margin: var(--space-3) 0 0;
+}
+.welcome__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--step--1);
+  margin-block: var(--space-6);
+}
+.welcome__divider::before,
+.welcome__divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule-strong);
+}
+.welcome__browse {
+  margin-top: var(--space-4);
+}
+.welcome__terms {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-5);
+  /* The rule above it wants more air than a note does, so this replaces the shared
+     `--space-3` rather than sitting on top of it. */
+  margin: var(--space-5) 0 0;
+}
+.welcome__footer {
+  border-top: 1px solid var(--rule-strong);
+  padding-top: var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--step--1);
+}
+@media (max-width: 55rem) {
+  .welcome__layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'hero' 'entry' 'preview' 'features';
+    grid-template-rows: none;
+    row-gap: clamp(2rem, 6vw, 6rem);
+  }
+  /* One column, so the `row-gap` above is what separates the four regions; the
+     margins these two carry for the two-column stack would double it. */
+  .welcome__features {
+    margin-top: 0;
+    /*
+     * A wider floor once the page is one column: the cards then have the whole measure
+     * rather than a 1.5fr share of it, and 10.5rem would put two 177px columns on a
+     * 420px phone. 13rem stacks them instead, and still takes two at 512px and three
+     * in landscape.
+     */
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  }
+  .welcome__lede {
+    margin-bottom: 0;
+  }
+  .welcome__entry {
+    border-left: 0;
+    border-top: 1px solid var(--rule-strong);
+    padding: var(--space-6) 0 0;
+  }
+  .welcome__edition {
+    display: none;
+  }
+  .welcome__footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+@media (max-width: 30rem) {
+  .welcome__features {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .welcome__features li {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: var(--space-4);
+  }
+  /*
+   * The footer is the same shape as the header -- two items, `space-between`, no wrap --
+   * with several times the text in it, so both stack here. Side by side on a 360px
+   * phone the two spans shrink into ragged three- and four-line stacks against each
+   * other, and `.welcome__source`'s right alignment makes the second ragged-left too.
+   */
+  .welcome__preview-top,
+  .welcome__preview footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .welcome__source {
+    text-align: left;
+  }
+}
+/* A range, so nothing falls between this and the 55rem stack above: 55rem and
+   55.001rem are 880px and 880.016px, and a fractional zoom lands in between. */
+@media (width > 55rem) and (max-height: 48rem) {
+  .welcome__layout {
+    /* `column-gap`, not `gap`: the row axis is load-bearing now, and zero. */
+    padding-block: var(--space-6);
+    column-gap: var(--space-7);
+  }
+  .welcome__hero h1 {
+    font-size: var(--step-5);
+  }
+  .welcome__lede {
+    margin-block: var(--space-4);
+  }
+  .welcome__preview {
+    padding: var(--space-5);
+  }
+  .welcome__preview h2 {
+    margin-top: var(--space-4);
+  }
+  .welcome__features {
+    margin-top: var(--space-5);
+  }
+  .welcome__entry h2 {
+    font-size: var(--step-3);
+  }
+  .welcome__intro {
+    margin-bottom: var(--space-4);
+  }
+  .welcome__divider {
+    margin-block: var(--space-4);
+  }
+}
