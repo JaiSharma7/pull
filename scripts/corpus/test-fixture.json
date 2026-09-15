@@ -7,6 +7,12 @@
       "author": "A Nother"
     },
     {
+      "title": "A Source Never Tried",
+      "kind": "essay",
+      "url": "https://example.test/never",
+      "author": "A Nother"
+    },
+    {
       "title": "A Source Already Published",
       "kind": "essay",
       "url": "https://example.test/published",

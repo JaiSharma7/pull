@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 /*
@@ -19,9 +20,10 @@ import { fileURLToPath } from 'node:url';
 const seeder = fileURLToPath(new URL('./seed-corpus.mjs', import.meta.url));
 const manifestPath = fileURLToPath(new URL('./corpus/test-fixture.json', import.meta.url));
 
-// The whole opening line, not just "with target": the migration's header quotes that
-// phrase while explaining what follows it, so a shorter marker finds prose.
-const MARKER = '\nwith target(title, kind, url, author) as (values';
+// The start of a line, so adding a column to the manifest moves nothing here: a marker
+// carrying the whole column list turned an ordinary catalogue change into "emitted no
+// seeder statement", which points the contributor at a statement that is in fact there.
+const MARKER = '\nwith target(';
 
 const emitted = execFileSync(process.execPath, [seeder, '--sql', '--manifest', manifestPath], {
   encoding: 'utf8',
@@ -54,7 +56,20 @@ const sql = emitted.slice(start + 1);
  */
 
 const failed = 'A Source That Failed';
+const never = 'A Source Never Tried';
 const present = 'A Source Already Published';
+
+/*
+ * Fresh ids per run, which is what every SQL file in this chain does with
+ * `extensions.gen_random_uuid()`. Hard-coded ones raise a duplicate key against any
+ * database that is not freshly reset -- a previous run that aborted before its
+ * `rollback`, a developer's own fixtures -- and the failure then names `auth.users`
+ * rather than anything about the seeder, which is the hazard this file's own header
+ * warns about for `DATABASE_URL`.
+ */
+const reader = randomUUID();
+const failedWork = randomUUID();
+const publishedWork = randomUUID();
 
 /** Canonical queued jobs for one title. A reader's own job is not the library's. */
 const queued = (title, count) => `do $$ begin
@@ -85,7 +100,7 @@ end $$;
 -- value the canonical test looks for, so the reader cases would pass by being the thing
 -- they are meant to be distinguished from.
 insert into auth.users (id, instance_id, email, aud, role)
-values ('22222222-2222-4222-8222-222222222222',
+values ('${reader}',
         '00000000-0000-0000-0000-000000000000',
         'corpus-seed-reader@example.test', 'authenticated', 'authenticated');
 
@@ -93,21 +108,43 @@ values ('22222222-2222-4222-8222-222222222222',
 -- and one that is already published with NO job at all, which is how nine works in this
 -- catalogue actually arrived: seeded directly by migration. A predicate that asks only
 -- about jobs re-queues every one of them.
-insert into public.works(id, kind, title, slug, rights_status)
-values ('33333333-3333-4333-8333-333333333333', 'book', '${failed}',
-        'failed-' || extensions.gen_random_uuid(), 'public_domain');
+insert into public.works(id, kind, title, slug, rights_status, source_url)
+values ('${failedWork}', 'book', '${failed}',
+        'failed-' || extensions.gen_random_uuid(), 'public_domain',
+        'https://example.test/failed');
 insert into public.generation_jobs(requester_id, target, status, visibility)
 values (null, jsonb_build_object('title', '${failed}'), 'failed', 'public');
 
-insert into public.works(id, kind, title, slug, rights_status)
-values ('11111111-1111-4111-8111-111111111111', 'book', '${present}',
-        'present-' || extensions.gen_random_uuid(), 'public_domain');
+-- With its source_url, because that is the key: works.title is written from
+-- summary.title, which a model chooses, and against the real manifest a title match
+-- finds 7 rows where a URL match finds 10. The title here is deliberately NOT the
+-- manifest's, so a predicate that went back to matching on it fails this case.
+insert into public.works(id, kind, title, slug, rights_status, source_url)
+values ('${publishedWork}', 'book', 'A Title The Model Chose',
+        'present-' || extensions.gen_random_uuid(), 'public_domain',
+        'https://example.test/published');
 insert into public.summaries(work_id, title, status, visibility, published_at)
-values ('11111111-1111-4111-8111-111111111111', '${present}', 'published', 'public', now());
+values ('${publishedWork}', 'A Title The Model Chose', 'published', 'public', now());
 
+-- TWO rows queued by one statement, which is what the LATERAL sent and the
+-- single-materialisation claim are about; a one-row fixture exercises neither.
 ${sql}
 ${queued(failed, 1)}
+${queued(never, 1)}
 ${queued(present, 0)}
+
+do $$ begin
+  if (select count(*) from pgmq.q_generation m
+      where m.message->>'jobId' in (
+        select g.id::text from public.generation_jobs g
+         where g.target->>'title' in ('${failed}', '${never}'))) <> 2 then
+    raise exception 'two jobs were inserted but % messages were sent',
+      (select count(*) from pgmq.q_generation m
+        where m.message->>'jobId' in (
+          select g.id::text from public.generation_jobs g
+           where g.target->>'title' in ('${failed}', '${never}')));
+  end if;
+end $$;
 
 -- What the job it queued has to be. A NULL requester is load-bearing: a reader named
 -- here is charged the quota, becomes author of every summary -- and
@@ -121,6 +158,11 @@ do $$ begin
        and g.visibility = 'public'
        and g.target->>'rights_status' = 'public_domain'
        and g.target->>'url' = 'https://example.test/failed'
+       -- kind and author too: asWorkKind narrows an absent kind to 'essay', so
+       -- dropping it from the target would never surface at runtime either, and the
+       -- nullif on author is the reason attribute_work is not handed an empty string.
+       and g.target->>'kind' = 'essay'
+       and g.target->>'author' = 'A Nother'
   ) then
     raise exception 'the queued job is not the canonical, unattributed, public one: %',
       (select to_jsonb(g) from public.generation_jobs g
@@ -148,54 +190,96 @@ end $$;
 ${sql}
 ${queued(failed, 1)}
 
--- From here each case sets this title's job rows outright and asks what the seeder does
--- with that state, rather than accumulating. The counter looks at canonical rows only,
--- so a suppressed title reads 0 and an unsuppressed one reads 1.
+-- From here each case sets one title's job rows outright and asks what the seeder does
+-- with that state. They use "A Source Never Tried", which has no works row, so the last
+-- leg of the predicate is satisfied by that alone and each case isolates the one thing
+-- it is about. The counter looks at canonical rows only: a suppressed title reads 0.
 
--- A SUCCEEDED job suppresses it, and keeps suppressing it once the summary is withdrawn.
--- Unpublishing after a copyright complaint must not be undone by a seeder run, and a
--- predicate that asked only whether a readable summary exists did exactly that.
-delete from public.generation_jobs where target->>'title' = '${failed}';
+-- A SUCCEEDED job suppresses it, whatever was done to the summary afterwards.
+delete from public.generation_jobs where target->>'title' = '${never}';
 insert into public.generation_jobs(requester_id, target, status, visibility)
-values (null, jsonb_build_object('title', '${failed}'), 'succeeded', 'public');
+values (null, jsonb_build_object('title', '${never}'), 'succeeded', 'public');
 ${sql}
-${queued(failed, 0)}
+${queued(never, 0)}
 
 -- A CANCELLED job is somebody stopping it on purpose, so that is not a retry either.
-update public.generation_jobs set status = 'cancelled' where target->>'title' = '${failed}';
+update public.generation_jobs set status = 'cancelled' where target->>'title' = '${never}';
 ${sql}
-${queued(failed, 0)}
+${queued(never, 0)}
 
--- CASE INSENSITIVE, which the emitted comment argues at length for and which the
--- manifest needs: it carries "Democracy and Education: Chapter Iv" and its siblings.
-delete from public.generation_jobs where target->>'title' = '${failed}';
+-- CASE INSENSITIVE, which the manifest needs: it carries "Democracy and Education:
+-- Chapter Iv" and its siblings.
+delete from public.generation_jobs where target->>'title' = '${never}';
 insert into public.generation_jobs(requester_id, target, status, visibility)
-values (null, jsonb_build_object('title', upper('${failed}')), 'succeeded', 'public');
+values (null, jsonb_build_object('title', upper('${never}')), 'succeeded', 'public');
 ${sql}
-${queued(failed, 0)}
+${queued(never, 0)}
 
 -- A READER'S job is not the library's. enqueue_generation_job writes a caller's target
 -- verbatim, so without this one reader asking the Studio about a manifest title would
 -- remove it from the catalogue for ever. Attributed AND public, which nothing produces
--- today -- the column defaults to private -- because the requester test is what the rule
--- means and it should not rest on a default staying put.
+-- today, because the requester test is what the rule means and it should not rest on a
+-- column default staying where it is.
 delete from public.generation_jobs
- where target->>'title' in ('${failed}', upper('${failed}'));
+ where target->>'title' in ('${never}', upper('${never}'));
 insert into public.generation_jobs(requester_id, target, status, visibility)
-values ('22222222-2222-4222-8222-222222222222',
-        jsonb_build_object('title', '${failed}'), 'succeeded', 'public');
+values ('${reader}', jsonb_build_object('title', '${never}'), 'succeeded', 'public');
 ${sql}
-${queued(failed, 1)}
+${queued(never, 1)}
+
+-- And a CANONICAL job that is not public does not speak for the catalogue either.
+-- Nothing writes one today -- the column defaults to private and only this statement
+-- sets it -- which is exactly why the test holds the condition in place rather than
+-- letting the requester test carry it alone.
+delete from public.generation_jobs where target->>'title' = '${never}';
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values (null, jsonb_build_object('title', '${never}'), 'succeeded', 'private');
+${sql}
+${queued(never, 1)}
+
+-- THE SWEEPER'S failures are not attempts. sweep_stranded_generation_jobs fails every
+-- job whose message went missing, so one dispatch outage fails the whole batch at once;
+-- counting those, three outages would disqualify the entire catalogue for ever, with
+-- nothing telling a dead URL from a quiet afternoon.
+delete from public.generation_jobs where target->>'title' = '${never}';
+insert into public.generation_jobs(requester_id, target, status, visibility, error)
+select null, jsonb_build_object('title', '${never}'), 'failed', 'public',
+       'stranded: nothing queued for step resolve_identity since 2026-01-01'
+  from generate_series(1, 5);
+${sql}
+${queued(never, 1)}
 
 -- AND IT TERMINATES. A source that dies after synthesis has been paid for leaves a
 -- failed job and no published summary, so without a bound it is re-queued on every run
 -- and repaid for every time.
-delete from public.generation_jobs where target->>'title' = '${failed}';
+delete from public.generation_jobs where target->>'title' = '${never}';
 insert into public.generation_jobs(requester_id, target, status, visibility)
-select null, jsonb_build_object('title', '${failed}'), 'failed', 'public'
+select null, jsonb_build_object('title', '${never}'), 'failed', 'public'
   from generate_series(1, 3);
 ${sql}
-${queued(failed, 0)}
+${queued(never, 0)}
+
+-- THE WORK IS FOUND BY URL, not by title. works.title is written from summary.title,
+-- which a model chooses -- against the real manifest a title match finds 7 rows where a
+-- URL match finds 10 -- and the manifest is full of one-word titles (Art, Love, Meno) a
+-- model could emit for some other source. This row is titled something else entirely, so
+-- a predicate that went back to matching on the title would not find it. The failed job
+-- is what makes this case about leg 2 alone: without it the last leg suppresses anyway.
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values (null, jsonb_build_object('title', '${present}'), 'failed', 'public');
+${sql}
+${queued(present, 0)}
+
+-- A WITHDRAWAL of a work this seeder never produced is not a gap to fill. Ten works in
+-- the real catalogue arrived by migration with no job at all; unpublishing one after a
+-- copyright complaint leaves the works row and takes the readable summary away, and
+-- without the last leg the next run regenerates and republishes it. The job from the
+-- case above goes, because this one is about a work with none.
+delete from public.generation_jobs where target->>'title' = '${present}';
+update public.summaries set status = 'draft', published_at = null
+ where work_id = '${publishedWork}';
+${sql}
+${queued(present, 0)}
 
 rollback;
 `;

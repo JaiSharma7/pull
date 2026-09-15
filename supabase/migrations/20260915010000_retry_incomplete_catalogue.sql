@@ -15,46 +15,59 @@
 -- against this file with an error telling the contributor to edit it. What changes goes
 -- in a NEW migration; this one says what it said when it ran.
 --
--- The live predicate is what `scripts/test-corpus-seed.mjs` still tests, by driving the
--- SQL the generator emits today rather than a second copy of it.
+-- The live predicate is what `scripts/test-corpus-seed.mjs` tests, by driving the SQL the
+-- generator emits today rather than a second copy of it. Every condition below has been
+-- checked by breaking it and watching that suite fail.
 --
 -- WHAT IT ENQUEUES. A generation that died after `resolve_identity` leaves a `works` row
 -- with no readable summary, and the seeder meant to retry it skipped it: the old test was
 -- "a works row with this title exists", and that row is exactly what a half-finished job
--- leaves behind. A title is missing now when three things hold at once.
+-- leaves behind. A title is missing now when four things hold at once.
 --
---   No CANONICAL job for it that is anything but failed. Queued or running means it is
---   already coming, succeeded means it arrived whatever was done to it afterwards, and
---   cancelled means somebody stopped it deliberately. Canonical because
---   `enqueue_generation_job` writes a reader's target verbatim: without the
---   `requester_id is null and visibility = 'public'` test, one signed-in reader asking
---   the Studio about "Nature" -- a real manifest entry -- would remove Emerson from this
---   seeder for good.
+--   NO LIVE JOB. Queued or running means it is already coming, succeeded means it
+--   arrived whatever was done to it afterwards, and cancelled means somebody stopped it
+--   deliberately. Counted over CANONICAL jobs only, because `enqueue_generation_job`
+--   writes a reader's target verbatim: without the `requester_id is null and visibility
+--   = 'public'` test, one signed-in reader asking the Studio about "Nature" -- a real
+--   manifest entry -- would retire Emerson from this seeder for good.
 --
---   Nothing a reader can already OPEN under that title. A job is not the only way a
---   source arrives: nine works here were seeded directly by migration and have no job
---   row at all, and a predicate that asked only about jobs re-queued seven of them on a
---   database replayed from zero. Measured, and the cost is not abstract -- a duplicate
---   `works` row, a duplicate feed card and a second generation paid for, each, because
---   those rows have no `content_hash` and `upsertWork` cannot adopt them.
+--   FEWER THAN THREE REAL ATTEMPTS, because "retry" has to terminate: a source that dies
+--   after synthesis is paid for would otherwise be bought again on every run. The
+--   sweeper's failures are excluded from that count. `sweep_stranded_generation_jobs`
+--   fails every job whose pgmq message went missing, so one dispatch stall fails the
+--   whole batch at once -- and counting those, three stalls would disqualify the entire
+--   catalogue for ever, with nothing telling a dead URL from a quiet afternoon.
 --
---   And FEWER THAN THREE failures already. "Retry" has to terminate. A source that dies
---   after synthesis has been paid for satisfies both tests above on every run, for ever,
---   buying the same generation again each time. Three is the ceiling the worker already
---   gives a job internally.
+--   NOTHING A READER CAN ALREADY OPEN under that source. This is the leg that covers
+--   rows no job produced: ten works here were seeded directly by migration, and a
+--   predicate that asked only about jobs re-queued seven of them on a database replayed
+--   from zero -- each one a duplicate work, a duplicate feed card and a second generation
+--   paid for, unadoptable because those rows carry no `content_hash`.
+--
+--   AND NOTHING THAT ARRIVED WITHOUT ONE OF OUR JOBS. Unpublishing a work after a
+--   copyright complaint leaves the `works` row and takes the readable summary away, so
+--   for a migration-seeded row -- which has no job to speak for it -- the two legs above
+--   both fall silent and the next run regenerates and republishes it. A source no job of
+--   ours produced is not this seeder's to retry, whatever state it is in. The cost of
+--   that is the mirror case: if a job row is ever pruned away from under a work, the
+--   source stops being retryable. Not regenerating is the safe direction.
+--
+-- KEYED ON THE URL, for the two legs about the work. `works.title` is written from
+-- `summary.title`, which a model chooses: against this manifest a title match finds 7
+-- rows where a URL match finds 10, and the manifest is full of one-word titles -- Art,
+-- Love, Circles, Apology, Meno -- that a model could plausibly emit for some other
+-- source and so suppress the real one for ever. `source_url` is exact and no model
+-- writes it. The jobs are still matched on `lower(title)`, which is what the manifest
+-- guarantees is unique; a URL match there would miss the same work reached by two hosts,
+-- which has happened -- Common Sense arrived from Wikisource and Gutenberg and was
+-- published twice.
 --
 -- So on a database replayed from zero this inserts NOTHING, and that is the right answer
 -- rather than a gap: `20260907011000_expand_catalogue` has just queued the whole
--- manifest, the nine seeded works are readable, and nothing has had the chance to fail.
--- Measured, not assumed -- `select count(*) group by created_at` after `db reset` shows
--- one batch, not two. It does its work on an environment that has been running, where
+-- manifest, the seeded works are readable, and nothing has had the chance to fail.
+-- Measured, not assumed -- `select count(distinct created_at) from generation_jobs` after
+-- `db reset` is 1, not 2. It does its work on an environment that has been running, where
 -- those jobs have finished and some of them badly.
---
--- What it still cannot see: a withdrawal performed by DELETING a work rather than
--- unpublishing it. `generation_jobs.work_id` is `on delete cascade`, so deleting the work
--- takes the succeeded job with it and the title looks untried. Both tests then pass and
--- the next run regenerates it. Unpublishing is the withdrawal this predicate holds
--- against; deleting is not, and that is worth knowing before reaching for `delete`.
 --
 -- Renumbered from 20260908120000 before it was ever applied anywhere -- a migration
 -- inserted into the middle of history replays in one order from zero and in another on an
@@ -295,65 +308,81 @@ with target(title, kind, url, author) as (values
      --   complaint and the next run regenerates and republishes it.
      --
      -- `generation_jobs.target->>'title'` is the manifest title verbatim,
-     -- written by this statement and never by a model. So the first leg:
-     -- nothing here but failures. A queued or running job means it is already
-     -- coming; a succeeded one means it arrived, whatever was done to it
-     -- afterwards; a cancelled one means somebody stopped it on purpose. Only
-     -- `failed` is a source that tried and did not make it.
+     -- written by this statement and never by a model, so the counts below
+     -- are over jobs THIS seeder is responsible for. CANONICAL ONLY:
+     -- enqueue_generation_job writes a reader-supplied target verbatim, so
+     -- without the requester and visibility tests one signed-in reader asking
+     -- the Studio about "Nature" -- a real manifest entry -- would retire
+     -- Emerson from this seeder permanently.
      --
-     -- CANONICAL JOBS ONLY. enqueue_generation_job writes a reader-supplied
-     -- target verbatim, so without the requester and visibility test one
-     -- signed-in reader asking the Studio about "Nature" -- a real manifest
-     -- entry, and the sort of word somebody types -- leaves a succeeded
-     -- private job that removes Emerson from this seeder permanently.
-     -- Two tests where one would do today: the column defaults to private, so
-     -- either alone excludes a reader. The requester test is what the rule
-     -- means; the visibility test is what it must still mean if that default
-     -- ever moves.
+     -- `live` is a job already coming or already arrived: queued, running,
+     -- succeeded, or cancelled because somebody stopped it on purpose. Any of
+     -- those and there is nothing to retry.
      --
-     -- And a second leg, because a job is not the only way a source arrives:
-     -- nine works in this catalogue were seeded directly by migration and have
-     -- no job row at all. Asking only about jobs re-queued seven of them on a
-     -- database replayed from zero -- measured -- and each one is a duplicate
-     -- work, a duplicate feed card and a second generation paid for. So:
-     -- nothing a reader can already open under this title, either. That leg
-     -- reads works.title, which a model writes, and it is sound only because
-     -- the job leg above already covers everything a job produced; this one is
-     -- for rows no job produced, whose titles reached works.title from the
-     -- manifest through a migration.
+     -- `tried` is a real attempt that failed, and it EXCLUDES the sweeper.
+     -- sweep_stranded_generation_jobs fails every job whose message went
+     -- missing -- a dispatch outage fails the whole batch at once -- and
+     -- counting those, three outages would disqualify the entire catalogue
+     -- for ever, with nothing telling a dead URL from a quiet afternoon.
+     -- Three real attempts is the ceiling the worker gives a job internally,
+     -- and it is what makes "retry" terminate: a source that dies AFTER
+     -- synthesis is paid for would otherwise be bought again on every run.
      --
-     -- AND A BOUND, because "retry" has to terminate. A source that dies after
-     -- synthesis is paid for leaves a failed job and no published summary, so
-     -- both legs above let it through on every run, for ever, buying the same
-     -- generation again each time. Three attempts, the ceiling the worker
-     -- already gives a job internally.
+     -- Then two things about the WORK, both keyed on the URL rather than on
+     -- the title. `works.title` is written from `summary.title`, which a model
+     -- chooses: against this manifest a title match finds 7 rows and a URL
+     -- match finds 10, and the manifest is full of one-word titles -- Art,
+     -- Love, Circles, Apology, Meno -- that a model could plausibly emit for a
+     -- different source and so suppress the real one for ever. `source_url` is
+     -- exact, and no model writes it.
      --
-     -- Matched on lower(title) because that is what the manifest guarantees is
-     -- unique. A URL match would miss the same work reached by two hosts, which
-     -- has already happened once here: Common Sense arrived from Wikisource and
-     -- Gutenberg and was published twice.
+     -- Nothing a reader can already OPEN, which is the leg that covers rows no
+     -- job produced: ten works here were seeded directly by migration, and a
+     -- predicate that asked only about jobs re-queued seven of them on a
+     -- database replayed from zero. Each one is a duplicate work, a duplicate
+     -- feed card and a second generation paid for.
+     --
+     -- And nothing that ARRIVED WITHOUT ONE OF OUR JOBS. Unpublishing a work
+     -- after a copyright complaint leaves the works row and takes away the
+     -- readable summary, so for a migration-seeded row -- which has no job to
+     -- speak for it -- the two legs above both fall silent and the next run
+     -- regenerates and republishes it. A source that no job of ours produced
+     -- is not this seeder's to retry, whatever state it is in.
+     --
+     -- Matched on lower(title) for the jobs because that is what the manifest
+     -- guarantees is unique. A URL match there would miss the same work reached
+     -- by two hosts, which has already happened: Common Sense arrived from
+     -- Wikisource and Gutenberg and was published twice.
      missing as (
        select t.* from target t
-       where not exists (
-         select 1 from public.generation_jobs g
+       -- ONE pass over generation_jobs per target, not two: the counts
+       -- below share a predicate, and neither lower(target->>'title') nor
+       -- lower(works.title) has an expression index to lean on.
+       cross join lateral (
+         select
+           count(*) as jobs,
+           count(*) filter (where g.status <> 'failed') as live,
+           count(*) filter (where g.status = 'failed'
+                              and coalesce(g.error, '') not like 'stranded:%') as tried
+         from public.generation_jobs g
          where lower(g.target->>'title') = lower(t.title)
            and g.requester_id is null
            and g.visibility = 'public'
-           and g.status <> 'failed'
-       )
-       and not exists (
-         select 1 from public.works w
-         join public.summaries s on s.work_id = w.id
-         where lower(w.title) = lower(t.title)
-           and s.status = 'published' and s.visibility = 'public'
-       )
-       and (
-         select count(*) from public.generation_jobs g
-         where lower(g.target->>'title') = lower(t.title)
-           and g.requester_id is null
-           and g.visibility = 'public'
-           and g.status = 'failed'
-       ) < 3
+       ) j
+       where j.live = 0
+         and j.tried < 3
+         and not exists (
+           select 1 from public.works w
+           join public.summaries s on s.work_id = w.id
+           where w.source_url = t.url
+             and s.status = 'published' and s.visibility = 'public'
+         )
+         and (
+           j.jobs > 0
+           or not exists (
+             select 1 from public.works w where w.source_url = t.url
+           )
+         )
      ),
      queued as (
        insert into public.generation_jobs (requester_id, target, status, visibility)

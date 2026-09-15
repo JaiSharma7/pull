@@ -163,8 +163,10 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
   see a policy, so a file without the guard proves less than it looks like it does, and
   several of them do not have it. The last entry is `scripts/test-corpus-seed.mjs`, which
   runs as the owner deliberately: it drives the SQL `scripts/seed-corpus.mjs --sql` emits,
-  which is a seeder and therefore an owner-role write path, and it asserts that the
-  committed migration's body is still what that script prints.
+  which is a seeder and therefore an owner-role write path, and testing a second copy of
+  its predicate would test nothing. What it does not do is compare that output against the
+  committed migration — a migration is a snapshot and law 6 says never to edit a pushed
+  one, so a check demanding they match demands a violation to go green.
 
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
   from `pnpm db:types`, `packages/prompts/baml_sdk` from `pnpm baml:generate`, and
