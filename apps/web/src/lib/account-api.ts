@@ -191,6 +191,8 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'recall_events', column: 'user_id', key: 'id' },
   { table: 'feed_impressions', column: 'user_id', key: 'id' },
   { table: 'feed_recipes', column: 'user_id', key: 'id' },
+  // The sources the reader asked to see less of (20260909050000): theirs, and small.
+  { table: 'muted_works', column: 'user_id', key: 'work_id' },
   { table: 'follows', column: 'follower_id', key: 'followee_id' },
   { table: 'generation_jobs', column: 'requester_id', key: 'id' },
   // Three more that `docs/privacy.md` names as the reader's own and this list did

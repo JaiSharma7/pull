@@ -3,7 +3,13 @@ import { progressLabel, type PathItem } from '../lib/paths.js';
 import { fetchPaths } from '../lib/paths-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 
-export function Paths({ onNavigate }: { onNavigate: (to: string) => void }) {
+export function Paths({
+  userId,
+  onNavigate,
+}: {
+  userId: string | null;
+  onNavigate: (to: string) => void;
+}) {
   const [paths, setPaths] = useState<PathItem[]>([]);
   const [settled, setSettled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,6 +23,10 @@ export function Paths({ onNavigate }: { onNavigate: (to: string) => void }) {
         if (controller.signal.aborted) return;
         setPaths(items);
         setSettled(true);
+        // A load that worked ends the failure before it. `error` was set in one place
+        // and cleared in none, so one flaky request replaced the list with a dead end
+        // until the reader reloaded the page. `Library.tsx` documents the same defect.
+        setError(null);
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
@@ -25,7 +35,12 @@ export function Paths({ onNavigate }: { onNavigate: (to: string) => void }) {
         setError(e instanceof Error ? e.message : String(e));
       });
     return () => controller.abort();
-  }, [attempt]);
+    // `userId` is in the deps and not in the body on purpose. `get_paths` answers for
+    // whoever `auth.uid()` is and is granted to anon too, so it is the session that
+    // decides what comes back: signing in with this screen mounted left the visitor's
+    // all-null progress on screen, and `progressLabel` read "5 steps" over a path the
+    // reader had finished. `Library.tsx` is the precedent.
+  }, [userId, attempt]);
 
   if (error) {
     return (

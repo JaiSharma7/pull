@@ -1,6 +1,6 @@
 # Data model
 
-51 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+52 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -24,7 +24,8 @@ User
  ├── imports ─── import_items                     ← highlights you kept
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
- └── feed_recipes · feed_impressions
+ ├── feed_recipes · feed_impressions
+ └── muted_works                                  ← sources the reader asked to see less of
 
 Work                                              ← the thing itself
  ├── editions                                     ← its concrete forms
@@ -144,7 +145,10 @@ their whole history.
 
 **Lineage and counterpoints share one edge table.** `pull_relations.kind` covers
 `related`, `opposes`, `elaborates`, `ancestor`, `descendant` and `supports`. Counterpull
-reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`.
+reads the `opposes` edges; Idea Lineage walks `ancestor`/`descendant`. A kind describes
+the `to` pull relative to the `from` pull, so the same edge reads differently from each
+end; `related_pulls` says which side the anchor is on (`direction`), and the client keeps
+one label map per side.
 
 The read path reads `opposes` too, and not as a feature — as a correction.
 Embeddings barely encode negation, so a claim and its contradiction sit closer

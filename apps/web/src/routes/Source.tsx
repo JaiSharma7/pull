@@ -6,6 +6,7 @@ import { isSchemaMismatch, TRANSPORT_ERROR } from '../lib/rpc-error.js';
 import { type Highlight, anchor, splitByRanges } from '../lib/highlights.js';
 import { createHighlight, deleteHighlight, fetchHighlights } from '../lib/highlights-api.js';
 import { fetchRelatedPulls, type RelatedPull } from '../lib/search-api.js';
+import { relationLabel } from '../lib/relations.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { askReducer, draftFor, draftQuestion, EMPTY_ASK } from '../lib/questions.js';
 import {
@@ -30,22 +31,6 @@ import type { SourceDelta } from '../lib/types.js';
  * engagement metrics as an anti-goal, and the number a reader is shown is the one the
  * product is actually optimising for.
  */
-
-/**
- * How an authored edge reads to a person.
- *
- * The enum is `relation_kind` in the database. Anything unrecognised falls through
- * to the raw value rather than being dropped, so a member added by a migration
- * shows up as itself instead of silently disappearing from the page.
- */
-const RELATION_LABEL: Record<string, string> = {
-  supports: 'Supports this',
-  opposes: 'Argues against this',
-  elaborates: 'Elaborates on this',
-  ancestor: 'This idea came from it',
-  descendant: 'Grew out of this idea',
-  related: 'Related',
-};
 
 /**
  * Where the current selection sits inside one element, as character offsets.
@@ -1041,11 +1026,13 @@ export function Source({
                   are labelled differently. "Argues against this" is something a
                   person asserted and can be held to; a vector distance is not, and
                   dressing one as the other is how a Counterpull surface starts
-                  lying about what it knows.
+                  lying about what it knows. And an edge is read from the side the
+                  reader is standing on: `direction` says which, and the two maps in
+                  `lib/relations.ts` say what it means from there.
                 */}
                 {r.relation ? (
                   <p className="meta source__related-kind">
-                    {RELATION_LABEL[r.relation] ?? r.relation}
+                    {relationLabel(r.relation, r.direction)}
                     {r.rationale ? ` — ${r.rationale}` : ''}
                   </p>
                 ) : null}

@@ -1,3 +1,4 @@
+import type { EdgeDirection } from './relations.js';
 import { rpcError } from './rpc-error.js';
 import { type SearchResult, shapeSearchResult } from './search.js';
 import { supabase } from './supabase.js';
@@ -58,6 +59,13 @@ export interface RelatedPull {
    */
   relation: string | null;
   rationale: string | null;
+  /**
+   * Which side of the edge the anchor is on. `kind` describes the `to` pull relative
+   * to the `from` pull, so the same edge reads differently from each end;
+   * `relationLabel` in `lib/relations.ts` picks the map. Null for a vector
+   * neighbour, and for a payload older than 20260909040000.
+   */
+  direction: EdgeDirection | null;
 }
 
 export async function fetchRelatedPulls(pullId: string, limit = 6): Promise<RelatedPull[]> {
@@ -82,6 +90,7 @@ export async function fetchRelatedPulls(pullId: string, limit = 6): Promise<Rela
         workTitle: typeof r.workTitle === 'string' ? r.workTitle : '',
         relation: typeof r.relation === 'string' ? r.relation : null,
         rationale: typeof r.rationale === 'string' ? r.rationale : null,
+        direction: r.direction === 'from' || r.direction === 'to' ? r.direction : null,
       };
     })
     .filter((r): r is RelatedPull => r !== null);

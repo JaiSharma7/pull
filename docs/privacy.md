@@ -108,6 +108,7 @@ This is the category most services describe vaguely, so here it is precisely:
 | Highlights you chose to keep                                    | `imports`, `import_items`, and pulls under a private summary | Your own copy of your own reading, so the product can schedule and search it        |
 | Questions you wrote for yourself                                | `user_questions`                                             | Asked in Review before ours, because yours is the one you wanted                    |
 | Learning path progress and completed steps                      | `path_progress`, `path_step_done`                            | Remembers your place, reflections and tested-out steps on curated learning paths    |
+| Sources you asked to see less of                                | `muted_works`                                                | Keeps them out of your feed and your Daily Pull until you unmute them               |
 
 **Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
 export, the text of each highlight is stored verbatim — that is the point of keeping it —
@@ -229,16 +230,18 @@ policy changes first and the change is a commit you can read.
 
 ## Who else processes your data
 
-Three, and only three:
+The app uses these services:
 
-| Processor                      | What it handles                                        | Where                   |
-| ------------------------------ | ------------------------------------------------------ | ----------------------- |
-| **Supabase** (and AWS beneath) | Database, authentication, server functions             | `ca-central-1`, Canada  |
-| **Vercel**                     | Serving the web app and its static assets              | Global edge network     |
-| **Google** (Gemini API)        | Generating summaries — including a document you submit | Google's infrastructure |
+| Processor                             | What it handles                                                   | Where                                  |
+| ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
+| **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
+| **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
+| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
 
-Sign-in emails are delivered through Supabase Auth's email provider, which necessarily
-sees your address and the code.
+Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your
+account identifier, email address and basic profile information needed to sign you in.
+We do not receive your provider password. Email codes and email/password sign-in are disabled.
 
 That is the complete list. There is no analytics vendor, no session-replay tool, no crash
 reporter, no tag manager, and no advertising SDK in the app today.

@@ -198,3 +198,10 @@ Enforced rather than intended: `jsx-a11y` rules are lint **errors** in
 
 `eslint-plugin-jsx-a11y` runs as errors in CI. `/design-check` audits a diff against
 this document.
+
+### Supplied brand artwork
+
+The approved wordmark and magic hat are the PNG originals in `scripts/assets/`.
+Their gold sparks, red band and subtle shading are part of the supplied artwork;
+they do not introduce new interface colours or gradients. `node scripts/gen-icons.mjs`
+regenerates the masthead image, favicon and PWA icons from those originals.

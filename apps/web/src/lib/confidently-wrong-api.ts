@@ -1,28 +1,58 @@
 import {
   dedupeConfidentlyWrong,
+  newestFirst,
   parseConfidentlyWrongRows,
-  type ConfidentlyWrongItem,
+  type ConfidentlyWrongList,
 } from './confidently-wrong.js';
+import { pageAfter } from './paging.js';
 import { supabase } from './supabase.js';
 
 export { CONFIDENTLY_WRONG_COPY, formatAttemptDate } from './confidently-wrong.js';
-export type { ConfidentlyWrongItem } from './confidently-wrong.js';
+export type { ConfidentlyWrongItem, ConfidentlyWrongList } from './confidently-wrong.js';
 
 /**
- * Fetch recall_events where confidence = 'sure' and grade = 'forgot' over the last N days.
- * Returns unique items deduplicated by pull_id (most recent first).
+ * The ideas the reader was sure of and then missed, in the last `days` days, one per
+ * idea, most recent first, at most `limit` of them -- and how many there were before
+ * the cut, so the screen can say what it left out rather than call twenty "all".
+ *
+ * The embed rides on every event, repeats included, and is folded away with them; a
+ * reader wrong on one idea a hundred times fetches its headline a hundred times. Named
+ * here rather than fixed: walking ids alone and embedding the twenty survivors once is
+ * a second request and a second parser, for a population that is one page for almost
+ * every reader.
+ *
+ * WALKED, THEN ORDERED, THEN DEDUPLICATED, THEN CUT -- in that order. The first
+ * version took twenty events from the server and deduplicated them here, so a reader
+ * confidently wrong five times on each of four ideas saw four items in a list whose
+ * own copy calls them the misconceptions worth repairing first. Repeated lapses are
+ * exactly this list's population, and the cut has to come after the events have been
+ * folded into ideas. The walk is bounded by thirty days of one reader's own lapses.
+ *
+ * KEYED ON `id`, NOT OFFSET (Codex finding). `pageAll` is LIMIT/OFFSET, and an offset
+ * shifts under a concurrent write -- `paging.ts` says so, and `buildAccountExport`
+ * measured it -- while this reader's other tab writes a `recall_events` row every
+ * time they answer a question. A keyset walk on the primary key reads nothing twice
+ * and skips nothing that was there when it began; a row written during the walk may
+ * be missed, which is the honest outcome for an event that did not yet exist. `id`
+ * is a uuid, so the walk is in no useful order: `newestFirst` orders the rows once
+ * they are all in hand, and `dedupeConfidentlyWrong` then keeps the newest per idea.
+ *
+ * A failure is thrown, not swallowed into `[]`. The screen tells loading, failed and
+ * "nothing in thirty days" apart, and it can only do that if the difference reaches
+ * it: the first version returned an empty list on a network error, and the dashboard
+ * read that as a clean record.
  */
 export async function fetchConfidentlyWrong(
   userId: string | null,
   days = 30,
   limit = 20,
-): Promise<ConfidentlyWrongItem[]> {
-  if (!userId) return [];
+): Promise<ConfidentlyWrongList> {
+  if (!userId) return { items: [], total: 0 };
 
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-  try {
-    const { data, error } = await supabase
+  const rows = await pageAfter<{ id: string }>((after, pageSize) => {
+    const query = supabase
       .from('recall_events')
       .select(
         `
@@ -35,8 +65,7 @@ export async function fetchConfidentlyWrong(
           summaries (
             works (
               id,
-              title,
-              slug
+              title
             )
           )
         )
@@ -45,18 +74,11 @@ export async function fetchConfidentlyWrong(
       .eq('confidence', 'sure')
       .eq('grade', 'forgot')
       .gte('applied_at', sinceIso)
-      .order('applied_at', { ascending: false })
-      .limit(limit);
+      .order('id', { ascending: true })
+      .limit(pageSize);
+    return after === null ? query : query.gt('id', String(after));
+  }, 'id');
 
-    if (error) {
-      console.warn('Failed to fetch confidently wrong events:', error);
-      return [];
-    }
-
-    const parsed = parseConfidentlyWrongRows(data ?? []);
-    return dedupeConfidentlyWrong(parsed);
-  } catch (err: unknown) {
-    console.warn('Network error fetching confidently wrong events:', err);
-    return [];
-  }
+  const ideas = dedupeConfidentlyWrong(newestFirst(parseConfidentlyWrongRows(rows)));
+  return { items: ideas.slice(0, limit), total: ideas.length };
 }

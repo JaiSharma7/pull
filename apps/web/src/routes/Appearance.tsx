@@ -67,7 +67,7 @@ export function Appearance() {
   return (
     <section className="appearance measure">
       <p className="meta">Appearance</p>
-      <h1>How this reads</h1>
+      <h2>How this reads</h2>
 
       {/*
         What has already been changed, before offering more to change — the same

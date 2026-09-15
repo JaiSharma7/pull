@@ -73,7 +73,8 @@ enable_anonymous_sign_ins = true
 # the message and type six digits, and short enough that a code sitting in a synced
 # inbox stops being useful quickly. GoTrue's default is an hour.
 [auth.email]
-enable_signup = true
+# Disables the email provider (passwords and OTP); OAuth remains enabled.
+enable_signup = false
 enable_confirmations = false
 otp_expiry = 600
 # One code per minute per address. The sign-in screen already handles the rate-limit

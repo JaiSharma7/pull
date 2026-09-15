@@ -148,43 +148,14 @@ export interface MarkProps {
   title?: string;
 }
 
-const UNITS = 32;
-/*
- * The sparks are ornament, so they take the muted text role rather than a hue of
- * their own. A champagne gold here would be a second accent the moment anything
- * pointed at it, which design law 1 does not allow and `design-laws.test.ts` catches
- * both in `tokens.css` and in this file.
- */
-const SPARK = 'var(--text-muted)';
-
+/** The supplied magic hat, shared with the favicon and PWA icon generator. */
 export function Mark({ className, title }: MarkProps) {
-  const h = hatGeometry(UNITS);
-  const [big] = h.sparkles;
-  const top = big.y - big.ry;
-  const bottom = h.bodyBottom + h.bottomCapRy;
-
   return (
-    <svg
+    <img
       className={className}
-      viewBox={`${n(h.c - h.brimRx)} ${n(top)} ${n(h.brimRx * 2)} ${n(bottom - top)}`}
-      role={title ? 'img' : undefined}
+      src="/brand/hat.png"
+      alt={title ?? ''}
       aria-hidden={title ? undefined : true}
-      focusable="false"
-    >
-      {title ? <title>{title}</title> : null}
-      <path d={bodyPath(h)} fill="currentColor" />
-      <ellipse
-        cx={n(h.c)}
-        cy={n(h.bodyBottom)}
-        rx={n(h.crownBottomW / 2)}
-        ry={n(h.bottomCapRy)}
-        fill="currentColor"
-      />
-      <path d={bandPath(h)} fill="var(--accent)" />
-      <path d={brimRingPath(h)} fill="currentColor" fillRule="evenodd" clipRule="evenodd" />
-      {h.sparkles.map((sparkle, index) => (
-        <path key={index} d={sparklePath(sparkle)} fill={SPARK} />
-      ))}
-    </svg>
+    />
   );
 }

@@ -37,9 +37,9 @@ export interface SimulationConfig {
 }
 
 export const DEFAULT_CONFIG: SimulationConfig = {
-  repulsion: 800,
+  repulsion: 3200,
   springK: 0.04,
-  centerGravity: 0.015,
+  centerGravity: 0.003,
   damping: 0.86,
   maxVelocity: 8,
 };

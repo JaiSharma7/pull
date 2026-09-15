@@ -48,6 +48,7 @@ export function Preferences({
   mode?: 'settings' | 'onboarding';
   onDone: () => void;
 }) {
+  const Heading = mode === 'onboarding' ? 'h1' : 'h2';
   const [topics, setTopics] = useState<TopicOption[] | null>(null);
   const [mediaOptions, setMediaOptions] = useState<WorkKind[]>([]);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
@@ -149,7 +150,7 @@ export function Preferences({
      */
     return (
       <section className="measure">
-        <h1 className="prose__heading">Preferences</h1>
+        <h2 className="prose__heading">Preferences</h2>
         <p>Could not load your preferences.</p>
         <p className="meta">{error}</p>
         <div className="prefs__actions">
@@ -187,12 +188,12 @@ export function Preferences({
           a 3rem top margin, and the rule that zeroes it applies only to a `:first-child` of
           a `.prose` — neither is true here, so the step counter above floated 3rem clear of
           the title it labels while screens 2 and 3 tucked theirs under it. */}
-      <h1
+      <Heading
         className="prose__heading"
         style={mode === 'onboarding' ? { marginTop: 'var(--space-1)' } : undefined}
       >
         {mode === 'onboarding' ? 'What do you want to learn about?' : 'Preferences'}
-      </h1>
+      </Heading>
 
       <p>
         {mode === 'onboarding'

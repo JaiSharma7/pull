@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { InterruptKind, Stance } from '@wap/schemas';
 import { GRADE_LABELS, RECALL_GRADES, type RecallGrade } from '../lib/grades.js';
-import { recognitionSupported, startRecognition } from '../lib/speech.js';
+import { useDictation } from '../lib/use-dictation.js';
+import { DICTATION_DISCLOSURE } from '../lib/dictation.js';
 import type { FeedRow, ReviewQuestion } from '../lib/types.js';
 import { fetchQuestions } from '../lib/questions-api.js';
-import { resolveEffectiveKind, toActivityQuestion } from '../lib/review-question.js';
+import {
+  chooseQuestion,
+  mcqOptionMarker,
+  resolveEffectiveKind,
+  toActivityQuestion,
+} from '../lib/review-question.js';
 import { gradeCloze, gradeMcq, mcqOptions, whyWrong, type WhyWrong } from '../lib/activities.js';
 import { elapsedSince } from '../lib/submission.js';
+import { onceInView } from '../lib/in-view.js';
 
 /** What the reader gave back. Every field is optional — a conviction answer
  *  carries a stance and no grade, a recall answer the reverse. */
@@ -51,20 +58,54 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
     latencyMs?: number;
   }
   const [answered, setAnswered] = useState<AnsweredState | null>(null);
+  /*
+   * WHEN THE QUESTION WAS ACTUALLY PUT TO THE READER.
+   *
+   * This was set as the first statement of the mount effect, before `fetchQuestions`
+   * resolved -- and `Feed.tsx` mounts every interrupt at once, including cards far
+   * below the fold. So the clock started while the question was still in flight and
+   * the card still off screen, and the "latency" the MCQ and cloze graders split
+   * `easy` from `good` on included the fetch and however long the reader spent on the
+   * cards above. Those are exactly the two deterministic graders, so this corrupted the
+   * memory model's inputs on both kinds Package 3 introduced.
+   *
+   * Started once the question has arrived AND the card is in view -- `onceInView` in
+   * `lib/in-view.ts` says what "in view" means and why the flag alone was not enough.
+   * Where there is no `IntersectionObserver` it starts when the question arrives, which
+   * is still after the fetch. Left `null` until then, and `elapsedSince(null)` is
+   * `undefined`: no measurement rather than a false one, which is the rule
+   * `lib/submission.ts` already states for the column.
+   */
   const displayedAtRef = useRef<number | null>(null);
+  const cardRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    displayedAtRef.current = Date.now();
     let cancelled = false;
     fetchQuestions(pull.id).then((qs) => {
-      if (!cancelled && qs.length > 0) {
-        setQuestion(qs[0]!);
-      }
+      if (cancelled) return;
+      // Rotated by the day rather than always the first: a feed row carries no `reps`,
+      // and `questions[0]` here was the same one-question-per-idea bottleneck Review
+      // had. The UTC day is the counter, as `lib/history.ts` counts days, so the same
+      // card asks the same question until the UTC date turns -- mid-afternoon west of
+      // Greenwich -- and a different one after. See `chooseQuestion`.
+      setQuestion(chooseQuestion(qs, Math.floor(Date.now() / 86_400_000)));
     });
     return () => {
       cancelled = true;
     };
   }, [pull.id]);
+
+  useEffect(() => {
+    if (!question) return;
+    const el = cardRef.current;
+    if (!el) {
+      displayedAtRef.current ??= Date.now();
+      return;
+    }
+    return onceInView(el, () => {
+      displayedAtRef.current ??= Date.now();
+    });
+  }, [question]);
 
   const activityQ = useMemo(() => (question ? toActivityQuestion(question) : null), [question]);
   const mcqChoices = useMemo(() => {
@@ -83,6 +124,7 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
 
   return (
     <section
+      ref={cardRef}
       className="pull-card"
       aria-labelledby={`interrupt-${pull.id}`}
       style={{ borderColor: 'var(--accent)' }}
@@ -123,13 +165,16 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                     key={g}
                     type="button"
                     className="btn"
+                    /* No `answer`. Free recall is self-graded with no text input, so
+                       there is nothing the reader wrote -- and this used to send the
+                       stored reference answer, or failing that the card's own body, into
+                       the one column that holds what a reader actually said. */
                     onClick={() =>
                       onAnswer({
                         grade: g,
                         confidence: sure ? 'sure' : 'unsure',
                         questionId: question?.id,
                         latencyMs: elapsedSince(revealedAt),
-                        answer: question?.answer ?? pull.body,
                         kind: 'recall',
                       })
                     }
@@ -189,22 +234,49 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
           >
             {mcqChoices.map((opt) => {
               const isSelected = answered?.pickedOrTyped === opt;
+              /* Law 5: the word carries the verdict, and the colour agrees with it. */
+              const marker = mcqOptionMarker(
+                opt,
+                activityQ?.answer,
+                answered?.pickedOrTyped ?? null,
+              );
               return (
                 <button
                   key={opt}
                   type="button"
                   className="btn"
                   aria-pressed={isSelected}
-                  disabled={answered !== null}
+                  /* `aria-disabled`, as Review.tsx: a disabled button is painted at 45%
+                     opacity, below the contrast floor for the verdict word. */
+                  aria-disabled={answered !== null}
                   style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                    gap: 'var(--space-3)',
                     textAlign: 'left',
                     width: '100%',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 'var(--step--1)',
-                    borderColor: isSelected ? 'var(--accent)' : undefined,
-                    fontWeight: isSelected ? 600 : undefined,
+                    /* The colour agrees with the word: the correct option in the accent,
+                       a wrong pick muted, exactly as Review.tsx has it. Before this the
+                       wrong pick was the most emphasised button on the screen. */
+                    borderColor:
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--rule)'
+                          : undefined,
+                    color:
+                      marker === 'Correct answer'
+                        ? 'var(--accent)'
+                        : marker === 'Your answer'
+                          ? 'var(--text-muted)'
+                          : undefined,
+                    fontWeight: marker === 'Correct answer' ? 600 : undefined,
                   }}
                   onClick={() => {
+                    if (answered !== null) return;
                     const latencyMs = elapsedSince(displayedAtRef.current);
                     const res = gradeMcq(opt, activityQ!, sure ? 'sure' : 'unsure', latencyMs);
                     const reason = whyWrong(activityQ!, opt);
@@ -218,7 +290,8 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
                     });
                   }}
                 >
-                  {opt}
+                  <span>{opt}</span>
+                  {marker ? <span className="meta">{marker}</span> : null}
                 </button>
               );
             })}
@@ -529,50 +602,12 @@ function RecallInterruptCard({ pull, onAnswer, onDismiss }: RecallInterruptCardP
 export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
   const [revealed, setRevealed] = useState(false);
   const [explanation, setExplanation] = useState('');
-  const [listening, setListening] = useState(false);
-  /* Shown under the field, never appended. `startRecognition` hands interim words over
-     separately for exactly this: they are a preview the engine may still revise. */
-  const [interim, setInterim] = useState('');
-  /* A refused microphone, or an engine that would not start. Silence here read as a
-     button that flicked back to "Dictate" for no stated reason. */
-  const [dictationError, setDictationError] = useState<string | null>(null);
-  const stopListeningRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    return () => {
-      stopListeningRef.current?.();
-    };
-  }, []);
-
-  const toggleListening = () => {
-    if (listening) {
-      stopListeningRef.current?.();
-      setListening(false);
-      setInterim('');
-      return;
-    }
-
-    let failed = false;
-    setDictationError(null);
-    const teardown = startRecognition({
-      onResult: (text) => setExplanation((prev) => (prev ? prev + ' ' + text.trim() : text.trim())),
-      onInterim: setInterim,
-      onEnd: () => {
-        setListening(false);
-        setInterim('');
-      },
-      onError: () => {
-        failed = true;
-        setListening(false);
-        setInterim('');
-        setDictationError(
-          'Could not start dictation — your browser may have refused the microphone.',
-        );
-      },
-    });
-    stopListeningRef.current = teardown;
-    if (!failed) setListening(true);
-  };
+  /* The microphone, the interim preview (a preview the engine may still revise --
+     shown under the field, never appended) and the reason it stopped, from the one
+     hook `Path.tsx` shares. See `lib/use-dictation.ts`. */
+  const dictation = useDictation((text) =>
+    setExplanation((prev) => (prev ? prev + ' ' + text.trim() : text.trim())),
+  );
 
   const shell = (label: string, children: React.ReactNode) => (
     <section
@@ -627,17 +662,17 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
             <label className="field__label" htmlFor={`explain-${pull.id}`}>
               In your own words
             </label>
-            {recognitionSupported() && (
+            {dictation.supported && (
               <button
                 type="button"
                 className="btn btn--plain meta"
                 style={{ textDecoration: 'underline' }}
-                onClick={toggleListening}
+                onClick={dictation.toggle}
               >
                 {/* Typography is the ornament — docs/design.md. This read "🎤 Dictate"
                     and "● Listening (click to stop)". The label carries the state, so
                     there is no `aria-pressed` to double-encode it into "Stop, pressed". */}
-                {listening ? 'Stop' : 'Dictate'}
+                {dictation.listening ? 'Stop' : 'Dictate'}
               </button>
             )}
           </div>
@@ -654,23 +689,16 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
           {/* Always mounted: a live region inserted at the same moment as its text is
               usually not announced at all, because there was no region to observe. */}
           <p className="meta" aria-live="polite">
-            {listening ? interim || 'Listening…' : ''}
+            {dictation.listening ? dictation.interim || 'Listening…' : ''}
           </p>
-          {dictationError ? (
+          {dictation.error ? (
             <p className="meta" role="alert" style={{ color: 'var(--accent)' }}>
-              {dictationError}
+              {dictation.error}
             </p>
           ) : null}
-          {recognitionSupported() ? (
-            /* Said where the decision is made, not only in docs/privacy.md. In most
-               browsers speech recognition is not on the device — the audio goes to the
-               browser's own vendor. It never reaches us, but it does leave
-               the reader's machine, and they are about to press the button that does it. */
-            <p className="meta">
-              Dictation uses your browser's speech recognition, which in most browsers sends the
-              audio to your browser's vendor. We never receive it. Typing sends nothing.
-            </p>
-          ) : null}
+          {/* Said where the decision is made, not only in docs/privacy.md; the sentence
+              itself lives in lib/dictation.ts so both screens say the same thing. */}
+          {dictation.supported ? <p className="meta">{DICTATION_DISCLOSURE}</p> : null}
         </div>
         {revealed ? (
           <>
@@ -724,11 +752,7 @@ export function Interrupt({ kind, pull, onAnswer, onDismiss }: InterruptProps) {
               className="btn btn--primary"
               disabled={explanation.trim().length < 10}
               onClick={() => {
-                if (listening) {
-                  stopListeningRef.current?.();
-                  setListening(false);
-                  setInterim('');
-                }
+                dictation.stop();
                 setRevealed(true);
               }}
             >

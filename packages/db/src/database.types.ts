@@ -1118,6 +1118,32 @@ export type Database = {
           },
         ]
       }
+      muted_works: {
+        Row: {
+          muted_at: string
+          user_id: string
+          work_id: string
+        }
+        Insert: {
+          muted_at?: string
+          user_id: string
+          work_id: string
+        }
+        Update: {
+          muted_at?: string
+          user_id?: string
+          work_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "muted_works_work_id_fkey"
+            columns: ["work_id"]
+            isOneToOne: false
+            referencedRelation: "works"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notes: {
         Row: {
           body: string
@@ -2299,6 +2325,10 @@ export type Database = {
         }
         Returns: Json
       }
+      complete_path_step: {
+        Args: { p_ordinal: number; p_path_id: string; p_pull_id: string }
+        Returns: boolean
+      }
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
@@ -2436,6 +2466,14 @@ export type Database = {
           p_response_hours?: number
         }
         Returns: Json
+      }
+      readable_path_steps: {
+        Args: { p_path_id: string }
+        Returns: {
+          kind: string
+          ordinal: number
+          pull_id: string
+        }[]
       }
       record_failed_job_step: {
         Args: {
@@ -2578,6 +2616,7 @@ export type Database = {
         Args: { p_name: string; p_value: string }
         Returns: string
       }
+      settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean
