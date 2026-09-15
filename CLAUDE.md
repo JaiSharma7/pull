@@ -125,7 +125,7 @@ pnpm db:start       # local Supabase stack
 pnpm db:reset       # replay every migration from zero, then seed
 pnpm db:types       # regenerate packages/db/src/database.types.ts — never hand-edit
 pnpm db:lint        # the schema invariants CI check 4 runs
-pnpm db:test        # read-path behaviour, as a real reader under RLS
+pnpm db:test        # read-path behaviour as a real reader under RLS, then the seeder
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
 pnpm baml:fmt       # format packages/prompts/baml_src — prettier has no .baml parser
 pnpm baml:generate  # regenerate packages/prompts/baml_sdk — never hand-edit
@@ -156,6 +156,12 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
   committed JSON fixture captured by hand, not against the database, so a change to the
   SQL planner passes CI unless someone regenerates the fixture. Closing that is in
   `docs/contributing-map.md`.
+
+  The chain is `supabase/tests/*.sql` run through psql as a reader — each one installs
+  `assert_is_reader()` and would reject a write — followed by
+  `scripts/test-corpus-seed.mjs`, which is the one exception and says so: it runs the SQL
+  `scripts/seed-corpus.mjs --sql` emits, as the owner, because a seeder is an owner-role
+  write path and testing a copy of its predicate would test nothing.
 
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
   from `pnpm db:types`, `packages/prompts/baml_sdk` from `pnpm baml:generate`, and

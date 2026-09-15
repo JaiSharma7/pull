@@ -1,37 +1,56 @@
--- The catalogue seeder, emitted by `scripts/seed-corpus.mjs --sql` and committed
--- so that a database replayed from zero carries the same 198 sources a hosted
--- one does. Everything from `with target(` down is byte-for-byte what that
--- command prints -- only the header differs, the script's describing how to run
--- it by hand -- and `scripts/test-corpus-seed.mjs` exercises the emitted SQL
--- rather than a second copy of its predicate, so the two cannot drift.
+-- Retry the catalogue sources whose every generation failed.
 --
--- What changed, and why this file exists: the eligibility test used to be
--- "a works row with this title exists". A generation that died after
--- resolve_identity leaves exactly that -- a work with no published summary --
--- so every source that failed midway was permanently skipped by the seeder
--- meant to retry it. Eligibility is now the readable summary itself, which is
--- the thing a reader can actually open.
+-- The body below is exactly what `node scripts/seed-corpus.mjs --sql` prints from
+-- `with target(` down; only this header differs, the script's being addressed to
+-- somebody running it by hand. `scripts/test-corpus-seed.mjs` drives the emitted SQL
+-- rather than a second copy of its predicate, so what the script does is what is
+-- tested -- but nothing regenerates this FILE and diffs it, the way CI does for
+-- `database.types.ts` and the BAML exports. Regenerate it by hand if the emitter
+-- changes, or the two will differ and nothing will say so.
 --
--- Re-running stays safe, which is the point: a queued or running job for the
--- same title still suppresses a duplicate, so this enqueues only what is
--- genuinely absent. Renumbered from 20260908120000 before it was ever applied
--- anywhere -- a migration inserted into the middle of history replays in one
--- order from zero and in another on an environment that already ran past it,
--- which is the divergence law 6 exists to prevent.
+-- WHAT IT ENQUEUES, AND WHEN IT ENQUEUES NOTHING. A generation that died after
+-- `resolve_identity` leaves a `works` row with no readable summary, and the seeder that
+-- was meant to retry it skipped it -- the old test was "a works row with this title
+-- exists", and that row is exactly what a half-finished job leaves behind. The test is
+-- now the job: a title is missing when every `generation_jobs` row carrying it has
+-- FAILED. Queued or running means it is already coming; succeeded means it arrived,
+-- whatever was done to it afterwards; cancelled means somebody stopped it deliberately.
 --
--- Mirrors enqueue_generation_job without its per-reader quota: the insert and
--- the sends are one statement, so a job either exists and is queued or neither
--- happened. visibility=public with rights_status=public_domain is what lets the
--- result clear resolve_identity and moderate and reach the feed. The spend these
--- jobs go on to make is bounded by the global daily cap, not by this file.
+-- So on a database replayed from zero this inserts NOTHING, and that is the correct
+-- answer rather than a gap: `20260907011000_expand_catalogue` has just queued the whole
+-- manifest, nothing has had the chance to fail, and there is nothing to retry. It does
+-- its work on an environment that has been running -- where those jobs have finished,
+-- and some of them badly. Measured, not assumed: against a freshly reset local stack
+-- the `missing` CTE returns zero rows.
 --
--- requester_id is NULL on purpose. These are canonical summaries belonging to
--- the library rather than to a person, and attributing them to a reader has
--- three consequences: it spends their daily quota, locking them out on the day
--- they seed; it makes them author of every summary -- and summaries_author_update
--- permits an author to unpublish, so one PATCH per row would empty the public
--- feed -- and it exposes every job row, step output and per-step cost to them
--- through the _own policies.
+-- Two earlier predicates are worth naming because both looked right and neither
+-- converges. "A works row with a published public summary" reads a title column the
+-- MODEL writes -- `pipeline.ts` stores `summary.title` -- so a source that generated
+-- perfectly under a title of its own choosing is missing for ever and is re-queued on
+-- every run. It also silently undoes a withdrawal: unpublish a work after a copyright
+-- complaint and the next run regenerates and republishes it, which is law 4 being
+-- reversed by a seeder. `generation_jobs.target->>'title'` is the manifest title
+-- verbatim, written by this statement and never by a model.
+--
+-- Re-running stays safe, which is the point: a queued or running job for the same title
+-- suppresses a duplicate, so this enqueues only what is genuinely absent. Renumbered
+-- from 20260908120000 before it was ever applied anywhere -- a migration inserted into
+-- the middle of history replays in one order from zero and in another on an environment
+-- that already ran past it, which is the divergence law 6 exists to prevent.
+--
+-- Mirrors `enqueue_generation_job` without its per-reader quota: the insert and the
+-- sends are one statement, so a job either exists and is queued or neither happened.
+-- `visibility=public` with `rights_status=public_domain` is what lets the result clear
+-- `resolve_identity` and `moderate` and reach the feed. The spend these jobs go on to
+-- make is bounded by the global daily cap, not by this file.
+--
+-- `requester_id` is NULL on purpose. These are canonical summaries belonging to the
+-- library rather than to a person, and attributing them to a reader has three
+-- consequences: it spends their daily quota -- the manifest is several times the ceiling
+-- of 50, so it does not merely lock them out for the day, it cannot complete at all --
+-- it makes them author of every summary, and `summaries_author_update` permits an author
+-- to unpublish, so one PATCH per row would empty the public feed -- and it exposes every
+-- job row, step output and per-step cost to them through the `_own` policies.
 
 with target(title, kind, url, author) as (values
        ('Self-Reliance', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Self-Reliance', 'Ralph Waldo Emerson'),
@@ -233,13 +252,32 @@ with target(title, kind, url, author) as (values
        ('The Works of Francis Bacon: Of Travel', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Travel', 'Francis Bacon'),
        ('The Works of Francis Bacon: Of Usury', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Usury', 'Francis Bacon')
      ),
-     -- Only what is genuinely missing.
+     -- Only what is genuinely missing: a title whose every job FAILED.
      --
-     -- Without this the statement enqueues every entry in the manifest every
-     -- time it runs, including the ones already published — duplicate works in
-     -- the feed and duplicate model spend, which is the one cost law 2 is
-     -- written to avoid. Re-running a seeder is the normal way to add a source,
-     -- so it has to be safe to do.
+     -- Without a test like this the statement enqueues the whole manifest
+     -- every time it runs -- duplicate works in the feed and duplicate model
+     -- spend, which is the one cost law 2 is written to avoid. Re-running a
+     -- seeder is the normal way to add a source, so it has to be safe.
+     --
+     -- THE TEST IS THE JOB, not the work. Two earlier versions asked about
+     -- `works`, and both were wrong in ways that never converge:
+     --
+     --   "a works row with this title exists" skipped every source that died
+     --   after resolve_identity, which is exactly the row this seeder is for.
+     --
+     --   "a works row with a published public summary" reads a title column
+     --   the MODEL writes -- pipeline.ts stores `summary.title` -- so a source
+     --   that generated perfectly under a title of its own choosing looks
+     --   missing forever, and is re-queued on every run, for ever. It also
+     --   silently undoes a WITHDRAWAL: unpublish a work after a copyright
+     --   complaint and the next run regenerates and republishes it.
+     --
+     -- `generation_jobs.target->>'title'` is the manifest title verbatim,
+     -- written by this statement and never by a model. So: nothing here but
+     -- failures. A queued or running job means it is already coming; a
+     -- succeeded one means it arrived, whatever was done to it afterwards;
+     -- a cancelled one means somebody stopped it on purpose. Only `failed`
+     -- is a source that tried and did not make it.
      --
      -- Matched on lower(title) because that is what the manifest guarantees is
      -- unique. A URL match would miss the same work reached by two hosts, which
@@ -248,16 +286,9 @@ with target(title, kind, url, author) as (values
      missing as (
        select t.* from target t
        where not exists (
-         select 1 from public.works w
-         join public.summaries s on s.work_id = w.id
-         where lower(w.title) = lower(t.title)
-           and s.status = 'published' and s.visibility = 'public'
-           and w.rights_status in ('public_domain', 'licensed')
-       )
-       and not exists (
          select 1 from public.generation_jobs g
          where lower(g.target->>'title') = lower(t.title)
-           and g.status in ('queued', 'running')
+           and g.status <> 'failed'
        )
      ),
      queued as (
