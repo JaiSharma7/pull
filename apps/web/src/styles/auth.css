@@ -6,22 +6,7 @@
   display: flex;
   flex-direction: column;
 }
-
-/*
- * A full viewport MINUS the room the player bar is holding.
- *
- * `player.css` reserves `--space-8` on `body` rather than on the shell, and says why:
- * the bar is drawn beside every screen the app can return, and the sign-in page has no
- * shell to pad. A screen that then claims the whole viewport for itself adds that room
- * back on, so a signed-out visitor listening to something queued from `/explore` gets
- * 64px of scroll under a page with nothing below the fold. Audio is free and reaches a
- * visitor with no account -- law 3 -- so this is a real pairing, not a hypothetical one.
- */
-:root[data-listening='on'] .welcome {
-  min-height: calc(100svh - var(--space-8) - env(safe-area-inset-bottom));
-}
 .welcome__masthead,
-.welcome__brand,
 .welcome__preview-top,
 .welcome__preview footer,
 .welcome__footer {
@@ -35,17 +20,13 @@
   border-bottom: 1px solid var(--rule-strong);
 }
 /*
- * The same lockup the app shell shows, not a second one.
- *
- * The hat is `.shell__mark`, which sizes itself at 1.15em off the wordmark --
- * roughly the word's cap height, which is what docs/design.md asks for and what
- * every other screen already does. A fixed 2rem here was half again taller than
- * the word beside it, and it did not track the reader's text-size setting, so
- * the first screen a new reader sees carried a bigger mark than the product.
- * `align-items: baseline` and the tighter gap are the shell's too.
+ * The app shell's lockup, not a second one: `.shell__mark` sizes the hat at 1.15em off
+ * the wordmark, which docs/design.md asks for -- roughly the word's cap height and no
+ * more -- and `.shell__wordmark` sets the tracking. Baseline alignment and `--space-2`
+ * are the shell's too, so the mark a reader meets here is the mark they keep seeing.
  */
 .welcome__brand {
-  justify-content: flex-start;
+  display: flex;
   align-items: baseline;
   gap: var(--space-2);
   color: var(--text);
@@ -61,11 +42,11 @@
  *
  * The four regions sit in the DOM in the order they are read -- hero, sign-in,
  * the sample, the three features -- and that is the order a screen reader, a
- * reader-mode view and a narrow viewport all get. `order` used to move the
- * sign-in panel up on phones while leaving it last in the DOM, so what was
- * announced and what was shown were two different pages. Two columns cannot
- * match a single linear order by moving boxes around; they can only be an
- * arrangement of one, which is what the areas below are.
+ * reader-mode view and a narrow viewport all get. Nothing here uses `order`, and that
+ * is deliberate: `order` can put the sign-in panel above the sample on a phone while
+ * leaving it last in the DOM, and then what is announced and what is shown are two
+ * different pages. Two columns cannot match a single linear order by moving boxes
+ * around; they can only be an arrangement of one, which is what the areas below are.
  *
  * The two `1fr` rows are slack, not content. They split whatever height is left
  * over equally above and below, so the left stack stays optically centred the
@@ -91,16 +72,6 @@
 }
 .welcome__hero {
   grid-area: hero;
-}
-.welcome__preview {
-  grid-area: preview;
-}
-.welcome__features {
-  grid-area: features;
-}
-.welcome__entry {
-  grid-area: entry;
-  align-self: center;
 }
 .welcome__eyebrow {
   color: var(--accent);
@@ -135,6 +106,7 @@
   margin-block: var(--space-5) var(--space-6);
 }
 .welcome__preview {
+  grid-area: preview;
   background: var(--surface-raised);
   border: 1px solid var(--rule-strong);
   border-top: 3px solid var(--accent);
@@ -167,8 +139,20 @@
   text-align: right;
 }
 .welcome__features {
+  grid-area: features;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /*
+   * Reflowed, not held at three. Three fixed columns squeeze to about 132px each just
+   * above the 55rem breakpoint -- where the left column is at its narrowest before the
+   * page stacks -- and ladder to three different heights. `auto-fit` drops to two there
+   * and back to three once the column can hold them, with no width of its own to keep
+   * in step with the layout's.
+   *
+   * 10.5rem is chosen against the narrowest column the three-up design is drawn for:
+   * 168px x 3 plus two gaps is 552, and the left column passes that at about a 1100px
+   * viewport. Below it the cards reflow; above it they are the design's three.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
   gap: var(--space-5);
   padding: 0;
   margin: var(--space-6) 0 0;
@@ -191,6 +175,8 @@
   margin: 0;
 }
 .welcome__entry {
+  grid-area: entry;
+  align-self: center;
   border-left: 1px solid var(--rule-strong);
   padding-left: clamp(1.5rem, 3vw, 3rem);
 }
@@ -251,7 +237,9 @@
 .welcome__terms {
   border-top: 1px solid var(--rule);
   padding-top: var(--space-5);
-  margin-top: var(--space-5);
+  /* The rule above it wants more air than a note does, so this replaces the shared
+     `--space-3` rather than sitting on top of it. */
+  margin: var(--space-5) 0 0;
 }
 .welcome__footer {
   border-top: 1px solid var(--rule-strong);
@@ -271,12 +259,10 @@
   .welcome__features {
     margin-top: 0;
     /*
-     * Reflowed from here down, rather than held at three until 30rem. Below 55rem the
-     * page is one column, and three fixed cards in it squeezed to about 137px each at
-     * 32rem -- a large phone in landscape, or a split window -- laddering three cards
-     * to three different heights. `auto-fit` takes two and then one as the room goes,
-     * with no second breakpoint to keep in step with this one. Above 55rem the left
-     * column is the design's three-up and stays exactly that.
+     * A wider floor once the page is one column: the cards then have the whole measure
+     * rather than a 1.5fr share of it, and 10.5rem would put two 177px columns on a
+     * 420px phone. 13rem stacks them instead, and still takes two at 512px and three
+     * in landscape.
      */
     grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   }
@@ -306,9 +292,9 @@
   }
   /*
    * The footer is the same shape as the header -- two items, `space-between`, no wrap --
-   * with several times the text in it, and only the header was being stacked. On a
-   * 360px phone both spans shrank into ragged three- and four-line stacks against each
-   * other, and `.welcome__source`'s right alignment made the second one ragged-left too.
+   * with several times the text in it, so both stack here. Side by side on a 360px
+   * phone the two spans shrink into ragged three- and four-line stacks against each
+   * other, and `.welcome__source`'s right alignment makes the second ragged-left too.
    */
   .welcome__preview-top,
   .welcome__preview footer {
@@ -320,7 +306,9 @@
     text-align: left;
   }
 }
-@media (min-width: 55.001rem) and (max-height: 48rem) {
+/* A range, so nothing falls between this and the 55rem stack above: 55rem and
+   55.001rem are 880px and 880.016px, and a fractional zoom lands in between. */
+@media (width > 55rem) and (max-height: 48rem) {
   .welcome__layout {
     /* `column-gap`, not `gap`: the row axis is load-bearing now, and zero. */
     padding-block: var(--space-6);

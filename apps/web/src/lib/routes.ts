@@ -93,3 +93,37 @@ export function isPath(pathname: string, exact: string): boolean {
   const target = exact.replace(/\/+$/, '') || '/';
   return clean === target;
 }
+
+/**
+ * Should this click go to the router, or to the browser?
+ *
+ * The rule is small and entirely about intent: a plain left click on an in-app link is
+ * a navigation this app can do without reloading, and everything else -- a middle click,
+ * a modified click, a right click -- is the reader asking the browser for a new tab or a
+ * menu, which is theirs to have.
+ *
+ * It lives here because `App.tsx` listens for `popstate` and nothing else: a bare `<a>`
+ * on a route rendered outside the shell is a full document reload, with the bundle
+ * re-downloaded, `onAuthStateChange` re-registered and any sign-in in flight abandoned.
+ * `Legal.tsx` and `Auth.tsx` both need it, and both had their own copy of these five
+ * lines, so a change to the rule had to be found twice.
+ */
+export function routerClick(
+  onNavigate: (to: string) => void,
+  to: string,
+): (event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  button: number;
+  preventDefault: () => void;
+}) => void {
+  return (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    onNavigate(to);
+  };
+}

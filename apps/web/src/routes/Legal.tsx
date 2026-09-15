@@ -5,6 +5,7 @@ import termsSource from '../../../../docs/terms.md?raw';
 import { Prose } from '../components/Prose.js';
 import { LEGAL_PATHS, type LegalDoc, legalDocFor } from '../lib/legal-routes.js';
 import { parseMarkdown } from '../lib/markdown.js';
+import { routerClick } from '../lib/routes.js';
 
 /**
  * The privacy policy and the terms, rendered from the committed documents.
@@ -37,16 +38,6 @@ export function Legal({ doc, onNavigate }: { doc: LegalDoc; onNavigate: (to: str
   const { blocks } = useMemo(() => parseMarkdown(SOURCES[doc]), [doc]);
   const other = OTHER[doc];
 
-  function go(to: string) {
-    return (e: React.MouseEvent<HTMLAnchorElement>) => {
-      // Left click only, and never when the reader asked for a new tab: a
-      // modified click belongs to the browser, not to the router.
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-      e.preventDefault();
-      onNavigate(to);
-    };
-  }
-
   return (
     <div className="shell">
       <a className="skip-link" href="#main">
@@ -58,7 +49,12 @@ export function Legal({ doc, onNavigate }: { doc: LegalDoc; onNavigate: (to: str
           <Mark className="shell__mark" />
           <span className="shell__wordmark">What a Pull</span>
         </span>
-        <a className="btn btn--plain" href="/" onClick={go('/')} style={{ marginLeft: 'auto' }}>
+        <a
+          className="btn btn--plain"
+          href="/"
+          onClick={routerClick(onNavigate, '/')}
+          style={{ marginLeft: 'auto' }}
+        >
           Back to reading
         </a>
       </header>
@@ -70,7 +66,7 @@ export function Legal({ doc, onNavigate }: { doc: LegalDoc; onNavigate: (to: str
           <hr className="rule" />
 
           <p className="meta legal__foot">
-            <a href={other.path} onClick={go(other.path)}>
+            <a href={other.path} onClick={routerClick(onNavigate, other.path)}>
               {other.label}
             </a>
           </p>

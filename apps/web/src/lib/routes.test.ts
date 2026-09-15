@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { anchoredPullId, decodeSegment, isPath, queryParam, routeParam } from './routes.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  anchoredPullId,
+  decodeSegment,
+  isPath,
+  queryParam,
+  routeParam,
+  routerClick,
+} from './routes.js';
 
 const UUID = '0e825ac9-6df4-495a-8028-1868c7d35e95';
 const PULL = '43005e69-e1c6-4fdd-bf34-dee342db375e';
@@ -148,5 +155,45 @@ describe('decodeSegment', () => {
   it('is not fooled by a segment that merely contains a percent', () => {
     expect(decodeSegment('%25')).toBe('%');
     expect(decodeSegment('50%25-off')).toBe('50%-off');
+  });
+});
+
+describe('routerClick', () => {
+  const click = (over: Partial<Record<string, unknown>> = {}) => ({
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    button: 0,
+    preventDefault: vi.fn(),
+    ...over,
+  });
+
+  it('takes a plain left click for the router', () => {
+    const onNavigate = vi.fn();
+    const event = click();
+    routerClick(onNavigate, '/explore')(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith('/explore');
+  });
+
+  /*
+   * And leaves every other click alone. A modified or middle click is the reader asking
+   * the browser for a new tab, and calling `preventDefault` on it would take that away --
+   * on a sign-in screen whose Terms and Privacy links are exactly what somebody opens
+   * beside what they are reading.
+   */
+  it.each([
+    ['cmd', { metaKey: true }],
+    ['ctrl', { ctrlKey: true }],
+    ['shift', { shiftKey: true }],
+    ['alt', { altKey: true }],
+    ['middle button', { button: 1 }],
+  ])('leaves a %s click to the browser', (_label, over) => {
+    const onNavigate = vi.fn();
+    const event = click(over);
+    routerClick(onNavigate, '/explore')(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 });

@@ -54,8 +54,9 @@ clear of the crown. Drawn as a flat rectangle it reads as a plinth, not a hat.
 It is written twice and neither copy is decorative. `scripts/gen-icons.mjs` generates
 the PWA icons and the tab icon — this repo has no rasteriser, so the PNGs are encoded
 from a pixel buffer — and `packages/ui/src/components/Mark.tsx` draws the same hat in
-the top bar. `Mark.test.ts` pins every one of those files, so neither a divergent tweak
-nor a stale icon in `public/` gets through. Re-run `node scripts/gen-icons.mjs` after any
+the top bar. `Mark.test.ts` pins the dimensions of every PNG that generator writes --
+the icons, the tab icon and the two under `brand/` -- so neither a divergent tweak nor a
+stale icon in `public/` gets through. Re-run `node scripts/gen-icons.mjs` after any
 change to either, and look at the result at 16px rather than reasoning about it.
 
 The tab icon is **`favicon-hat.png`**, which is what `index.html` points at.

@@ -5,6 +5,7 @@ import { OAuthButtons } from '../components/OAuthButtons.js';
 import { isAnonymousSignInDisabled, isCaptchaRequired } from '../lib/auth-errors.js';
 import { oauthRedirectError } from '../lib/oauth.js';
 import { rememberDestination } from '../lib/pending-destination.js';
+import { routerClick } from '../lib/routes.js';
 import { supabase } from '../lib/supabase.js';
 
 export function Auth({
@@ -43,30 +44,13 @@ export function Auth({
     }
   }
   /*
-   * A left click is the router's; everything else is the browser's.
-   *
-   * `Legal.tsx`'s helper, for the same reason it has one: neither route renders the
-   * shell, and `App.tsx` listens for `popstate` and nothing else, so a bare `<a>` here
-   * is a full document reload -- the bundle re-downloaded, `onAuthStateChange`
-   * re-registered, and any guest sign-in in flight abandoned. The "Browse the library"
-   * button below goes to this same destination through `onNavigate`, so without this
-   * one screen had two controls to one place behaving differently.
-   */
-  function go(to: string) {
-    return (e: React.MouseEvent<HTMLAnchorElement>) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-      e.preventDefault();
-      onNavigate(to);
-    };
-  }
-
-  /*
-   * `header` and `footer` are OUTSIDE `main`, which is what makes them landmarks at
-   * all: `banner` and `contentinfo` are only mapped when the element is not inside
-   * `article`, `aside`, `main`, `nav` or `section`. Nested, as they were, a screen
-   * reader met one unnamed `main` and no way to jump between the parts of a page that
-   * is now four regions of content. `Legal.tsx` -- this app's other shell-less route --
-   * already had the shape, skip link included.
+   * `header` and `footer` sit OUTSIDE `main`, which is what makes them landmarks at all:
+   * `banner` and `contentinfo` are mapped only when the element is not inside `article`,
+   * `aside`, `main`, `nav` or `section`. Nested, a screen reader meets one unnamed `main`
+   * and no way to move between the parts of a page that is four regions of content.
+   * `Legal.tsx` -- this app's other shell-less route -- has the same shape, skip link
+   * included, and every in-app link here goes through `routerClick` for the reason that
+   * helper gives.
    */
   return (
     <div className="welcome">
@@ -74,7 +58,7 @@ export function Auth({
         Skip to content
       </a>
       <header className="welcome__masthead">
-        <a className="welcome__brand" href="/explore" onClick={go('/explore')}>
+        <a className="welcome__brand" href="/explore" onClick={routerClick(onNavigate, '/explore')}>
           <Mark className="shell__mark" />
           <span className="shell__wordmark">What a Pull</span>
         </a>
@@ -102,10 +86,9 @@ export function Auth({
           {redirectError && <p role="alert">{redirectError}</p>}
           <OAuthButtons next={next} />
           {/*
-            Restored. The rewrite replaced "Email and password sign-in is unavailable."
-            with a line that reads well and says nothing, and a reader who has neither
-            a Google nor a Microsoft account was left hunting for a "more options"
-            control that does not exist.
+            The second sentence is the load-bearing one: there are two providers and no
+            third option, and a reader with neither account needs to be told that rather
+            than left hunting for a "more options" control that does not exist.
           */}
           <p className="welcome__note">
             One account. Your ideas, wherever you read. Email and password sign-in is unavailable.
@@ -132,8 +115,15 @@ export function Auth({
             Browse the library
           </button>
           <p className="welcome__terms">
-            By continuing, you agree to our <a href="/terms">Terms</a> and{' '}
-            <a href="/privacy">Privacy Policy</a>.
+            By continuing, you agree to our{' '}
+            <a href="/terms" onClick={routerClick(onNavigate, '/terms')}>
+              Terms
+            </a>{' '}
+            and{' '}
+            <a href="/privacy" onClick={routerClick(onNavigate, '/privacy')}>
+              Privacy Policy
+            </a>
+            .
           </p>
         </section>
         <article className="welcome__preview" aria-label="An example Pull">
@@ -155,7 +145,16 @@ export function Auth({
             <span className="welcome__source">Ideas with a source.</span>
           </footer>
         </article>
-        <ol className="welcome__features">
+        {/*
+          `role="list"` although an `<ol>` has it implicitly, which is what the lint rule
+          below is about. WebKit drops the list role from a list styled `list-style:
+          none`, and this one is -- the design numbers the cards itself ("01 / Discover")
+          rather than letting the browser do it. Without the explicit role VoiceOver
+          announces three loose headings instead of "list, 3 items", and those ordinals
+          read as ordinary text. Redundant per the spec; load-bearing in a browser.
+        */}
+        {/* eslint-disable-next-line jsx-a11y/no-redundant-roles */}
+        <ol className="welcome__features" role="list">
           <li>
             <span className="meta">01 / Discover</span>
             <h3>Find your next idea.</h3>
