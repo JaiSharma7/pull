@@ -85,7 +85,56 @@ export async function fetchHighlights(userId: string, pullIds: string[]): Promis
   );
 }
 
+/*
+ * INSERTS GO OUT ONE AT A TIME, and the reason is `created_at`.
+ *
+ * `Source.tsx` calls this fire-and-forget: the mark is drawn optimistically and the
+ * write is left to settle on its own, which is right for a highlight -- a reader who
+ * has just underlined something should not wait on a round trip to see it. But two
+ * marks made in quick succession then become two independent requests, and nothing
+ * makes the database see them in the order the reader made them.
+ *
+ * `created_at` is `default now()`, stamped when each INSERT commits rather than when
+ * the reader acted. So the second mark can commit first, take the earlier timestamp,
+ * and sort ahead of the first -- and `shapeHighlights` sorting by `(createdAt, id)` is
+ * then faithfully reporting an order that never happened. On the next reload "Remove
+ * the last one" deletes the passage the reader underlined FIRST, which is the exact
+ * bug that sort was added to fix, just moved into a narrower window.
+ *
+ * Chaining the writes closes it at the only place all of them pass through: each
+ * insert starts after the previous one has settled, so commit order is click order and
+ * the server's clock becomes a faithful proxy for the reader's. The alternative --
+ * sending the client's own timestamp -- was rejected because `created_at` is also what
+ * `highlights_user_idx` orders the Library by and what the data export reports, and a
+ * reader with a skewed clock would have their marks dated wrongly in both.
+ *
+ * `.catch` on the QUEUE and not on the returned promise: a failed write must not stop
+ * the next one from going out, while its own caller still sees its own rejection.
+ *
+ * What this does not order: two tabs, or two devices. Each has its own queue, so marks
+ * made in the same round trip from both can still invert. That needs a client-supplied
+ * action time and the trade above, and it is a great deal rarer than the double-click
+ * this fixes.
+ */
+let writes: Promise<unknown> = Promise.resolve();
+
 export async function createHighlight(
+  userId: string,
+  h: {
+    id: string;
+    pullId: string;
+    field: HighlightField;
+    start: number;
+    end: number;
+    text: string;
+  },
+): Promise<void> {
+  const write = writes.then(() => insertHighlight(userId, h));
+  writes = write.catch(() => undefined);
+  return write;
+}
+
+async function insertHighlight(
   userId: string,
   h: {
     id: string;
