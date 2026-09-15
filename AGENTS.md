@@ -8,12 +8,12 @@ project's laws; this file holds the process.
 One concern per PR. Green CI. A description that explains _why_, not just what — the
 diff already says what. Never push straight to `main`.
 
-Work happens on a feature branch, is reviewed by two independent reviewers (below), and
-merges only when both are satisfied.
+Work happens on a feature branch and follows the review gate below, including its
+dependency-only exception.
 
 ## The review gate
 
-**Mandatory, in this order, for every PR. No step is skippable.**
+**Mandatory, in this order, except for dependency-only PRs as defined below.**
 
 1. **All four CI checks green** — `lint`, `typecheck`, `test`, `db`.
 
@@ -60,6 +60,28 @@ merges only when both are satisfied.
 If Codex is not installed, or is rate-limited, say so and continue from step 4 rather
 than waiting indefinitely. Do not merge around step 4 on the assumption it would have
 passed — that step is the gate now, and skipping it is skipping the whole thing.
+
+## Dependency-only exception
+
+Development and production dependency updates may skip the Codex review request and
+four-specialist review loop (steps 2–4). This applies to version bumps in package
+manifests and lockfiles, plus generated files that must be refreshed with the updated
+toolchain. Generate those files with the repository commands; never hand-edit them.
+
+Before merging:
+
+- Inspect the complete diff and relevant compatibility changes, especially major
+  upgrades and updates to authentication clients, database tools, or code generators.
+- Confirm that the PR contains only dependency updates and their required generated
+  output. Application logic, migrations, policies, CI changes, and unrelated edits
+  require the normal review gate; split them into a separate PR when practical.
+- Address any existing review findings. The exception does not waive known problems.
+- Require `lint`, `typecheck`, `test`, and `db` to pass on the final head, along with
+  any other required checks. Keep the pre-push secret scan and all seven laws.
+
+Record the dependency-only scope and compatibility checks in the PR description or
+merge summary. Green CI plus this focused review is sufficient to merge; no automated
+review request or specialist round is required for a qualifying dependency-only PR.
 
 ## Secrets
 
