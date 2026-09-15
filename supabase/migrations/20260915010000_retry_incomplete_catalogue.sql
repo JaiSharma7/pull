@@ -1,0 +1,417 @@
+-- Retry the catalogue sources whose every generation failed.
+--
+-- A SNAPSHOT of what `node scripts/seed-corpus.mjs --sql` printed on the day this was
+-- written, from its first statement down; only this header differs, the script's being
+-- addressed to somebody running it by hand.
+--
+-- A snapshot, and not kept in step, because those are the same statement under law 6.
+-- The manifest gains sources -- that is the normal way to add one -- and the predicate
+-- will be improved again, and neither of those changes belongs in this file once it has
+-- been applied. An earlier revision had `scripts/test-corpus-seed.mjs` compare the two
+-- and fail when they differed, which sounds like the check CI runs for
+-- `database.types.ts` and the BAML exports and is its opposite: those are regenerated
+-- every build and are meant to track their source, while a migration is applied once and
+-- is then history. Adding a single source to the manifest turned `pnpm db:test` red
+-- against this file with an error telling the contributor to edit it. What changes goes
+-- in a NEW migration; this one says what it said when it ran.
+--
+-- The live predicate is what `scripts/test-corpus-seed.mjs` tests, by driving the SQL the
+-- generator emits today rather than a second copy of it. Every condition below has been
+-- checked by breaking it and watching that suite fail.
+--
+-- WHAT IT ENQUEUES. A generation that died after `resolve_identity` leaves a `works` row
+-- with no readable summary, and the seeder meant to retry it skipped it: the old test was
+-- "a works row with this title exists", and that row is exactly what a half-finished job
+-- leaves behind. A title is missing now when four things hold at once.
+--
+--   NO LIVE JOB. Queued or running means it is already coming, succeeded means it
+--   arrived whatever was done to it afterwards, and cancelled means somebody stopped it
+--   deliberately. Counted over CANONICAL jobs only, because `enqueue_generation_job`
+--   writes a reader's target verbatim: without the `requester_id is null and visibility
+--   = 'public'` test, one signed-in reader asking the Studio about "Nature" -- a real
+--   manifest entry -- would retire Emerson from this seeder for good.
+--
+--   FEWER THAN THREE REAL ATTEMPTS, because "retry" has to terminate: a source that dies
+--   after synthesis is paid for would otherwise be bought again on every run. The
+--   sweeper's failures are excluded from that count. `sweep_stranded_generation_jobs`
+--   fails every job whose pgmq message went missing, so one dispatch stall fails the
+--   whole batch at once -- and counting those, three stalls would disqualify the entire
+--   catalogue for ever, with nothing telling a dead URL from a quiet afternoon.
+--
+--   NOTHING A READER CAN ALREADY OPEN under that source. This is the leg that covers
+--   rows no job produced: ten works here were seeded directly by migration, and a
+--   predicate that asked only about jobs re-queued seven of them on a database replayed
+--   from zero -- each one a duplicate work, a duplicate feed card and a second generation
+--   paid for, unadoptable because those rows carry no `content_hash`.
+--
+--   AND NOTHING THAT ARRIVED WITHOUT ONE OF OUR JOBS. Unpublishing a work after a
+--   copyright complaint leaves the `works` row and takes the readable summary away, so
+--   for a migration-seeded row -- which has no job to speak for it -- the two legs above
+--   both fall silent and the next run regenerates and republishes it. A source no job of
+--   ours produced is not this seeder's to retry, whatever state it is in. The cost of
+--   that is the mirror case: if a job row is ever pruned away from under a work, the
+--   source stops being retryable. Not regenerating is the safe direction.
+--
+-- KEYED ON THE URL, for the two legs about the work. `works.title` is written from
+-- `summary.title`, which a model chooses: against this manifest a title match finds 7
+-- rows where a URL match finds 10, and the manifest is full of one-word titles -- Art,
+-- Love, Circles, Apology, Meno -- that a model could plausibly emit for some other
+-- source and so suppress the real one for ever. `source_url` is exact and no model
+-- writes it. The jobs are still matched on `lower(title)`, which is what the manifest
+-- guarantees is unique; a URL match there would miss the same work reached by two hosts,
+-- which has happened -- Common Sense arrived from Wikisource and Gutenberg and was
+-- published twice.
+--
+-- So on a database replayed from zero this inserts NOTHING, and that is the right answer
+-- rather than a gap: `20260907011000_expand_catalogue` has just queued the whole
+-- manifest, the seeded works are readable, and nothing has had the chance to fail.
+-- Measured, not assumed -- `select count(distinct created_at) from generation_jobs` after
+-- `db reset` is 1, not 2. It does its work on an environment that has been running, where
+-- those jobs have finished and some of them badly.
+--
+-- Renumbered from 20260908120000 before it was ever applied anywhere -- a migration
+-- inserted into the middle of history replays in one order from zero and in another on an
+-- environment that already ran past it, which is the divergence law 6 exists to prevent.
+--
+-- Mirrors `enqueue_generation_job` without its per-reader quota: the insert and the sends
+-- are one statement, so a job either exists and is queued or neither happened.
+-- `visibility=public` with `rights_status=public_domain` is what lets the result clear
+-- `resolve_identity` and `moderate` and reach the feed. The spend these jobs go on to
+-- make is bounded by the global daily cap, not by this file.
+--
+-- `requester_id` is NULL on purpose. These are canonical summaries belonging to the
+-- library rather than to a person, and attributing them to a reader has three
+-- consequences: it spends their daily quota -- the manifest is several times the ceiling
+-- of 50, so it does not merely lock them out for the day, it cannot complete at all --
+-- it makes them author of every summary, and `summaries_author_update` permits an author
+-- to unpublish, so one PATCH per row would empty the public feed -- and it exposes every
+-- job row, step output and per-step cost to them through the `_own` policies.
+
+with target(title, kind, url, author) as (values
+       ('Self-Reliance', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Self-Reliance', 'Ralph Waldo Emerson'),
+       ('Compensation', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Compensation', 'Ralph Waldo Emerson'),
+       ('Circles', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Circles', 'Ralph Waldo Emerson'),
+       ('The Over-Soul', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/The_Over-Soul', 'Ralph Waldo Emerson'),
+       ('Civil Disobedience', 'essay', 'https://en.wikisource.org/wiki/Civil_Disobedience_(Thoreau)', 'Henry David Thoreau'),
+       ('Life Without Principle', 'essay', 'https://en.wikisource.org/wiki/Life_Without_Principle', 'Henry David Thoreau'),
+       ('Of Studies', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Studies', 'Francis Bacon'),
+       ('Of Truth', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Truth', 'Francis Bacon'),
+       ('Of Innovations', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Innovations', 'Francis Bacon'),
+       ('Of Great Place', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Great_Place', 'Francis Bacon'),
+       ('Of Cannibals', 'essay', 'https://en.wikisource.org/wiki/The_Essays_of_Montaigne/Book_I/Chapter_XXX', 'Michel de Montaigne'),
+       ('Of the Education of Children', 'essay', 'https://en.wikisource.org/wiki/The_Essays_of_Montaigne/Book_I/Chapter_XXV', 'Michel de Montaigne'),
+       ('Federalist No. 1: General Introduction', 'essay', 'https://en.wikisource.org/wiki/The_Federalist_Papers/No._1', 'Alexander Hamilton'),
+       ('Federalist No. 10: The Union as a Safeguard Against Faction', 'essay', 'https://en.wikisource.org/wiki/The_Federalist_Papers/No._10', 'James Madison'),
+       ('Federalist No. 51: The Structure of the Government', 'essay', 'https://en.wikisource.org/wiki/The_Federalist_Papers/No._51', 'James Madison'),
+       ('Federalist No. 78: The Judiciary Department', 'essay', 'https://en.wikisource.org/wiki/The_Federalist_Papers/No._78', 'Alexander Hamilton'),
+       ('The Gettysburg Address', 'lecture', 'https://en.wikisource.org/wiki/Gettysburg_Address', 'Abraham Lincoln'),
+       ('Second Inaugural Address', 'lecture', 'https://en.wikisource.org/wiki/Abraham_Lincoln%27s_Second_Inaugural_Address', 'Abraham Lincoln'),
+       ('What to the Slave is the Fourth of July?', 'lecture', 'https://en.wikisource.org/wiki/What_to_the_Slave_Is_the_Fourth_of_July%3F', 'Frederick Douglass'),
+       ('Ain''t I a Woman?', 'lecture', 'https://en.wikisource.org/wiki/Ain%27t_I_a_Woman%3F', 'Sojourner Truth'),
+       ('A Vindication of the Rights of Woman: Introduction', 'essay', 'https://en.wikisource.org/wiki/A_Vindication_of_the_Rights_of_Woman/Introduction', 'Mary Wollstonecraft'),
+       ('Common Sense', 'essay', 'https://en.wikisource.org/wiki/Common_Sense_(1776)/Common_Sense', 'Thomas Paine'),
+       ('The Subjection of Women: Chapter I', 'essay', 'https://en.wikisource.org/wiki/The_Subjection_of_Women/Chapter_1', 'John Stuart Mill'),
+       ('The Wealth of Nations: Of the Division of Labour', 'essay', 'https://en.wikisource.org/wiki/The_Wealth_of_Nations/Book_I/Chapter_1', 'Adam Smith'),
+       ('The Wealth of Nations: Of the Principle which gives Occasion to the Division of Labour', 'essay', 'https://en.wikisource.org/wiki/The_Wealth_of_Nations/Book_I/Chapter_2', 'Adam Smith'),
+       ('The Theory of the Leisure Class: Conspicuous Consumption', 'essay', 'https://en.wikisource.org/wiki/The_Theory_of_the_Leisure_Class/Chapter_4', 'Thorstein Veblen'),
+       ('On the Origin of Species: Struggle for Existence', 'paper', 'https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_III', 'Charles Darwin'),
+       ('On the Origin of Species: Natural Selection', 'paper', 'https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_IV', 'Charles Darwin'),
+       ('On the Origin of Species: Difficulties on Theory', 'paper', 'https://en.wikisource.org/wiki/On_the_Origin_of_Species_(1859)/Chapter_VI', 'Charles Darwin'),
+       ('The Chemical History of a Candle: Lecture I', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_I', 'Michael Faraday'),
+       ('The Will to Believe', 'lecture', 'https://en.wikisource.org/wiki/The_Will_to_Believe', 'William James'),
+       ('What Pragmatism Means', 'lecture', 'https://en.wikisource.org/wiki/Pragmatism:_A_New_Name_for_Some_Old_Ways_of_Thinking/Lecture_II', 'William James'),
+       ('The Souls of Black Folk: Of Our Spiritual Strivings', 'essay', 'https://en.wikisource.org/wiki/The_Souls_of_Black_Folk/Chapter_1', 'W. E. B. Du Bois'),
+       ('The Souls of Black Folk: Of Mr. Booker T. Washington and Others', 'essay', 'https://en.wikisource.org/wiki/The_Souls_of_Black_Folk/Chapter_3', 'W. E. B. Du Bois'),
+       ('The Prince: Concerning New Principalities', 'book', 'https://en.wikisource.org/wiki/The_Prince_(Marriott)/Chapter_6', 'Niccolò Machiavelli'),
+       ('The Poetic Principle', 'essay', 'https://en.wikisource.org/wiki/The_Poetic_Principle', 'Edgar Allan Poe'),
+       ('The Philosophy of Composition', 'essay', 'https://en.wikisource.org/wiki/The_Philosophy_of_Composition', 'Edgar Allan Poe'),
+       ('The Decay of Lying', 'essay', 'https://en.wikisource.org/wiki/Intentions/The_Decay_of_Lying', 'Oscar Wilde'),
+       ('Apology', 'book', 'https://classics.mit.edu/Plato/apology.html', 'Plato'),
+       ('Crito', 'book', 'https://classics.mit.edu/Plato/crito.html', 'Plato'),
+       ('Meno', 'book', 'https://classics.mit.edu/Plato/meno.html', 'Plato'),
+       ('Phaedo', 'book', 'https://classics.mit.edu/Plato/phaedo.html', 'Plato'),
+       ('Symposium', 'book', 'https://classics.mit.edu/Plato/symposium.html', 'Plato'),
+       ('Gorgias', 'book', 'https://classics.mit.edu/Plato/gorgias.html', 'Plato'),
+       ('The Republic, Book II', 'book', 'https://classics.mit.edu/Plato/republic.2.i.html', 'Plato'),
+       ('Poetics', 'book', 'https://classics.mit.edu/Aristotle/poetics.1.1.html', 'Aristotle'),
+       ('Rhetoric, Book I', 'book', 'https://classics.mit.edu/Aristotle/rhetoric.1.i.html', 'Aristotle'),
+       ('Metaphysics, Book I', 'book', 'https://classics.mit.edu/Aristotle/metaphysics.1.i.html', 'Aristotle'),
+       ('Nicomachean Ethics, Book I', 'book', 'https://classics.mit.edu/Aristotle/nicomachaen.1.i.html', 'Aristotle'),
+       ('Nicomachean Ethics, Book II', 'book', 'https://classics.mit.edu/Aristotle/nicomachaen.2.ii.html', 'Aristotle'),
+       ('On the Soul, Book I', 'book', 'https://classics.mit.edu/Aristotle/soul.1.i.html', 'Aristotle'),
+       ('The Discourses, Book I', 'book', 'https://classics.mit.edu/Epictetus/discourses.1.one.html', 'Epictetus'),
+       ('Aphorisms', 'book', 'https://classics.mit.edu/Hippocrates/aphorisms.1.i.html', 'Hippocrates'),
+       ('History of the Peloponnesian War, Book II', 'book', 'https://classics.mit.edu/Thucydides/pelopwar.2.second.html', 'Thucydides'),
+       ('Discourse on the Method', 'essay', 'https://www.gutenberg.org/cache/epub/59/pg59.txt', 'Rene Descartes'),
+       ('Caesar', 'book', 'https://classics.mit.edu/Plutarch/caesar.html', 'Plutarch'),
+       ('Alexander', 'book', 'https://classics.mit.edu/Plutarch/alexandr.html', 'Plutarch'),
+       ('Lycurgus', 'book', 'https://classics.mit.edu/Plutarch/lycurgus.html', 'Plutarch'),
+       ('Solon', 'book', 'https://classics.mit.edu/Plutarch/solon.html', 'Plutarch'),
+       ('On the Sacred Disease', 'book', 'https://classics.mit.edu/Hippocrates/sacred.html', 'Hippocrates'),
+       ('On the Heavens, Book I', 'book', 'https://classics.mit.edu/Aristotle/heavens.1.i.html', 'Aristotle'),
+       ('Physics, Book I', 'book', 'https://classics.mit.edu/Aristotle/physics.1.i.html', 'Aristotle'),
+       ('Prior Analytics, Book I', 'book', 'https://classics.mit.edu/Aristotle/prior.1.i.html', 'Aristotle'),
+       ('Posterior Analytics, Book I', 'book', 'https://classics.mit.edu/Aristotle/posterior.1.i.html', 'Aristotle'),
+       ('Topics, Book I', 'book', 'https://classics.mit.edu/Aristotle/topics.1.i.html', 'Aristotle'),
+       ('On Sophistical Refutations', 'book', 'https://classics.mit.edu/Aristotle/sophist_refut.1.1.html', 'Aristotle'),
+       ('Pericles', 'book', 'https://classics.mit.edu/Plutarch/pericles.html', 'Plutarch'),
+       ('Cicero', 'book', 'https://classics.mit.edu/Plutarch/cicero.html', 'Plutarch'),
+       ('Demosthenes', 'book', 'https://classics.mit.edu/Plutarch/demosthe.html', 'Plutarch'),
+       ('Theseus', 'book', 'https://classics.mit.edu/Plutarch/theseus.html', 'Plutarch'),
+       ('Coriolanus', 'book', 'https://classics.mit.edu/Plutarch/coriolan.html', 'Plutarch'),
+       ('Cato the Younger', 'book', 'https://classics.mit.edu/Plutarch/cato_you.html', 'Plutarch'),
+       ('Antony', 'book', 'https://classics.mit.edu/Plutarch/antony.html', 'Plutarch'),
+       ('Pyrrhus', 'book', 'https://classics.mit.edu/Plutarch/pyrrhus.html', 'Plutarch'),
+       ('On Memory and Reminiscence', 'book', 'https://classics.mit.edu/Aristotle/memory.html', 'Aristotle'),
+       ('On Dreams', 'book', 'https://classics.mit.edu/Aristotle/dreams.html', 'Aristotle'),
+       ('On Sleep and Sleeplessness', 'book', 'https://classics.mit.edu/Aristotle/sleep.html', 'Aristotle'),
+       ('On Prophesying by Dreams', 'book', 'https://classics.mit.edu/Aristotle/prophesying.html', 'Aristotle'),
+       ('On the Heavens, Book II', 'book', 'https://classics.mit.edu/Aristotle/heavens.2.ii.html', 'Aristotle'),
+       ('Meteorology, Book I', 'book', 'https://classics.mit.edu/Aristotle/meteorology.1.i.html', 'Aristotle'),
+       ('On Generation and Corruption, Book I', 'book', 'https://classics.mit.edu/Aristotle/gener_corr.1.i.html', 'Aristotle'),
+       ('On the Motion of Animals', 'book', 'https://classics.mit.edu/Aristotle/motion_animals.html', 'Aristotle'),
+       ('On the Gait of Animals', 'book', 'https://classics.mit.edu/Aristotle/gait_anim.html', 'Aristotle'),
+       ('The Chemical History of a Candle: Lecture II', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_II', 'Michael Faraday'),
+       ('The Chemical History of a Candle: Lecture III', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_III', 'Michael Faraday'),
+       ('The Chemical History of a Candle: Lecture IV', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_IV', 'Michael Faraday'),
+       ('The Chemical History of a Candle: Lecture V', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_V', 'Michael Faraday'),
+       ('The Chemical History of a Candle: Lecture VI', 'lecture', 'https://en.wikisource.org/wiki/The_Chemical_History_of_a_Candle/Lecture_VI', 'Michael Faraday'),
+       ('The Critic as Artist', 'essay', 'https://en.wikisource.org/wiki/Intentions/The_Critic_as_Artist', 'Oscar Wilde'),
+       ('The Poet', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/The_Poet', 'Ralph Waldo Emerson'),
+       ('Art', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Art', 'Ralph Waldo Emerson'),
+       ('Experience', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Experience', 'Ralph Waldo Emerson'),
+       ('Love', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Love', 'Ralph Waldo Emerson'),
+       ('Friendship', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Friendship', 'Ralph Waldo Emerson'),
+       ('Heroism', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Heroism', 'Ralph Waldo Emerson'),
+       ('Prudence', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Prudence', 'Ralph Waldo Emerson'),
+       ('Intellect', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Intellect', 'Ralph Waldo Emerson'),
+       ('Of Death', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Death', 'Francis Bacon'),
+       ('Manifesto of the Communist Party', 'essay', 'https://en.wikisource.org/wiki/Manifesto_of_the_Communist_Party', 'Karl Marx and Friedrich Engels'),
+       ('The Subjection of Women: Chapter II', 'essay', 'https://en.wikisource.org/wiki/The_Subjection_of_Women/Chapter_2', 'John Stuart Mill'),
+       ('The Souls of Black Folk: Of the Meaning of Progress', 'essay', 'https://en.wikisource.org/wiki/The_Souls_of_Black_Folk_(2nd_ed)/Chapter_4', 'W. E. B. Du Bois'),
+       ('What the Tortoise Said to Achilles', 'essay', 'https://en.wikisource.org/wiki/What_the_Tortoise_Said_to_Achilles', 'Lewis Carroll'),
+       ('Sketch of the Analytical Engine: Notes by the Translator', 'paper', 'https://en.wikisource.org/wiki/Scientific_Memoirs/3/Sketch_of_the_Analytical_Engine_invented_by_Charles_Babbage,_Esq./Notes_by_the_Translator', 'Ada Lovelace'),
+       ('The Ethics of Belief', 'essay', 'https://en.wikisource.org/wiki/The_Ethics_of_Belief', 'William Kingdon Clifford'),
+       ('The Problems of Philosophy: On Induction', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_6', 'Bertrand Russell'),
+       ('The Problems of Philosophy: The Value of Philosophy', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_15', 'Bertrand Russell'),
+       ('The Problems of Philosophy: Appearance and Reality', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_1', 'Bertrand Russell'),
+       ('Ten Books on Architecture: Book I', 'book', 'https://en.wikisource.org/wiki/Ten_Books_on_Architecture/Book_I', 'Vitruvius'),
+       ('Ten Books on Architecture: Book II', 'book', 'https://en.wikisource.org/wiki/Ten_Books_on_Architecture/Book_II', 'Vitruvius'),
+       ('The Art of War', 'book', 'https://en.wikisource.org/wiki/The_Art_of_War_(Sun)', 'Sun Tzu'),
+       ('Tao Te Ching', 'book', 'https://en.wikisource.org/wiki/Tao_Te_Ching_(James_Legge)', 'Laozi'),
+       ('The Discourses, Book II', 'book', 'https://classics.mit.edu/Epictetus/discourses.2.two.html', 'Epictetus'),
+       ('The Discourses, Book III', 'book', 'https://classics.mit.edu/Epictetus/discourses.3.three.html', 'Epictetus'),
+       ('History of the Peloponnesian War, Book I', 'book', 'https://classics.mit.edu/Thucydides/pelopwar.1.first.html', 'Thucydides'),
+       ('A Vindication of the Rights of Woman: Chapter II', 'essay', 'https://en.wikisource.org/wiki/A_Vindication_of_the_Rights_of_Woman/Chapter_II', 'Mary Wollstonecraft'),
+       ('Democracy in America: Of Individualism in Democratic Countries', 'essay', 'https://en.wikisource.org/wiki/Democracy_in_America/Volume_2/Book_2/Chapter_2', 'Alexis de Tocqueville'),
+       ('The Talented Tenth', 'essay', 'https://en.wikisource.org/wiki/The_Talented_Tenth', 'W. E. B. Du Bois'),
+       ('Discourse on the Method: Part I', 'essay', 'https://en.wikisource.org/wiki/Discourse_on_the_Method/Part_1', 'René Descartes'),
+       ('Discourse on the Method: Part II', 'essay', 'https://en.wikisource.org/wiki/Discourse_on_the_Method/Part_2', 'René Descartes'),
+       ('Discourse on the Method: Part IV', 'essay', 'https://en.wikisource.org/wiki/Discourse_on_the_Method/Part_4', 'René Descartes'),
+       ('Meditations on First Philosophy: Meditation I', 'essay', 'https://en.wikisource.org/wiki/Meditations_on_First_Philosophy/Meditation_I', 'René Descartes'),
+       ('Meditations on First Philosophy: Meditation II', 'essay', 'https://en.wikisource.org/wiki/Meditations_on_First_Philosophy/Meditation_II', 'René Descartes'),
+       ('Of the Standard of Taste', 'essay', 'https://en.wikisource.org/wiki/Of_the_Standard_of_Taste', 'David Hume'),
+       ('What is Enlightenment?', 'essay', 'https://en.wikisource.org/wiki/What_is_Enlightenment%3F', 'Immanuel Kant'),
+       ('The American Scholar', 'lecture', 'https://en.wikisource.org/wiki/The_American_Scholar', 'Ralph Waldo Emerson'),
+       ('The Works of Francis Bacon: Of Simulation and Dissimulation', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Simulation_and_Dissimulation', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Envy', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Envy', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Custom and Education', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Custom_and_Education', 'Francis Bacon'),
+       ('The Song Celestial (Bhagavad Gita)', 'book', 'https://en.wikisource.org/wiki/The_Song_Celestial', 'Vyasa'),
+       ('Ten Books on Architecture: Book III', 'book', 'https://en.wikisource.org/wiki/Ten_Books_on_Architecture/Book_III', 'Vitruvius'),
+       ('Ten Books on Architecture: Book IV', 'book', 'https://en.wikisource.org/wiki/Ten_Books_on_Architecture/Book_IV', 'Vitruvius'),
+       ('Ten Books on Architecture: Book V', 'book', 'https://en.wikisource.org/wiki/Ten_Books_on_Architecture/Book_V', 'Vitruvius'),
+       ('The Prince: Chapter XVII - Concerning Cruelty and Clemency', 'essay', 'https://en.wikisource.org/wiki/The_Prince_(Marriott)/Chapter_17', 'Niccolò Machiavelli'),
+       ('The Prince: Chapter XVIII - In What Way Princes Must Keep Faith', 'essay', 'https://en.wikisource.org/wiki/The_Prince_(Marriott)/Chapter_18', 'Niccolò Machiavelli'),
+       ('The Prince: Chapter XXV - What Fortune Can Effect in Human Affairs', 'essay', 'https://en.wikisource.org/wiki/The_Prince_(Marriott)/Chapter_25', 'Niccolò Machiavelli'),
+       ('The Discourses, Book IV', 'book', 'https://classics.mit.edu/Epictetus/discourses.4.four.html', 'Epictetus'),
+       ('A Defence of Poetry', 'essay', 'https://en.wikisource.org/wiki/A_Defence_of_Poetry', 'Percy Bysshe Shelley'),
+       ('Democracy and Education: Chapter I', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_I', 'John Dewey'),
+       ('Democracy and Education: Chapter Iv', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_IV', 'John Dewey'),
+       ('Democracy and Education: Chapter Ix', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_IX', 'John Dewey'),
+       ('Democracy and Education: Chapter Vii', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_VII', 'John Dewey'),
+       ('Democracy and Education: Chapter Xii', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_XII', 'John Dewey'),
+       ('Democracy and Education: Chapter Xiii', 'essay', 'https://en.wikisource.org/wiki/Democracy_and_Education/Chapter_XIII', 'John Dewey'),
+       ('Character', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Character', 'Ralph Waldo Emerson'),
+       ('Gifts', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Gifts', 'Ralph Waldo Emerson'),
+       ('Manners', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Manners', 'Ralph Waldo Emerson'),
+       ('Nature', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Nature', 'Ralph Waldo Emerson'),
+       ('New England Reformers', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/New_England_Reformers', 'Ralph Waldo Emerson'),
+       ('Nominalist and Realist', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Nominalist_and_Realist', 'Ralph Waldo Emerson'),
+       ('Politics', 'essay', 'https://en.wikisource.org/wiki/Essays:_Second_Series/Politics', 'Ralph Waldo Emerson'),
+       ('How We Think: What is Thought?', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_1', 'John Dewey'),
+       ('How We Think: Empirical and Scientific Thinking', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_11', 'John Dewey'),
+       ('How We Think: The Need for Training Thought', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_2', 'John Dewey'),
+       ('How We Think: The Analysis of a Complete Act of Thought', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_6', 'John Dewey'),
+       ('How We Think: Systematic Inference: Induction and Deduction', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_7', 'John Dewey'),
+       ('How We Think: Judgment: The Interpretation of Facts', 'essay', 'https://en.wikisource.org/wiki/How_We_Think/Chapter_8', 'John Dewey'),
+       ('Mutual Aid: A Factor of Evolution: Mutual Aid Among Animals', 'essay', 'https://en.wikisource.org/wiki/Mutual_Aid:_A_Factor_of_Evolution/Chapter_I', 'Peter Kropotkin'),
+       ('Mutual Aid: A Factor of Evolution: MUTUAL AID AMONG ANIMALS (continued)', 'essay', 'https://en.wikisource.org/wiki/Mutual_Aid:_A_Factor_of_Evolution/Chapter_II', 'Peter Kropotkin'),
+       ('Mutual Aid: A Factor of Evolution: Mutual Aid Amongst Ourselves', 'essay', 'https://en.wikisource.org/wiki/Mutual_Aid:_A_Factor_of_Evolution/Chapter_VII', 'Peter Kropotkin'),
+       ('Mutual Aid: A Factor of Evolution: MUTUAL AID AMONGST OURSELVES (continued)', 'essay', 'https://en.wikisource.org/wiki/Mutual_Aid:_A_Factor_of_Evolution/Chapter_VIII', 'Peter Kropotkin'),
+       ('Science and Hypothesis: On the Nature of Mathematical Reasoning', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_1', 'Henri Poincaré'),
+       ('Science and Hypothesis: The Calculus of Probabilities', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_11', 'Henri Poincaré'),
+       ('Science and Hypothesis: Mathematical Magnitude and Experiment', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_2', 'Henri Poincaré'),
+       ('Science and Hypothesis: Non-Euclidean Geometries', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_3', 'Henri Poincaré'),
+       ('Science and Hypothesis: Space and Geometry', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_4', 'Henri Poincaré'),
+       ('Science and Hypothesis: Hypotheses in Physics', 'essay', 'https://en.wikisource.org/wiki/Science_and_Hypothesis/Chapter_9', 'Henri Poincaré'),
+       ('The Conquest of Bread: Chapter I', 'essay', 'https://en.wikisource.org/wiki/The_Conquest_of_Bread/Chapter_1', 'Peter Kropotkin'),
+       ('The Conquest of Bread: Chapter Xiv', 'essay', 'https://en.wikisource.org/wiki/The_Conquest_of_Bread/Chapter_14', 'Peter Kropotkin'),
+       ('The Conquest of Bread: Chapter Ii', 'essay', 'https://en.wikisource.org/wiki/The_Conquest_of_Bread/Chapter_2', 'Peter Kropotkin'),
+       ('The Conquest of Bread: Chapter V', 'essay', 'https://en.wikisource.org/wiki/The_Conquest_of_Bread/Chapter_5', 'Peter Kropotkin'),
+       ('The Conquest of Bread: Chapter Ix', 'essay', 'https://en.wikisource.org/wiki/The_Conquest_of_Bread/Chapter_9', 'Peter Kropotkin'),
+       ('The Problems of Philosophy: On Intuitive Knowledge', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_11', 'Bertrand Russell'),
+       ('The Problems of Philosophy: Truth And Falsehood', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_12', 'Bertrand Russell'),
+       ('The Problems of Philosophy: Knowledge, Error, And Probable Opinion', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_13', 'Bertrand Russell'),
+       ('The Problems of Philosophy: The Existence Of Matter', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_2', 'Bertrand Russell'),
+       ('The Problems of Philosophy: The Nature Of Matter', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_3', 'Bertrand Russell'),
+       ('The Problems of Philosophy: Knowledge By Acquaintance And Knowledge By Description', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_5', 'Bertrand Russell'),
+       ('The Problems of Philosophy: On Our Knowledge Of General Principles', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_7', 'Bertrand Russell'),
+       ('The Problems of Philosophy: The World Of Universals', 'essay', 'https://en.wikisource.org/wiki/The_Problems_of_Philosophy/Chapter_9', 'Bertrand Russell'),
+       ('The Works of Francis Bacon: Of Adversity', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Adversity', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Beauty', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Beauty', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Boldness', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Boldness', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Counsel', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Counsel', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Cunning', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Cunning', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Delays', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Delays', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Discourse', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Discourse', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Expense', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Expense', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Followers and Friends', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Followers_and_Friends', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Friendship', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Friendship', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Goodness and Goodness of Nature', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Goodness_and_Goodness_of_Nature', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Judicature', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Judicature', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Parents and Children', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Parents_and_Children', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Plantations', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Plantations', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Prophecies', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Prophecies', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Revenge', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Revenge', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Seeming Wise', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Seeming_Wise', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Travel', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Travel', 'Francis Bacon'),
+       ('The Works of Francis Bacon: Of Usury', 'essay', 'https://en.wikisource.org/wiki/The_Works_of_Francis_Bacon/Volume_1/Essays/Of_Usury', 'Francis Bacon')
+     ),
+     -- Only what is genuinely missing: a title whose every job FAILED.
+     --
+     -- Without a test like this the statement enqueues the whole manifest
+     -- every time it runs -- duplicate works in the feed and duplicate model
+     -- spend, which is the one cost law 2 is written to avoid. Re-running a
+     -- seeder is the normal way to add a source, so it has to be safe.
+     --
+     -- THE TEST IS THE JOB, not the work. Two earlier versions asked about
+     -- `works`, and both were wrong in ways that never converge:
+     --
+     --   "a works row with this title exists" skipped every source that died
+     --   after resolve_identity, which is exactly the row this seeder is for.
+     --
+     --   "a works row with a published public summary" reads a title column
+     --   the MODEL writes -- pipeline.ts stores `summary.title` -- so a source
+     --   that generated perfectly under a title of its own choosing looks
+     --   missing forever, and is re-queued on every run, for ever. It also
+     --   silently undoes a WITHDRAWAL: unpublish a work after a copyright
+     --   complaint and the next run regenerates and republishes it.
+     --
+     -- `generation_jobs.target->>'title'` is the manifest title verbatim,
+     -- written by this statement and never by a model, so the counts below
+     -- are over jobs THIS seeder is responsible for. CANONICAL ONLY:
+     -- enqueue_generation_job writes a reader-supplied target verbatim, so
+     -- without the requester and visibility tests one signed-in reader asking
+     -- the Studio about "Nature" -- a real manifest entry -- would retire
+     -- Emerson from this seeder permanently.
+     --
+     -- `live` is a job already coming or already arrived: queued, running,
+     -- succeeded, or cancelled because somebody stopped it on purpose. Any of
+     -- those and there is nothing to retry.
+     --
+     -- `tried` is a real attempt that failed, and it EXCLUDES the sweeper.
+     -- sweep_stranded_generation_jobs fails every job whose message went
+     -- missing -- a dispatch outage fails the whole batch at once -- and
+     -- counting those, three outages would disqualify the entire catalogue
+     -- for ever, with nothing telling a dead URL from a quiet afternoon.
+     -- Three real attempts is the ceiling the worker gives a job internally,
+     -- and it is what makes "retry" terminate: a source that dies AFTER
+     -- synthesis is paid for would otherwise be bought again on every run.
+     --
+     -- Then two things about the WORK, both keyed on the URL rather than on
+     -- the title. `works.title` is written from `summary.title`, which a model
+     -- chooses: against this manifest a title match finds 7 rows and a URL
+     -- match finds 10, and the manifest is full of one-word titles -- Art,
+     -- Love, Circles, Apology, Meno -- that a model could plausibly emit for a
+     -- different source and so suppress the real one for ever. `source_url` is
+     -- exact, and no model writes it.
+     --
+     -- Nothing a reader can already OPEN, which is the leg that covers rows no
+     -- job produced: ten works here were seeded directly by migration, and a
+     -- predicate that asked only about jobs re-queued seven of them on a
+     -- database replayed from zero. Each one is a duplicate work, a duplicate
+     -- feed card and a second generation paid for.
+     --
+     -- And nothing that ARRIVED WITHOUT ONE OF OUR JOBS. Unpublishing a work
+     -- after a copyright complaint leaves the works row and takes away the
+     -- readable summary, so for a migration-seeded row -- which has no job to
+     -- speak for it -- the two legs above both fall silent and the next run
+     -- regenerates and republishes it. A source that no job of ours produced
+     -- is not this seeder's to retry, whatever state it is in.
+     --
+     -- Matched on lower(title) for the jobs because that is what the manifest
+     -- guarantees is unique. A URL match there would miss the same work reached
+     -- by two hosts, which has already happened: Common Sense arrived from
+     -- Wikisource and Gutenberg and was published twice.
+     missing as (
+       select t.* from target t
+       -- ONE pass over generation_jobs per target, not two: the counts
+       -- below share a predicate, and neither lower(target->>'title') nor
+       -- lower(works.title) has an expression index to lean on.
+       cross join lateral (
+         select
+           count(*) as jobs,
+           count(*) filter (where g.status <> 'failed') as live,
+           count(*) filter (where g.status = 'failed'
+                              and coalesce(g.error, '') not like 'stranded:%') as tried
+         from public.generation_jobs g
+         where lower(g.target->>'title') = lower(t.title)
+           and g.requester_id is null
+           and g.visibility = 'public'
+       ) j
+       where j.live = 0
+         and j.tried < 3
+         and not exists (
+           select 1 from public.works w
+           join public.summaries s on s.work_id = w.id
+           where w.source_url = t.url
+             and s.status = 'published' and s.visibility = 'public'
+         )
+         and (
+           j.jobs > 0
+           or not exists (
+             select 1 from public.works w where w.source_url = t.url
+           )
+         )
+     ),
+     queued as (
+       insert into public.generation_jobs (requester_id, target, status, visibility)
+       select null,
+              jsonb_build_object(
+                'title', missing.title,
+                'kind', missing.kind,
+                'url', missing.url,
+                'author', nullif(missing.author, ''),
+                'rights_status', 'public_domain'
+              ),
+              'queued', 'public'
+       from missing
+       returning id
+     ),
+     -- LATERAL, not count(pgmq.send(...)). `send` returns SETOF bigint, and
+     -- Postgres has rejected set-returning functions inside aggregate arguments
+     -- since v10 — so the aggregate form fails at parse analysis and inserts
+     -- nothing. Every migration reaches pgmq through `perform`, which discards
+     -- a result set; count() cannot. This is the shape that runs.
+     sent as (
+       select s.msg_id
+       from queued q
+       cross join lateral pgmq.send(
+         'generation',
+         jsonb_build_object('jobId', q.id, 'step', 'resolve_identity'),
+         0
+       ) as s(msg_id)
+     )
+-- One count, not two: a data-modifying CTE is materialised once, so every
+-- inserted job is represented here exactly once.
+select count(*) as queued_and_sent from sent;

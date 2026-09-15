@@ -125,7 +125,34 @@ function validate(entries) {
   return entries;
 }
 
-const { sources } = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+/*
+ * `--manifest` exists for one caller: `scripts/test-corpus-seed.mjs`, which needs a
+ * small, known catalogue to assert against. Without it the test had to splice a
+ * replacement row into the emitted `values` clause with a regex, which re-derived SQL
+ * literal quoting in JavaScript and broke on the apostrophe in "Ain't I a Woman?" the
+ * moment a reorder made that entry first. A flag on the generator is the seam; a regex
+ * over its output was a workaround for not having one.
+ */
+const pathOf = (flag, fallback) => {
+  const i = args.indexOf(flag);
+  if (i === -1) return fallback;
+  const value = args[i + 1];
+  if (!value || value.startsWith('--')) die(`${flag} needs a path`);
+  return value;
+};
+
+const manifest = pathOf('--manifest', MANIFEST);
+let parsed;
+try {
+  parsed = JSON.parse(readFileSync(manifest, 'utf8'));
+} catch (e) {
+  // Through `die`, like every other input here. A missing file or a stray comma
+  // otherwise arrives as a raw ENOENT or a `SyntaxError` stack, and `validate`'s own
+  // docstring calls this the system boundary where shapes get checked.
+  die(`could not read ${manifest}: ${e instanceof Error ? e.message : String(e)}`);
+}
+const sources = parsed?.sources;
+if (!Array.isArray(sources)) die(`${manifest} has no "sources" array`);
 validate(sources);
 
 const skip = valueOf('--skip', 0);
@@ -205,8 +232,9 @@ function sql() {
   console.log('--');
   console.log('-- requester_id is NULL on purpose. These are canonical summaries belonging to');
   console.log('-- the library rather than to a person, and attributing them to a reader has');
-  console.log('-- three consequences: it spends their daily quota (38 jobs against a ceiling');
-  console.log('-- of 50, locking them out on the day they seed), it makes them author of every');
+  console.log('-- three consequences: it spends their daily quota -- the manifest is several');
+  console.log('-- times the ceiling of 50, so it does not merely lock them out for the day,');
+  console.log('-- it cannot complete at all -- it makes them author of every');
   console.log('-- summary — and summaries_author_update permits an author to unpublish, so one');
   console.log('-- PATCH per row would empty the public feed — and it exposes every job row,');
   console.log('-- step output and per-step cost to them through the _own policies.');
@@ -220,28 +248,104 @@ function sql() {
   );
 
   console.log('     ),');
-  console.log('     -- Only what is genuinely missing.');
+  console.log('     -- Only what is genuinely missing: a title whose every job FAILED.');
   console.log('     --');
-  console.log('     -- Without this the statement enqueues every entry in the manifest every');
-  console.log('     -- time it runs, including the ones already published — duplicate works in');
-  console.log('     -- the feed and duplicate model spend, which is the one cost law 2 is');
-  console.log('     -- written to avoid. Re-running a seeder is the normal way to add a source,');
-  console.log('     -- so it has to be safe to do.');
+  console.log('     -- Without a test like this the statement enqueues the whole manifest');
+  console.log('     -- every time it runs -- duplicate works in the feed and duplicate model');
+  console.log('     -- spend, which is the one cost law 2 is written to avoid. Re-running a');
+  console.log('     -- seeder is the normal way to add a source, so it has to be safe.');
   console.log('     --');
-  console.log('     -- Matched on lower(title) because that is what the manifest guarantees is');
-  console.log('     -- unique. A URL match would miss the same work reached by two hosts, which');
-  console.log('     -- has already happened once here: Common Sense arrived from Wikisource and');
-  console.log('     -- Gutenberg and was published twice.');
+  console.log('     -- THE TEST IS THE JOB, not the work. Two earlier versions asked about');
+  console.log('     -- `works`, and both were wrong in ways that never converge:');
+  console.log('     --');
+  console.log('     --   "a works row with this title exists" skipped every source that died');
+  console.log('     --   after resolve_identity, which is exactly the row this seeder is for.');
+  console.log('     --');
+  console.log('     --   "a works row with a published public summary" reads a title column');
+  console.log('     --   the MODEL writes -- pipeline.ts stores `summary.title` -- so a source');
+  console.log('     --   that generated perfectly under a title of its own choosing looks');
+  console.log('     --   missing forever, and is re-queued on every run, for ever. It also');
+  console.log('     --   silently undoes a WITHDRAWAL: unpublish a work after a copyright');
+  console.log('     --   complaint and the next run regenerates and republishes it.');
+  console.log('     --');
+  console.log("     -- `generation_jobs.target->>'title'` is the manifest title verbatim,");
+  console.log('     -- written by this statement and never by a model, so the counts below');
+  console.log('     -- are over jobs THIS seeder is responsible for. CANONICAL ONLY:');
+  console.log('     -- enqueue_generation_job writes a reader-supplied target verbatim, so');
+  console.log('     -- without the requester and visibility tests one signed-in reader asking');
+  console.log('     -- the Studio about "Nature" -- a real manifest entry -- would retire');
+  console.log('     -- Emerson from this seeder permanently.');
+  console.log('     --');
+  console.log('     -- `live` is a job already coming or already arrived: queued, running,');
+  console.log('     -- succeeded, or cancelled because somebody stopped it on purpose. Any of');
+  console.log('     -- those and there is nothing to retry.');
+  console.log('     --');
+  console.log('     -- `tried` is a real attempt that failed, and it EXCLUDES the sweeper.');
+  console.log('     -- sweep_stranded_generation_jobs fails every job whose message went');
+  console.log('     -- missing -- a dispatch outage fails the whole batch at once -- and');
+  console.log('     -- counting those, three outages would disqualify the entire catalogue');
+  console.log('     -- for ever, with nothing telling a dead URL from a quiet afternoon.');
+  console.log('     -- Three real attempts is the ceiling the worker gives a job internally,');
+  console.log('     -- and it is what makes "retry" terminate: a source that dies AFTER');
+  console.log('     -- synthesis is paid for would otherwise be bought again on every run.');
+  console.log('     --');
+  console.log('     -- Then two things about the WORK, both keyed on the URL rather than on');
+  console.log('     -- the title. `works.title` is written from `summary.title`, which a model');
+  console.log('     -- chooses: against this manifest a title match finds 7 rows and a URL');
+  console.log('     -- match finds 10, and the manifest is full of one-word titles -- Art,');
+  console.log('     -- Love, Circles, Apology, Meno -- that a model could plausibly emit for a');
+  console.log('     -- different source and so suppress the real one for ever. `source_url` is');
+  console.log('     -- exact, and no model writes it.');
+  console.log('     --');
+  console.log('     -- Nothing a reader can already OPEN, which is the leg that covers rows no');
+  console.log('     -- job produced: ten works here were seeded directly by migration, and a');
+  console.log('     -- predicate that asked only about jobs re-queued seven of them on a');
+  console.log('     -- database replayed from zero. Each one is a duplicate work, a duplicate');
+  console.log('     -- feed card and a second generation paid for.');
+  console.log('     --');
+  console.log('     -- And nothing that ARRIVED WITHOUT ONE OF OUR JOBS. Unpublishing a work');
+  console.log('     -- after a copyright complaint leaves the works row and takes away the');
+  console.log('     -- readable summary, so for a migration-seeded row -- which has no job to');
+  console.log('     -- speak for it -- the two legs above both fall silent and the next run');
+  console.log('     -- regenerates and republishes it. A source that no job of ours produced');
+  console.log("     -- is not this seeder's to retry, whatever state it is in.");
+  console.log('     --');
+  console.log('     -- Matched on lower(title) for the jobs because that is what the manifest');
+  console.log('     -- guarantees is unique. A URL match there would miss the same work reached');
+  console.log('     -- by two hosts, which has already happened: Common Sense arrived from');
+  console.log('     -- Wikisource and Gutenberg and was published twice.');
   console.log('     missing as (');
   console.log('       select t.* from target t');
-  console.log('       where not exists (');
-  console.log('         select 1 from public.works w where lower(w.title) = lower(t.title)');
-  console.log('       )');
-  console.log('       and not exists (');
-  console.log('         select 1 from public.generation_jobs g');
+  console.log('       -- ONE pass over generation_jobs per target, not two: the counts');
+  console.log("       -- below share a predicate, and neither lower(target->>'title') nor");
+  console.log('       -- lower(works.title) has an expression index to lean on.');
+  console.log('       cross join lateral (');
+  console.log('         select');
+  console.log('           count(*) as jobs,');
+  console.log("           count(*) filter (where g.status <> 'failed') as live,");
+  console.log("           count(*) filter (where g.status = 'failed'");
+  console.log(
+    "                              and coalesce(g.error, '') not like 'stranded:%') as tried",
+  );
+  console.log('         from public.generation_jobs g');
   console.log("         where lower(g.target->>'title') = lower(t.title)");
-  console.log("           and g.status in ('queued', 'running')");
-  console.log('       )');
+  console.log('           and g.requester_id is null');
+  console.log("           and g.visibility = 'public'");
+  console.log('       ) j');
+  console.log('       where j.live = 0');
+  console.log('         and j.tried < 3');
+  console.log('         and not exists (');
+  console.log('           select 1 from public.works w');
+  console.log('           join public.summaries s on s.work_id = w.id');
+  console.log('           where w.source_url = t.url');
+  console.log("             and s.status = 'published' and s.visibility = 'public'");
+  console.log('         )');
+  console.log('         and (');
+  console.log('           j.jobs > 0');
+  console.log('           or not exists (');
+  console.log('             select 1 from public.works w where w.source_url = t.url');
+  console.log('           )');
+  console.log('         )');
   console.log('     ),');
   console.log('     queued as (');
   console.log(
@@ -335,6 +439,8 @@ if (has('--check')) await check();
 else if (has('--sql')) sql();
 else if (has('--backfill')) backfill();
 else {
-  console.log('Usage: seed-corpus.mjs (--check | --sql | --backfill) [--limit N] [--skip N]');
+  console.log(
+    'Usage: seed-corpus.mjs (--check | --sql | --backfill) [--limit N] [--skip N] [--manifest PATH]',
+  );
   process.exitCode = 2;
 }

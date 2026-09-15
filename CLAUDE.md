@@ -149,7 +149,7 @@ pnpm db:start       # local Supabase stack
 pnpm db:reset       # replay every migration from zero, then seed
 pnpm db:types       # regenerate packages/db/src/database.types.ts — never hand-edit
 pnpm db:lint        # the schema invariants CI check 4 runs
-pnpm db:test        # read-path behaviour, as a real reader under RLS
+pnpm db:test        # database behaviour: read paths under RLS, then the corpus seeder
 pnpm baml:check     # parse and typecheck packages/prompts/baml_src
 pnpm baml:fmt       # format packages/prompts/baml_src — prettier has no .baml parser
 pnpm baml:generate  # regenerate packages/prompts/baml_sdk — never hand-edit
@@ -180,6 +180,17 @@ pnpm baml:export    # export prompts + schemas to supabase/functions/_shared/gen
   committed JSON fixture captured by hand, not against the database, so a change to the
   SQL planner passes CI unless someone regenerates the fixture. Closing that is in
   `docs/contributing-map.md`.
+
+- **`pnpm db:test` is the database's behaviour, not only its read paths.** Most of the
+  chain is `supabase/tests/*.sql`, and most of those install `assert_is_reader()` (or
+  `assert_is_visitor()`) so that RLS is actually in force — an owner-role query cannot
+  see a policy, so a file without the guard proves less than it looks like it does, and
+  several of them do not have it. The last entry is `scripts/test-corpus-seed.mjs`, which
+  runs as the owner deliberately: it drives the SQL `scripts/seed-corpus.mjs --sql` emits,
+  which is a seeder and therefore an owner-role write path, and testing a second copy of
+  its predicate would test nothing. What it does not do is compare that output against the
+  committed migration — a migration is a snapshot and law 6 says never to edit a pushed
+  one, so a check demanding they match demands a violation to go green.
 
 - **Generated files are never hand-edited** — `packages/db/src/database.types.ts` comes
   from `pnpm db:types`, `packages/prompts/baml_sdk` from `pnpm baml:generate`, and
