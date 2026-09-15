@@ -57,11 +57,10 @@ export async function fetchHighlights(userId: string, pullIds: string[]): Promis
     start_offset: number;
     end_offset: number;
     text: string;
-    created_at: string;
   }>((after, limit) => {
     let q = supabase
       .from('highlights')
-      .select('id, pull_id, field, start_offset, end_offset, text, created_at')
+      .select('id, pull_id, field, start_offset, end_offset, text')
       .eq('user_id', userId)
       .in('pull_id', pullIds)
       .order('id', { ascending: true })
@@ -80,7 +79,6 @@ export async function fetchHighlights(userId: string, pullIds: string[]): Promis
       start: r.start_offset,
       end: r.end_offset,
       text: r.text,
-      createdAt: r.created_at,
     })),
   );
 }

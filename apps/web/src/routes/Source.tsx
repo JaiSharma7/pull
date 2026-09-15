@@ -891,16 +891,7 @@ export function Source({
                         claimHighlightLoad();
                         setHighlights((prev) => [
                           ...prev,
-                          // The reader's own clock for the optimistic row: it has to
-                          // sort after everything already on screen, and the server's
-                          // `created_at` replaces it on the next load.
-                          {
-                            id,
-                            pullId: p.id,
-                            field: 'body',
-                            createdAt: new Date().toISOString(),
-                            ...range,
-                          },
+                          { id, pullId: p.id, field: 'body', ...range },
                         ]);
                         window.getSelection()?.removeAllRanges();
                         createHighlight(userId, {

@@ -50,15 +50,6 @@ export interface Highlight {
   start: number;
   end: number;
   text: string;
-  /**
-   * When the reader made the mark. The server's clock (`highlights.created_at`, not
-   * null), or the client's for a mark that has not been written yet.
-   *
-   * Carried because `id` cannot answer "which did I just make": it is a client-minted
-   * UUIDv4, so the fetch's `id` order -- which exists to make the keyset walk
-   * partition the set -- is arbitrary against the order a reader marked things in.
-   */
-  createdAt: string;
 }
 
 export interface Range {
@@ -66,20 +57,6 @@ export interface Range {
   end: number;
 }
 
-/**
- * Shape rows into highlights, IN THE ORDER THEY WERE MADE.
- *
- * The sort is the point, and it was missing: `highlights-api.ts` has always said
- * "`shapeHighlights` sorts what it is given, so the display order is unaffected" to
- * justify walking the fetch by `id`, and nothing here sorted anything. The ids are
- * client-minted UUIDv4s, so what came back was in no order a reader would recognise
- * -- and "Remove the last one" on a source page took the highest id rather than the
- * newest mark, deleting a passage the reader had underlined first and leaving the one
- * they had just made.
- *
- * `(createdAt, id)`: the timestamp is what a reader means by last, and the id makes
- * the order total when two marks share a millisecond.
- */
 export function shapeHighlights(raw: unknown): Highlight[] {
   return rows(raw)
     .map((r): Highlight | null => {
@@ -89,18 +66,9 @@ export function shapeHighlights(raw: unknown): Highlight[] {
       const start = int(r.start);
       const end = int(r.end);
       if (end <= start) return null;
-      return {
-        id,
-        pullId: str(r.pullId),
-        field,
-        start,
-        end,
-        text: str(r.text),
-        createdAt: str(r.createdAt),
-      };
+      return { id, pullId: str(r.pullId), field, start, end, text: str(r.text) };
     })
-    .filter(nonNull)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    .filter(nonNull);
 }
 
 /**
