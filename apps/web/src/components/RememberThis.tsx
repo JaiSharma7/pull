@@ -51,9 +51,27 @@ export interface RememberThisProps {
    * toggle alone, exactly as before.
    */
   actions?: ReactNode;
+  /**
+   * A sentence about one of those controls -- "Link copied", "Select some words
+   * first" -- rendered LAST in the row, after the toggle.
+   *
+   * Separate from `actions` rather than left to the caller's ordering because the
+   * position is the point. `.meta` in an actions row takes the whole line, so a
+   * status sentence anywhere but last pushes whatever follows it onto the next
+   * line at the moment it appears -- which is the moment of the press that
+   * produced it, with the reader's finger still on a control that has just moved.
+   * Last, nothing follows it to move.
+   */
+  status?: ReactNode;
 }
 
-export function RememberThis({ pullId, onKept, idPrefix = 'ask', actions }: RememberThisProps) {
+export function RememberThis({
+  pullId,
+  onKept,
+  idPrefix = 'ask',
+  actions,
+  status,
+}: RememberThisProps) {
   /*
    * The reducer from `lib/questions.ts`, driven with one key.
    *
@@ -143,6 +161,7 @@ export function RememberThis({ pullId, onKept, idPrefix = 'ask', actions }: Reme
         >
           {open ? 'Never mind' : 'Remember this'}
         </button>
+        {status}
       </p>
 
       {open && (

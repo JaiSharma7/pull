@@ -60,11 +60,34 @@ describe('RememberThis', () => {
     expect(row.indexOf('Share')).toBeLessThan(row.indexOf('Remember this'));
   });
 
-  it('draws the row with the toggle alone when no actions are passed', () => {
+  it('draws the row with the toggle alone when nothing is passed', () => {
     const html = renderToStaticMarkup(createElement(RememberThis, { pullId: PULL }));
     const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    // The count, not the absence of a string: `not.toContain('<button type="button">')`
+    // passed whatever the component did, because React never serialises a bare
+    // `<button type="button">` -- the toggle carries a class and two aria attributes.
+    expect(row.match(/<button/g)).toHaveLength(1);
     expect(row).toContain('Remember this');
-    expect(row).not.toContain('<button type="button">');
+  });
+
+  /**
+   * `status` is a separate slot from `actions` because its POSITION is the point:
+   * `.meta` in an actions row takes the whole line, so a sentence anywhere but last
+   * pushes what follows onto the next line at the moment it appears -- under the
+   * finger of the reader who just pressed the control it is about. Last, nothing
+   * follows it to move. This asserts the order that makes that true.
+   */
+  it('renders status after the toggle, and actions before it', () => {
+    const html = renderToStaticMarkup(
+      createElement(RememberThis, {
+        pullId: PULL,
+        actions: createElement('button', { type: 'button', className: 'btn' }, 'Share'),
+        status: createElement('span', { className: 'meta', role: 'status' }, 'Pick some words'),
+      }),
+    );
+    const row = html.slice(html.indexOf('<p class="remember__actions">'), html.indexOf('</p>'));
+    expect(row.indexOf('Share')).toBeLessThan(row.indexOf('Remember this'));
+    expect(row.indexOf('Remember this')).toBeLessThan(row.indexOf('Pick some words'));
   });
 
   it('says nothing about having kept anything before anything is kept', () => {
