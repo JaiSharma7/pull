@@ -154,6 +154,16 @@ export function Mark({ className, title }: MarkProps) {
     <img
       className={className}
       src="/brand/hat.png"
+      /*
+       * The file's own pixels, so the box is reserved before it arrives.
+       *
+       * CSS gives this `height: 1.15em; width: auto`, which cannot be resolved until the
+       * image's aspect ratio is known -- so without these the masthead reflowed when the
+       * PNG landed, on the first screen a signed-out visitor sees. The attributes are
+       * overridden by the stylesheet for the drawn size; what they supply is the ratio.
+       */
+      width={433}
+      height={512}
       alt={title ?? ''}
       aria-hidden={title ? undefined : true}
     />
