@@ -3,8 +3,29 @@
 --
 -- `handle_new_user` mints `reader_` plus hex for every new account
 -- (20260901120000). This is the other half: a reader may take a name of their
--- own, once, through a function that owns the rules rather than a PATCH that
--- would let the client pick any of them.
+-- own, through a function that owns the rules.
+--
+-- WHAT IT DOES NOT DO, said here because the first draft of this header said
+-- "once" and the function below says no such thing (Codex, #122):
+--
+--   * It does not make the claim ONE-TIME. The update matches on `id = uid`
+--     alone, so a reader may rename as often as they like, `handle_set_at`
+--     moving with each one.
+--   * It is not the ONLY way in. `authenticated` holds UPDATE on every column
+--     of `profiles`, including `handle` and `handle_set_at`, and
+--     `profiles_write_own` permits a reader's own row -- so a PostgREST PATCH
+--     sets a handle without passing any rule in here. What still holds at the
+--     table is the shape (`profiles_handle_format`, 20260829124425) and the
+--     constraint below, which stops a CHOSEN handle wearing the generated
+--     `reader_` prefix. Reserved names and the guest refusal live only in this
+--     function, and only for callers who use it.
+--
+-- Both are true of the deployed database as this file was written, and this file
+-- is a record of that database rather than a proposal to change it (see below).
+-- Closing either is a new migration: narrowing the column grants and the policy,
+-- and guarding the update on `handle_set_at is null` if a claim should be
+-- one-time. Nothing calls `claim_handle` yet, so there is no screen that assumes
+-- either rule today.
 --
 -- RECONSTRUCTED, and that is why this file arrives after the migrations either
 -- side of it were written. The hosted project has carried this version in
@@ -33,9 +54,9 @@
 --     generated one, and `profiles_chosen_handle_not_generated` holds that at
 --     the table: a row with `handle_set_at` set cannot carry a `reader_` name,
 --     whatever writes it.
---   * RESERVED names are refused outright.
---   * A GUEST may not hold one. `is_guest()` is 20260901190000's; a guest
---     session lasts a day and a username outlives it.
+--   * RESERVED names are refused outright -- by this function, not by the table.
+--   * A GUEST may not hold one, again here rather than at the table. `is_guest()`
+--     is 20260901190000's; a guest session lasts a day and a username outlives it.
 --
 -- `handle_set_at` is what separates "chosen" from "issued". It is the only new
 -- column, it is null on every row a trigger wrote, and nothing reads it yet
