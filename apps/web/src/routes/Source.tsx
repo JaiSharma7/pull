@@ -822,7 +822,16 @@ export function Source({
                       claimHighlightLoad();
                       setHighlights((prev) => [
                         ...prev,
-                        { id, pullId: p.id, field: 'body', ...range },
+                        // The reader's own clock for the optimistic row: it has to sort
+                        // after everything already on screen, and the server's
+                        // `created_at` replaces it on the next load.
+                        {
+                          id,
+                          pullId: p.id,
+                          field: 'body',
+                          createdAt: new Date().toISOString(),
+                          ...range,
+                        },
                       ]);
                       window.getSelection()?.removeAllRanges();
                       createHighlight(userId, {
@@ -840,12 +849,26 @@ export function Source({
                   </button>
                 )}
 
-                {userId && highlights.some((h) => h.pullId === p.id) && (
+                {/*
+                  `field === 'body'`, because that is what the card draws.
+                  `HIGHLIGHTABLE_FIELDS` has three members and the fetch filters by none
+                  of them, so a mark on `explanation` -- which nothing writes today and
+                  the card does not render -- put this button under an idea with no
+                  visible mark, and pressing it deleted something the reader could not
+                  see while the mark they could see stayed put.
+                */}
+                {userId && highlights.some((h) => h.pullId === p.id && h.field === 'body') && (
                   <button
                     type="button"
                     className="btn btn--plain"
                     onClick={() => {
-                      const mine = highlights.filter((h) => h.pullId === p.id);
+                      // Same predicate as the gate above, and `shapeHighlights` now
+                      // returns marks in the order they were made -- so "the last one" is
+                      // the one the reader made last, not the one whose random UUID
+                      // happens to sort highest.
+                      const mine = highlights.filter(
+                        (h) => h.pullId === p.id && h.field === 'body',
+                      );
                       const last = mine[mine.length - 1];
                       if (!last) return;
                       // Same reasoning as the insert: a load in flight would
