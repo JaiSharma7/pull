@@ -261,6 +261,24 @@ export function App() {
    */
   const [path, setPath] = useState(readLocation);
   /*
+   * The last screen that was not Settings, for the feedback form to record.
+   *
+   * A REF RATHER THAN STATE, deliberately: nothing renders differently because of it,
+   * so putting it in state would re-render the whole app on every navigation to
+   * recompute a value only one panel reads.
+   *
+   * Updated during render rather than in an effect, which is safe because writing a ref
+   * is not a state update and cannot cascade. What keeps the value correct is that the
+   * write is SKIPPED on a Settings render — so while Settings is open nothing overwrites
+   * it and it still names wherever the reader came from.
+   *
+   * Settings is excluded because everyone sending feedback is on Settings by definition:
+   * recording it would store the same constant on every row and tell nobody anything.
+   * The three addresses that render Settings are excluded together, since /appearance
+   * and /account open the same screen.
+   */
+  const lastNonSettingsPath = useRef<string | null>(null);
+  /*
    * The address the guest confirmation was last reconciled against, and the reconciliation
    * itself. Both live here, beside `path`, and the placement is the whole point.
    *
@@ -699,6 +717,10 @@ export function App() {
   const owesFactor = session && factorState?.userId === session.user.id ? factorState.owes : null;
 
   const accountOpen = isPath(path, '/account');
+
+  // Skipped on the three addresses that render Settings, so the ref keeps naming the
+  // screen before it. See the declaration above.
+  if (!settingsOpen && !appearanceOpen && !accountOpen) lastNonSettingsPath.current = path;
 
   const topicSlug = routeParam(path, '/topic');
   /*
@@ -1163,6 +1185,7 @@ export function App() {
                 }
                 onNavigate={navigate}
                 onPreferencesSaved={() => setPrefsSaved((n) => n + 1)}
+                fromPath={lastNonSettingsPath.current}
               />
             )}
             {/*

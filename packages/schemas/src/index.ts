@@ -47,3 +47,6 @@ export const INTERRUPT_KINDS = [
   'delta_probe',
 ] as const;
 export type InterruptKind = (typeof INTERRUPT_KINDS)[number];
+
+export const FEEDBACK_SUBJECTS = ['bug', 'idea', 'content', 'account', 'other'] as const;
+export type FeedbackSubject = (typeof FEEDBACK_SUBJECTS)[number];

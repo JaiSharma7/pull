@@ -548,6 +548,39 @@ export type Database = {
           },
         ]
       }
+      feedback: {
+        Row: {
+          client_mutation_id: string | null
+          created_at: string
+          id: string
+          message: string
+          path: string | null
+          status: string
+          subject: Database["public"]["Enums"]["feedback_subject"]
+          user_id: string
+        }
+        Insert: {
+          client_mutation_id?: string | null
+          created_at?: string
+          id?: string
+          message: string
+          path?: string | null
+          status?: string
+          subject: Database["public"]["Enums"]["feedback_subject"]
+          user_id: string
+        }
+        Update: {
+          client_mutation_id?: string | null
+          created_at?: string
+          id?: string
+          message?: string
+          path?: string | null
+          status?: string
+          subject?: Database["public"]["Enums"]["feedback_subject"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       follows: {
         Row: {
           created_at: string
@@ -2717,6 +2750,7 @@ export type Database = {
     Enums: {
       acquisition: "read" | "saved" | "explained" | "quizzed" | "probed"
       curator_kind: "editorial" | "community" | "algorithmic"
+      feedback_subject: "bug" | "idea" | "content" | "account" | "other"
       interrupt_kind:
         | "recall"
         | "say_it_back"
@@ -2885,6 +2919,7 @@ export const Constants = {
     Enums: {
       acquisition: ["read", "saved", "explained", "quizzed", "probed"],
       curator_kind: ["editorial", "community", "algorithmic"],
+      feedback_subject: ["bug", "idea", "content", "account", "other"],
       interrupt_kind: [
         "recall",
         "say_it_back",

@@ -3,11 +3,20 @@
 **Effective 15 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-What changed on this date: **Anthropic** was added to the processors below. A deployment
-may configure it as the fallback that writes a Studio summary when Google is unavailable,
-so text you submit to the Studio may reach a second provider. Nothing else about what is
-collected, kept or shared has changed. Under "Changes" at the foot of this document this
-is a material change, which is why the date above moved rather than staying at 30 August.
+What changed on this date, in two parts.
+
+**Anthropic** was added to the processors below. A deployment may configure it as the
+fallback that writes a Studio summary when Google is unavailable, so text you submit to
+the Studio may reach a second provider.
+
+**Feedback** is new, and it collects something this policy did not previously describe:
+if you use the form in Settings, what you write is stored against your account, together
+with the subject you chose and the screen you were on before you opened Settings. It is
+described under "What you create" below. Nothing else about what is collected, kept or
+shared has changed.
+
+Under "Changes" at the foot of this document both are material changes, which is why the
+date above moved rather than staying at 30 August.
 
 ## Scope
 
@@ -90,10 +99,21 @@ exactly the kind of linking this policy exists to say we do not do.
 ### What you create
 
 Saved Pulls and stashes, notes, highlights, your reading progress, the explanations you
-write in Say It Back, and the stances you record in the Conviction Ledger
-(`stashes`, `saved_items`, `notes`, `highlights`, `progress`, `explanations`, `convictions`).
+write in Say It Back, the stances you record in the Conviction Ledger, and any feedback
+you send (`stashes`, `saved_items`, `notes`, `highlights`, `progress`, `explanations`,
+`convictions`, `feedback`).
 
-Two notes on the last of these. Convictions are **append-only by design** — recording a new
+**Feedback** is worth its own sentence, because it is the one thing here you write _to us_
+rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
+path of the screen you were on before you opened Settings — `/explore`, say. The path is
+recorded without its query string or fragment, deliberately: that is what would otherwise
+carry a search term you had typed or the identifier of the idea you were reading, and
+neither belongs in a bug report you did not know was collecting them. Feedback cannot be
+edited or withdrawn from the app once sent, because a message somebody has already read
+should not be able to change underneath them — but it is deleted with your account like
+everything else, and it appears in your data export.
+
+Two notes on the Conviction Ledger. Convictions are **append-only by design** — recording a new
 stance supersedes the old one rather than overwriting it, because "how my mind changed" is a
 feature. And your explanations are your own writing, kept as you typed it. Both are deleted
 with your account like everything else; the append-only property is about not losing your
