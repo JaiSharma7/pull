@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {
+      "title": "A Source That Failed",
+      "kind": "essay",
+      "url": "https://example.test/failed",
+      "author": "A Nother"
+    },
+    {
+      "title": "A Source Already Published",
+      "kind": "essay",
+      "url": "https://example.test/published",
+      "author": "A Nother"
+    }
+  ]
+}

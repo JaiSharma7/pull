@@ -1,45 +1,56 @@
 -- Retry the catalogue sources whose every generation failed.
 --
--- The body below is exactly what `node scripts/seed-corpus.mjs --sql` prints from
--- `with target(` down; only this header differs, the script's being addressed to
--- somebody running it by hand. `scripts/test-corpus-seed.mjs` drives the emitted SQL
--- rather than a second copy of its predicate, so what the script does is what is
--- tested -- but nothing regenerates this FILE and diffs it, the way CI does for
--- `database.types.ts` and the BAML exports. Regenerate it by hand if the emitter
--- changes, or the two will differ and nothing will say so.
+-- The body below is exactly what `node scripts/seed-corpus.mjs --sql` prints, from its
+-- first statement down; only this header differs, the script's being addressed to
+-- somebody running it by hand. `scripts/test-corpus-seed.mjs` asserts that -- it runs the
+-- generator and compares -- so the drift a hand-copied 290 lines invites is a red
+-- `pnpm db:test` rather than something nobody notices. That test also drives the emitted
+-- SQL for its own cases, rather than a second copy of the predicate.
 --
--- WHAT IT ENQUEUES, AND WHEN IT ENQUEUES NOTHING. A generation that died after
--- `resolve_identity` leaves a `works` row with no readable summary, and the seeder that
--- was meant to retry it skipped it -- the old test was "a works row with this title
--- exists", and that row is exactly what a half-finished job leaves behind. The test is
--- now the job: a title is missing when every `generation_jobs` row carrying it has
--- FAILED. Queued or running means it is already coming; succeeded means it arrived,
--- whatever was done to it afterwards; cancelled means somebody stopped it deliberately.
+-- WHAT IT ENQUEUES. A generation that died after `resolve_identity` leaves a `works` row
+-- with no readable summary, and the seeder meant to retry it skipped it: the old test was
+-- "a works row with this title exists", and that row is exactly what a half-finished job
+-- leaves behind. A title is missing now when three things hold at once.
 --
--- So on a database replayed from zero this inserts NOTHING, and that is the correct
--- answer rather than a gap: `20260907011000_expand_catalogue` has just queued the whole
--- manifest, nothing has had the chance to fail, and there is nothing to retry. It does
--- its work on an environment that has been running -- where those jobs have finished,
--- and some of them badly. Measured, not assumed: against a freshly reset local stack
--- the `missing` CTE returns zero rows.
+--   No CANONICAL job for it that is anything but failed. Queued or running means it is
+--   already coming, succeeded means it arrived whatever was done to it afterwards, and
+--   cancelled means somebody stopped it deliberately. Canonical because
+--   `enqueue_generation_job` writes a reader's target verbatim: without the
+--   `requester_id is null and visibility = 'public'` test, one signed-in reader asking
+--   the Studio about "Nature" -- a real manifest entry -- would remove Emerson from this
+--   seeder for good.
 --
--- Two earlier predicates are worth naming because both looked right and neither
--- converges. "A works row with a published public summary" reads a title column the
--- MODEL writes -- `pipeline.ts` stores `summary.title` -- so a source that generated
--- perfectly under a title of its own choosing is missing for ever and is re-queued on
--- every run. It also silently undoes a withdrawal: unpublish a work after a copyright
--- complaint and the next run regenerates and republishes it, which is law 4 being
--- reversed by a seeder. `generation_jobs.target->>'title'` is the manifest title
--- verbatim, written by this statement and never by a model.
+--   Nothing a reader can already OPEN under that title. A job is not the only way a
+--   source arrives: nine works here were seeded directly by migration and have no job
+--   row at all, and a predicate that asked only about jobs re-queued seven of them on a
+--   database replayed from zero. Measured, and the cost is not abstract -- a duplicate
+--   `works` row, a duplicate feed card and a second generation paid for, each, because
+--   those rows have no `content_hash` and `upsertWork` cannot adopt them.
 --
--- Re-running stays safe, which is the point: a queued or running job for the same title
--- suppresses a duplicate, so this enqueues only what is genuinely absent. Renumbered
--- from 20260908120000 before it was ever applied anywhere -- a migration inserted into
--- the middle of history replays in one order from zero and in another on an environment
--- that already ran past it, which is the divergence law 6 exists to prevent.
+--   And FEWER THAN THREE failures already. "Retry" has to terminate. A source that dies
+--   after synthesis has been paid for satisfies both tests above on every run, for ever,
+--   buying the same generation again each time. Three is the ceiling the worker already
+--   gives a job internally.
 --
--- Mirrors `enqueue_generation_job` without its per-reader quota: the insert and the
--- sends are one statement, so a job either exists and is queued or neither happened.
+-- So on a database replayed from zero this inserts NOTHING, and that is the right answer
+-- rather than a gap: `20260907011000_expand_catalogue` has just queued the whole
+-- manifest, the nine seeded works are readable, and nothing has had the chance to fail.
+-- Measured, not assumed -- `select count(*) group by created_at` after `db reset` shows
+-- one batch, not two. It does its work on an environment that has been running, where
+-- those jobs have finished and some of them badly.
+--
+-- What it still cannot see: a withdrawal performed by DELETING a work rather than
+-- unpublishing it. `generation_jobs.work_id` is `on delete cascade`, so deleting the work
+-- takes the succeeded job with it and the title looks untried. Both tests then pass and
+-- the next run regenerates it. Unpublishing is the withdrawal this predicate holds
+-- against; deleting is not, and that is worth knowing before reaching for `delete`.
+--
+-- Renumbered from 20260908120000 before it was ever applied anywhere -- a migration
+-- inserted into the middle of history replays in one order from zero and in another on an
+-- environment that already ran past it, which is the divergence law 6 exists to prevent.
+--
+-- Mirrors `enqueue_generation_job` without its per-reader quota: the insert and the sends
+-- are one statement, so a job either exists and is queued or neither happened.
 -- `visibility=public` with `rights_status=public_domain` is what lets the result clear
 -- `resolve_identity` and `moderate` and reach the feed. The spend these jobs go on to
 -- make is bounded by the global daily cap, not by this file.
@@ -273,11 +284,38 @@ with target(title, kind, url, author) as (values
      --   complaint and the next run regenerates and republishes it.
      --
      -- `generation_jobs.target->>'title'` is the manifest title verbatim,
-     -- written by this statement and never by a model. So: nothing here but
-     -- failures. A queued or running job means it is already coming; a
-     -- succeeded one means it arrived, whatever was done to it afterwards;
-     -- a cancelled one means somebody stopped it on purpose. Only `failed`
-     -- is a source that tried and did not make it.
+     -- written by this statement and never by a model. So the first leg:
+     -- nothing here but failures. A queued or running job means it is already
+     -- coming; a succeeded one means it arrived, whatever was done to it
+     -- afterwards; a cancelled one means somebody stopped it on purpose. Only
+     -- `failed` is a source that tried and did not make it.
+     --
+     -- CANONICAL JOBS ONLY. enqueue_generation_job writes a reader-supplied
+     -- target verbatim, so without the requester and visibility test one
+     -- signed-in reader asking the Studio about "Nature" -- a real manifest
+     -- entry, and the sort of word somebody types -- leaves a succeeded
+     -- private job that removes Emerson from this seeder permanently.
+     -- Two tests where one would do today: the column defaults to private, so
+     -- either alone excludes a reader. The requester test is what the rule
+     -- means; the visibility test is what it must still mean if that default
+     -- ever moves.
+     --
+     -- And a second leg, because a job is not the only way a source arrives:
+     -- nine works in this catalogue were seeded directly by migration and have
+     -- no job row at all. Asking only about jobs re-queued seven of them on a
+     -- database replayed from zero -- measured -- and each one is a duplicate
+     -- work, a duplicate feed card and a second generation paid for. So:
+     -- nothing a reader can already open under this title, either. That leg
+     -- reads works.title, which a model writes, and it is sound only because
+     -- the job leg above already covers everything a job produced; this one is
+     -- for rows no job produced, whose titles reached works.title from the
+     -- manifest through a migration.
+     --
+     -- AND A BOUND, because "retry" has to terminate. A source that dies after
+     -- synthesis is paid for leaves a failed job and no published summary, so
+     -- both legs above let it through on every run, for ever, buying the same
+     -- generation again each time. Three attempts, the ceiling the worker
+     -- already gives a job internally.
      --
      -- Matched on lower(title) because that is what the manifest guarantees is
      -- unique. A URL match would miss the same work reached by two hosts, which
@@ -288,8 +326,23 @@ with target(title, kind, url, author) as (values
        where not exists (
          select 1 from public.generation_jobs g
          where lower(g.target->>'title') = lower(t.title)
+           and g.requester_id is null
+           and g.visibility = 'public'
            and g.status <> 'failed'
        )
+       and not exists (
+         select 1 from public.works w
+         join public.summaries s on s.work_id = w.id
+         where lower(w.title) = lower(t.title)
+           and s.status = 'published' and s.visibility = 'public'
+       )
+       and (
+         select count(*) from public.generation_jobs g
+         where lower(g.target->>'title') = lower(t.title)
+           and g.requester_id is null
+           and g.visibility = 'public'
+           and g.status = 'failed'
+       ) < 3
      ),
      queued as (
        insert into public.generation_jobs (requester_id, target, status, visibility)

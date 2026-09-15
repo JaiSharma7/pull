@@ -1,66 +1,116 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /*
  * The catalogue seeder's eligibility rule, exercised through the SQL it actually emits.
  *
  * Not a second copy of the predicate: `seed-corpus.mjs --sql` is run and its output is
- * fed to psql, so a change to the emitter is a change to what this tests. The previous
- * version of this file asserted only that a published source is not re-queued, which a
- * bare join satisfies -- every condition the rule turns on could be deleted and it
- * stayed green. The cases below are the ones that tell the rule apart from nothing: a
- * failed job IS retried, a succeeded one is not, and neither is a withdrawal.
+ * fed to psql, so a change to the emitter is a change to what this tests. An earlier
+ * version asserted only that an already-published source is not re-queued, which a bare
+ * join satisfies -- every condition the rule turns on could be deleted and it stayed
+ * green. The cases below are the ones that tell the rule apart from nothing, and each
+ * one has been checked by breaking that leg of the predicate and watching this fail.
+ *
+ * Two manifest rows rather than one, through `--manifest`, so the multi-row path runs:
+ * `sent` is a LATERAL because `count(pgmq.send(...))` fails at parse analysis, and the
+ * final count claims a data-modifying CTE is materialised once. Neither is a statement
+ * about a single row.
  */
 const seeder = fileURLToPath(new URL('./seed-corpus.mjs', import.meta.url));
-const emitted = execFileSync(process.execPath, [seeder, '--sql', '--limit', '1'], {
+const manifestPath = fileURLToPath(new URL('./corpus/test-fixture.json', import.meta.url));
+
+// The whole opening line, not just "with target": the migration's header quotes that
+// phrase while explaining what follows it, so a shorter marker finds prose.
+const MARKER = '\nwith target(title, kind, url, author) as (values';
+
+const emitted = execFileSync(process.execPath, [seeder, '--sql', '--manifest', manifestPath], {
   encoding: 'utf8',
 });
-
-const MARKER = 'with target';
 const start = emitted.indexOf(MARKER);
 if (start === -1) {
   // Loudly, because the alternative is `slice(-1)`: a one-character `input`, no seeder
   // statement at all, and a count assertion below blaming the predicate for it.
-  throw new Error(`seed-corpus.mjs --sql emitted no "${MARKER}" statement:\n${emitted}`);
+  throw new Error(`seed-corpus.mjs --sql emitted no seeder statement:\n${emitted}`);
 }
-
-const title = `Catalogue retry ${randomUUID()}`;
-const work = randomUUID();
+const sql = emitted.slice(start + 1);
 
 /*
- * The first manifest row is replaced whole rather than by reaching into its first quoted
- * field. `('Ain''t I a Woman?', ...` is already in the manifest, and a regex that stopped
- * at the first apostrophe turned that row into a different literal -- or, with `O'Brien`,
- * into a syntax error -- the moment a reorder made one of them `sources[0]`.
+ * And the committed migration is still that same statement.
+ *
+ * `20260915010000_retry_incomplete_catalogue.sql` is generator output copied in by hand,
+ * and nothing in CI regenerates it and diffs it the way it does for `database.types.ts`
+ * and the BAML exports. This is that check: run the generator over the real manifest and
+ * compare from the first statement down. A predicate changed in one and not the other is
+ * a migration doing something the script it is documented to come from does not.
  */
-const rows = emitted.slice(start);
-const firstRow = rows.match(/\n\s{7}\((?:'(?:[^']|'')*'|[^)])*\)/);
-if (!firstRow) throw new Error(`no manifest row found in:\n${rows.slice(0, 400)}`);
-const sql = rows.replace(
-  firstRow[0],
-  `\n       ('${title}', 'essay', 'https://example.test/retry', 'A Nother')`,
+const migrationPath = fileURLToPath(
+  new URL('../supabase/migrations/20260915010000_retry_incomplete_catalogue.sql', import.meta.url),
 );
+const committed = readFileSync(migrationPath, 'utf8');
+const real = execFileSync(process.execPath, [seeder, '--sql'], { encoding: 'utf8' });
+if (committed.slice(committed.indexOf(MARKER)) !== real.slice(real.indexOf(MARKER))) {
+  throw new Error(
+    '20260915010000_retry_incomplete_catalogue.sql is stale.\n' +
+      'Regenerate its body with `node scripts/seed-corpus.mjs --sql`, keeping the header.',
+  );
+}
 
-const queued = (count) => `do $$ begin
+const failed = 'A Source That Failed';
+const present = 'A Source Already Published';
+
+/** Canonical queued jobs for one title. A reader's own job is not the library's. */
+const queued = (title, count) => `do $$ begin
   if (select count(*) from public.generation_jobs
-      where target->>'title' = '${title}' and status = 'queued') <> ${count} then
-    raise exception 'expected ${count} queued job(s) for the test title, found %',
+      where target->>'title' = '${title}' and status = 'queued'
+        and requester_id is null) <> ${count} then
+    raise exception 'expected ${count} queued job(s) for %, found %', '${title}',
       (select count(*) from public.generation_jobs
-        where target->>'title' = '${title}' and status = 'queued');
+        where target->>'title' = '${title}' and status = 'queued' and requester_id is null);
   end if;
 end $$;`;
 
 const input = `begin;
 
--- A source that failed after creating its work row: the case this seeder exists for.
+-- The owner, and nothing else. The SQL files in this chain that assert a reader role do
+-- it because RLS is invisible to an owner-role query; this file is the inverse and needs
+-- saying just as plainly, because a seeder is an owner-role write path and a
+-- DATABASE_URL pointing at a reader would fail below for reasons that look like the
+-- predicate.
+do $$ begin
+  if current_user <> 'postgres' then
+    raise exception 'test-corpus-seed.mjs must run as the owner, not as %', current_user;
+  end if;
+end $$;
+
+-- A reader to attribute jobs to. auth.users is empty on a freshly reset database, and
+-- selecting one would quietly hand back NULL -- which is precisely the
+-- value the canonical test looks for, so the reader cases would pass by being the thing
+-- they are meant to be distinguished from.
+insert into auth.users (id, instance_id, email, aud, role)
+values ('22222222-2222-4222-8222-222222222222',
+        '00000000-0000-0000-0000-000000000000',
+        'corpus-seed-reader@example.test', 'authenticated', 'authenticated');
+
+-- One source that failed after creating its work row -- the case this seeder is for --
+-- and one that is already published with NO job at all, which is how nine works in this
+-- catalogue actually arrived: seeded directly by migration. A predicate that asks only
+-- about jobs re-queues every one of them.
 insert into public.works(id, kind, title, slug, rights_status)
-values ('${work}', 'book', '${title}', '${work}', 'public_domain');
-insert into public.generation_jobs(target, status, visibility)
-values (jsonb_build_object('title', '${title}'), 'failed', 'public');
+values ('33333333-3333-4333-8333-333333333333', 'book', '${failed}',
+        'failed-' || extensions.gen_random_uuid(), 'public_domain');
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values (null, jsonb_build_object('title', '${failed}'), 'failed', 'public');
+
+insert into public.works(id, kind, title, slug, rights_status)
+values ('11111111-1111-4111-8111-111111111111', 'book', '${present}',
+        'present-' || extensions.gen_random_uuid(), 'public_domain');
+insert into public.summaries(work_id, title, status, visibility, published_at)
+values ('11111111-1111-4111-8111-111111111111', '${present}', 'published', 'public', now());
 
 ${sql}
-${queued(1)}
+${queued(failed, 1)}
+${queued(present, 0)}
 
 -- What the job it queued has to be. A NULL requester is load-bearing: a reader named
 -- here is charged the quota, becomes author of every summary -- and
@@ -69,58 +119,86 @@ ${queued(1)}
 do $$ begin
   if not exists (
     select 1 from public.generation_jobs g
-     where g.target->>'title' = '${title}' and g.status = 'queued'
+     where g.target->>'title' = '${failed}' and g.status = 'queued'
        and g.requester_id is null
        and g.visibility = 'public'
        and g.target->>'rights_status' = 'public_domain'
-       and g.target->>'url' = 'https://example.test/retry'
+       and g.target->>'url' = 'https://example.test/failed'
   ) then
     raise exception 'the queued job is not the canonical, unattributed, public one: %',
       (select to_jsonb(g) from public.generation_jobs g
-        where g.target->>'title' = '${title}' and g.status = 'queued' limit 1);
+        where g.target->>'title' = '${failed}' and g.status = 'queued' limit 1);
   end if;
 end $$;
 
--- And it was SENT. The insert and the sends are one statement precisely so a job cannot
--- exist unqueued; a row with no message is a source that never generates.
+-- And it was SENT, exactly once. The insert and the sends are one statement precisely so
+-- a job cannot exist unqueued; a row with no message is a source that never generates,
+-- and two messages is a source generated twice.
 do $$ begin
   if (select count(*) from pgmq.q_generation m
       where m.message->>'jobId' in (
         select g.id::text from public.generation_jobs g
-         where g.target->>'title' = '${title}')) < 1 then
-    raise exception 'the job was inserted but no pgmq message was sent';
+         where g.target->>'title' = '${failed}')) <> 1 then
+    raise exception 'expected exactly one pgmq message for the queued job, found %',
+      (select count(*) from pgmq.q_generation m
+        where m.message->>'jobId' in (
+          select g.id::text from public.generation_jobs g
+           where g.target->>'title' = '${failed}'));
   end if;
 end $$;
 
 -- Re-running is safe: the job it just queued suppresses a second one.
 ${sql}
-${queued(1)}
+${queued(failed, 1)}
 
--- A SUCCEEDED job suppresses it, and keeps suppressing it once the summary is
--- withdrawn. Unpublishing after a copyright complaint must not be undone by a seeder
--- run, and a predicate that asked whether a readable summary exists did exactly that.
-update public.generation_jobs set status = 'succeeded' where target->>'title' = '${title}';
-insert into public.summaries(work_id, title, status, visibility, published_at)
-values ('${work}', '${title}', 'published', 'public', now());
-${sql}
-${queued(0)}
+-- From here each case sets this title's job rows outright and asks what the seeder does
+-- with that state, rather than accumulating. The counter looks at canonical rows only,
+-- so a suppressed title reads 0 and an unsuppressed one reads 1.
 
-update public.summaries set status = 'draft', published_at = null where work_id = '${work}';
+-- A SUCCEEDED job suppresses it, and keeps suppressing it once the summary is withdrawn.
+-- Unpublishing after a copyright complaint must not be undone by a seeder run, and a
+-- predicate that asked only whether a readable summary exists did exactly that.
+delete from public.generation_jobs where target->>'title' = '${failed}';
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values (null, jsonb_build_object('title', '${failed}'), 'succeeded', 'public');
 ${sql}
-${queued(0)}
+${queued(failed, 0)}
 
 -- A CANCELLED job is somebody stopping it on purpose, so that is not a retry either.
-update public.generation_jobs set status = 'cancelled' where target->>'title' = '${title}';
+update public.generation_jobs set status = 'cancelled' where target->>'title' = '${failed}';
 ${sql}
-${queued(0)}
+${queued(failed, 0)}
 
--- And a model that titled the summary something of its own is still not a second job.
--- works.title is written from summary.title, so a predicate keyed on it finds nothing
--- matching the manifest and re-queues this source on every run, for ever.
-update public.generation_jobs set status = 'succeeded' where target->>'title' = '${title}';
-update public.works set title = 'On Lending at Interest' where id = '${work}';
+-- CASE INSENSITIVE, which the emitted comment argues at length for and which the
+-- manifest needs: it carries "Democracy and Education: Chapter Iv" and its siblings.
+delete from public.generation_jobs where target->>'title' = '${failed}';
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values (null, jsonb_build_object('title', upper('${failed}')), 'succeeded', 'public');
 ${sql}
-${queued(0)}
+${queued(failed, 0)}
+
+-- A READER'S job is not the library's. enqueue_generation_job writes a caller's target
+-- verbatim, so without this one reader asking the Studio about a manifest title would
+-- remove it from the catalogue for ever. Attributed AND public, which nothing produces
+-- today -- the column defaults to private -- because the requester test is what the rule
+-- means and it should not rest on a default staying put.
+delete from public.generation_jobs
+ where target->>'title' in ('${failed}', upper('${failed}'));
+insert into public.generation_jobs(requester_id, target, status, visibility)
+values ('22222222-2222-4222-8222-222222222222',
+        jsonb_build_object('title', '${failed}'), 'succeeded', 'public');
+${sql}
+${queued(failed, 1)}
+
+-- AND IT TERMINATES. A source that dies after synthesis has been paid for leaves a
+-- failed job and no published summary, so without a bound it is re-queued on every run
+-- and repaid for every time.
+delete from public.generation_jobs where target->>'title' = '${failed}';
+insert into public.generation_jobs(requester_id, target, status, visibility)
+select null, jsonb_build_object('title', '${failed}'), 'failed', 'public'
+  from generate_series(1, 3);
+${sql}
+${queued(failed, 0)}
 
 rollback;
 `;

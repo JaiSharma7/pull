@@ -125,7 +125,23 @@ function validate(entries) {
   return entries;
 }
 
-const { sources } = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+/*
+ * `--manifest` exists for one caller: `scripts/test-corpus-seed.mjs`, which needs a
+ * small, known catalogue to assert against. Without it the test had to splice a
+ * replacement row into the emitted `values` clause with a regex, which re-derived SQL
+ * literal quoting in JavaScript and broke on the apostrophe in "Ain't I a Woman?" the
+ * moment a reorder made that entry first. A flag on the generator is the seam; a regex
+ * over its output was a workaround for not having one.
+ */
+const pathOf = (flag, fallback) => {
+  const i = args.indexOf(flag);
+  if (i === -1) return fallback;
+  const value = args[i + 1];
+  if (!value || value.startsWith('--')) die(`${flag} needs a path`);
+  return value;
+};
+
+const { sources } = JSON.parse(readFileSync(pathOf('--manifest', MANIFEST), 'utf8'));
 validate(sources);
 
 const skip = valueOf('--skip', 0);
@@ -242,11 +258,38 @@ function sql() {
   console.log('     --   complaint and the next run regenerates and republishes it.');
   console.log('     --');
   console.log("     -- `generation_jobs.target->>'title'` is the manifest title verbatim,");
-  console.log('     -- written by this statement and never by a model. So: nothing here but');
-  console.log('     -- failures. A queued or running job means it is already coming; a');
-  console.log('     -- succeeded one means it arrived, whatever was done to it afterwards;');
-  console.log('     -- a cancelled one means somebody stopped it on purpose. Only `failed`');
-  console.log('     -- is a source that tried and did not make it.');
+  console.log('     -- written by this statement and never by a model. So the first leg:');
+  console.log('     -- nothing here but failures. A queued or running job means it is already');
+  console.log('     -- coming; a succeeded one means it arrived, whatever was done to it');
+  console.log('     -- afterwards; a cancelled one means somebody stopped it on purpose. Only');
+  console.log('     -- `failed` is a source that tried and did not make it.');
+  console.log('     --');
+  console.log('     -- CANONICAL JOBS ONLY. enqueue_generation_job writes a reader-supplied');
+  console.log('     -- target verbatim, so without the requester and visibility test one');
+  console.log('     -- signed-in reader asking the Studio about "Nature" -- a real manifest');
+  console.log('     -- entry, and the sort of word somebody types -- leaves a succeeded');
+  console.log('     -- private job that removes Emerson from this seeder permanently.');
+  console.log('     -- Two tests where one would do today: the column defaults to private, so');
+  console.log('     -- either alone excludes a reader. The requester test is what the rule');
+  console.log('     -- means; the visibility test is what it must still mean if that default');
+  console.log('     -- ever moves.');
+  console.log('     --');
+  console.log('     -- And a second leg, because a job is not the only way a source arrives:');
+  console.log('     -- nine works in this catalogue were seeded directly by migration and have');
+  console.log('     -- no job row at all. Asking only about jobs re-queued seven of them on a');
+  console.log('     -- database replayed from zero -- measured -- and each one is a duplicate');
+  console.log('     -- work, a duplicate feed card and a second generation paid for. So:');
+  console.log('     -- nothing a reader can already open under this title, either. That leg');
+  console.log('     -- reads works.title, which a model writes, and it is sound only because');
+  console.log('     -- the job leg above already covers everything a job produced; this one is');
+  console.log('     -- for rows no job produced, whose titles reached works.title from the');
+  console.log('     -- manifest through a migration.');
+  console.log('     --');
+  console.log('     -- AND A BOUND, because "retry" has to terminate. A source that dies after');
+  console.log('     -- synthesis is paid for leaves a failed job and no published summary, so');
+  console.log('     -- both legs above let it through on every run, for ever, buying the same');
+  console.log('     -- generation again each time. Three attempts, the ceiling the worker');
+  console.log('     -- already gives a job internally.');
   console.log('     --');
   console.log('     -- Matched on lower(title) because that is what the manifest guarantees is');
   console.log('     -- unique. A URL match would miss the same work reached by two hosts, which');
@@ -257,8 +300,23 @@ function sql() {
   console.log('       where not exists (');
   console.log('         select 1 from public.generation_jobs g');
   console.log("         where lower(g.target->>'title') = lower(t.title)");
+  console.log('           and g.requester_id is null');
+  console.log("           and g.visibility = 'public'");
   console.log("           and g.status <> 'failed'");
   console.log('       )');
+  console.log('       and not exists (');
+  console.log('         select 1 from public.works w');
+  console.log('         join public.summaries s on s.work_id = w.id');
+  console.log('         where lower(w.title) = lower(t.title)');
+  console.log("           and s.status = 'published' and s.visibility = 'public'");
+  console.log('       )');
+  console.log('       and (');
+  console.log('         select count(*) from public.generation_jobs g');
+  console.log("         where lower(g.target->>'title') = lower(t.title)");
+  console.log('           and g.requester_id is null');
+  console.log("           and g.visibility = 'public'");
+  console.log("           and g.status = 'failed'");
+  console.log('       ) < 3');
   console.log('     ),');
   console.log('     queued as (');
   console.log(
@@ -352,6 +410,8 @@ if (has('--check')) await check();
 else if (has('--sql')) sql();
 else if (has('--backfill')) backfill();
 else {
-  console.log('Usage: seed-corpus.mjs (--check | --sql | --backfill) [--limit N] [--skip N]');
+  console.log(
+    'Usage: seed-corpus.mjs (--check | --sql | --backfill) [--limit N] [--skip N] [--manifest PATH]',
+  );
   process.exitCode = 2;
 }
