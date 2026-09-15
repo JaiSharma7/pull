@@ -1,5 +1,4 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /*
@@ -36,25 +35,23 @@ if (start === -1) {
 const sql = emitted.slice(start + 1);
 
 /*
- * And the committed migration is still that same statement.
+ * And NOT a comparison against the committed migration, which an earlier revision of this
+ * file did and which was a trap.
  *
- * `20260915010000_retry_incomplete_catalogue.sql` is generator output copied in by hand,
- * and nothing in CI regenerates it and diffs it the way it does for `database.types.ts`
- * and the BAML exports. This is that check: run the generator over the real manifest and
- * compare from the first statement down. A predicate changed in one and not the other is
- * a migration doing something the script it is documented to come from does not.
+ * `20260915010000_retry_incomplete_catalogue.sql` is generator output, so pinning it to
+ * the generator's current output looks like the check CI runs for `database.types.ts` and
+ * the BAML exports. It is the opposite of that. Those files are regenerated on every
+ * build and are meant to track their source; a migration is applied once and is then
+ * history, and law 6 says never to edit one that has been pushed. Adding a source to
+ * `scripts/corpus/public-domain.json` -- which this script's own docstring calls the
+ * normal way to add a source -- changed the generator's output and turned `pnpm db:test`
+ * red against a historical file, with an error telling the contributor to edit it. A
+ * check whose remedy is a law violation is worse than no check.
+ *
+ * So the migration is a snapshot and says so in its own header. What is tested here is
+ * the live predicate, through the SQL the generator emits today, which is the thing a
+ * future change can actually get wrong.
  */
-const migrationPath = fileURLToPath(
-  new URL('../supabase/migrations/20260915010000_retry_incomplete_catalogue.sql', import.meta.url),
-);
-const committed = readFileSync(migrationPath, 'utf8');
-const real = execFileSync(process.execPath, [seeder, '--sql'], { encoding: 'utf8' });
-if (committed.slice(committed.indexOf(MARKER)) !== real.slice(real.indexOf(MARKER))) {
-  throw new Error(
-    '20260915010000_retry_incomplete_catalogue.sql is stale.\n' +
-      'Regenerate its body with `node scripts/seed-corpus.mjs --sql`, keeping the header.',
-  );
-}
 
 const failed = 'A Source That Failed';
 const present = 'A Source Already Published';

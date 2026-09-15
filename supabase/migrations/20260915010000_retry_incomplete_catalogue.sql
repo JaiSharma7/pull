@@ -1,11 +1,22 @@
 -- Retry the catalogue sources whose every generation failed.
 --
--- The body below is exactly what `node scripts/seed-corpus.mjs --sql` prints, from its
--- first statement down; only this header differs, the script's being addressed to
--- somebody running it by hand. `scripts/test-corpus-seed.mjs` asserts that -- it runs the
--- generator and compares -- so the drift a hand-copied 290 lines invites is a red
--- `pnpm db:test` rather than something nobody notices. That test also drives the emitted
--- SQL for its own cases, rather than a second copy of the predicate.
+-- A SNAPSHOT of what `node scripts/seed-corpus.mjs --sql` printed on the day this was
+-- written, from its first statement down; only this header differs, the script's being
+-- addressed to somebody running it by hand.
+--
+-- A snapshot, and not kept in step, because those are the same statement under law 6.
+-- The manifest gains sources -- that is the normal way to add one -- and the predicate
+-- will be improved again, and neither of those changes belongs in this file once it has
+-- been applied. An earlier revision had `scripts/test-corpus-seed.mjs` compare the two
+-- and fail when they differed, which sounds like the check CI runs for
+-- `database.types.ts` and the BAML exports and is its opposite: those are regenerated
+-- every build and are meant to track their source, while a migration is applied once and
+-- is then history. Adding a single source to the manifest turned `pnpm db:test` red
+-- against this file with an error telling the contributor to edit it. What changes goes
+-- in a NEW migration; this one says what it said when it ran.
+--
+-- The live predicate is what `scripts/test-corpus-seed.mjs` still tests, by driving the
+-- SQL the generator emits today rather than a second copy of it.
 --
 -- WHAT IT ENQUEUES. A generation that died after `resolve_identity` leaves a `works` row
 -- with no readable summary, and the seeder meant to retry it skipped it: the old test was
