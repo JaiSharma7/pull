@@ -1,3 +1,38 @@
+-- The catalogue seeder, emitted by `scripts/seed-corpus.mjs --sql` and committed
+-- so that a database replayed from zero carries the same 198 sources a hosted
+-- one does. Everything from `with target(` down is byte-for-byte what that
+-- command prints -- only the header differs, the script's describing how to run
+-- it by hand -- and `scripts/test-corpus-seed.mjs` exercises the emitted SQL
+-- rather than a second copy of its predicate, so the two cannot drift.
+--
+-- What changed, and why this file exists: the eligibility test used to be
+-- "a works row with this title exists". A generation that died after
+-- resolve_identity leaves exactly that -- a work with no published summary --
+-- so every source that failed midway was permanently skipped by the seeder
+-- meant to retry it. Eligibility is now the readable summary itself, which is
+-- the thing a reader can actually open.
+--
+-- Re-running stays safe, which is the point: a queued or running job for the
+-- same title still suppresses a duplicate, so this enqueues only what is
+-- genuinely absent. Renumbered from 20260908120000 before it was ever applied
+-- anywhere -- a migration inserted into the middle of history replays in one
+-- order from zero and in another on an environment that already ran past it,
+-- which is the divergence law 6 exists to prevent.
+--
+-- Mirrors enqueue_generation_job without its per-reader quota: the insert and
+-- the sends are one statement, so a job either exists and is queued or neither
+-- happened. visibility=public with rights_status=public_domain is what lets the
+-- result clear resolve_identity and moderate and reach the feed. The spend these
+-- jobs go on to make is bounded by the global daily cap, not by this file.
+--
+-- requester_id is NULL on purpose. These are canonical summaries belonging to
+-- the library rather than to a person, and attributing them to a reader has
+-- three consequences: it spends their daily quota, locking them out on the day
+-- they seed; it makes them author of every summary -- and summaries_author_update
+-- permits an author to unpublish, so one PATCH per row would empty the public
+-- feed -- and it exposes every job row, step output and per-step cost to them
+-- through the _own policies.
+
 with target(title, kind, url, author) as (values
        ('Self-Reliance', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Self-Reliance', 'Ralph Waldo Emerson'),
        ('Compensation', 'essay', 'https://en.wikisource.org/wiki/Essays:_First_Series/Compensation', 'Ralph Waldo Emerson'),
