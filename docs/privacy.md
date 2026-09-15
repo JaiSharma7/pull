@@ -11,7 +11,7 @@ is a material change, which is why the date above moved rather than staying at 3
 
 ## Scope
 
-This policy covers the **hosted service** at whatapull.com and its apps — the account you
+This policy covers the **hosted service** at whatapull.vercel.app and its apps — the account you
 sign into, and the data that account accumulates.
 
 It does not cover the open-source repository. Running your own copy of this code makes you

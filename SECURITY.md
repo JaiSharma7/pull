@@ -18,7 +18,7 @@ If you have not heard back in a week, assume the mail went astray and chase it.
 
 ## What is in scope
 
-The hosted service at whatapull.com, and this repository.
+The hosted service at whatapull.vercel.app, and this repository.
 
 Most valuable, because they are where this design concentrates its risk:
 
