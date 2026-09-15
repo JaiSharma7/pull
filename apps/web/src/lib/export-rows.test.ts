@@ -51,6 +51,7 @@ const highlight = (over: Partial<Highlight> = {}): Highlight => ({
   start: 0,
   end: 4,
   text: 'The',
+  createdAt: '2026-01-01T00:00:00.000Z',
   ...over,
 });
 
@@ -146,6 +147,7 @@ describe('stashExportSources', () => {
       start: 4,
       end: 9,
       text: id,
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
     const sources = stashExportSources(
       [item({ id: 'p1' })],

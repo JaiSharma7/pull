@@ -35,6 +35,18 @@
 }
 
 /*
+ * And a status sentence in it goes last, on its own line -- the same rule
+ * `source.css` states for `.source__pull-actions`, written here because this row
+ * is this component's. `order` moves it past every control however the caller
+ * ordered them, so a control never moves when a sentence appears.
+ */
+.remember__actions > .meta {
+  order: 1;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/*
  * The sentence under "The answer".
  *
  * `.meta` would have been the obvious class and is the wrong one: it uppercases,
