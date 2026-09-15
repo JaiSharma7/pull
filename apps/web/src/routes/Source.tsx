@@ -839,6 +839,26 @@ export function Source({
                   </button>
                 )}
 
+                {/*
+                  BESIDE THE CONTROL IT IS ABOUT, and inside the row for that reason.
+
+                  Behind the same gate as the button it points at: turning the dial below
+                  the claim takes Highlight off the screen, and an instruction naming a
+                  button that is not there and a passage that is not shown is worse than
+                  silence. It also has to come before the form `RememberThis` opens --
+                  rendered after the component, a reader with the Keep form open met this
+                  sentence below two text areas, far enough down a phone to look like the
+                  button had done nothing (Codex, #121).
+
+                  A `<span>` rather than a `<p>`: the row is a paragraph and cannot hold
+                  one. `role="status"` is what carries it to a screen reader either way.
+                */}
+                {userId && bodyShown && highlightHint === p.id ? (
+                  <span className="meta" role="status">
+                    Select some words in this idea first, then press Highlight.
+                  </span>
+                ) : null}
+
                 {userId && highlights.some((h) => h.pullId === p.id) && (
                   <button
                     type="button"
@@ -956,18 +976,6 @@ export function Source({
                 ) : (
                   <p className="source__pull-actions">{ideaActions}</p>
                 )}
-
-                {/*
-                  Behind the same gate as the button it points at. Turning the dial below
-                  the claim takes the Highlight control off the screen, and this was
-                  outside the gate — so the instruction stayed, naming a button that was
-                  not there and a passage that was not shown.
-                */}
-                {userId && bodyShown && highlightHint === p.id ? (
-                  <p className="meta" role="status">
-                    Select some words in this idea first, then press Highlight.
-                  </p>
-                ) : null}
 
                 {userId && questionsFailed && mine.length === 0 && (
                   <p className="meta">Could not load your questions for this idea.</p>
