@@ -16,6 +16,13 @@ describe('stripElementBodies', () => {
     );
   });
 
+  it('preserves offsets around non-ASCII text', () => {
+    assert.equal(
+      stripElementBodies('İ<script>hidden</script><p>visible</p>', 'script'),
+      'İ <p>visible</p>',
+    );
+  });
+
   it('drops the remainder after an unclosed element', () => {
     assert.equal(stripElementBodies('<p>before</p><script>hidden', 'script'), '<p>before</p> ');
     assert.equal(stripElementBodies('<p>before</p><style>.hidden{}', 'style'), '<p>before</p> ');

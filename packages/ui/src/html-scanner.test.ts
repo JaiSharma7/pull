@@ -9,6 +9,12 @@ describe('elementBodies', () => {
     ]);
   });
 
+  it('preserves offsets when unrelated Unicode expands during lowercase conversion', () => {
+    expect(elementBodies('İ<style>linear-gradient(red,blue)</style>', 'style')).toEqual([
+      'linear-gradient(red,blue)',
+    ]);
+  });
+
   it('requires a tag-name boundary and drops unterminated bodies', () => {
     expect(elementBodies('<scripture>prose</scripture>', 'script')).toEqual([]);
     expect(elementBodies('<script>never page content', 'script')).toEqual([]);
