@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { elementBodies, withoutHtmlComments } from './html-scanner.js';
 
 /**
  * The Archive's design laws, enforced instead of merely documented.
@@ -305,14 +306,11 @@ const rules = (f: string): [string, string, string][] =>
  * `class="…"` is not a declaration. HTML comments go too.
  */
 const code = (f: string) => {
-  const raw = read(f);
-  const body = f.endsWith('.html')
-    ? [...raw.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]!).join('\n')
-    : raw;
+  const raw = withoutHtmlComments(read(f));
+  const body = f.endsWith('.html') ? elementBodies(raw, 'style').join('\n') : raw;
   return (
     body
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
       /*
        * PERCENT-DECODED, because the browser decodes a data URI before parsing it and
        * the checks below read the source. `%47` is `G`, so
@@ -734,8 +732,7 @@ describe('The Archive design laws', () => {
      * with `appearance.test.ts`, which pins this same file, still green.
      */
     for (const f of shellFiles.filter((n) => n.endsWith('.html'))) {
-      const scripts = [...readFileSync(f, 'utf8').matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
-        .map((m) => m[1]!)
+      const scripts = elementBodies(withoutHtmlComments(readFileSync(f, 'utf8')), 'script')
         .join('\n')
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/(^|[^:])\/\/[^\n]*/g, '$1');

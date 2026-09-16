@@ -16,7 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "turbo run test && node --test scripts/html-text.test.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "db:start": "supabase start",
     "db:reset": "supabase db reset",

@@ -11,6 +11,7 @@ import {
   type JobRow,
   type StepResult,
 } from '../_shared/pipeline.ts';
+import { providerUnavailableResponse } from '../_shared/worker-http.ts';
 
 /**
  * One tick of the generation step-machine.
@@ -472,10 +473,7 @@ Deno.serve(async (req) => {
   try {
     providers = await providersNow();
   } catch (e) {
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : String(e), claimed: 0 }),
-      { status: 503, headers: { 'content-type': 'application/json' } },
-    );
+    return providerUnavailableResponse(e);
   }
 
   // Claimed immediately before it is run, and never more than one: `read_ct` is

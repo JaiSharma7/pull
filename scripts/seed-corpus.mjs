@@ -36,6 +36,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { visibleTextLength } from './html-text.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = join(HERE, 'corpus', 'public-domain.json');
@@ -157,16 +158,6 @@ validate(sources);
 
 const skip = valueOf('--skip', 0);
 const selected = sources.slice(skip, skip + valueOf('--limit', sources.length));
-
-/** Rough stand-in for `extractText`, good enough to judge whether a page has prose. */
-function visibleTextLength(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim().length;
-}
 
 async function check() {
   let failures = 0;

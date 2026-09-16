@@ -88,11 +88,13 @@ export function extractText(html: string): string {
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<[^>]+>/g, ' ')
       .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
       .replace(/&lt;/gi, '<')
       .replace(/&gt;/gi, '>')
       .replace(/&#39;|&apos;/gi, "'")
       .replace(/&quot;/gi, '"')
+      // The entity marker is decoded last, so nested input is decoded once:
+      // `&amp;lt;` becomes `&lt;`, not `<`.
+      .replace(/&amp;/gi, '&')
       // Horizontal whitespace only, so the paragraph breaks just established
       // survive the tidy-up.
       .replace(/[^\S\n]+/g, ' ')

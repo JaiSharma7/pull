@@ -1,0 +1,22 @@
+import { describe, expect, it } from 'vitest';
+import { elementBodies, withoutHtmlComments } from './html-scanner.js';
+
+describe('elementBodies', () => {
+  it('recognises mixed-case tags and browser-tolerated closing whitespace', () => {
+    expect(elementBodies('<ScRiPt type="module">safe()</sCrIpT >', 'script')).toEqual(['safe()']);
+    expect(elementBodies('<STYLE>.safe { color: inherit }</style data-x>', 'style')).toEqual([
+      '.safe { color: inherit }',
+    ]);
+  });
+
+  it('requires a tag-name boundary and drops unterminated bodies', () => {
+    expect(elementBodies('<scripture>prose</scripture>', 'script')).toEqual([]);
+    expect(elementBodies('<script>never page content', 'script')).toEqual([]);
+  });
+});
+
+describe('withoutHtmlComments', () => {
+  it('removes comments again when one removal recombines comment fragments', () => {
+    expect(withoutHtmlComments('<!<!-- discarded -->--hidden-->visible')).toBe('visible');
+  });
+});

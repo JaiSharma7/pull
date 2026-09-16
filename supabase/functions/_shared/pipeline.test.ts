@@ -80,6 +80,10 @@ describe('extractText', () => {
     );
   });
 
+  it('decodes nested entities exactly once', () => {
+    expect(extractText('<p>&amp;lt; &lt; &amp;quot; &quot;</p>')).toBe('&lt; < &quot; "');
+  });
+
   it('keeps paragraph breaks, because segment splits on them', () => {
     // This previously collapsed to "one two". `segment` splits on blank lines,
     // so that made every fetched article a single unsplittable chunk while the
