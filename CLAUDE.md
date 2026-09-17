@@ -15,14 +15,59 @@ and reviewers should reject it on that basis alone.
    Hairline rules, generous margins, paper grain. Typography is the ornament.
    The full brief is `docs/design.md`; `/design-check` audits a diff against it.
 
-2. **Cost law — no LLM in the read path. Ever.**
-   Ranking, search, the Delta and the interleave planner are SQL and pgvector maths.
-   Models run at _generation_ time, once per canonical summary, and every call writes
-   to `cost_ledger`. A feature that calls a model per impression is not shippable:
-   one canonical generation costs ~$0.056 and serves thousands of readers, while
-   per-user regeneration costs ~$56 per thousand. That ratio is the business model.
+2. **Cost law — one model may run in the read path, and it is Jev.**
+   Ranking, search, the Delta and the interleave planner are SQL and pgvector maths, and
+   that stays the default: the cheapest call is the one nobody makes. Text generation runs
+   at _generation_ time, once per canonical summary, and every call writes to
+   `cost_ledger`. One canonical generation costs ~$0.056 and serves thousands of readers,
+   while per-user regeneration costs ~$56 per thousand. That ratio is the business model,
+   and everything below exists to keep it.
 
-   **One carve-out, and it is bounded rather than excused: the Studio.** A reader may
+   **The read path admits exactly one model: Jev**, TypeSafe's System One model, reached
+   through `POST /v1/systemone`. Not Gemini, not Anthropic, not any other LLM, not a System
+   One model from another vendor, and not "Jev, plus a small LLM for the cases Jev finds
+   hard". A judgment the read path needs is SQL, or it is Jev, or it does not ship.
+
+   The distinction this rests on is shape rather than vendor. Jev returns a typed judgment
+   — a Choice, a Noul or a Score, with calibrated probabilities — which SQL can consume as
+   a number. It does not write prose, and nothing it returns is rendered to a reader as
+   text. A model that writes sentences a reader then reads is what this law has always
+   forbidden, and admitting Jev does not admit that.
+
+   Shape is not price, though, and the ratio above is a measurement rather than a slogan.
+   So the carve-out is bounded, in the same spirit as the Studio's below:
+
+   - **Cost per impression is measured before the first such call ships, and written into
+     this law.** TypeSafe publishes no public price list — `docs.typesafe.ai` has no
+     pricing page as this is written — so the figure that belongs beside `$0.056` above
+     does not yet exist. A carve-out nobody has priced is unbounded spend under a better
+     name.
+   - **Every Jev call writes to `cost_ledger`**, exactly as a generation call does. That
+     ledger is how the line above ever gets its answer.
+   - **A judgment is cached against the state that produced it, and reused.** Asking the
+     same question about unchanged state on every impression is per-impression spend with
+     extra steps. Where an answer can be stored as a row and read back by SQL on later
+     impressions, it is stored as a row — that amortisation is the ratio, applied to
+     judgments instead of summaries.
+   - **The SQL answer stays, and the read path degrades to it.** Jev is a network call in
+     the path that renders a feed: when it is slow, rate-limited or down, the reader gets
+     the SQL result. A feed that cannot render without a provider is a feed that is down
+     whenever that provider is.
+
+   **The privacy promise moves with this law, and has not moved yet.** `docs/privacy.md`
+   tells readers that when they read, "nothing about you is sent to Google or to any other
+   model provider", and `/privacy` publishes that sentence. A Jev call in the read path
+   sends reader state — what someone is reading, and whatever the question needs about what
+   they know — to a third party, which makes that sentence false the day it ships.
+   Rewriting it, along with the README's "No LLM ever runs in the read path" and the
+   section of that name in `docs/architecture.md`, is part of shipping the first such call
+   rather than follow-up work.
+
+   Nothing in CI asserts any of this. No check tells one provider hostname from another,
+   and `/costcheck` reads the tree rather than gating it, so this paragraph is the
+   enforcement — which is the argument for keeping the bounds few and their wording plain.
+
+   **The second carve-out, bounded rather than excused: the Studio.** A reader may
    ask for a summary of _their own_ text — a pasted document, or the highlights they
    imported — and that is a model call per reader per document, which is the ratio above
    pointing the wrong way. It is sanctioned because every term that makes the ratio
@@ -40,9 +85,10 @@ and reviewers should reject it on that basis alone.
    - The result is `private` and never joins the catalogue, so it cannot be a way to
      publish around law 4.
 
-   A private generation outside those bounds is the thing this law forbids. Widening
-   any of them — a bigger cap, a higher ceiling, a public result — is a change to the
-   law and belongs in this file, not in a PR that quietly needs the room.
+   A private generation outside those bounds is the thing this law forbids. Widening any of
+   them — a bigger cap, a higher ceiling, a public result, a second model in the read path
+   — is a change to the law and belongs in this file, not in a PR that quietly needs the
+   room.
 
 3. **Free law — the five stay free.**
    Audio, offline, unlimited history, unlimited stashing and curated Daily Pulls are
