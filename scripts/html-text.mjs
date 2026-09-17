@@ -17,6 +17,22 @@ function asciiIndexOf(text, token, from) {
   return -1;
 }
 
+/** Find a tag's closing bracket without treating a quoted bracket as the end. */
+function tagEnd(html, from) {
+  let quote;
+  for (let cursor = from; cursor < html.length; cursor += 1) {
+    const char = html[cursor];
+    if (quote) {
+      if (char === quote) quote = undefined;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return cursor;
+    }
+  }
+  return -1;
+}
+
 /**
  * Drop an HTML element and its contents with a linear scan.
  *
@@ -41,7 +57,7 @@ export function stripElementBodies(html, tag) {
     if (start === -1) return output + html.slice(cursor);
 
     output += `${html.slice(cursor, start)} `;
-    const openEnd = html.indexOf('>', start + open.length);
+    const openEnd = tagEnd(html, start + open.length);
     if (openEnd === -1) return output;
 
     let end = asciiIndexOf(html, close, openEnd + 1);
@@ -50,16 +66,40 @@ export function stripElementBodies(html, tag) {
     }
     if (end === -1) return output;
 
-    const closeEnd = html.indexOf('>', end + close.length);
+    const closeEnd = tagEnd(html, end + close.length);
     if (closeEnd === -1) return output;
     cursor = closeEnd + 1;
   }
 }
 
+/** Replace complete tags and comments in one forward pass. */
+function stripTags(html) {
+  let output = '';
+  let cursor = 0;
+
+  for (;;) {
+    const start = html.indexOf('<', cursor);
+    if (start === -1) return output + html.slice(cursor);
+
+    output += `${html.slice(cursor, start)} `;
+    if (html.startsWith('<!--', start)) {
+      const commentEnd = html.indexOf('-->', start + 4);
+      if (commentEnd === -1) return output;
+      cursor = commentEnd + 3;
+      continue;
+    }
+
+    const end = tagEnd(html, start + 1);
+    if (end === -1) {
+      return output + html.slice(start);
+    }
+    cursor = end + 1;
+  }
+}
+
 /** Rough stand-in for the worker's extractor, enough to identify a prose page. */
 export function visibleTextLength(html) {
-  return stripElementBodies(stripElementBodies(html, 'script'), 'style')
-    .replace(/<[^>]+>/g, ' ')
+  return stripTags(stripElementBodies(stripElementBodies(html, 'script'), 'style'))
     .replace(/\s+/g, ' ')
     .trim().length;
 }

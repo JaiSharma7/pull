@@ -61,32 +61,106 @@ export async function contentHash(text: string): Promise<string> {
  * unterminated opener drops the remainder of the document, which is the safe
  * direction — the tail of a document whose script tag never closes is not content.
  */
+function asciiIndexOf(text: string, token: string, from: number): number {
+  const fold = (code: number) => (code >= 65 && code <= 90 ? code + 32 : code);
+  const last = text.length - token.length;
+
+  for (let start = from; start <= last; start += 1) {
+    let matches = true;
+    for (let offset = 0; offset < token.length; offset += 1) {
+      if (fold(text.charCodeAt(start + offset)) !== fold(token.charCodeAt(offset))) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return start;
+  }
+
+  return -1;
+}
+
+function tagEnd(html: string, from: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let cursor = from; cursor < html.length; cursor += 1) {
+    const char = html[cursor];
+    if (quote) {
+      if (char === quote) quote = undefined;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return cursor;
+    }
+  }
+  return -1;
+}
+
+function elementStart(html: string, token: string, from: number): number {
+  const boundary = (char: string | undefined) =>
+    char === undefined || char === '>' || char === '/' || /\s/.test(char);
+  let start = asciiIndexOf(html, token, from);
+  while (start !== -1 && !boundary(html[start + token.length])) {
+    start = asciiIndexOf(html, token, start + token.length);
+  }
+  return start;
+}
+
 function stripElement(html: string, tag: string): string {
-  const lower = html.toLowerCase();
   const open = `<${tag}`;
-  const close = `</${tag}>`;
-  let out = '';
-  let i = 0;
+  const close = `</${tag}`;
+  let output = '';
+  let cursor = 0;
+
   for (;;) {
-    const start = lower.indexOf(open, i);
-    if (start === -1) return out + html.slice(i);
-    out += html.slice(i, start) + ' ';
-    const end = lower.indexOf(close, start);
-    if (end === -1) return out;
-    i = end + close.length;
+    const start = elementStart(html, open, cursor);
+    if (start === -1) return output + html.slice(cursor);
+
+    output += `${html.slice(cursor, start)} `;
+    const openEnd = tagEnd(html, start + open.length);
+    if (openEnd === -1) return output;
+
+    const end = elementStart(html, close, openEnd + 1);
+    if (end === -1) return output;
+
+    const closeEnd = tagEnd(html, end + close.length);
+    if (closeEnd === -1) return output;
+    cursor = closeEnd + 1;
+  }
+}
+
+/** Replace complete tags and comments in one forward pass. */
+function stripTags(html: string): string {
+  let output = '';
+  let cursor = 0;
+
+  for (;;) {
+    const start = html.indexOf('<', cursor);
+    if (start === -1) return output + html.slice(cursor);
+
+    output += `${html.slice(cursor, start)} `;
+    if (html.startsWith('<!--', start)) {
+      const commentEnd = html.indexOf('-->', start + 4);
+      if (commentEnd === -1) return output;
+      cursor = commentEnd + 3;
+      continue;
+    }
+
+    const end = tagEnd(html, start + 1);
+    if (end === -1) return output + html.slice(start);
+    cursor = end + 1;
   }
 }
 
 export function extractText(html: string): string {
+  const withBreaks = stripElement(stripElement(html, 'script'), 'style')
+    // Block boundaries become paragraph breaks *before* tags are stripped.
+    // Collapsing all whitespace first — which this used to do — destroyed the
+    // only structure `segment` can split on, so every fetched article arrived
+    // as one undivided chunk and the segmentation below did nothing at all.
+    .replace(/<\/(?:p|div|section|article|h[1-6]|li|blockquote|tr|pre)\s*>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+
   return (
-    stripElement(stripElement(html, 'script'), 'style')
-      // Block boundaries become paragraph breaks *before* tags are stripped.
-      // Collapsing all whitespace first — which this used to do — destroyed the
-      // only structure `segment` can split on, so every fetched article arrived
-      // as one undivided chunk and the segmentation below did nothing at all.
-      .replace(/<\/(?:p|div|section|article|h[1-6]|li|blockquote|tr|pre)\s*>/gi, '\n\n')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
+    stripTags(withBreaks)
       .replace(/&nbsp;/gi, ' ')
       .replace(/&lt;/gi, '<')
       .replace(/&gt;/gi, '>')

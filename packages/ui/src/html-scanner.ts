@@ -17,6 +17,22 @@ const asciiIndexOf = (text: string, token: string, from: number): number => {
   return -1;
 };
 
+/** Find a tag's closing bracket without treating a quoted bracket as the end. */
+const tagEnd = (html: string, from: number): number => {
+  let quote: '"' | "'" | undefined;
+  for (let cursor = from; cursor < html.length; cursor += 1) {
+    const char = html[cursor];
+    if (quote) {
+      if (char === quote) quote = undefined;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return cursor;
+    }
+  }
+  return -1;
+};
+
 /**
  * Return the bodies of one kind of HTML element with a linear scan.
  *
@@ -41,7 +57,7 @@ export const elementBodies = (html: string, tag: string): string[] => {
     }
     if (start === -1) return bodies;
 
-    const openEnd = html.indexOf('>', start + open.length);
+    const openEnd = tagEnd(html, start + open.length);
     if (openEnd === -1) return bodies;
 
     let end = asciiIndexOf(html, close, openEnd + 1);
@@ -50,7 +66,7 @@ export const elementBodies = (html: string, tag: string): string[] => {
     }
     if (end === -1) return bodies;
 
-    const closeEnd = html.indexOf('>', end + close.length);
+    const closeEnd = tagEnd(html, end + close.length);
     if (closeEnd === -1) return bodies;
     bodies.push(html.slice(openEnd + 1, end));
     cursor = closeEnd + 1;

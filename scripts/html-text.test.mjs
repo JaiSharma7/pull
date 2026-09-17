@@ -23,6 +23,20 @@ describe('stripElementBodies', () => {
     );
   });
 
+  it('ignores greater-than signs and apparent closers inside quoted attributes', () => {
+    assert.equal(
+      stripElementBodies(
+        '<script data-note="> </script>">hiddenCodeHere()</script><p>visible</p>',
+        'script',
+      ),
+      ' <p>visible</p>',
+    );
+  });
+
+  it('strips generic tags without ending them inside quoted attributes', () => {
+    assert.equal(visibleTextLength('<p title="1 > 0">visible</p>'), 'visible'.length);
+  });
+
   it('drops the remainder after an unclosed element', () => {
     assert.equal(stripElementBodies('<p>before</p><script>hidden', 'script'), '<p>before</p> ');
     assert.equal(stripElementBodies('<p>before</p><style>.hidden{}', 'style'), '<p>before</p> ');

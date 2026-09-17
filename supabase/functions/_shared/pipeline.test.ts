@@ -84,6 +84,20 @@ describe('extractText', () => {
     expect(extractText('<p>&amp;lt; &lt; &amp;quot; &quot;</p>')).toBe('&lt; < &quot; "');
   });
 
+  it('keeps offsets aligned when unrelated Unicode expands during lowercase conversion', () => {
+    expect(extractText('İ<script>hidden</script><p>Real prose.</p>')).toBe('İ Real prose.');
+  });
+
+  it('ignores greater-than signs and apparent closers inside quoted attributes', () => {
+    expect(
+      extractText('<script data-note="> </script>">hidden</script data-x><p>Real prose.</p>'),
+    ).toBe('Real prose.');
+  });
+
+  it('strips generic tags without ending them inside quoted attributes', () => {
+    expect(extractText('<p title="1 > 0">Real prose.</p>')).toBe('Real prose.');
+  });
+
   it('keeps paragraph breaks, because segment splits on them', () => {
     // This previously collapsed to "one two". `segment` splits on blank lines,
     // so that made every fetched article a single unsplittable chunk while the
@@ -108,6 +122,13 @@ describe('extractText', () => {
    */
   it.each(['script', 'style'])('strips unterminated <%s> in linear time', (tag) => {
     const hostile = `<${tag}`.repeat(200_000); // ~1.2MB, 200k unclosed openers
+    const started = Date.now();
+    extractText(hostile);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('handles unterminated generic tags in linear time', () => {
+    const hostile = '<broken'.repeat(200_000);
     const started = Date.now();
     extractText(hostile);
     expect(Date.now() - started).toBeLessThan(1_000);

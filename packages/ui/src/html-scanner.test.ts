@@ -15,6 +15,14 @@ describe('elementBodies', () => {
     ]);
   });
 
+  it('ignores greater-than signs and apparent closers inside quoted attributes', () => {
+    const html =
+      '<style title="> </style>">.bad { background: linear-gradient(red, blue) }</style>';
+    expect(elementBodies(html, 'style')).toEqual([
+      '.bad { background: linear-gradient(red, blue) }',
+    ]);
+  });
+
   it('requires a tag-name boundary and drops unterminated bodies', () => {
     expect(elementBodies('<scripture>prose</scripture>', 'script')).toEqual([]);
     expect(elementBodies('<script>never page content', 'script')).toEqual([]);
