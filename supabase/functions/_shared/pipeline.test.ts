@@ -80,6 +80,16 @@ describe('extractText', () => {
     );
   });
 
+  it('decodes each entity once, so escaped markup stays escaped', () => {
+    // `&amp;` used to be decoded before `&lt;` and `&gt;`, so `&amp;lt;` came out as
+    // a live bracket: a fetched page could put markup its own author had escaped
+    // into the text we summarise. Asserted on the doubly-escaped form, because the
+    // singly-escaped one passed either way.
+    expect(extractText('<p>&amp;lt;b&amp;gt; and &amp;amp; itself</p>')).toBe(
+      '&lt;b&gt; and &amp; itself',
+    );
+  });
+
   it('keeps paragraph breaks, because segment splits on them', () => {
     // This previously collapsed to "one two". `segment` splits on blank lines,
     // so that made every fetched article a single unsplittable chunk while the

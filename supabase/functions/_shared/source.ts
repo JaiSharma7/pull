@@ -77,6 +77,17 @@ function stripElement(html: string, tag: string): string {
   }
 }
 
+/** The entities worth decoding, resolved in a single pass by `extractText`. */
+const ENTITIES: Record<string, string> = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  '#39': "'",
+};
+
 export function extractText(html: string): string {
   return (
     stripElement(stripElement(html, 'script'), 'style')
@@ -87,12 +98,16 @@ export function extractText(html: string): string {
       .replace(/<\/(?:p|div|section|article|h[1-6]|li|blockquote|tr|pre)\s*>/gi, '\n\n')
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>')
-      .replace(/&#39;|&apos;/gi, "'")
-      .replace(/&quot;/gi, '"')
+      // ONE PASS, because the order of several passes was the bug.
+      //
+      // `&amp;` was decoded before `&lt;`, so `&amp;lt;` became `&lt;` and then `<`.
+      // A fetched page could therefore put live markup into the text we hand to a
+      // model and store as a summary -- markup its own author had already escaped
+      // once, undone by us on the way through. A single scan cannot re-read what it
+      // has written, so no amount of stacking `&amp;` produces a bracket.
+      .replace(/&(nbsp|amp|lt|gt|quot|apos|#39);/gi, (whole, name: string) => {
+        return ENTITIES[name.toLowerCase()] ?? whole;
+      })
       // Horizontal whitespace only, so the paragraph breaks just established
       // survive the tidy-up.
       .replace(/[^\S\n]+/g, ' ')
