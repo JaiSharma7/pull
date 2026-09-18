@@ -14,6 +14,18 @@ env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.33.0'
 
+# Read-only, for the whole file. `GITHUB_TOKEN` is minted per run with whatever the
+# repository default grants — which for a repository created before the default
+# changed is write on every scope, handed to six jobs that between them run
+# `pnpm install`, a Deno lint, a Supabase stack and two downloaded binaries. None of
+# them writes anything back to GitHub; `actions/checkout` needs `contents: read` and
+# nothing else does. Declared once at the top rather than six times, so a job added
+# later inherits the floor instead of silently getting the default again. A job that
+# genuinely needs to write (a release, a comment) declares its own `permissions:`,
+# which overrides this — and that declaration is then the thing a reviewer sees.
+permissions:
+  contents: read
+
 # No job here references `secrets.*`, and none should. `pull_request` runs with a
 # read-only token and, on a fork, no access to repository secrets at all — so a
 # workflow that needed one would either fail for every outside contributor or have

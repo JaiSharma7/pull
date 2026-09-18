@@ -439,7 +439,17 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
 Deno.serve(async (req) => {
   const auth = await authorised(req);
   if (!auth.ok) {
-    return new Response(JSON.stringify({ error: auth.why }), {
+    /*
+     * Same rule as the 503 below, and this one is reachable WITHOUT a credential.
+     *
+     * `authorised` distinguishes "bad token" from "no dispatch token configured" from
+     * "dispatch token unreadable: <Postgres error>", and those distinctions are worth
+     * having -- for whoever is setting the dispatcher up, in the log. Returned to an
+     * unauthenticated caller they describe the inside of the deployment to someone who
+     * has just failed to prove they belong there.
+     */
+    console.error('worker dispatch refused:', auth.why);
+    return new Response(JSON.stringify({ error: 'unauthorised' }), {
       status: 401,
       headers: { 'content-type': 'application/json' },
     });
@@ -472,10 +482,24 @@ Deno.serve(async (req) => {
   try {
     providers = await providersNow();
   } catch (e) {
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : String(e), claimed: 0 }),
-      { status: 503, headers: { 'content-type': 'application/json' } },
-    );
+    /*
+     * The detail goes to the log, not down the wire.
+     *
+     * Provider resolution fails through `generation_secret`, so the thrown message
+     * carries whatever Postgres said -- a function signature, a schema name, a
+     * permission error naming a role. The caller here is pg_cron over pg_net and
+     * cannot act on any of it; the person who can is reading the function log, which
+     * is where it now goes in full, exception object and all.
+     *
+     * The status is the part that matters to the dispatcher, and it is unchanged:
+     * 503 is still "try again shortly", the queue still stalls rather than burning
+     * retries, and the ordering argument above still holds.
+     */
+    console.error('providers unavailable, not claiming', e);
+    return new Response(JSON.stringify({ error: 'providers unavailable', claimed: 0 }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
   // Claimed immediately before it is run, and never more than one: `read_ct` is

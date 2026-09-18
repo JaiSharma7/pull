@@ -158,11 +158,35 @@ validate(sources);
 const skip = valueOf('--skip', 0);
 const selected = sources.slice(skip, skip + valueOf('--limit', sources.length));
 
+/**
+ * The element and its content, gone, by index scan.
+ *
+ * This was `/<script[\s\S]*?<\/script>/gi`, which is the shape CodeQL names "Bad HTML
+ * filtering regexp" and which `source.ts` already stopped using for a second reason:
+ * on a page of unterminated openers it backtracks quadratically, and this script runs
+ * over whatever the manifest points at. The same scan, kept deliberately in step with
+ * `stripElement` there, because a stand-in that judges prose differently from the
+ * function it stands in for is worse than no stand-in.
+ */
+function stripElement(html, tag) {
+  const lower = html.toLowerCase();
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const start = lower.indexOf(open, i);
+    if (start === -1) return out + html.slice(i);
+    out += `${html.slice(i, start)} `;
+    const end = lower.indexOf(close, start);
+    if (end === -1) return out;
+    i = end + close.length;
+  }
+}
+
 /** Rough stand-in for `extractText`, good enough to judge whether a page has prose. */
 function visibleTextLength(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  return stripElement(stripElement(html, 'script'), 'style')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim().length;
