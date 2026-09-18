@@ -333,6 +333,18 @@ const endOfTag = (text: string, from: number): number => {
   return -1;
 };
 
+/** `<styles>` is not `<style>`: only whitespace, `/` or `>` ends a tag name. */
+const endsTagName = (char: string | undefined): boolean =>
+  char === undefined || char === '>' || char === '/' || /\s/.test(char);
+
+/** The first `token` at or after `from` that is a whole tag name, or -1. */
+const findTag = (lower: string, text: string, token: string, from: number): number => {
+  let at = lower.indexOf(token, from);
+  while (at !== -1 && !endsTagName(text[at + token.length]))
+    at = lower.indexOf(token, at + token.length);
+  return at;
+};
+
 /** The body of every `<tag …>…</tag>` span in `text`. */
 const spansOf = (text: string, tag: string): string[] => {
   const lower = text.toLowerCase();
@@ -341,17 +353,20 @@ const spansOf = (text: string, tag: string): string[] => {
   const bodies: string[] = [];
   let i = 0;
   for (;;) {
-    const start = lower.indexOf(open, i);
+    const start = findTag(lower, text, open, i);
     if (start === -1) return bodies;
-    const next = text[start + open.length];
-    // `<styles>` is not `<style>`. Only whitespace, `/` or `>` ends the name.
-    if (next === undefined || !/[\s/>]/.test(next)) {
-      i = start + open.length;
-      continue;
-    }
     const bodyStart = endOfTag(text, start + open.length);
     if (bodyStart === -1) return bodies;
-    const end = lower.indexOf(close, bodyStart);
+    /*
+     * THE CLOSING NAME IS CHECKED TOO, and skipping that was a way to blind the law.
+     *
+     * Matching a bare `</style` prefix meant a declaration could close the element
+     * early from inside itself: `.a{content:"</stylex>"}` is a string to a browser
+     * and ends nothing, but it ended the body here, so every rule after it --
+     * a gradient, a shadow, a literal radius -- was never read. Found by Codex on
+     * the pull request, and it is exactly the failure the comment above describes.
+     */
+    const end = findTag(lower, text, close, bodyStart);
     if (end === -1) return bodies;
     bodies.push(text.slice(bodyStart, end));
     i = end + close.length;
@@ -393,6 +408,13 @@ describe('the scanner these laws are read through', () => {
     expect(spansOf('<styles>.k{background:linear-gradient(red,blue)}</style>', 'style')).toEqual(
       [],
     );
+  });
+
+  it('does not let a declaration close the element from inside a string', () => {
+    // `</stylex>` ends nothing in a browser. Matching a bare `</style` prefix meant
+    // it ended the body here, hiding every rule after it from all the laws below.
+    const hidden = '<style>.a{content:"</stylex>"}.b{background:linear-gradient(red,blue)}</style>';
+    expect(spansOf(hidden, 'style').join('')).toContain('linear-gradient');
   });
 
   it('still sees the file after an unterminated comment opener', () => {

@@ -90,6 +90,30 @@ describe('extractText', () => {
     );
   });
 
+  it('ends a tag at the real bracket, not at one inside an attribute', () => {
+    // `<[^>]+>` stopped at the quoted `>` and left `y">` sitting in the prose.
+    expect(extractText('<p>a <img alt="x>y"> b</p>')).toBe('a b');
+  });
+
+  it('honours a closing tag written the way browsers accept it', () => {
+    // `</script >` closes the element in every browser. Matching only `</script>`
+    // meant the script never closed here, so the rest of the document was dropped
+    // as though it were markup -- an article silently truncated to its first line.
+    expect(extractText('<p>Before.</p><script>bad()</script >After the script.')).toBe(
+      'Before.\n\nAfter the script.',
+    );
+  });
+
+  it('keeps its offsets when the document is not all ASCII', () => {
+    // Tags were found in `html.toLowerCase()` and sliced out of `html`, which assumes
+    // the two are the same length. `'\u0130'.toLowerCase()` is TWO code units, so one
+    // of them above a script shifted every offset after it: this produced `İ< ail`,
+    // losing a letter of the prose and leaving a bracket behind. Three of them left
+    // `<sc` -- markup -- in text on its way to a model.
+    expect(extractText('İ<script>SECRET</script>tail')).toBe('İ tail');
+    expect(extractText('İİİ<p>one</p><script>SECRET</script><p>two</p>')).toBe('İİİ one\n\ntwo');
+  });
+
   it('keeps paragraph breaks, because segment splits on them', () => {
     // This previously collapsed to "one two". `segment` splits on blank lines,
     // so that made every fetched article a single unsplittable chunk while the
