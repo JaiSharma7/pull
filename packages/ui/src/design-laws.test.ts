@@ -298,6 +298,110 @@ const blocksOf = (css: string): [string, string][] => {
 const rules = (f: string): [string, string, string][] =>
   blocksOf(code(f)).map(([selector, body]) => [`${selector}{${body}}`, selector, body]);
 
+/*
+ * INDEX SCANS, not regexes, for the three places below that have to find a
+ * `<style>` body, a `<script>` body or a comment span.
+ *
+ * `<style[^>]*>([\s\S]*?)</style>` is the shape CodeQL names "Bad HTML filtering
+ * regexp", and it is wrong here in ways this file cares about: `[^>]*` stops at the
+ * first `>`, so an attribute containing one (`<script data-x="a>b">`) ends the tag
+ * early and the body is read as markup; and `<styles>…</style>` is read as a style
+ * body, because `[^>]*` is glad to absorb the extra letter before the `>`. A scanner
+ * that misreads a file is a law with a way around it, which is the failure the
+ * comments above keep describing.
+ *
+ * `withoutSpans` is the same argument for a C comment span and an HTML one: one
+ * regex pass over nested or adjacent markers leaves fragments behind, which is
+ * CodeQL's "Incomplete multi-character sanitization". Both scans visit each byte
+ * once, and neither can be made to skip a region of a file it should have read;
+ * `withoutSpans` says why that is the direction that matters here.
+ */
+
+/** Index just past the `>` that closes a tag opening at `from`, quoted `>` included. */
+const endOfTag = (text: string, from: number): number => {
+  let quote = '';
+  for (let i = from; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (quote) {
+      if (c === quote) quote = '';
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '>') {
+      return i + 1;
+    }
+  }
+  return -1;
+};
+
+/** The body of every `<tag …>…</tag>` span in `text`. */
+const spansOf = (text: string, tag: string): string[] => {
+  const lower = text.toLowerCase();
+  const open = `<${tag}`;
+  const close = `</${tag}`;
+  const bodies: string[] = [];
+  let i = 0;
+  for (;;) {
+    const start = lower.indexOf(open, i);
+    if (start === -1) return bodies;
+    const next = text[start + open.length];
+    // `<styles>` is not `<style>`. Only whitespace, `/` or `>` ends the name.
+    if (next === undefined || !/[\s/>]/.test(next)) {
+      i = start + open.length;
+      continue;
+    }
+    const bodyStart = endOfTag(text, start + open.length);
+    if (bodyStart === -1) return bodies;
+    const end = lower.indexOf(close, bodyStart);
+    if (end === -1) return bodies;
+    bodies.push(text.slice(bodyStart, end));
+    i = end + close.length;
+  }
+};
+
+/**
+ * `text` with every `open`…`close` span removed.
+ *
+ * An UNTERMINATED span is kept, not dropped. `source.ts` drops the tail in the same
+ * situation and is right to: it is deciding what to summarise, and the remainder of a
+ * document whose script never closes is not prose. Here the question is the opposite
+ * one — "is there a gradient anywhere in this file" — so text this function cannot
+ * see is text the law cannot reach, and a stray `/*` would be a way around it.
+ */
+const withoutSpans = (text: string, open: string, close: string): string => {
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const start = text.indexOf(open, i);
+    if (start === -1) return out + text.slice(i);
+    const end = text.indexOf(close, start + open.length);
+    if (end === -1) return out + text.slice(i);
+    out += text.slice(i, start);
+    i = end + close.length;
+  }
+};
+
+describe('the scanner these laws are read through', () => {
+  it('reads a style body whose opening tag carries a > inside an attribute', () => {
+    // `<style[^>]*>` stopped at the quoted `>` and handed back `b">.k{color:red}` --
+    // markup as declarations, and the declaration itself half swallowed.
+    expect(spansOf('<style data-note="a>b">.k{color:red}</style>', 'style')).toEqual([
+      '.k{color:red}',
+    ]);
+  });
+
+  it('does not read <styles> as a style body', () => {
+    expect(spansOf('<styles>.k{background:linear-gradient(red,blue)}</style>', 'style')).toEqual(
+      [],
+    );
+  });
+
+  it('still sees the file after an unterminated comment opener', () => {
+    // The one that matters: text the scanner cannot see is text no law below reaches.
+    expect(withoutSpans('a /* b', '/*', '*/')).toContain('b');
+    expect(withoutSpans('.k{}/*x*/.j{}', '/*', '*/')).toBe('.k{}.j{}');
+  });
+});
+
 /**
  * Strip comments so prose about gradients doesn't trip the checks.
  *
@@ -306,13 +410,9 @@ const rules = (f: string): [string, string, string][] =>
  */
 const code = (f: string) => {
   const raw = read(f);
-  const body = f.endsWith('.html')
-    ? [...raw.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]!).join('\n')
-    : raw;
+  const body = f.endsWith('.html') ? spansOf(raw, 'style').join('\n') : raw;
   return (
-    body
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
+    withoutSpans(withoutSpans(body, '/*', '*/'), '<!--', '-->')
       /*
        * PERCENT-DECODED, because the browser decodes a data URI before parsing it and
        * the checks below read the source. `%47` is `G`, so
@@ -734,11 +834,11 @@ describe('The Archive design laws', () => {
      * with `appearance.test.ts`, which pins this same file, still green.
      */
     for (const f of shellFiles.filter((n) => n.endsWith('.html'))) {
-      const scripts = [...readFileSync(f, 'utf8').matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
-        .map((m) => m[1]!)
-        .join('\n')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      const scripts = withoutSpans(
+        spansOf(readFileSync(f, 'utf8'), 'script').join('\n'),
+        '/*',
+        '*/',
+      ).replace(/(^|[^:])\/\/[^\n]*/g, '$1');
       for (const [pattern, what, sanctioned] of banned) {
         for (const declaration of scripts.matchAll(pattern)) {
           const value = valueAfter(scripts, declaration.index + declaration[0].length)
