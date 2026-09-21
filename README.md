@@ -65,8 +65,6 @@ pnpm db:reset        # apply migrations, including the seeded demo corpus
 pnpm dev             # http://127.0.0.1:5173
 ```
 
-Or just use the web app: https://whatapull.vercel.app/
-
 The demo corpus is drawn only from public-domain sources, so a fresh clone runs with
 **no model-provider API key**. What `db:reset` gives you is **6 works and 21 Pulls** —
 enough to watch every mechanic work, including a deliberately planted near-duplicate so
@@ -79,7 +77,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Using the hosted service
 
-The hosted app at whatapull.vercel.app is governed by two documents, and both are in this
+The hosted app at https://whatapull.vercel.app/ is governed by two documents, and both are in this
 repository rather than on a landing page nobody can diff:
 
 - **[Privacy Policy](./docs/privacy.md)** — what is collected, which three processors
