@@ -65,7 +65,7 @@ pnpm db:reset        # apply migrations, including the seeded demo corpus
 pnpm dev             # http://127.0.0.1:5173
 ```
 
-Or just use the web app: whatapull.vercel.app
+Or just use the web app: https://whatapull.vercel.app/
 
 The demo corpus is drawn only from public-domain sources, so a fresh clone runs with
 **no model-provider API key**. What `db:reset` gives you is **6 works and 21 Pulls** —
