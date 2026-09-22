@@ -94,9 +94,15 @@ pnpm db:types     # if the database shape changed; commit the generated diff
 pnpm check        # format:check + lint + typecheck + test
 ```
 
-CI runs six required checks — `lint`, `typecheck`, `test`, `db`, `secrets`, `dco`.
-The `db` check replays every migration from zero and asserts that RLS is enabled with
-a policy on every public table, that every foreign key has a non-partial index, that
+CI requires the core jobs — `lint`, `typecheck`, `test`, `db`, `secrets`, `dco`,
+`policy`, `dependency-review`, and `node-24` — plus GitHub's CodeQL analysis.
+`policy` protects only hard invariants: landed migrations are append-only, and local
+Supabase CLI state must never be tracked. It does not freeze normal source,
+documentation, or generated files. The same job checks local Markdown links without
+external requests. `dependency-review` blocks newly introduced high-severity
+vulnerabilities, and `node-24` verifies the second supported Node release. The `db`
+check replays every migration from zero and asserts that RLS is enabled with a policy
+on every public table, that every foreign key has a non-partial index, that
 every `SECURITY DEFINER` function pins its `search_path`, and that no two permissive
 policies overlap on SELECT.
 

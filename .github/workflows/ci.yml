@@ -11,15 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: '22.13.0'
   PNPM_VERSION: '10.33.0'
 
 # Read-only, for the whole file. `GITHUB_TOKEN` is minted per run with whatever the
 # repository default grants — which for a repository created before the default
-# changed is write on every scope, handed to six jobs that between them run
+# changed is write on every scope, handed to jobs that between them run
 # `pnpm install`, a Deno lint, a Supabase stack and two downloaded binaries. None of
 # them writes anything back to GitHub; `actions/checkout` needs `contents: read` and
-# nothing else does. Declared once at the top rather than six times, so a job added
+# nothing else does. Declared once at the top, so a job added
 # later inherits the floor instead of silently getting the default again. A job that
 # genuinely needs to write (a release, a comment) declares its own `permissions:`,
 # which overrides this — and that declaration is then the thing a reviewer sees.
@@ -38,12 +38,30 @@ permissions:
 # on `push` to a branch, not in this one.
 
 jobs:
-  # Check 1 of 6 — style drift, dead code, and JSX accessibility rules.
+  # Style drift, dead code, workflow syntax, and JSX accessibility rules.
   lint:
     name: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate GitHub Actions workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256_X64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_ARM64: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ACTIONLINT_ARCH=amd64; ACTIONLINT_SHA256="$ACTIONLINT_SHA256_X64" ;;
+            aarch64) ACTIONLINT_ARCH=arm64; ACTIONLINT_SHA256="$ACTIONLINT_SHA256_ARM64" ;;
+            *) echo "::error::unsupported arch $(uname -m) for actionlint"; exit 1 ;;
+          esac
+          archive=/tmp/actionlint.tar.gz
+          curl -sSfL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${ACTIONLINT_ARCH}.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C /tmp actionlint
+          /tmp/actionlint -color
       - uses: pnpm/action-setup@v6
         with: { version: '${{ env.PNPM_VERSION }}' }
       - uses: actions/setup-node@v7
@@ -64,7 +82,7 @@ jobs:
         run: deno lint
         working-directory: supabase/functions
 
-  # Check 2 of 6 — schema/code drift is the likeliest breakage in this repo,
+  # Schema/code drift is the likeliest breakage in this repo,
   # so typecheck runs against the committed generated Supabase types.
   typecheck:
     name: typecheck
@@ -142,7 +160,7 @@ jobs:
           git diff --cached --exit-code -- supabase/functions/_shared/generated \
             || { echo "::error::Exported prompts are stale. Run 'pnpm baml:export' and commit the result."; exit 1; }
 
-  # Check 3 of 6 — the signature mechanics must not change behaviour silently.
+  # The signature mechanics must not change behaviour silently.
   test:
     name: test
     runs-on: ubuntu-latest
@@ -155,7 +173,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
-  # Check 4 of 6 — replay every migration from zero on a real Supabase stack,
+  # Exercise the other supported Node release independently of the primary jobs.
+  node-24:
+    name: node-24
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with: { version: '${{ env.PNPM_VERSION }}' }
+      - uses: actions/setup-node@v7
+        with: { node-version: '24', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+
+  # Replay every migration from zero on a real Supabase stack,
   # then assert the invariants that a missing policy would violate. An RLS gap
   # is a data breach, and it is trivial to introduce by adding a table.
   db:
@@ -174,6 +207,9 @@ jobs:
 
       - name: Replay all migrations from zero
         run: pnpm exec supabase db reset --no-seed
+
+      - name: Lint database functions with Supabase
+        run: pnpm exec supabase db lint --schema public --level warning
 
       - name: Assert RLS, policies, and FK indexes
         run: pnpm run db:lint
@@ -199,7 +235,43 @@ jobs:
           git diff --exit-code -- packages/db/src/database.types.ts \
             || { echo "::error::Generated DB types are stale. Run 'pnpm db:types' and commit the result."; exit 1; }
 
-  # Check 5 of 6 — a committed credential, in the tree or anywhere in history.
+  # Fast repository invariants that should fail before expensive build work.
+  policy:
+    name: policy
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v7
+        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - name: Test repository guardrails
+        run: node --test scripts/*.test.mjs
+      - name: Enforce repository policy
+        run: |
+          args=(--head "$HEAD_SHA")
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+            args+=(--base "$BASE_SHA")
+          fi
+          node scripts/repository-policy.mjs "${args[@]}"
+      - name: Check local Markdown links
+        run: node scripts/check-local-links.mjs
+
+  # Review dependency changes against GitHub's advisory data and dependency graph.
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  # A committed credential, in the tree or anywhere in history.
   #
   # This repository commits two keys on purpose (law 7: a VITE_* variable is in the
   # bundle every visitor downloads, so the publishable key is public by construction).
@@ -250,7 +322,7 @@ jobs:
           # a later commit is still in every clone that fetched the earlier one.
           /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner .
 
-  # Check 6 of 6 — every commit carries a Developer Certificate of Origin sign-off.
+  # Every commit carries a Developer Certificate of Origin sign-off.
   #
   # `Signed-off-by:` is the contributor asserting they have the right to submit the
   # code under the project's licence. It is a provenance record, per commit, and there

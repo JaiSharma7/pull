@@ -15,7 +15,10 @@ dependency-only exception.
 
 **Mandatory, in this order, except for dependency-only PRs as defined below.**
 
-1. **All four CI checks green** — `lint`, `typecheck`, `test`, `db`.
+1. **All required CI checks green.** This includes the core jobs (`lint`, `typecheck`,
+   `test`, `db`, `secrets`, `dco`, `policy`, `dependency-review`, and
+   `node-24`) plus CodeQL. Do not merge around a missing check; an expected check that
+   never reports is a configuration failure, not a pass.
 
 2. **Codex reviews the first pass only.** Comment `@codex review` once, on the opening
    diff of a PR. Then _wait_. Do not merge, and do not start unrelated feature work on
@@ -54,7 +57,7 @@ dependency-only exception.
    real RLS is worth ten that are reasoned about, and the difference is not effort —
    it is whether the claim is true.
 
-5. **Merge** — only once the parallel round comes back clean and all four checks are
+5. **Merge** — only once the parallel round comes back clean and all required checks are
    green on the final head.
 
 If Codex is not installed, or is rate-limited, say so and continue from step 4 rather
