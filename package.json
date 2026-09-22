@@ -7,7 +7,7 @@
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": "^22.13.0 || >=24"
+    "node": "^22.18.0 || >=24"
   },
   "scripts": {
     "build": "turbo run build",
@@ -16,7 +16,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "turbo run test && pnpm test:repo",
+    "test:repo": "node --test scripts/*.test.mjs",
+    "policy:check": "node scripts/repository-policy.mjs",
+    "docs:links": "node scripts/check-local-links.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "db:start": "supabase start",
     "db:reset": "supabase db reset",

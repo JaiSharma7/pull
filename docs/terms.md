@@ -1,7 +1,7 @@
 # Terms of Service
 
 **Effective 1 September 2026.** Every revision of this document is a commit in
-[this file's history](https://github.com/JaiSharma7/pull/commits/main/docs/terms.md), so
+[this file's history](https://github.com/WhatAPull/pull/commits/main/docs/terms.md), so
 what changed and when is public record.
 
 **Why this revision takes effect immediately rather than on notice.** §14 promises

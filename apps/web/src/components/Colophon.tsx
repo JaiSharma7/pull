@@ -22,7 +22,7 @@ export function Colophon({ onNavigate }: { onNavigate: (to: string) => void }) {
         <a href="/terms" onClick={go('/terms')}>
           Terms
         </a>
-        <a href="https://github.com/JaiSharma7/pull" target="_blank" rel="noreferrer noopener">
+        <a href="https://github.com/WhatAPull/pull" target="_blank" rel="noreferrer noopener">
           Source
         </a>
       </nav>

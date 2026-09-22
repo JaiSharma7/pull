@@ -106,7 +106,9 @@ describe('link resolution', () => {
   it('routes a sibling document to its screen and anything else to the repository', () => {
     expect(resolveHref('./privacy.md')).toBe('/privacy');
     expect(resolveHref('./terms.md')).toBe('/terms');
-    expect(resolveHref('./content-policy.md')).toContain('github.com');
+    expect(resolveHref('./content-policy.md')).toBe(
+      'https://github.com/WhatAPull/pull/blob/main/docs/content-policy.md',
+    );
   });
 
   it('leaves anchors and absolute links untouched', () => {

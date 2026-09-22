@@ -94,16 +94,19 @@ describe ours, not yours.
 
 ## Contributing
 
-> **Contribution status:** this repository is currently a read-only public preview.
-> External pull requests and issues are temporarily closed while the project stabilises;
-> the contribution channels described below will reopen later.
+Issues and pull requests are welcome at
+[`WhatAPull/pull`](https://github.com/WhatAPull/pull). You do not need collaborator
+access: fork the repository, choose one focused concern, and open a pull request.
 
-Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) — setup, the contribution policy
-(DCO sign-off, and what is expected if you used an AI assistant), and how a change gets
-reviewed. [`docs/contributing-map.md`](./docs/contributing-map.md) lists work that is
-genuinely self-contained. `CLAUDE.md` holds the seven laws that govern changes;
-`AGENTS.md` describes the maintainer-side review gate. Security reports go to
-[`SECURITY.md`](./SECURITY.md), never to a public issue. Docs live in [`docs/`](./docs).
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, DCO sign-off, and the
+AI-assistance policy. [`docs/contributing-map.md`](./docs/contributing-map.md) lists
+current entry points. Backend work is welcome and uses the local stack — see
+[`docs/supabase-contributing.md`](./docs/supabase-contributing.md).
+
+[`GOVERNANCE.md`](./GOVERNANCE.md) explains how recurring contributors can grow into
+review and subsystem ownership. `CLAUDE.md` holds the seven laws; `AGENTS.md` describes
+the maintainer-side review gate. Security reports go to [`SECURITY.md`](./SECURITY.md),
+never to a public issue.
 
 ## Licence
 
@@ -132,8 +135,8 @@ not want one. Host it and charge for it, fold it into something you sell, compet
 us — all of that is permitted, and the condition above is the only price: the people
 using your instance get its source. What nobody can do is take it _closed_.
 
-**External contributions will be welcome when the channels reopen, and there is no
-CLA.** Inbound is outbound — what you send is released under the AGPL, the same terms
+**External contributions are welcome, and there is no CLA.** Inbound is outbound —
+what you send is released under the AGPL, the same terms
 the project is already on, so nothing you contribute can be relicensed out from under
 you, by the maintainers or anyone else. Contributions count as open source, because the
 AGPL is

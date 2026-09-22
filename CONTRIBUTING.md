@@ -1,8 +1,16 @@
 # Contributing
 
-> **Contribution status:** external pull requests and issues are temporarily closed
-> while the project stabilises. This guide documents the policy that will apply when
-> those channels reopen.
+Issues and pull requests are welcome. The canonical repository is
+[`WhatAPull/pull`](https://github.com/WhatAPull/pull); anyone may fork it and submit a
+change without collaborator access.
+
+Start with an issue when the outcome is ambiguous, security-sensitive, destructive, or
+architectural. For a small reproducible bug, a focused test, documentation,
+accessibility work, or another self-contained change, opening the pull request directly
+is fine. [`docs/contributing-map.md`](./docs/contributing-map.md) lists current places
+to start.
+
+One concern per pull request. Small changes are easier to verify and review.
 
 ## Setup
 
@@ -18,6 +26,11 @@ work, not enough to feel like a product. That is deliberate and it is the honest
 size: the 101-source manifest in `scripts/corpus/public-domain.json` is turned into
 content by the generation pipeline, which needs a model API key and an operator. See
 [Adding content](#adding-content).
+
+The Supabase CLI is a pinned development dependency. Use the repository commands above
+or `pnpm exec supabase ...`, not an independently installed CLI whose version may drift.
+The CLI's local state — `supabase/.temp/`, `supabase/.branches/`, and `supabase/.env` —
+is ignored and must not be added to a pull request.
 
 ### On Windows, work inside WSL
 
@@ -50,6 +63,15 @@ the reason is not confidentiality — RLS keeps you inside your own account eith
 It is that every write a dev server makes is a write that account is _allowed_ to
 make, landing in a real reader's library, with no undo.
 
+## Backend and Supabase changes
+
+Backend contributions are welcome. Develop and validate them against the local Supabase
+stack; contributors and reviewers do not need access to a hosted project. The detailed
+workflow is in [`docs/supabase-contributing.md`](./docs/supabase-contributing.md).
+
+Maintainers handle deployment and any validation that genuinely requires hosted access.
+Do not request, copy, or configure production credentials for contribution work.
+
 ## Verifying the read path
 
 ```bash
@@ -65,14 +87,22 @@ and invisible to a superuser query.
 ## Before you push
 
 ```bash
-pnpm check        # format:check + lint + typecheck + test
+pnpm db:reset     # if you touched supabase/; replay migrations from zero
 pnpm db:lint      # if you touched supabase/
 pnpm db:test      # if you touched the read path or any policy
+pnpm db:types     # if the database shape changed; commit the generated diff
+pnpm check        # format:check + lint + typecheck + test
 ```
 
-CI runs six required checks — `lint`, `typecheck`, `test`, `db`, `secrets`, `dco`.
-The `db` check replays every migration from zero and asserts that RLS is enabled with
-a policy on every public table, that every foreign key has a non-partial index, that
+CI requires the core jobs — `lint`, `typecheck`, `test`, `db`, `secrets`, `dco`,
+`policy`, `dependency-review`, and `node-24` — plus GitHub's CodeQL analysis.
+`policy` protects only hard invariants: landed migrations are append-only, and local
+Supabase CLI state must never be tracked. It does not freeze normal source,
+documentation, or generated files. The same job checks local Markdown links without
+external requests. `dependency-review` blocks newly introduced high-severity
+vulnerabilities, and `node-24` verifies the second supported Node release. The `db`
+check replays every migration from zero and asserts that RLS is enabled with a policy
+on every public table, that every foreign key has a non-partial index, that
 every `SECURITY DEFINER` function pins its `search_path`, and that no two permissive
 policies overlap on SELECT.
 
@@ -82,9 +112,9 @@ outside contributor or have to run untrusted code with credentials in scope.
 
 ## How a change gets reviewed
 
-When external contributions reopen, **you will not need to run anything a maintainer
-runs.** Open a pull request with green CI and a description that says _why_; a
-maintainer takes it from there.
+You do not need to run anything a maintainer runs. Open a pull request with green CI and
+a description that says _why_; a maintainer takes it from there. Link the issue when
+there is one, but a focused pull request does not need a permission-granting issue first.
 
 `AGENTS.md` describes an agent-assisted review gate the maintainers use — Codex on the
 first pass, then four specialist reviewers over non-overlapping slices. That is a
@@ -174,9 +204,9 @@ What this rules out is narrow and specific:
   you have to have checked. `docs/roadmap.md` is the tone: things that were verified,
   and things that were not, marked as which.
 
-When issues reopen, findings from a scanner or a model will be welcome there with a
-reproduction. They will not be welcome as a PR that changes code on the strength of a
-claim nobody confirmed.
+Findings from a scanner or a model are welcome in an issue with a reproduction. They
+are not welcome as a pull request that changes code on the strength of a claim nobody
+confirmed.
 
 ## The seven laws
 
@@ -201,13 +231,11 @@ have rights to, or ripped media. See `docs/content-policy.md`.
 **Your own writing is a separate case, and is not being accepted yet.** Original
 summaries, commentary and translations are content rather than code, so "inbound is
 outbound" does not settle what happens to them — and no agreement covering them exists.
-Until one does, discuss original writing in an issue after that channel reopens rather
-than sending a pull request. A public-domain **source entry** is different and will be
-welcome when external contributions reopen: a pointer to a work whose rights have
+Until one does, discuss original writing in an issue rather than sending a pull request.
+A public-domain **source entry** is different: a pointer to a work whose rights have
 expired needs no grant from anyone, because there is no right left to grant.
 
-When contribution channels reopen, the most useful contribution that needs no database
-will be a source for the manifest:
+One of the most useful contributions that needs no database is a source for the manifest:
 
 ```bash
 # add an entry to scripts/corpus/public-domain.json, then

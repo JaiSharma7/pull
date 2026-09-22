@@ -231,7 +231,7 @@ export function parseMarkdown(source: string): Document {
  * link has to become a route, and a reference to a doc with no screen has to
  * become a URL that exists rather than a 404.
  */
-const REPO = 'https://github.com/JaiSharma7/pull/blob/main/docs';
+const REPO = 'https://github.com/WhatAPull/pull/blob/main/docs';
 
 export function resolveHref(href: string): string {
   if (href.startsWith('#') || /^(https?:|mailto:)/.test(href)) return href;

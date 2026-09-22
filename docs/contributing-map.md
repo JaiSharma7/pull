@@ -1,73 +1,80 @@
 # Where to start
 
-Work that is genuinely self-contained, roughly easiest first. Each of these is
-something a maintainer would otherwise do; none needs context you cannot get from the
-file it lives in.
+Contributions are open. Read [`CONTRIBUTING.md`](../CONTRIBUTING.md) first, choose one
+focused concern, and open either an issue or a pull request. The categories below tell
+you what environment and discussion a change needs; they are not permission tiers.
 
-Read `CONTRIBUTING.md` first for setup and the contribution policy — in particular:
-one concern per PR, and you have to be able to explain the diff.
+The list is intentionally short. It includes work that is current, reproducible, and
+reviewable without private context. If an item has already been claimed or fixed, choose
+another rather than widening the pull request.
 
-## No database needed
+## No backend access required
 
-**Add a source to the corpus.** `scripts/corpus/public-domain.json`, then
-`node scripts/seed-corpus.mjs --check`, which fetches the URL and compares the page
-title against the expected work. The corpus is thin in economics, mathematics and
-anything written outside Europe and North America, and the Delta is a better
-demonstration the wider it spreads — a feed where everything sits near everything else
-makes "you already knew this" meaningless. Public domain only, and short enough to
-finish inside 200,000 characters. See the `$comment` at the top of that file; it is
-worth reading before adding anything.
+### Add a public-domain source
 
-**Component tests.** There are none. `apps/web/src/routes/` is roughly 5,000 lines with
-no automated coverage, and the pure logic those screens sit on is already split out and
-tested — `feed-items.ts`, `stashes.ts`, `library.ts`, `search.ts`, `routes.ts`,
-`title.ts`. What is missing is the wiring. `packages/ui/src/components/PullCard.test.ts`
-shows the house approach: `renderToStaticMarkup` rather than a DOM library, and
-`createElement` rather than JSX, because the Vitest preset includes `src/**/*.test.ts`
-only and a `.tsx` test would silently never run. The most valuable ones are the state
-machines the comments argue hardest about — `Review`'s four states, `Feed`'s read
-counting, `Auth`'s four ways in.
+Add one entry to `scripts/corpus/public-domain.json`, then run:
 
-**Focus management on navigation.** Nothing focuses the new view when a route opens,
-and there is no route announcer, so a screen-reader user activating "Read it in its
-source" gets focus dumped to `<body>` with no indication anything changed. The
-`role="status"` sweep is done; this is the other half.
+```bash
+node scripts/seed-corpus.mjs --check
+```
 
-## Needs the local stack
+The check fetches the URL and verifies its title. The corpus is thinnest outside Europe
+and North America and in subjects such as economics and mathematics. Read the
+`$comment` at the top of the manifest: sources must be unambiguously public domain and
+short enough to finish inside `MAX_SOURCE_CHARS`.
 
-**Sections have no URLs.** Library, Review, History and Preferences are component
-state, so they cannot be bookmarked, shared, or reloaded into, and Back does not
-traverse them. `App.tsx` argues that reading is tab state on purpose — a Pull is not a
-page — and that argument holds for the feed and is weaker for the others, which are
-places rather than modes. `DESTINATIONS` already shows the shape a routed screen takes.
+### Add focused route wiring coverage
 
-**Scroll position is lost on Back.** `navigate` calls `scrollTo(0, 0)` unconditionally,
-`popstate` restores nothing, and `history.scrollRestoration` is never set. Worse, the
-feed is hidden with `hidden` (`display: none`), which collapses layout and clamps
-scroll to 0 anyway — so the 20-line comment explaining that the feed stays mounted so a
-reader "keeps their place" is half true: the state survives and the place does not.
+The pure logic under `apps/web/src/lib/` has broad coverage and several routes now have
+tests. Focused wiring coverage is still useful for an untested behavior in `Review`,
+`Feed`, or `Auth`—for example, a state transition or visible error that can regress
+while its helper remains correct.
 
-**`plan_interleave` has no SQL-side test.** `packages/ranking` mirrors it in TypeScript
-and asserts parity against a committed JSON fixture, captured by hand. Nothing in CI
-ever calls the SQL function and compares, so a change to the planner passes green
-unless someone remembers to regenerate the fixture. A `db:test` file that runs the SQL
-over the fixture's inputs would close it.
+Follow the existing house style: prove one observed behavior, use
+`renderToStaticMarkup` when a DOM is unnecessary, and use `.test.ts` or `.test.tsx`
+so the current Vitest include pattern runs the file. Do not submit a blanket "increase coverage" change.
 
-## Bigger, and worth discussing in an issue first
+### Improve focus and navigation accessibility
 
-**`refresh_knowledge_vector` has no caller.** `user_knowledge_vectors` is never
-populated, so the `uvec` term — 18% of the ranking score — is a constant for every
-reader. `docs/roadmap.md` describes the two options (a `pg_cron` tick, or dropping the
-term and redistributing its weight) and why neither has been chosen.
+A focused fix that moves focus or announces a newly opened view can be developed without
+Supabase. Include a regression test for the exact navigation path and verify that the
+change does not steal focus during ordinary reading.
 
-**The Delta banner counts the pool, not the page.** It reports over an 800-row
-candidate pool while the reader is looking at twenty cards, so a well-read reader can
-be told "skipped 240 ideas you already know" above twenty. It is a true statement about
-what the ranker considered and a false one about the page. A counting-scope decision
-rather than a bug, and it needs a product answer before a patch.
+### Restore scroll position on Back
+
+The feed remains mounted to preserve reading state, but `navigate` resets scroll and
+`popstate` does not restore it. A fix should cover both forward navigation and browser
+Back, including the fact that a hidden feed collapses layout.
+
+## Local Supabase stack required
+
+### Prove SQL and TypeScript interleave parity
+
+`plan_interleave` is mirrored in `packages/ranking` and compared with a committed JSON
+fixture, but CI does not call the SQL function over those fixture inputs. Add a
+`supabase/tests/` regression that makes `pnpm db:test` fail when the SQL planner
+diverges from the TypeScript mirror.
+
+Use [`docs/supabase-contributing.md`](./supabase-contributing.md). Contributors and
+reviewers validate this work locally; hosted-project access is not required.
+
+## Discuss in an issue first
+
+- Changes to routing or the product model for Library, Review, History, Preferences, or
+  individual Pulls. Component state is deliberate today; turning those concepts into
+  URLs is an architectural decision, not a beginner task.
+- Changes to what the Delta banner counts. It currently describes the candidate pool,
+  not only the visible page, so the right scope needs a product decision before code.
+- Authentication, authorization, RLS, destructive migrations, data backfills, hosted
+  infrastructure, provider integrations, or a new source host.
+- Original summaries, commentary, or translations. The project does not yet have a
+  contribution agreement for original editorial content.
 
 ## What not to send
 
-`CONTRIBUTING.md` has the full policy. The short version: no bulk PRs, no drive-by
-dependency bumps, and no change made on the strength of a scanner finding nobody
-reproduced. Those are welcome as issues with a reproduction.
+No bulk typo or refactor pull requests, drive-by dependency churn, production
+configuration, generated files edited by hand, or code changes based only on an
+unreproduced scanner or model finding. A verified finding is welcome as an issue.
+
+Security vulnerabilities belong in the private channel described by
+[`SECURITY.md`](../SECURITY.md), never in a public issue.
