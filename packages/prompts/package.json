@@ -20,7 +20,7 @@
     "baml:export": "node scripts/export.mjs"
   },
   "devDependencies": {
-    "@boundaryml/baml-bridge": "0.20.0",
+    "@boundaryml/baml-bridge": "0.19.0",
     "@types/node": "^26.6.2",
     "@wap/config": "workspace:*",
     "typescript": "^6.0.3",

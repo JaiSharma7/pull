@@ -130,8 +130,8 @@ importers:
   packages/prompts:
     devDependencies:
       '@boundaryml/baml-bridge':
-        specifier: 0.20.0
-        version: 0.20.0
+        specifier: 0.19.0
+        version: 0.19.0
       '@types/node':
         specifier: ^26.6.2
         version: 26.6.2
@@ -727,52 +727,52 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@boundaryml/baml-bridge-darwin-arm64@0.20.0':
-    resolution: {integrity: sha512-JUyRZZQ1vf3n3W+Fg/YN43XM0iqK+p24fGA0AlDFWrtJLpKcnUOo4H82aW5FQimAStUj7UiDGb+AsnnMFExUOw==}
+  '@boundaryml/baml-bridge-darwin-arm64@0.19.0':
+    resolution: {integrity: sha512-vGrxXe89j2Fhlu6dlbmGBVwWn2PItrFaKQ8o/irfQfSAg0EqDqnyFOG1UGxnumwGtZIMCLedVwIVdvOKIVEFXQ==}
     cpu: [arm64]
     os: [darwin]
 
-  '@boundaryml/baml-bridge-darwin-x64@0.20.0':
-    resolution: {integrity: sha512-xbp4rMhAgP9ZPpXrC4Ov8+ReAAAEX1H7rbijWxzjSyKTAzFtzrfF7Cni6WKhH4e54UKCkJp/NUVAUtar94NK9A==}
+  '@boundaryml/baml-bridge-darwin-x64@0.19.0':
+    resolution: {integrity: sha512-lawfGsn81MgXCONPNrEqLZ9DPokd1M/SV7MQ/Snydn6tWdEV6mJAORS7ZYCKENOhrZyex0wQrVJg4bLLOBkcGQ==}
     cpu: [x64]
     os: [darwin]
 
-  '@boundaryml/baml-bridge-linux-arm64-gnu@0.20.0':
-    resolution: {integrity: sha512-xy05/CB9g/6CAsKtD8+axqXCY73HyES/3HJErC9xu7g7IxoMglX/OATtDeq6O9GFugfrwBQ4Xl7bTOIi7ySSOw==}
+  '@boundaryml/baml-bridge-linux-arm64-gnu@0.19.0':
+    resolution: {integrity: sha512-RnLOW9QC3TDCJRResBg7uWih0JS35cCFbLkzcEdltnF2WIVXFtbhXXA5J4vsP7VU+Lkp40EKZkYgNSets5Iwxw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@boundaryml/baml-bridge-linux-arm64-musl@0.20.0':
-    resolution: {integrity: sha512-hD3t/cxftzwM1Oa67r+M0IqvDgWO96fPxQAknOpLDl6+MDGhTd6JdWNQfyK75d9sQI1yzdI+66rj9mbxHm48CQ==}
+  '@boundaryml/baml-bridge-linux-arm64-musl@0.19.0':
+    resolution: {integrity: sha512-PJvn5a3vtd5+JTBsexhzNLjd1JDDk5b15JuIdfF77Ogak25Jr0qYHrgLt+HycOoiaRP20AXScOCh30Q93X1Xjg==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@boundaryml/baml-bridge-linux-x64-gnu@0.20.0':
-    resolution: {integrity: sha512-eUp2nkKILmCd0gxzoXrkEbsysLuonxK2aCQxUzRl4BIH7qQPXzcziMIG88BHwGHtQd8loB09qOWI1RsZW6MSJg==}
+  '@boundaryml/baml-bridge-linux-x64-gnu@0.19.0':
+    resolution: {integrity: sha512-n/Ummus4ztXwSsllOQbexhPYCMC44HvrjSFCumFOy43M8TkGbYm6ntYCyHZUN+5aZSeWf4eoxcihECdj1t7vFQ==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@boundaryml/baml-bridge-linux-x64-musl@0.20.0':
-    resolution: {integrity: sha512-laTIL76i1RNOfGArYM8gheAggUwL2E/VSzM6kjn9LV59fXzJMh3ofPk0JzzmEJQBiZZe2VTmuolLkEkDLd++Bw==}
+  '@boundaryml/baml-bridge-linux-x64-musl@0.19.0':
+    resolution: {integrity: sha512-RZJ2s6xu46dw+FheKKu5BpJsh2EeM0mAwjy5wSd2peGXVT2Fd14hm5JaoSauEFVWTKa4mig++vPKulzPV74kRg==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@boundaryml/baml-bridge-win32-arm64-msvc@0.20.0':
-    resolution: {integrity: sha512-+XKqBS9YuAIsQPX7F+bqzh1tDMSfoIHTJHRMbVEZqtTb4jKRKsE2r7JTycq7SCFhO2nnDE+S1lUiZYY+sjOLkQ==}
+  '@boundaryml/baml-bridge-win32-arm64-msvc@0.19.0':
+    resolution: {integrity: sha512-RP5d6sKLdz2mSxw510RZhb97P+FtYl2qqty1KiCUafl+XPOAGmOdkYT30N532CzWulo9gePaS8wHeI2MtGSDug==}
     cpu: [arm64]
     os: [win32]
 
-  '@boundaryml/baml-bridge-win32-x64-msvc@0.20.0':
-    resolution: {integrity: sha512-thsAXuaylf9qkkeatw7XC710jTbXN3GU7fGx0Mt2kbH0OAnLFIhmpch/mk/pH7slGS152c3curT92egGrcpyRA==}
+  '@boundaryml/baml-bridge-win32-x64-msvc@0.19.0':
+    resolution: {integrity: sha512-7LMADLaCn99SQNP639OoKmGbgA0mZweB/V24VZN7PGpVKUQtcwtZFZOZQ0VxtyE/jVB4nWldOz2rVxkgdW7ToQ==}
     cpu: [x64]
     os: [win32]
 
-  '@boundaryml/baml-bridge@0.20.0':
-    resolution: {integrity: sha512-ww7HbIAUw2sbG/SJTqQxIYKTgLc0qIovirNIVu358ki/VwGF3FIL0JPlEZWo7+1KM9hsbD5zaGf75egh4tjkUg==}
+  '@boundaryml/baml-bridge@0.19.0':
+    resolution: {integrity: sha512-Hvnon28eHeR+o3gRTcCwIXo2OfJWl8ezQqkHGTyfETN6+FhuLUvaSxvq2pmbCtPJAy2R9zO7b8jdqFd11e5hCw==}
 
   '@cacheable/memory@2.2.0':
     resolution: {integrity: sha512-CTLKqLItRCEixEAewD3/j9DB3/o96gpTPD4eJ1v+DGOlxZRZncRQkGYqqnAGCscYd6RNeXfGeiuCphsPtqyIfQ==}
@@ -3763,42 +3763,42 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@boundaryml/baml-bridge-darwin-arm64@0.20.0':
+  '@boundaryml/baml-bridge-darwin-arm64@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-darwin-x64@0.20.0':
+  '@boundaryml/baml-bridge-darwin-x64@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-linux-arm64-gnu@0.20.0':
+  '@boundaryml/baml-bridge-linux-arm64-gnu@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-linux-arm64-musl@0.20.0':
+  '@boundaryml/baml-bridge-linux-arm64-musl@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-linux-x64-gnu@0.20.0':
+  '@boundaryml/baml-bridge-linux-x64-gnu@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-linux-x64-musl@0.20.0':
+  '@boundaryml/baml-bridge-linux-x64-musl@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-win32-arm64-msvc@0.20.0':
+  '@boundaryml/baml-bridge-win32-arm64-msvc@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge-win32-x64-msvc@0.20.0':
+  '@boundaryml/baml-bridge-win32-x64-msvc@0.19.0':
     optional: true
 
-  '@boundaryml/baml-bridge@0.20.0':
+  '@boundaryml/baml-bridge@0.19.0':
     dependencies:
       protobufjs: 7.6.6
     optionalDependencies:
-      '@boundaryml/baml-bridge-darwin-arm64': 0.20.0
-      '@boundaryml/baml-bridge-darwin-x64': 0.20.0
-      '@boundaryml/baml-bridge-linux-arm64-gnu': 0.20.0
-      '@boundaryml/baml-bridge-linux-arm64-musl': 0.20.0
-      '@boundaryml/baml-bridge-linux-x64-gnu': 0.20.0
-      '@boundaryml/baml-bridge-linux-x64-musl': 0.20.0
-      '@boundaryml/baml-bridge-win32-arm64-msvc': 0.20.0
-      '@boundaryml/baml-bridge-win32-x64-msvc': 0.20.0
+      '@boundaryml/baml-bridge-darwin-arm64': 0.19.0
+      '@boundaryml/baml-bridge-darwin-x64': 0.19.0
+      '@boundaryml/baml-bridge-linux-arm64-gnu': 0.19.0
+      '@boundaryml/baml-bridge-linux-arm64-musl': 0.19.0
+      '@boundaryml/baml-bridge-linux-x64-gnu': 0.19.0
+      '@boundaryml/baml-bridge-linux-x64-musl': 0.19.0
+      '@boundaryml/baml-bridge-win32-arm64-msvc': 0.19.0
+      '@boundaryml/baml-bridge-win32-x64-msvc': 0.19.0
 
   '@cacheable/memory@2.2.0':
     dependencies:
