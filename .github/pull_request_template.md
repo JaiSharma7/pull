@@ -1,12 +1,14 @@
 ## What and why
 
-<!-- The diff says what changed. This should say why it needed to. If it fixes
-     something, describe the failure: what a reader saw, or what a query returned. -->
+<!-- One concern per pull request. The diff says what changed; explain why it needed to.
+If it fixes something, describe the failure a reader saw or a query returned. -->
+
+Related issue: <!-- Fixes #123, or "none — focused self-contained change" -->
 
 ## The laws
 
 <!-- CLAUDE.md. Delete the ones the diff cannot touch; do not tick a box you have not
-     thought about. -->
+thought about. -->
 
 - [ ] **1 · Design** — no gradients, no shadows, one accent. `packages/ui` unchanged, or
       `design-laws.test.ts` still passes.
@@ -22,10 +24,24 @@
 - [ ] **7 · Secrets** — nothing but the publishable key reaches `apps/web` or a `VITE_*`
       variable.
 
+## Backend / Supabase
+
+<!-- Delete this section when the change does not touch backend behavior. Contributors
+and reviewers validate against the local stack; hosted access is not required. -->
+
+- [ ] A clean `pnpm db:reset` replays the change from zero.
+- [ ] RLS and authorization behavior is covered as the real reader or visitor role,
+      including a denial case where relevant.
+- [ ] `pnpm db:lint` and `pnpm db:test` pass.
+- [ ] I ran `pnpm db:types` and committed the generated diff, or the schema is unchanged.
+- [ ] Any `SECURITY DEFINER`, service-role, authentication, cross-user, backfill, or
+      compatibility behavior is explained below.
+
+Backend risk notes: <!-- "none", or explain the boundary and rollout concern -->
+
 ## Checks
 
 - [ ] `pnpm check` passes
-- [ ] `pnpm db:lint` and `pnpm db:test` pass (if `supabase/` changed)
 - [ ] Every commit is signed off (`git commit -s`) — see CONTRIBUTING.md
 
 ## AI assistance

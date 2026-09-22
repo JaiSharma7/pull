@@ -1,5 +1,7 @@
 # Everything, for now. This is a one-maintainer project and pretending otherwise
-# would only route reviews to nobody.
+# would only route reviews to nobody. As real subsystem ownership develops,
+# GOVERNANCE.md describes how additional owners may be added here; nobody is
+# assigned in anticipation of responsibility they do not yet hold.
 *       @JaiSharma7
 
 # Named separately not because the owner differs but because these are the files

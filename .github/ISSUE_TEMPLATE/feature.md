@@ -1,15 +1,23 @@
 ---
 name: Feature or change
-about: Something the product should do differently
+about: Propose an outcome the product should support
 labels: enhancement
 ---
 
-**What a reader could do afterwards that they cannot do now.**
+## Problem
 
-**Which law it lives under.** `CLAUDE.md` holds seven; a proposal that needs one bent
-is not automatically refused, but it needs to say which and why. The two that most
-often bite: anything per-impression is a law 2 problem, and anything gated is a law 3
-problem.
+<!-- What can a reader not do today, or what current behavior causes the problem? -->
 
-**Where it sits.** `docs/roadmap.md` puts work in rounds, and several obvious ideas are
-already there — or in "Deliberately not planned", which is worth reading first.
+## Desired outcome
+
+<!-- Describe what a reader could do afterwards. A solution sketch is optional. -->
+
+## Product constraints
+
+<!-- Which of the seven laws in CLAUDE.md are relevant? If one may need to bend, name it
+and explain why. Anything per-impression touches law 2; anything gated touches law 3. -->
+
+## Context
+
+<!-- Link the relevant roadmap item, discussion, mockup, or example if one exists.
+Read docs/roadmap.md, including "Deliberately not planned", before filing. -->

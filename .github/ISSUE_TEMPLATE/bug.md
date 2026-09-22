@@ -1,18 +1,28 @@
 ---
 name: Bug
-about: Something behaves differently from how it reads
+about: Report reproducible behavior that differs from what the product says
 labels: bug
 ---
 
-**What happened, and what you expected instead.**
+## What happened?
 
-**Where.** The hosted app at whatapull.vercel.app, or a local stack? If local: the output of
-`pnpm --version && node --version`, and whether `pnpm db:reset` completed.
+<!-- What did you observe, and what did you expect instead? -->
 
-**How to see it again.** The smallest sequence you know of. If it involves data — a
-library of a certain size, a source with particular content — say so; several bugs in
-this repo's history were only visible past a hundred rows.
+## Reproduction
 
-**Anything in the console.** The error text is usually more useful than the screenshot.
+<!-- Give the smallest sequence that shows it. If data shape or library size matters,
+say so. A minimal fixture or failing test is especially useful. -->
 
-<!-- Please do not report anything exploitable here. See SECURITY.md. -->
+## Environment
+
+<!-- Hosted app or local stack? For local work, include:
+pnpm --version
+node --version
+and whether pnpm db:reset completed. -->
+
+## Evidence
+
+<!-- Relevant console output, logs, or screenshots. Remove credentials and personal
+data. Error text is usually more useful than a screenshot alone. -->
+
+<!-- Do not report an exploitable vulnerability here. Follow SECURITY.md instead. -->
