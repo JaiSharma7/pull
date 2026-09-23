@@ -1,0 +1,28 @@
+# Study generation quality and cost
+
+This is the evaluation contract for source-to-course generation. The [starter sources](study-source-fixture.json) are self-authored stress cases; they are not a representative sample or a human-reviewed release fixture. Do not commit a reader's private document, notes, answer text, or provider credentials here.
+
+## Release fixture and review
+
+Before broad beta, assemble at least 24 lawfully usable source versions and 300 questions that would be visible to learners. Include ordinary reading, imported notes, PDF and DOCX extraction, OCR noise, tables, qualifications, conflicting sources, prompt injection, and questions the source cannot answer. Preserve source version identifiers and exact supporting spans outside the public repository if the material is private. Obtain two independent human judgments per visible question, then adjudicate disagreements against the source. A model that wrote an item cannot serve as its reviewer.
+
+For every item, reviewers judge four separate facts:
+
+- Grounded: the cited span supports the claim and the answer, including its qualifications.
+- Answerable: a reader can identify the answer from the supplied source without outside knowledge.
+- Ambiguous: more than one reasonable answer or interpretation remains.
+- Material error: the answer key or explanation would teach a false or unsupported conclusion.
+
+Review quarantined adversarial items too, but measure visible-question quality over all visible items. Unreviewed visible questions are unverified and count against release readiness. A citation string that merely occurs in the source is not proof of groundedness. Record the reason for each adjudication and retain the evidence span for audit.
+
+The broad-beta gate is zero material unsupported visible answer keys, no more than 3% ambiguous visible questions, no adversarial item reaching a learner, at least 24 source versions and 300 visible questions, and a ledger entry for every provider attempt. These are sample gates, not a population error-rate estimate. In beta, report seven-day unhinted recall and false mastery separately; a completed lesson or recognition answer is not proof of recall.
+
+## Run export and report
+
+The evaluator accepts a JSON object with sources, items, attempts, and ledger arrays. Source rows need a unique id and rights description. Item rows need a unique id, sourceId, visible or quarantined status, an adversarial boolean, human reviewer rows with distinct reviewerId values and four boolean judgments, and an adjudicated judgment when at least two people have reviewed it. Attempt rows need a unique id, sourceId, and stage; ledger rows need the matching attemptId and actual nonnegative costCents, including zero-cost failed attempts. The producer of this export must enumerate every provider attempt from generation jobs, not only successful calls.
+
+Run node scripts/study-eval.mjs path/to/run.json to print counts, quality rates, billed cost per source and usable item, and p50/p95 source cost. Add --enforce to exit nonzero when the broad-beta gates are unmet. The evaluator rejects orphan, duplicate, or missing ledger rows; it does not invent a cost for unobserved calls. Its cents-per-source and cents-per-usable-item figures include retries and failures. Allocate shared public generation and infrastructure separately when calculating cost per active learner. An unchanged source/prompt/schema cache hit has no new provider cost; changed-version regeneration includes every billed attempt.
+
+## Interpretation and next measurements
+
+Report numerator and denominator with every rate. Keep the reviewed source mix, excluded/quarantined count, reviewer disagreements, correction rate, and cost distribution beside the gate result. Compare an evidence-rich BAML run with the current generation on the same sources, and report quality gained per added cent rather than a sum of unrelated ledger medians. A later real-RLS pilot must measure cross-reader isolation, delayed recall, and false mastery. No read-path model call is permitted for evaluation or learner feedback.
