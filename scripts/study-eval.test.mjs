@@ -28,6 +28,7 @@ function run(changes = {}) {
       },
     ],
     attempts: [{ id: 'attempt-1', sourceId: 'source-1', stage: 'synthesis' }],
+    providerAttemptIds: ['attempt-1'],
     ledger: [{ attemptId: 'attempt-1', costCents: 2.5 }],
     ...changes,
   };
@@ -46,6 +47,8 @@ describe('study generation evaluation', () => {
       materialErrors: 0,
       ambiguousVisible: 0,
       adversarialLeaks: 0,
+      doubleReviewedAdversarial: 0,
+      visibleSources: 1,
     });
     assert.deepEqual(result.quality, {
       groundedRate: 1,
@@ -60,6 +63,7 @@ describe('study generation evaluation', () => {
       p95SourceCents: 2.5,
     });
     assert.equal(result.gates.minimumFixture, false);
+    assert.equal(result.gates.ledgerComplete, true);
     assert.equal(result.gates.ready, false);
   });
 
@@ -94,12 +98,61 @@ describe('study generation evaluation', () => {
     assert.equal(result.gates.adversarial, false);
   });
 
+  it('does not certify an unreviewed quarantined adversarial item', () => {
+    const data = run();
+    data.items[0].status = 'quarantined';
+    data.items[0].adversarial = true;
+    data.items[0].reviewers = [];
+    delete data.items[0].adjudicated;
+
+    assert.equal(evaluateStudyRun(data).gates.adversarial, false);
+    data.items[0].reviewers = [
+      { reviewerId: 'reader-a', ...verdict() },
+      { reviewerId: 'reader-b', ...verdict() },
+    ];
+    data.items[0].adjudicated = verdict();
+    assert.equal(evaluateStudyRun(data).gates.adversarial, true);
+  });
+
+  it('requires visible questions from every counted fixture source', () => {
+    const data = run();
+    data.sources = Array.from({ length: 24 }, (_, index) => ({
+      id: 'source-' + (index + 1),
+      rights: 'self-authored',
+    }));
+    data.items = Array.from({ length: 300 }, (_, index) => ({
+      ...data.items[0],
+      id: 'item-' + (index + 1),
+    }));
+
+    assert.equal(evaluateStudyRun(data).gates.minimumFixture, false);
+    for (let index = 0; index < 24; index += 1) {
+      data.items[index].sourceId = data.sources[index].id;
+    }
+    assert.equal(evaluateStudyRun(data).gates.minimumFixture, true);
+  });
+
+  it('does not claim ledger completeness without a provider attempt inventory', () => {
+    const data = run();
+    delete data.providerAttemptIds;
+    assert.equal(evaluateStudyRun(data).gates.ledgerComplete, false);
+
+    data.providerAttemptIds = ['attempt-1', 'attempt-2'];
+    assert.equal(evaluateStudyRun(data).gates.ledgerComplete, false);
+
+    data.providerAttemptIds = [];
+    data.attempts = [];
+    data.ledger = [];
+    assert.equal(evaluateStudyRun(data).gates.ledgerComplete, false);
+  });
+
   it('keeps failed provider attempts in cost and refuses an unledgered call', () => {
     const data = run({
       attempts: [
         { id: 'attempt-1', sourceId: 'source-1', stage: 'synthesis' },
         { id: 'attempt-2', sourceId: 'source-1', stage: 'retry' },
       ],
+      providerAttemptIds: ['attempt-1', 'attempt-2'],
       ledger: [
         { attemptId: 'attempt-1', costCents: 2.5 },
         { attemptId: 'attempt-2', costCents: 0.75 },

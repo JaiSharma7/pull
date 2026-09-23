@@ -50,6 +50,18 @@ export function evaluateStudyRun(run) {
   const items = uniqueById(requireArray(run?.items, 'items'), 'item');
   const attempts = uniqueById(requireArray(run?.attempts, 'attempts'), 'attempt');
   const ledgerRows = requireArray(run?.ledger, 'ledger');
+  const providerAttemptIds =
+    run?.providerAttemptIds == null
+      ? null
+      : requireArray(run.providerAttemptIds, 'providerAttemptIds');
+  const providerAttempts = providerAttemptIds == null ? null : new Set();
+  for (const id of providerAttemptIds ?? []) {
+    const attemptId = requireId(id, 'provider attempt id');
+    if (providerAttempts.has(attemptId)) {
+      throw new Error('duplicate provider attempt id: ' + attemptId);
+    }
+    providerAttempts.add(attemptId);
+  }
 
   for (const source of sources.values()) {
     requireId(source.rights, 'source rights');
@@ -86,6 +98,8 @@ export function evaluateStudyRun(run) {
   let ambiguousVisible = 0;
   let adversarialItems = 0;
   let adversarialLeaks = 0;
+  let doubleReviewedAdversarial = 0;
+  const visibleSourceIds = new Set();
   let groundedVisible = 0;
   let answerableVisible = 0;
 
@@ -117,6 +131,7 @@ export function evaluateStudyRun(run) {
 
     if (item.adversarial) {
       adversarialItems += 1;
+      if (doubleReviewed) doubleReviewedAdversarial += 1;
       if (item.status === 'visible') adversarialLeaks += 1;
     }
     if (item.status === 'quarantined') {
@@ -124,6 +139,7 @@ export function evaluateStudyRun(run) {
       continue;
     }
     visibleItems += 1;
+    visibleSourceIds.add(item.sourceId);
     if (!doubleReviewed) continue;
 
     doubleReviewedVisible += 1;
@@ -141,15 +157,22 @@ export function evaluateStudyRun(run) {
   const totalCents = sourceCosts.reduce((sum, value) => sum + value, 0);
   const fullyReviewed = visibleItems > 0 && doubleReviewedVisible === visibleItems;
   const gates = {
-    minimumFixture: sources.size >= 24 && visibleItems >= 300,
+    minimumFixture: visibleSourceIds.size >= 24 && visibleItems >= 300,
     answersSupported:
       fullyReviewed &&
       groundedVisible === visibleItems &&
       answerableVisible === visibleItems &&
       materialErrors === 0,
     ambiguity: fullyReviewed && ambiguousVisible / visibleItems <= 0.03,
-    adversarial: adversarialItems > 0 && adversarialLeaks === 0,
-    ledgerComplete: true,
+    adversarial:
+      adversarialItems > 0 &&
+      adversarialLeaks === 0 &&
+      doubleReviewedAdversarial === adversarialItems,
+    ledgerComplete:
+      providerAttempts != null &&
+      providerAttempts.size > 0 &&
+      providerAttempts.size === attempts.size &&
+      [...providerAttempts].every((id) => attempts.has(id)),
   };
   gates.ready = Object.values(gates).every(Boolean);
 
@@ -163,6 +186,8 @@ export function evaluateStudyRun(run) {
       materialErrors,
       ambiguousVisible,
       adversarialLeaks,
+      doubleReviewedAdversarial,
+      visibleSources: visibleSourceIds.size,
     },
     quality: {
       groundedRate: rate(groundedVisible, visibleItems),
