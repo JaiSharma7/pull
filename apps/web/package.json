@@ -21,8 +21,11 @@
     "@wap/schemas": "workspace:*",
     "@wap/ui": "workspace:*",
     "idb": "^8.0.3",
+    "mammoth": "^1.12.3",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

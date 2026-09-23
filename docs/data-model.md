@@ -1,6 +1,6 @@
 # Data model
 
-52 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+54 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -22,6 +22,7 @@ User
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
+ ├── study_sources ─── study_source_versions       ← private extracted readings
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
  ├── feed_recipes · feed_impressions
@@ -90,6 +91,15 @@ never enter, and `refresh_knowledge_vector` skips a null embedding. Neither is a
 nothing is exposed, something is absent — and each is a change of its own size. The
 Delta's would need `docs/privacy.md`'s promise revisited first, since embedding a
 reader's verbatim highlight is a model call over their own text.
+
+**A private study source is versioned text, not a catalogue work.** The browser
+extracts TXT, Markdown, PDF, DOCX, or opt-in OCR; the reader previews and corrects
+the text before saving. `study_sources` identifies one owner-scoped source, while
+`study_source_versions` appends each correction under a stable source id and mutation
+id. The browser never uploads the original binary. A reader may delete a source and
+all versions; account deletion also cascades. Direct writes to version rows are
+denied, and another reader cannot read or delete them. See
+[`study-import.md`](./study-import.md).
 
 **A reader's own question lives in its own table.** `user_questions` rather than a row in
 `quiz_questions`, because the pipeline upserts canonical questions with

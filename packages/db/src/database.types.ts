@@ -2091,6 +2091,77 @@ export type Database = {
           },
         ]
       }
+      study_source_versions: {
+        Row: {
+          client_mutation_id: string
+          created_at: string
+          extracted_text: string
+          extraction_notes: string | null
+          format: string
+          id: string
+          origin_label: string | null
+          owner_id: string
+          source_id: string
+          title: string
+          version_no: number
+        }
+        Insert: {
+          client_mutation_id: string
+          created_at?: string
+          extracted_text: string
+          extraction_notes?: string | null
+          format: string
+          id?: string
+          origin_label?: string | null
+          owner_id: string
+          source_id: string
+          title: string
+          version_no: number
+        }
+        Update: {
+          client_mutation_id?: string
+          created_at?: string
+          extracted_text?: string
+          extraction_notes?: string | null
+          format?: string
+          id?: string
+          origin_label?: string | null
+          owner_id?: string
+          source_id?: string
+          title?: string
+          version_no?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_source_versions_source_id_owner_id_fkey"
+            columns: ["source_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_sources"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_sources: {
+        Row: {
+          created_at: string
+          id: string
+          latest_version_no: number
+          owner_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          latest_version_no?: number
+          owner_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          latest_version_no?: number
+          owner_id?: string
+        }
+        Relationships: []
+      }
       summaries: {
         Row: {
           author_id: string | null
@@ -2742,6 +2813,18 @@ export type Database = {
       }
       revoke_other_sessions: { Args: never; Returns: number }
       revoke_session: { Args: { p_session_id: string }; Returns: boolean }
+      save_study_source_version: {
+        Args: {
+          p_extraction_notes?: string
+          p_format: string
+          p_mutation_id: string
+          p_origin_label?: string
+          p_source_id?: string
+          p_text: string
+          p_title: string
+        }
+        Returns: Json
+      }
       search_catalogue: {
         Args: {
           p_kinds?: Database["public"]["Enums"]["work_kind"][]

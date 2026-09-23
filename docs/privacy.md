@@ -1,22 +1,16 @@
 # Privacy Policy
 
-**Effective 15 September 2026.** Every revision of this document is a commit in this
+**Effective 23 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-What changed on this date, in two parts.
+**Private study import** is new. When you save material in Studio's Prepare study material
+mode, we store the extracted text you approved and each corrected version in your private
+account. We do not upload the original file, and saving alone does not send the text to a
+model provider. You can delete a study source and all its versions from Studio. See
+[What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
-**Anthropic** was added to the processors below. A deployment may configure it as the
-fallback that writes a Studio summary when Google is unavailable, so text you submit to
-the Studio may reach a second provider.
-
-**Feedback** is new, and it collects something this policy did not previously describe:
-if you use the form in Settings, what you write is stored against your account, together
-with the subject you chose and the screen you were on before you opened Settings. It is
-described under "What you create" below. Nothing else about what is collected, kept or
-shared has changed.
-
-Under "Changes" at the foot of this document both are material changes, which is why the
-date above moved rather than staying at 30 August.
+The previous revision, effective 15 September, added Anthropic as an optional Studio
+summary fallback and described feedback sent through Settings. Those disclosures remain below.
 
 ## Scope
 
@@ -102,6 +96,17 @@ Saved Pulls and stashes, notes, highlights, your reading progress, the explanati
 write in Say It Back, the stances you record in the Conviction Ledger, and any feedback
 you send (`stashes`, `saved_items`, `notes`, `highlights`, `progress`, `explanations`,
 `convictions`, `feedback`).
+
+**Private study sources** are extracted text that you review in Studio before saving:
+pasted text, local files, or highlights you already imported. The title, source format,
+extraction notes, text, and each corrected version are stored in `study_sources` and
+`study_source_versions` under your account. The original file is read in your browser and
+is not uploaded. OCR is optional, uses downloaded recognition code/data, and runs on the
+image in your browser. Saving this text does not send it to Google or Anthropic, publish
+it, or add it to another reader's experience. You can delete the whole source and its
+versions in Studio; they are also included in your account export and deleted with your
+account. Correcting a version appends a new row; earlier text remains in your account
+export until you delete the source.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
@@ -232,8 +237,8 @@ or to any other model provider.** Models run at generation time, once, to turn a
 into a canonical summary that thousands of readers then share. What that call contains is
 the source material and our prompt — not you, not your history, and not your library.
 
-**The exception is a document you submit yourself.** If you ask the Studio to generate a
-summary of your own text, a URL, or highlights you have imported, that text is the source,
+**The exception is a document you submit for generation.** Saving a private study
+source does not send it to a model. If you ask the Studio to generate a summary of your own text, a URL, or highlights you have imported, that text is the source,
 and the pipeline sends it to a model provider as the context for the summary it writes —
 Google, or Anthropic where a deployment configures the fallback that answers when Gemini
 is unavailable. You are doing that deliberately, but it is your content reaching a model
@@ -360,6 +365,9 @@ and typing the same answer sends no audio at all.
 
 While your account exists, your data exists — unlimited history is one of the five things
 this product refuses to charge for, so we are not going to quietly trim it.
+
+You can delete an individual private study source and all its versions from Studio.
+This removes the extracted text for that source without deleting your account.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,

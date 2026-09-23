@@ -57,8 +57,48 @@ import type { ImportedItem } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { sqlState } from '../lib/rpc-error.js';
 import { mutationId } from '../lib/submission.js';
+import { StudyImport } from './StudyImport.js';
 
 export function Studio({
+  userId,
+  onNavigate,
+}: {
+  userId: string;
+  onNavigate: (to: string) => void;
+}) {
+  const [view, setView] = useState<'summary' | 'study'>('summary');
+  return (
+    <>
+      <div className="stack measure">
+        <div className="library__filters" role="group" aria-label="Studio work">
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={view === 'summary'}
+            onClick={() => setView('summary')}
+          >
+            Write a summary
+          </button>
+          <button
+            type="button"
+            className="btn btn--plain library__filter"
+            aria-pressed={view === 'study'}
+            onClick={() => setView('study')}
+          >
+            Prepare study material
+          </button>
+        </div>
+      </div>
+      {view === 'summary' ? (
+        <StudioSummary key={userId} userId={userId} onNavigate={onNavigate} />
+      ) : (
+        <StudyImport key={userId} userId={userId} />
+      )}
+    </>
+  );
+}
+
+function StudioSummary({
   userId,
   onNavigate,
 }: {

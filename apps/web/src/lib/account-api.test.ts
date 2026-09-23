@@ -138,6 +138,29 @@ describe('buildAccountExport', () => {
     expect(out.incomplete.map((i) => i.table)).toContain('history_events');
   });
 
+  it('includes the reader’s private source text and version history', async () => {
+    TABLES.set('study_sources', [{ id: 'source-1', owner_id: 'u1' }]);
+    TABLES.set('study_source_versions', [
+      {
+        id: 'version-1',
+        source_id: 'source-1',
+        owner_id: 'u1',
+        extracted_text: 'My corrected note.',
+      },
+    ]);
+
+    const out = await buildAccountExport('u1', null);
+
+    expect(out.data['study_sources']).toHaveLength(1);
+    expect(out.data['study_source_versions']).toEqual([
+      {
+        id: 'version-1',
+        source_id: 'source-1',
+        owner_id: 'u1',
+        extracted_text: 'My corrected note.',
+      },
+    ]);
+  });
   it('names every table it walked, so a missing one is visible in the file', async () => {
     const out = await buildAccountExport('u1', null);
     // Empty tables still appear as empty arrays. A table that vanished from `data`
