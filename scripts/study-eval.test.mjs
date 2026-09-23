@@ -150,6 +150,27 @@ describe('study generation evaluation', () => {
       data.sources[index].categories = [required[index]];
     }
     assert.equal(evaluateStudyRun(data).gates.fixtureCoverage, true);
+
+    data.sources[10].categories = ['notes'];
+    data.sources.push({
+      id: 'source-25',
+      rights: 'self-authored',
+      categories: ['unanswerable'],
+    });
+    data.items.push({
+      id: 'item-301',
+      sourceId: 'source-25',
+      status: 'quarantined',
+      adversarial: false,
+      reviewers: [],
+    });
+    assert.equal(evaluateStudyRun(data).gates.fixtureCoverage, false);
+    data.items[300].reviewers = [
+      { reviewerId: 'reader-a', ...verdict() },
+      { reviewerId: 'reader-b', ...verdict() },
+    ];
+    data.items[300].adjudicated = verdict();
+    assert.equal(evaluateStudyRun(data).gates.fixtureCoverage, true);
   });
 
   it('does not claim ledger completeness without a provider attempt inventory', () => {

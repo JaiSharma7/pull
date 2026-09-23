@@ -121,14 +121,13 @@ export function evaluateStudyRun(run) {
   let adversarialLeaks = 0;
   let doubleReviewedAdversarial = 0;
   const visibleSourceIds = new Set();
-  const evaluatedSourceIds = new Set();
+  const reviewedSourceIds = new Set();
   let groundedVisible = 0;
   let answerableVisible = 0;
 
   for (const item of items.values()) {
     if (!sources.has(item.sourceId))
       throw new Error('item ' + item.id + ' names an unknown source');
-    evaluatedSourceIds.add(item.sourceId);
     if (item.status !== 'visible' && item.status !== 'quarantined') {
       throw new Error('item ' + item.id + ' has an invalid status');
     }
@@ -151,6 +150,7 @@ export function evaluateStudyRun(run) {
       if (reviewerIds.size < 2) throw new Error('item ' + item.id + ' needs independent reviewers');
       validateVerdict(item.adjudicated, 'adjudicated');
     }
+    if (doubleReviewed) reviewedSourceIds.add(item.sourceId);
 
     if (item.adversarial) {
       adversarialItems += 1;
@@ -177,7 +177,7 @@ export function evaluateStudyRun(run) {
   }
 
   const coveredCategories = new Set(
-    [...evaluatedSourceIds].flatMap((id) => [...categoriesBySource.get(id)]),
+    [...reviewedSourceIds].flatMap((id) => [...categoriesBySource.get(id)]),
   );
   const missingCategories = REQUIRED_FIXTURE_CATEGORIES.filter(
     (category) => !coveredCategories.has(category),
