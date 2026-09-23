@@ -7,17 +7,22 @@ has separately established knowledge of that very idea.
 
 ## Active decision
 
-The append-only migration dated 20260922120000 replaces the final get_feed from
+The append-only migrations dated 20260922120000 and 20260922230000 replace the final get_feed from
 20260909050000 and get_source_delta from 20260830222533. Both require a
 knowledge state above the existing 0.7 retrievability floor plus the latest
 relevant recall event: good/easy review, recall, or say-it-back; or easy on the
-explicit “Already knew it” Delta probe. A later forgot/hard answer removes that
-evidence, even if the state remains highly stable. An old success also expires from its event time: opening the card cannot refresh that proof. Calibration, conviction,
+explicit “Already knew it” Delta probe. A later server-applied forgot/hard answer removes that
+evidence, even if the state remains highly stable. A delayed offline success
+submitted before that failure cannot revive it. An old success expires from its
+recorded event time and stability: opening the card cannot refresh that proof. Calibration, conviction,
 counterpull, opening, reading, saving, and impressions do not prove knowledge.
 
 Direct knowledge is never subject to the 500-idea semantic comparison cap.
-Reviewed equivalence can suppress only when one endpoint belongs to that capped
-proven-known set. Null embeddings stay in that set: a reviewed equivalence is
+Reviewed equivalence can suppress only when one endpoint belongs to the
+strongest 500 above-floor knowledge states and has recall evidence. The cap is
+applied before the event-history probe; an unproved state inside it is not
+replaced by a weaker state beyond it. This conservatively leaves some redundant
+ideas visible as a reader's history grows. Null embeddings stay in that set: a reviewed equivalence is
 usable without vectors. Missing embeddings and missing equivalence edges never
 cause semantic suppression. Authored opposition and approved opposition work in
 either stored direction for ranking and veto any conflicting equivalence for the
@@ -27,20 +32,24 @@ impressions, and muted sources retain their ranking and eligibility roles.
 The new relationship table links Pulls, not normalized claims. Its unordered
 pair key prevents duplicate or contradictory proposed kinds for one pair.
 Only an approved equivalence suppresses; approval requires evidence, a review
-timestamp, and two distinct reviewer references. Approval of an uncertain label is
+timestamp, and two distinct reviewer references. Approval of an uncertain or directionless elaboration label is
 forbidden. Disabling a bad edge immediately removes its read-path effect
 without touching any reader's knowledge history. The table permits readers
 to see an approved relation only when both endpoint summaries are readable under RLS;
-authenticated readers cannot write it.
+authenticated readers cannot write, truncate, or trigger it. A follow-up
+migration revokes inherited table privileges and grants only SELECT; it also
+stamps updated_at on relation review changes.
 
 The Feed's matched count covers directly known ideas in the bounded candidate
 pool plus reviewed equivalences in the shortlist. At the default limit, the
 pool can contain 800 ideas and the shortlist 400; neither count means
-“cards removed from the 20 displayed.” Candidate pools may overlap across
-pagination, so the UI reports the latest search instead of summing pages.
+“cards removed from the 20 displayed.” Pull IDs break equal-score ties at
+each feed sort boundary. Candidate pools may overlap across pagination, so the UI reports the latest search instead of summing pages.
 The minutes value sums stored estimated reading seconds for those matches and
-is not measured elapsed time saved. A Source Delta counts all published,
-readable ideas attached to that source; “unverified” means no proof of knowledge,
+is not measured elapsed time saved. The Source page asks get_summary_delta
+for the selected published summary it displays. The Library uses
+get_source_delta for all readable published versions of the work. “Unverified”
+means no proof of knowledge,
 not proof that the idea is unfamiliar. Search and Topic still receive the older
 knowledge-state annotation from their own RPCs; their labels now say “in your
 learning history” because a read or calibration can create that state without
@@ -75,8 +84,9 @@ text or credential was exported in this audit.
 
 A local, transaction-rolled-back benchmark built 709 public ideas and 500
 proven-known ideas under authenticated RLS. After bounding ranking-only vector
-comparisons to 100, ten repeated calls measured Feed p50 271.8 ms and p95
-314.2 ms; Source Delta p50 54.6 ms and p95 59.9 ms. An earlier single
+comparisons to 100 and applying the known-state cap before history probes,
+ten repeated calls measured Feed p50 223.7 ms and p95 258.1 ms;
+work-wide Source Delta p50 50.9 ms and p95 60.3 ms. An earlier single
 unbounded-ranking run took about 778 ms for Feed. These are local synthetic
 vectors, not hosted user latency or a release threshold. Re-run
 scripts/bench-delta-709.sql in CI or staging and measure real reader cohorts

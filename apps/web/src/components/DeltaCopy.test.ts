@@ -36,7 +36,7 @@ describe('Delta claims shown to readers', () => {
         delta: { total: 4, known: 0, new: 4, minutesSaved: 0 },
       }),
     );
-    expect(html).toContain('No ideas in this source are confirmed as known yet');
+    expect(html).toContain('No ideas in this version are confirmed as known yet');
     expect(html).not.toContain('new to you');
   });
 });

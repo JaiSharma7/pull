@@ -1130,7 +1130,7 @@ export function Library({ userId }: { userId: string }) {
                       <>
                         {' · '}
                         <span style={{ color: 'var(--accent)' }}>
-                          {d.new} of {d.total} still new to you
+                          {d.new} of {d.total} published source ideas unverified
                         </span>
                       </>
                     )}

@@ -23,6 +23,7 @@ declare
   paraphrase uuid;
   private_pull uuid;
   private_summary uuid;
+  public_summary uuid;
   on_liberty uuid;
   walden uuid;
   feed jsonb;
@@ -39,7 +40,24 @@ declare
   known_in uuid;
   known_out uuid;
   boundary_seconds double precision;
+  tie_work uuid;
+  tie_summary uuid;
+  tie_hi uuid := 'ffffffff-ffff-4fff-8fff-fffffffffff1';
+  tie_lo uuid := '11111111-1111-4111-8111-111111111111';
+  tie_hi_pos bigint;
+  tie_lo_pos bigint;
 begin
+  perform pg_temp.must(has_table_privilege('anon','public.delta_relations','SELECT')
+    and has_table_privilege('authenticated','public.delta_relations','SELECT'),
+    'reader roles need approved relation SELECT access');
+  perform pg_temp.must(not has_table_privilege('anon','public.delta_relations','TRUNCATE')
+    and not has_table_privilege('authenticated','public.delta_relations','TRUNCATE'),
+    'reader roles must not be able to bypass RLS with TRUNCATE');
+  perform pg_temp.must(not has_table_privilege('authenticated','public.delta_relations','INSERT')
+    and not has_table_privilege('authenticated','public.delta_relations','UPDATE')
+    and not has_table_privilege('authenticated','public.delta_relations','DELETE')
+    and not has_table_privilege('anon','public.delta_relations','INSERT'),
+    'relation review writes must remain owner-only');
   if (select count(*) from public.pulls) > 500 then
     raise exception 'Delta test only runs against the local seed corpus';
   end if;
@@ -50,6 +68,7 @@ begin
   select p.id into strict paraphrase from public.pulls p
     where p.headline like 'An unchallenged truth%';
   select id into strict on_liberty from public.works where slug = 'on-liberty';
+  select summary_id into strict public_summary from public.pulls where id=mill;
   select id into strict walden from public.works where slug = 'walden';
 
   foreach signup in array array[reader_a,reader_b] loop
@@ -106,6 +125,53 @@ begin
   feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
   perform pg_temp.must(feed=before_feed,'identical feed requests must be stable');
 
+  -- Equal-score cards must have a stable ID order regardless of heap order.
+  perform set_config('role','postgres',true);
+  insert into public.works (kind,title,slug,rights_status)
+    values ('essay','Tie high','delta-tie-high','public_domain') returning id into tie_work;
+  insert into public.summaries (work_id,title,status,visibility,published_at)
+    values (tie_work,'Tie high','published','public',now()) returning id into tie_summary;
+  insert into public.pulls (id,summary_id,ordinal,headline,body,estimated_read_seconds)
+    values (tie_hi,tie_summary,1,'Tie high','Stable sorting fixture.',20);
+  insert into public.works (kind,title,slug,rights_status)
+    values ('essay','Tie low','delta-tie-low','public_domain') returning id into tie_work;
+  insert into public.summaries (work_id,title,status,visibility,published_at)
+    values (tie_work,'Tie low','published','public',now()) returning id into tie_summary;
+  insert into public.pulls (id,summary_id,ordinal,headline,body,estimated_read_seconds)
+    values (tie_lo,tie_summary,1,'Tie low','Stable sorting fixture.',20);
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  perform set_config('enable_indexscan','off',true);
+  perform set_config('enable_bitmapscan','off',true);
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  select ord into tie_hi_pos from jsonb_array_elements(feed->'rows') with ordinality r(row,ord)
+    where (row->>'id')::uuid=tie_hi;
+  select ord into tie_lo_pos from jsonb_array_elements(feed->'rows') with ordinality r(row,ord)
+    where (row->>'id')::uuid=tie_lo;
+  perform pg_temp.must(tie_lo_pos is not null and tie_hi_pos is not null and tie_lo_pos<tie_hi_pos,
+    'equal-score feed cards must use pull ID as a deterministic tie-break');
+  perform set_config('enable_indexscan','on',true);
+  perform set_config('enable_bitmapscan','on',true);
+
+  -- Server application order wins over an inaccurate client clock. A delayed
+  -- offline success submitted before a failure cannot erase that failure.
+  perform public.grade_recall(mill,'hard',p_kind:='recall',
+    p_submitted_at:=now()-interval '1 year');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'newly applied backdated failure must revoke earlier recall proof');
+  perform public.grade_recall(mill,'easy',p_kind:='recall',
+    p_submitted_at:=now()-interval '1 year');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'late offline success submitted before failure must not revive proof');
+  perform public.grade_recall(mill,'easy',p_kind:='recall');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'a fresh success after failure must restore proof');
+
   -- Each storage direction of one opposition protects ranking independently.
   perform set_config('request.jwt.claims',
     json_build_object('sub',reader_b,'role','authenticated')::text,true);
@@ -160,9 +226,20 @@ begin
   pair_b := greatest(mill,paraphrase);
   perform set_config('role','postgres',true);
   insert into public.delta_relations
-    (pull_a_id,pull_b_id,kind,status,evidence,provenance,confidence)
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance,confidence,updated_at)
   values (pair_a,pair_b,'equivalent','proposed',
-    'Reviewed wording required before activation','test',0.9);
+    'Reviewed wording required before activation','test',0.9,now()-interval '1 day');
+  insert into public.delta_relations
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance)
+  values (least(mill,opposite),greatest(mill,opposite),
+    'elaborates','proposed','Direction requires a schema field','test');
+  begin
+    update public.delta_relations set status='approved',reviewed_at=now(),
+      reviewer_refs=array['test reviewer A','test reviewer B']
+      where pull_a_id=least(mill,opposite) and pull_b_id=greatest(mill,opposite);
+    raise exception 'directionless elaboration was approved';
+  exception when check_violation then null;
+  end;
   perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
     json_build_object('sub',reader_a,'role','authenticated')::text,true);
@@ -189,6 +266,10 @@ begin
   end;
   update public.delta_relations set status='approved',reviewed_at=now(),reviewer_refs=array['test reviewer A','test reviewer B']
     where pull_a_id=pair_a and pull_b_id=pair_b;
+  perform pg_temp.must(
+    (select updated_at > now()-interval '1 hour' from public.delta_relations
+      where pull_a_id=pair_a and pull_b_id=pair_b),
+    'review updates must refresh relation updated_at');
   perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
     json_build_object('sub',reader_a,'role','authenticated')::text,true);
@@ -318,6 +399,27 @@ begin
     where (row->>'id')::uuid=opposite),
     'another reader private evidence must not affect feed');
 
+  -- The Source page shows one selected summary; the Library work count spans
+  -- all readable published versions, including this reader's own private one.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_summary_delta(public_summary);
+  perform pg_temp.must((delta->>'total')::int=4,
+    'selected summary Delta must match the visible Source page idea list');
+  delta := public.get_summary_delta(private_summary);
+  perform pg_temp.must((delta->>'total')::int=1,
+    'private summary Delta must be readable to its own author');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'total')::int=5,
+    'work-wide Delta should still count the readable private version');
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_b,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_summary_delta(private_summary);
+  perform pg_temp.must((delta->>'total')::int=0,
+    'private summary Delta must be invisible to another reader');
+
   -- The strict retrievability floor is shared by direct and semantic
   -- decisions. Keep the test a minute either side of the computed boundary
   -- so timestamp precision cannot decide it accidentally.
@@ -327,7 +429,7 @@ begin
   update public.knowledge_states set stability=1,
     last_seen_at=now()-make_interval(secs=>boundary_seconds+60)
     where user_id=reader_b and pull_id=mill;
-  update public.recall_events set applied_at=now()-make_interval(secs=>boundary_seconds+60)
+  update public.recall_events set applied_at=now()-make_interval(secs=>boundary_seconds+60), stability_after=1
     where user_id=reader_b and pull_id=mill and kind='recall';
   perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
@@ -340,6 +442,10 @@ begin
   delta := public.get_source_delta(on_liberty);
   perform pg_temp.must((delta->>'known')::int=0,
     'reading must not revive an expired recall without a new attempt');
+  perform public.grade_recall(mill,'easy',p_kind:='calibration');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'calibration must not extend expired recall proof');
   perform set_config('role','postgres',true);
   update public.knowledge_states set
     last_seen_at=now()-make_interval(secs=>boundary_seconds-60)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
 import { RememberThis } from '../components/RememberThis.js';
-import { fetchSavedAmong, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
+import { fetchSavedAmong, fetchSummaryDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import {
   isPlaying,
@@ -346,6 +346,16 @@ export function Source({
           return;
         }
         setDetail(d);
+        setDelta(null);
+        if (d.summaryId) {
+          fetchSummaryDelta(d.summaryId)
+            .then((next) => {
+              if (live) setDelta(next);
+            })
+            .catch(() => {
+              /* The page stands without its Delta. */
+            });
+        }
         // The summary's own title where it has one, the work's otherwise — the same
         // choice the heading makes, so the tab and the page agree.
         onTitle?.(d.summaryTitle ?? d.work.title);
@@ -368,23 +378,6 @@ export function Source({
           );
         }
         setError(e instanceof Error ? e.message : 'Could not load this source.');
-      });
-
-    /*
-     * The Delta is fetched separately and allowed to fail on its own.
-     *
-     * It is the more interesting half and the more fragile one: it does vector work
-     * over everything the reader knows. If it fails, the source is still worth
-     * reading, so the page renders without the banner rather than not at all —
-     * absence of the Delta is not the same as a Delta of zero, and this is the same
-     * distinction `minutesSaved: number | null` makes in the session rail.
-     */
-    fetchSourceDelta(workId)
-      .then((d) => {
-        if (live) setDelta(d);
-      })
-      .catch(() => {
-        /* The page stands without it. */
       });
 
     return () => {

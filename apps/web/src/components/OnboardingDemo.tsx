@@ -51,7 +51,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
           {step === 1 &&
             'Control how much of an idea you get. The dial moves from the claim itself to the mechanism and the evidence behind it.'}
           {step === 2 &&
-            'Ideas repeat across books. The Delta leaves out the ones your reading already shows you hold.'}
+            'Ideas repeat across books. The Delta can set aside a match after you recall it or say you already knew it.'}
           {step === 3 &&
             'Your thoughts form an enduring lattice. Active recall fires only as memory fades.'}
         </p>
@@ -116,8 +116,8 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               Try it — toggle what you already know:
             </p>
             <p style={{ margin: 'var(--space-1) 0 0' }}>
-              The same idea turns up in book after book. The Delta leaves out the ones you have
-              already met, so what is left is what is new to you.
+              The same idea turns up in book after book. When you have recalled one version and a
+              match has been checked, the Delta can set the matching version aside.
             </p>
           </div>
 
@@ -128,7 +128,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               aria-pressed={!simulatedPriorKnowledge}
               onClick={() => setSimulatedPriorKnowledge(false)}
             >
-              First-time reader (No Delta)
+              No confirmed matches
             </button>
             <button
               type="button"
@@ -136,7 +136,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
               aria-pressed={simulatedPriorKnowledge}
               onClick={() => setSimulatedPriorKnowledge(true)}
             >
-              Calibrated reader (The Delta Active)
+              Two confirmed matches
             </button>
           </div>
 
@@ -177,7 +177,7 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                 >
                   {simulatedPriorKnowledge ? '2' : '0'}
                 </span>
-                <span className="meta"> ideas already held</span>
+                <span className="meta"> ideas with confirmed matches</span>
               </div>
               <div>
                 <span
@@ -189,14 +189,14 @@ export function OnboardingDemo({ onComplete, onSkip }: OnboardingDemoProps) {
                 >
                   {simulatedPriorKnowledge ? '~1m' : '0m'}
                 </span>
-                <span className="meta"> reading time spared</span>
+                <span className="meta"> estimated reading in matches</span>
               </div>
             </div>
 
             <p style={{ color: 'var(--text-soft)', margin: 0 }}>
               {simulatedPriorKnowledge
-                ? 'With two of these three already in your knowledge model, the Delta shows the one that is new to you.'
-                : 'Without a knowledge model, all three are shown in order, including the ones you already hold.'}
+                ? 'With two reviewed matches to ideas you recall, one remains unverified.'
+                : 'Without recall evidence or reviewed matches, all three remain unverified.'}
             </p>
           </div>
         </div>

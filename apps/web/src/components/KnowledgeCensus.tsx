@@ -257,8 +257,8 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
           What do you already know?
         </h1>
         <p className="meta">
-          Mark the ideas you already hold. Each one is recorded against your knowledge model, so the
-          Delta can stop showing you what you already know.
+          Mark what feels familiar. This calibrates your learning model. The Delta sets an idea
+          aside after you recall it or explicitly say you already knew it.
         </p>
 
         <div
@@ -319,7 +319,8 @@ export function KnowledgeCensus({ onComplete, onSkip }: KnowledgeCensusProps) {
                 */}
                 {applied.has(item.id) ? (
                   <p className="meta" style={{ marginTop: 'var(--space-2)' }}>
-                    Recorded as {applied.get(item.id) === 'easy' ? 'known well' : 'familiar'}.
+                    Calibration recorded as{' '}
+                    {applied.get(item.id) === 'easy' ? 'know it well' : 'familiar'}.
                   </p>
                 ) : (
                   <div

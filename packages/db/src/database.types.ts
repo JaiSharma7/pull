@@ -2536,6 +2536,7 @@ export type Database = {
       get_path: { Args: { p_slug: string }; Returns: Json }
       get_paths: { Args: never; Returns: Json }
       get_source_delta: { Args: { p_work_id: string }; Returns: Json }
+      get_summary_delta: { Args: { p_summary_id: string }; Returns: Json }
       get_topic: { Args: { p_limit?: number; p_slug: string }; Returns: Json }
       get_user_knowledge_graph: { Args: { p_limit?: number }; Returns: Json }
       grade_recall: {

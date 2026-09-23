@@ -6,7 +6,7 @@ export function SourceDeltaSummary({ delta }: { delta: SourceDelta | null }) {
   return (
     <p className="source__delta">
       {delta.known === 0 ? (
-        <>No ideas in this source are confirmed as known yet.</>
+        <>No ideas in this version are confirmed as known yet.</>
       ) : (
         <>
           <strong>{delta.known}</strong> of {delta.total}{' '}
