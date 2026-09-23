@@ -149,7 +149,7 @@ export function Topic({ slug, onNavigate }: { slug: string; onNavigate: (to: str
               {/*
                 Stated in words, not carried by a colour (design law 5), and
                 worded as what it measures: a tracked knowledge-state count, not the
-                The source's reviewed Delta matches, which stay on the source page.
+                source's reviewed Delta matches, which stay on the source page.
               */}
               {source.known > 0 ? ` · ${source.known} in your learning history` : ''}
             </p>

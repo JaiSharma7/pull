@@ -22,14 +22,14 @@ export type { KnowledgeLevel };
  * everything claimed is something the database did.
  *
  *   * The items are Pulls from the reader's own feed — `get_feed`, the same ranked
- *     ideas they are about to be shown — so calibration is against what the Delta will
- *     actually filter, and against the public-domain corpus rather than an invented list.
+ *     ideas they are about to be shown — so calibration uses the real public-domain
+ *     corpus rather than an invented list. Calibration alone does not prove recall.
  *   * An answer is written through `grade_recall`, which creates a `knowledge_states`
- *     row and applies FSRS to it. Familiar maps to `good`, Mastered to `easy`; the
+ *     row and applies FSRS to it. Familiar maps to `good`, Know it well to `easy`; the
  *     difference in initial stability is the database's to compute, not ours to assert.
- *   * There is no hours figure, because nothing here measures hours. The Delta does
- *     report real minutes — `FeedResponse.minutesSaved` — but that is a property of a
- *     feed response, not of an answer given here.
+ *   * There is no hours figure, because nothing here measures hours. The Feed
+ *     reports estimated reading in matched ideas for its latest candidate search;
+ *     that estimate is not a property of an answer given here.
  */
 const CENSUS_SIZE = 6;
 

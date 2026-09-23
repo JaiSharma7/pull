@@ -1110,9 +1110,11 @@ export function App() {
                 />
               </div>
             )}
+            {/* A source can show a reader's private summary and Delta. Remount on
+                account changes so old state and in-flight responses disappear. */}
             {sourceId !== null && (
               <Source
-                key={`${sourceId}:${summaryParam ?? ''}`}
+                key={`${sourceId}:${summaryParam ?? ''}:${session?.user.id ?? 'signed-out'}`}
                 workId={sourceId}
                 summaryId={summaryParam ?? undefined}
                 userId={session?.user.id ?? null}
@@ -1398,9 +1400,9 @@ export function App() {
 
         {/*
             The tally is an account of one sitting — ideas met, kept, recalled,
-            and the time the Delta spared. Every number in it is derived from a
-            reader's own history, so for a visitor it would be five zeroes and a
-            dash presented as a result. Omitted rather than emptied.
+            and estimated reading in the latest Delta matches. Reader actions and
+            the latest feed response supply the numbers. For a visitor, the
+            rail would be zeroes and a dash presented as a result.
           */}
         {!visitor && (
           <aside className="shell__aside" aria-label="This session">

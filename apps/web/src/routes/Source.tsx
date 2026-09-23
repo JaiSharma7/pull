@@ -24,8 +24,8 @@ import type { SourceDelta } from '../lib/types.js';
 import { SourceDeltaSummary } from '../components/SourceDeltaSummary.js';
 
 /**
- * One source and its recorded-knowledge estimate. The SQL counts all published
- * ideas in this readable source; an unmatched idea may still be familiar.
+ * One source and its recorded-knowledge estimate. The SQL counts the selected
+ * readable published summary; an unmatched idea may still be familiar.
  */
 
 /**
