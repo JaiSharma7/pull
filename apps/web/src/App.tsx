@@ -1420,11 +1420,6 @@ export function App() {
               </div>
             </div>
 
-            {/*
-            Time saved rather than time spent, in the one accent colour — it is
-            the number the product is optimising for, and putting it here keeps
-            it in view during a session instead of only at the end of one.
-          */}
             <div className="shell__group">
               <div
                 style={{
@@ -1451,12 +1446,12 @@ export function App() {
               </div>
 
               <div className="shell__stat">
-                <span>Already knew</span>
+                <span>Latest search matches</span>
                 <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
               </div>
 
               <div className="shell__stat">
-                <span>Time saved</span>
+                <span>Est. reading in matches</span>
                 <span className="shell__stat-value shell__stat-value--accent">
                   {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
                 </span>

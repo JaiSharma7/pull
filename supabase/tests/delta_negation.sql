@@ -1,542 +1,435 @@
--- ---------------------------------------------------------------------------
--- The Delta must not file a contradiction as something you already know.
---
--- Embeddings barely encode negation: measured against real Gemini vectors, a
--- claim and its opposite sit 0.0618 apart while two paraphrases of the SAME
--- claim sit 0.0987 apart. So a pure distance test rates a contradiction as
--- MORE redundant than a restatement, and the Delta hides exactly the material
--- Counterpull exists to surface.
---
--- The fix removes opposed pairs from the distance comparison, so `covered` and
--- `novelty_distance` are both computed against what the reader knows MINUS the
--- ideas this candidate contradicts.
---
--- This cannot be demonstrated against the seed as it stands: under the current
--- synthetic concept-axis embeddings the two seeded `opposes` pulls are 1.0198
--- apart, nowhere near the 0.14 cut, so the defect does not fire. The test
--- therefore CONSTRUCTS the condition -- which is the same reason the fix has to
--- land before the real-embedding backfill rather than after it.
---
--- Everything runs as a real reader under RLS, and section 7 is what makes that
--- claim mean something. The earlier sections would pass as a superuser too --
--- they assert paths whose predicates are written explicitly in the function
--- bodies (`ks.user_id = uid`, `status = 'published'`), so RLS is redundant for
--- them. Section 7 asserts a path that exists ONLY in a policy:
--- `pull_relations_read_readable`, which is what stops one reader's private
--- material from steering another reader's feed. `assert_is_reader` keeps the
--- rest honest by refusing to let an assertion run with owner rights.
---
--- The whole file rolls back.
--- ---------------------------------------------------------------------------
-
+-- The Delta treats knowledge as evidence, not exposure. All assertions execute
+-- as authenticated readers under real RLS; the transaction rolls back.
 \set ON_ERROR_STOP on
-
 begin;
-
--- Refuses to let an assertion run with owner rights. Without it, a stray
--- `set role postgres` that outlives its section turns every check below into a
--- superuser query that proves nothing -- and does so silently, which is the
--- failure mode worth engineering against.
-create or replace function pg_temp.assert_is_reader() returns void
-language plpgsql as $fn$
+create or replace function pg_temp.assert_reader() returns void language plpgsql as $$
 begin
   if current_user <> 'authenticated' then
-    raise exception
-      'assertions must run as the reader, not as %. RLS is invisible to an '
-      'owner-role query, so this file would be proving nothing.', current_user;
+    raise exception 'Delta assertions require authenticated RLS, got %', current_user;
   end if;
-end $fn$;
+end $$;
+create or replace function pg_temp.must(ok boolean, message text) returns void language plpgsql as $$
+begin
+  if not coalesce(ok, false) then raise exception '%', message; end if;
+end $$;
 
 do $$
 declare
-  reader_knows   uuid := extensions.gen_random_uuid();  -- knows the Mill pull
-  reader_blank   uuid := extensions.gen_random_uuid();  -- knows nothing
-  reader_lineage uuid := extensions.gen_random_uuid();  -- knows the Epictetus pull
-  reader_both    uuid := extensions.gen_random_uuid();  -- knows Mill AND its opposite
-  reader_oneside uuid := extensions.gen_random_uuid();  -- knows only the opposed idea
-  mill_id     uuid;   -- 'Silencing an opinion...'      (On Liberty)
-  thoreau_id  uuid;   -- 'Living deliberately...'       (Walden) -- opposes Mill
-  epi_id      uuid;   -- 'You are disturbed by...'      (Enchiridion)
-  marcus_id   uuid;   -- 'It is your opinion...'        (Meditations) -- restates epi
-  mill_echo_id uuid;  -- a second On Liberty pull, made a paraphrase of Mill
-  seed        constant bigint := 424242;
-  feed        jsonb;
-  delta       jsonb;
-  score_knows numeric;
+  reader_a uuid := extensions.gen_random_uuid();
+  reader_b uuid := extensions.gen_random_uuid();
+  signup uuid;
+  mill uuid;
+  opposite uuid;
+  paraphrase uuid;
+  private_pull uuid;
+  private_summary uuid;
+  on_liberty uuid;
+  walden uuid;
+  feed jsonb;
+  delta jsonb;
+  before_feed jsonb;
+  pair_a uuid;
+  pair_b uuid;
   score_blank numeric;
-  skipped       int;
-  skipped_blank int;
-  present     boolean;
-  signup_id   uuid;
-  author_id          uuid := extensions.gen_random_uuid();
-  private_summary_id uuid;
-  private_pull_id    uuid;
+  score_a numeric;
+  expected_minutes numeric;
+  cap_work uuid;
+  cap_summary uuid;
+  cap_candidate uuid;
+  known_in uuid;
+  known_out uuid;
+  boundary_seconds double precision;
 begin
-  -- This file DELETEs pulls and relations and INSERTs users. It is safe only
-  -- because of the rollback at the end -- and `db:test` honours $DATABASE_URL,
-  -- so "which database" is not a constant. Refuse anything that is not the
-  -- freshly seeded local corpus rather than trusting the transaction alone.
-  -- Identity and scale, not an exact count: the seed corpus grows, and a test
-  -- that turns CI red for that reads like a Delta regression to whoever hits
-  -- it. What actually matters is that this is a seeded development corpus and
-  -- not somebody's data.
   if (select count(*) from public.pulls) > 500 then
-    raise exception
-      'refusing to run: found % pulls, which is not a seed corpus. This test '
-      'writes before it rolls back and must not be pointed at real data.',
-      (select count(*) from public.pulls);
+    raise exception 'Delta test only runs against the local seed corpus';
   end if;
+  select p.id into strict mill from public.pulls p
+    where p.headline like 'Silencing an opinion%';
+  select p.id into strict opposite from public.pulls p
+    where p.headline like 'Living deliberately%';
+  select p.id into strict paraphrase from public.pulls p
+    where p.headline like 'An unchallenged truth%';
+  select id into strict on_liberty from public.works where slug = 'on-liberty';
+  select id into strict walden from public.works where slug = 'walden';
 
-  -- ---------------------------------------------------------------- fixture
-  -- STRICT: without it plpgsql silently takes an arbitrary row when a pattern
-  -- matches twice, and these patterns are only unique by convention.
-  select p.id into strict mill_id    from public.pulls p where p.headline like 'Silencing an opinion%';
-  select p.id into strict thoreau_id from public.pulls p where p.headline like 'Living deliberately%';
-  select p.id into strict epi_id     from public.pulls p where p.headline like 'You are disturbed by your judgement%';
-  select p.id into strict marcus_id  from public.pulls p where p.headline like 'It is your opinion of the thing%';
-  -- Another On Liberty pull; section 3 turns it into a restatement of Mill
-  -- carrying no `opposes` edge of its own. Constrained by slug so the comment
-  -- and the query cannot drift apart.
-  select p.id into strict mill_echo_id
-  from public.pulls p
-  join public.summaries s on s.id = p.summary_id
-  join public.works w on w.id = s.work_id
-  where w.slug = 'on-liberty' and p.headline like 'An unchallenged truth%';
-
-  -- The seeded `opposes` edge is real editorial disagreement (Mill wants you to
-  -- engage every opinion; Thoreau wants attention spent selectively). Give the
-  -- pair the distance that REAL embeddings would give it. Zero rather than
-  -- 0.0618 so the assertion cannot drift with the threshold.
-  update public.pulls set embedding = (select embedding from public.pulls where id = mill_id)
-  where id = thoreau_id;
-
-  -- Walden's and Meditations' other pulls are removed so `per_work <= 2` in
-  -- get_feed cannot silently drop a card under test for a reason unrelated to
-  -- the Delta. Without this, section 6 passes even if the `opposes`-only
-  -- restriction regresses: Marcus would be absent because he lost the per-work
-  -- cut, not because he was correctly covered.
-  delete from public.pulls p
-  using public.summaries s, public.works w
-  where p.summary_id = s.id and s.work_id = w.id
-    and ((w.slug = 'walden' and p.id <> thoreau_id)
-      or (w.slug = 'meditations' and p.id <> marcus_id));
-
-  -- Mimic three signups. Going through auth.users rather than inserting
-  -- profiles directly is deliberate: handle_new_user is what creates the
-  -- preference row get_feed scores against.
-  foreach signup_id in array array[reader_knows, reader_blank, reader_lineage, reader_both, reader_oneside] loop
+  foreach signup in array array[reader_a,reader_b] loop
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
-                            email_confirmed_at, created_at, updated_at,
-                            raw_app_meta_data, raw_user_meta_data)
-    values (signup_id, '00000000-0000-0000-0000-000000000000',
-            'authenticated', 'authenticated',
-            'delta-' || left(signup_id::text, 8) || '@example.test', '',
-            now(), now(), now(),
-            '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
+      email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
+    values (signup, '00000000-0000-0000-0000-000000000000',
+      'authenticated', 'authenticated',
+      'delta-' || left(signup::text,8) || '@example.test', '',
+      now(), now(), now(),
+      '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
   end loop;
 
-  -- Stability 100 with last_seen_at now() puts retrievability comfortably above
-  -- the 0.7 floor, so these count as known by the same test the read path uses.
-  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
-  values (reader_knows,   mill_id, 100, now()),
-         (reader_lineage, epi_id,  100, now());
+  -- Make a real opposition closer than any paraphrase. Vector distance alone
+  -- must never hide it, even if its authored edge goes missing.
+  update public.pulls set embedding = (select embedding from public.pulls where id = mill)
+    where id in (opposite, paraphrase);
+  delete from public.pulls p using public.summaries s
+    where p.summary_id = s.id and s.work_id = walden and p.id <> opposite;
 
-  -- ------------------------------------------------- 1. the contradiction shows
-  perform set_config('role', 'authenticated', true);
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  perform public.record_read(mill);
+  perform pg_temp.must(
+    exists(select 1 from public.knowledge_states where user_id=reader_a and pull_id=mill),
+    'reading should still start a knowledge state');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'reading without recall must not count as known');
+  -- A client clock in the future must not outrank a later failed attempt.
+  perform public.grade_recall(mill,'easy',p_kind:='recall',
+    p_submitted_at:=now() + interval '1 year');
 
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = thoreau_id
-  ) into present;
-
-  if not present then
-    raise exception
-      'REGRESSION: the Delta hid a contradiction. The reader knows Mill; the '
-      'Thoreau pull opposes it and sits at distance 0, so a pure distance test '
-      'files it as already-known. It must be shown.';
-  end if;
-
-  select (r ->> 'score')::numeric into score_knows
-  from jsonb_array_elements(feed -> 'rows') r where (r ->> 'id')::uuid = thoreau_id;
-
-  skipped := (feed ->> 'skippedKnownCount')::int;
-
-  -- --------------------- 2. it is judged on its merits, not handed a rank
-  -- The reader knows ONE idea, and the candidate opposes it. Excluding that
-  -- pair leaves nothing to compare against, so novelty must be identical to a
-  -- reader who knows nothing at all. Same seed, so every other scoring term is
-  -- held constant. This is the assertion that fails under a "floor the novelty"
-  -- design, which leaves the contradiction scored as a near-duplicate.
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set stability=100,last_seen_at=now()
+    where user_id=reader_a and pull_id=mill;
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_blank, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-  select (r ->> 'score')::numeric into score_blank
-  from jsonb_array_elements(feed -> 'rows') r where (r ->> 'id')::uuid = thoreau_id;
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'successful recall must make the directly recalled idea known');
+  delta := public.get_source_delta(walden);
+  perform pg_temp.must((delta->>'known')::int=0 and (delta->>'new')::int=1,
+    'near-identical contradiction must remain unverified on its source');
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  perform pg_temp.must(exists(
+    select 1 from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=opposite),
+    'near-identical contradiction must be visible in feed');
+  before_feed := feed;
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  perform pg_temp.must(feed=before_feed,'identical feed requests must be stable');
 
-  if score_blank is null then
-    raise exception 'control reader did not receive the Thoreau pull at all';
-  end if;
-  if score_knows <> score_blank then
-    raise exception
-      'a contradiction was scored as redundant: % for the reader who knows the '
-      'opposed idea vs % for a reader who knows nothing. Excluding the opposed '
-      'pair should make these identical.', score_knows, score_blank;
-  end if;
-
-  -- The comparison above is only meaningful while every other user-dependent
-  -- term is equal. Both readers take default preferences from handle_new_user,
-  -- and neither has a knowledge centroid -- but the REASON has changed, and it
-  -- is worth writing down because it is now a weaker reason than it was.
-  --
-  -- `user_knowledge_vectors` used to be written only by an RPC nobody called.
-  -- Since 20260901070000_the_feed_finally_knows_what_you_know.sql it is also
-  -- written by `refresh_stale_knowledge_vectors`, which a pg_cron job runs
-  -- every fifteen minutes, and that tick WOULD break the premise: run in this
-  -- transaction it gives reader_knows a one-idea centroid and reader_blank
-  -- none at all, because reader_blank has no knowledge states to average. That
-  -- asymmetry is exactly the divergence this check exists to catch -- one
-  -- reader scoring the uvec term as a real distance while the other scores the
-  -- neutral 0.5.
-  --
-  -- What holds the premise up now is transaction isolation, not absence: these
-  -- readers are created inside this transaction and rolled back, so no tick can
-  -- ever see them. Which leaves precisely one way for this to fire, and it is
-  -- the one worth catching -- somebody put a centroid write on the read path: a
-  -- trigger on knowledge_states, or a refresh call inside record_read or
-  -- get_feed. In that case the 0.18 uvec term diverges between these two
-  -- readers and the failure above would blame the negation fix for it.
-  if exists (
-    select 1 from public.user_knowledge_vectors
-    where user_id in (reader_knows, reader_blank)
-  ) then
-    raise exception
-      'premise broken: a reader gained a knowledge vector inside this '
-      'transaction, so the 0.18 uvec term is no longer equal for the two '
-      'readers and the score comparison above no longer tests the Delta. The '
-      'scheduled refresh cannot reach these readers -- look for a trigger on '
-      'knowledge_states, or a refresh_knowledge_vector call on the read path.';
-  end if;
-
-  -- ...and the contradiction is not counted as a saving. Asserted as a
-  -- difference against the reader who knows nothing rather than an absolute,
-  -- so growing the seed corpus cannot fail this with a message blaming the
-  -- Delta. Exactly one more skip than the blank reader: Mill itself.
-  skipped_blank := (feed ->> 'skippedKnownCount')::int;
-  if skipped <> skipped_blank + 1 then
-    raise exception
-      'expected the reader who knows Mill to skip exactly one more card than a '
-      'reader who knows nothing (Mill itself), got % vs %. A contradiction '
-      'counted as a saving is a false claim in the banner.', skipped, skipped_blank;
-  end if;
-
-  -- ------------------------------------------ 3. get_source_delta agrees
-  -- The same rule has to hold on a source page, which counts rather than ranks.
+  -- Each storage direction of one opposition protects ranking independently.
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  delta := public.get_source_delta(
-    (select w.id from public.works w where w.slug = 'walden'));
-
-  if (delta ->> 'known')::int <> 0 then
-    raise exception
-      'get_source_delta counted a contradiction as known: %. The reader knows '
-      'nothing in Walden -- only an idea that the Walden pull opposes.', delta;
-  end if;
-
-  -- A mutant that deleted this function's exclusion used to leave the suite
-  -- green, because every other assertion here only exercises get_feed and the
-  -- two carry near-identical SQL. Pin the reported shape as well as the count,
-  -- so the source page has an assertion of its own that bites.
-  if (delta ->> 'new')::int <> 1 or (delta ->> 'total')::int <> 1 then
-    raise exception
-      'get_source_delta should report the single Walden pull as new: %', delta;
-  end if;
-
-  -- ------------------------------------------ 4. the limitation, on purpose
-  -- Recorded as an assertion rather than a comment, because it is the boundary
-  -- of what this fix claims and the next person will want to know it is known.
-  --
-  -- The reader holds a SECOND phrasing of Mill that carries no `opposes` edge
-  -- of its own. Exclusion is edge-exact, so that phrasing still covers the
-  -- contradiction and it disappears again. An earlier design widened the
-  -- exclusion by distance to catch this; it was removed because distance cannot
-  -- tell a restatement from a contradiction, so the widening also dropped ideas
-  -- the candidate AGREED with and served them as novel. Incomplete beats wrong:
-  -- this fails the way the old Delta already failed, rather than inventing a
-  -- new way to mislead.
-  --
-  -- Relation extraction is what closes it, by annotating claims rather than
-  -- pulls. When it does, this assertion should be inverted.
-  perform set_config('role', 'postgres', true);
-  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
-  values (reader_knows, mill_echo_id, 100, now());
-  update public.pulls set embedding = (select embedding from public.pulls where id = mill_id)
-  where id = mill_echo_id;
-
-  perform set_config('role', 'authenticated', true);
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = thoreau_id
-  ) into present;
-
-  if present then
-    raise exception
-      'the known limitation no longer holds: a contradiction survived a reader '
-      'who knows an unannotated restatement of the opposed idea. If the edges '
-      'became dense enough to cover restatements, invert this assertion. If '
-      'something started widening the exclusion by distance instead, revert it '
-      '-- section 7 explains why that cannot work.';
-  end if;
-
-  -- ----------------------------------- 5. control: the edge is what does it
-  -- Remove the opposition and the very same card must go back to being covered.
-  -- Without this, the test would still pass if the covered check were simply
-  -- broken.
-  perform set_config('role', 'postgres', true);
+    json_build_object('sub',reader_b,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  select (row->>'score')::numeric into strict score_blank
+    from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=opposite;
+  perform set_config('role','postgres',true);
   delete from public.pull_relations
-  where kind = 'opposes'
-    and (from_pull_id in (mill_id, thoreau_id) or to_pull_id in (mill_id, thoreau_id));
-
-  perform set_config('role', 'authenticated', true);
+    where from_pull_id=mill and to_pull_id=opposite and kind='opposes';
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  select (row->>'score')::numeric into strict score_a
+    from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=opposite;
+  perform pg_temp.must(score_a=score_blank,
+    'known-to-candidate one-direction opposition must protect ranking');
 
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = thoreau_id
-  ) into present;
-
-  if present then
-    raise exception
-      'control failed: with the `opposes` edge deleted the card is 0 distance '
-      'from a known idea and must be covered. Something other than the '
-      'exclusion is keeping it in the feed.';
-  end if;
-
-  -- Three more than a reader who knows nothing: Mill and its restatement are
-  -- known directly, and the Thoreau pull is covered again now that the
-  -- opposition protecting it is gone. That third one is the point of the control.
-  skipped := (feed ->> 'skippedKnownCount')::int;
-  if skipped <> skipped_blank + 3 then
-    raise exception
-      'control failed: expected 3 more skipped cards than the blank reader '
-      'once the edge is deleted, got % vs %', skipped, skipped_blank;
-  end if;
-
-  -- ------------------------ 6. the exclusion is `opposes`-only, not any edge
-  -- Marcus restates Epictetus -- a genuine `descendant` edge, and genuinely
-  -- 0.0500 apart. Knowing one DOES mean you know the other, and that must not
-  -- regress: a restatement is covered, a contradiction is not.
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_lineage, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = marcus_id
-  ) into present;
-
-  if present then
-    raise exception
-      'a restatement of a known idea was shown as new. The exclusion must apply '
-      'to `opposes` edges only, not to ancestor/descendant lineage.';
-  end if;
-
-  -- ------- 7. the exclusion removes only what the candidate DISAGREES with
-  -- The regression guard against re-adding the widening this design removed.
-  --
-  -- The reader holds Mill and Thoreau, which oppose each other. The candidate
-  -- opposes Thoreau, so Thoreau leaves its comparison -- and Mill must NOT,
-  -- because the candidate says nothing about Mill. Since the candidate restates
-  -- Mill, keeping Mill is what covers it.
-  --
-  -- Any scheme that widens the exclusion beyond the annotated edge fails here:
-  -- Mill sits inside the threshold of Thoreau (they are opposed, and opposed
-  -- claims are near each other), so a distance-based widening drops Mill too,
-  -- leaves nothing to compare against, and serves the reader an idea they
-  -- already hold as maximally novel. Gating that widening on an `opposes` edge
-  -- does not rescue it either -- the widening exists because edges are sparse,
-  -- and such a gate reads a missing edge as "not opposed". If this assertion
-  -- fails, the exclusion has started removing something the candidate agrees
-  -- with; do not fix it by adding a gate.
-  perform set_config('role', 'postgres', true);
-  -- Section 5's control deleted the seeded Mill/Thoreau opposition to prove the
-  -- exclusion depends on it. Put it back: this section is about what happens
-  -- when the reader holds both sides, so both sides have to be opposed again.
-  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
-  values (mill_id, thoreau_id, 'opposes', 0.75),
-         (thoreau_id, mill_id, 'opposes', 0.75),
-         -- ...and the candidate takes a side, against Thoreau.
-         (mill_echo_id, thoreau_id, 'opposes', 0.75),
-         (thoreau_id, mill_echo_id, 'opposes', 0.75)
-  on conflict do nothing;
-
-  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
-  values (reader_both, mill_id, 100, now()), (reader_both, thoreau_id, 100, now());
-
-  perform set_config('role', 'authenticated', true);
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_both, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = mill_echo_id
-  ) into present;
-
-  if present then
-    raise exception
-      'the exclusion removed an idea the candidate AGREES with. A reader '
-      'holding both sides of a debate was served a restatement of one side as '
-      'new. Only what a candidate is annotated as opposing may leave its '
-      'comparison -- never what it agrees with, and never by distance.';
-  end if;
-
-  -- ---------------------------- 8. a one-sided edge still works, either way
-  -- Opposition is stored directionally and the seed writes both rows, so every
-  -- assertion above passes whichever direction the code reads -- a mutant that
-  -- deleted either union branch survived the whole suite. The migration claims
-  -- a one-sided edge works anyway; this is what holds it to that.
-  --
-  -- The reader must know ONLY the opposed idea. Give them anything else at the
-  -- same distance and it covers the candidate on its own, so the exclusion
-  -- makes no observable difference and the assertion proves nothing -- which is
-  -- how the first two versions of this section quietly failed to bite.
-  perform set_config('role', 'postgres', true);
-  insert into public.knowledge_states (user_id, pull_id, stability, last_seen_at)
-  values (reader_oneside, thoreau_id, 100, now());
+  perform set_config('role','postgres',true);
+  insert into public.pull_relations (from_pull_id,to_pull_id,kind,weight)
+    values (mill,opposite,'opposes',0.75) on conflict do nothing;
   delete from public.pull_relations
-  where kind = 'opposes'
-    and from_pull_id = mill_echo_id and to_pull_id = thoreau_id;
-
-  perform set_config('role', 'authenticated', true);
+    where from_pull_id=opposite and to_pull_id=mill and kind='opposes';
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_oneside, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-
-  -- Only (thoreau -> mill_echo) is left, and the candidate is its TO side, so
-  -- the second union branch is the only one that can see it. Without that
-  -- branch the candidate is covered by the very idea it contradicts.
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = mill_echo_id
-  ) into present;
-
-  if not present then
-    raise exception
-      'an `opposes` edge stored only as (known -> candidate) was not honoured: '
-      'the contradiction was covered by the idea it contradicts, so the union '
-      'branch reading that direction is dead.';
-  end if;
-
-  -- The mirror image, for the other branch.
-  perform set_config('role', 'postgres', true);
-  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
-  values (mill_echo_id, thoreau_id, 'opposes', 0.75) on conflict do nothing;
-  delete from public.pull_relations
-  where kind = 'opposes'
-    and from_pull_id = thoreau_id and to_pull_id = mill_echo_id;
-
-  perform set_config('role', 'authenticated', true);
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  select (row->>'score')::numeric into strict score_a
+    from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=opposite;
+  perform pg_temp.must(score_a=score_blank,
+    'candidate-to-known one-direction opposition must protect ranking');
+  perform set_config('role','postgres',true);
+  insert into public.pull_relations (from_pull_id,to_pull_id,kind,weight)
+    values (opposite,mill,'opposes',0.75) on conflict do nothing;
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_oneside, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
 
-  select exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = mill_echo_id
-  ) into present;
-
-  if not present then
-    raise exception
-      'an `opposes` edge stored only as (candidate -> known) was not honoured, '
-      'so the union branch reading that direction is dead.';
-  end if;
-
-  -- ------------------- 9. another author's private material cannot reach in
-  -- `opposed_pairs` reads `pull_relations`, and nothing in the function bodies
-  -- re-checks who may see an edge -- that is `pull_relations_read_readable`'s
-  -- job alone. This asserts the policy does it.
-  --
-  -- Being precise about what this does and does not prove, because the first
-  -- version of this comment overclaimed: today no authenticated user can write
-  -- an edge at all (there is no INSERT policy), and a private pull cannot enter
-  -- the candidate pool anyway, so this is defence in depth rather than a live
-  -- hole. It is worth keeping because both of those are properties of other
-  -- objects that could change independently, and because a direct read of the
-  -- edge is exactly what a future Counterpull UI will do.
-  perform set_config('role', 'postgres', true);
-
-  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
-                          email_confirmed_at, created_at, updated_at,
-                          raw_app_meta_data, raw_user_meta_data)
-  values (author_id, '00000000-0000-0000-0000-000000000000',
-          'authenticated', 'authenticated',
-          'delta-author-' || left(author_id::text, 8) || '@example.test', '',
-          now(), now(), now(),
-          '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
-
-  insert into public.summaries (work_id, title, status, visibility, author_id,
-                                published_at)
-  select w.id, 'Private counterpoint', 'published', 'private', author_id, now()
-  from public.works w where w.slug = 'on-liberty'
-  returning id into strict private_summary_id;
-
-  insert into public.pulls (summary_id, ordinal, headline, body, embedding,
-                            estimated_read_seconds)
-  select private_summary_id, 1, 'A private objection to Mill.',
-         'Visible only to its author.',
-         (select embedding from public.pulls where id = mill_id), 30
-  returning id into strict private_pull_id;
-
-  -- An edge the reader must never be able to act on.
-  insert into public.pull_relations (from_pull_id, to_pull_id, kind, weight)
-  values (private_pull_id, mill_id, 'opposes', 0.75);
-
-  perform set_config('role', 'authenticated', true);
+  -- A candidate at distance zero stays visible until a reviewed equivalent
+  -- relationship exists. A proposal is never suppression evidence.
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'vector-identical paraphrase without a relation must not be suppressed');
+  pair_a := least(mill,paraphrase);
+  pair_b := greatest(mill,paraphrase);
+  perform set_config('role','postgres',true);
+  insert into public.delta_relations
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance,confidence)
+  values (pair_a,pair_b,'equivalent','proposed',
+    'Reviewed wording required before activation','test',0.9);
+  perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', reader_knows, 'role', 'authenticated')::text, true);
-  perform pg_temp.assert_is_reader();
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  perform pg_temp.must(not exists (
+    select 1 from public.delta_relations where pull_a_id=pair_a and pull_b_id=pair_b),
+    'unapproved relation proposal must stay private');
+  begin
+    insert into public.delta_relations (pull_a_id,pull_b_id,kind,provenance)
+      values (least(mill,opposite),greatest(mill,opposite),'equivalent','client');
+    raise exception 'reader inserted an unreviewed relation';
+  exception when insufficient_privilege then null;
+  end;
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'proposed equivalence must not suppress');
+  perform set_config('role','postgres',true);
+  begin
+    update public.delta_relations set status='approved', reviewed_at=now(),
+      reviewer_refs=array['same reviewer','same reviewer']
+      where pull_a_id=pair_a and pull_b_id=pair_b;
+    raise exception 'duplicate reviewer references were accepted';
+  exception when check_violation then null;
+  end;
+  update public.delta_relations set status='approved',reviewed_at=now(),reviewer_refs=array['test reviewer A','test reviewer B']
+    where pull_a_id=pair_a and pull_b_id=pair_b;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=2,
+    'approved equivalence must suppress the paraphrase');
+  perform pg_temp.must((delta->>'total')::int=4 and (delta->>'new')::int=2
+    and (delta->>'minutesSaved')::numeric=1.1,
+    'Source display contract must report 2 of 4 matched and 1.1 estimated minutes');
+  -- The displayed feed fields count the bounded candidate search, not the
+  -- returned cards. Remove the read impression so the direct idea is eligible.
+  perform set_config('role','postgres',true);
+  delete from public.feed_impressions where user_id=reader_a and pull_id=mill;
+  select round((sum(estimated_read_seconds)/60.0)::numeric,1)
+    into expected_minutes from public.pulls where id in (mill,paraphrase);
+  perform pg_temp.must(expected_minutes=1.1,
+    'Feed display contract seed minutes changed; update the rendered-copy fixture');
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  perform pg_temp.must((feed->>'skippedKnownCount')::int=2,
+    'displayed matched count must be direct pool match plus approved shortlist match');
+  perform pg_temp.must((feed->>'minutesSaved')::numeric=expected_minutes,
+    'displayed estimated minutes must sum the same two matches');
+  perform pg_temp.must(not exists(
+    select 1 from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=paraphrase),
+    'feed and source must agree on approved equivalence');
 
-  if exists (select 1 from public.pull_relations
-             where from_pull_id = private_pull_id) then
-    raise exception
-      'a reader can see another author''s private `opposes` edge. '
-      'pull_relations_read_readable is not doing its job.';
-  end if;
+  -- A reviewed equivalence remains valid even if its candidate has no vector.
+  perform set_config('role','postgres',true);
+  update public.pulls set embedding=null where id=paraphrase;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=2,
+    'approved equivalence must work without a candidate embedding');
 
-  if exists (select 1 from public.pulls where id = private_pull_id) then
-    raise exception 'a reader can read another author''s private pull.';
-  end if;
+  -- A later failed recall revokes evidence even while stability is high.
+  perform public.grade_recall(mill,'forgot',p_kind:='recall');
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set stability=100,last_seen_at=now()
+    where user_id=reader_a and pull_id=mill;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'failed recall must revoke direct and equivalent suppression');
+  perform public.grade_recall(mill,'easy',p_kind:='delta_probe');
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set stability=100,last_seen_at=now()
+    where user_id=reader_a and pull_id=mill;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=2,
+    'explicit Already knew it should restore evidence');
 
-  feed := public.get_feed(p_limit := 20, p_seed := seed, p_page := 0);
-  if exists (
-    select 1 from jsonb_array_elements(feed -> 'rows') r
-    where (r ->> 'id')::uuid = private_pull_id
-  ) then
-    raise exception 'another author''s private pull was served in the feed.';
-  end if;
+  -- Knowing both sides directly wins over their opposition.
+  perform public.grade_recall(opposite,'easy',p_kind:='recall');
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set stability=100,last_seen_at=now()
+    where user_id=reader_a and pull_id=opposite;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(walden);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'direct knowledge of both sides must retain the second side');
 
-  raise notice 'DELTA IS NEGATION-AWARE: contradiction shown, scored on merit, '
-               'restatement still covered, source delta agrees, '
-               'both-sides reader keeps their coverage, one-sided edges work both '
-               'ways, private material stays out';
+  -- A reviewed but disabled equivalence no longer suppresses.
+  perform set_config('role','postgres',true);
+  update public.delta_relations set status='disabled',review_note='bad edge'
+    where pull_a_id=pair_a and pull_b_id=pair_b;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'disabling a bad equivalence must immediately restore the idea');
+
+  -- Another reader's private pull and approved relation must be invisible.
+  perform set_config('role','postgres',true);
+  insert into public.summaries
+    (work_id,title,status,visibility,author_id,published_at,version)
+  values (on_liberty,'Private claim','published','private',reader_a,now(),999)
+  returning id into private_summary;
+  insert into public.pulls (summary_id,ordinal,headline,body,embedding)
+    select private_summary,1,'Private claim','Reader A only',embedding
+    from public.pulls where id=mill
+    returning id into private_pull;
+  insert into public.knowledge_states (user_id,pull_id,stability,last_seen_at)
+    values (reader_b,private_pull,100,now());
+  insert into public.recall_events (user_id,pull_id,kind,grade)
+    values (reader_b,private_pull,'recall','easy');
+  insert into public.delta_relations
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance,reviewed_at,reviewer_refs)
+    values (least(private_pull,mill),greatest(private_pull,mill),
+      'equivalent','approved','Private fixture','test',now(),array['test reviewer A','test reviewer B']);
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_b,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  perform pg_temp.must(not exists(
+    select 1 from public.delta_relations
+    where pull_a_id=least(private_pull,mill) and pull_b_id=greatest(private_pull,mill)),
+    'private relation leaked across reader RLS');
+  perform pg_temp.must(not exists(select 1 from public.pulls where id=private_pull),
+    'private pull leaked across reader RLS');
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'another reader private evidence must not suppress public ideas');
+  feed := public.get_feed(p_limit:=100,p_seed:=424242,p_page:=0);
+  perform pg_temp.must(exists(
+    select 1 from jsonb_array_elements(feed->'rows') row
+    where (row->>'id')::uuid=opposite),
+    'another reader private evidence must not affect feed');
+
+  -- The strict retrievability floor is shared by direct and semantic
+  -- decisions. Keep the test a minute either side of the computed boundary
+  -- so timestamp precision cannot decide it accidentally.
+  perform public.grade_recall(mill,'easy',p_kind:='recall');
+  boundary_seconds := ln(public.known_retrievability_floor()) / ln(0.9) * 86400;
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set stability=1,
+    last_seen_at=now()-make_interval(secs=>boundary_seconds+60)
+    where user_id=reader_b and pull_id=mill;
+  update public.recall_events set applied_at=now()-make_interval(secs=>boundary_seconds+60)
+    where user_id=reader_b and pull_id=mill and kind='recall';
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_b,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'just below retrievability floor must not count direct knowledge');
+  perform public.record_read(mill);
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'reading must not revive an expired recall without a new attempt');
+  perform set_config('role','postgres',true);
+  update public.knowledge_states set
+    last_seen_at=now()-make_interval(secs=>boundary_seconds-60)
+    where user_id=reader_b and pull_id=mill;
+  update public.recall_events set applied_at=now()-make_interval(secs=>boundary_seconds-60)
+    where user_id=reader_b and pull_id=mill and kind='recall';
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_b,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=1,
+    'just above retrievability floor must count direct knowledge');
+
+  -- Build enough proven facts to cross the exact 500-idea semantic cap.
+  -- Direct facts remain known even outside it; an equivalent candidate only
+  -- matches when at least one endpoint survives the deterministic cap.
+  -- Keep these vectors null: hundreds of rolled-back HNSW entries starve
+  -- the later search fixture's approximate nearest-neighbor scan.
+  perform set_config('role','postgres',true);
+  insert into public.works (kind,title,slug,rights_status)
+    values ('book','Delta cap fixture','delta-cap-fixture','public_domain')
+    returning id into cap_work;
+  insert into public.summaries
+    (work_id,title,status,visibility,published_at)
+    values (cap_work,'Delta cap fixture','published','public',now())
+    returning id into cap_summary;
+  insert into public.pulls
+    (summary_id,ordinal,headline,body,embedding,estimated_read_seconds)
+  select cap_summary,n,'Cap fact ' || n,'Public fixture fact.',
+         null,20
+  from generate_series(1,502) n;
+  select id into strict cap_candidate from public.pulls
+    where summary_id=cap_summary and ordinal=502;
+  insert into public.knowledge_states
+    (user_id,pull_id,stability,last_seen_at)
+  select reader_a,id,100,now() from public.pulls
+    where summary_id=cap_summary and ordinal<=501;
+  insert into public.recall_events (user_id,pull_id,kind,grade)
+  select reader_a,id,'recall','easy' from public.pulls
+    where summary_id=cap_summary and ordinal<=501;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  select pull_id into strict known_in from (
+    select ks.pull_id,row_number() over (
+      order by public.retrievability(ks.stability,ks.last_seen_at) desc,ks.pull_id
+    ) rn from public.knowledge_states ks
+    where ks.user_id=reader_a
+      and public.retrievability(ks.stability,ks.last_seen_at)
+        > public.known_retrievability_floor()
+      and public.delta_has_evidence(ks.pull_id)
+  ) ranked where rn=500;
+  select pull_id into strict known_out from (
+    select ks.pull_id,row_number() over (
+      order by public.retrievability(ks.stability,ks.last_seen_at) desc,ks.pull_id
+    ) rn from public.knowledge_states ks
+    where ks.user_id=reader_a
+      and public.retrievability(ks.stability,ks.last_seen_at)
+        > public.known_retrievability_floor()
+      and public.delta_has_evidence(ks.pull_id)
+  ) ranked where rn=501;
+  perform set_config('role','postgres',true);
+  insert into public.delta_relations
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance,reviewed_at,reviewer_refs)
+    values (least(known_out,cap_candidate),greatest(known_out,cap_candidate),
+      'equivalent','approved','Cap boundary fixture','test',now(),
+      array['test reviewer A','test reviewer B']);
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(cap_work);
+  perform pg_temp.must((delta->>'known')::int=501,
+    'equivalent edge to fact 501 must not pass the 500-idea cap');
+  perform set_config('role','postgres',true);
+  insert into public.delta_relations
+    (pull_a_id,pull_b_id,kind,status,evidence,provenance,reviewed_at,reviewer_refs)
+    values (least(known_in,cap_candidate),greatest(known_in,cap_candidate),
+      'equivalent','approved','Cap boundary fixture','test',now(),
+      array['test reviewer A','test reviewer B']);
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(cap_work);
+  perform pg_temp.must((delta->>'known')::int=502,
+    'equivalent edge to fact 500 must pass the deterministic cap');
+
+  raise notice 'Delta evidence, equivalence review, opposition and private RLS passed';
 end $$;
-
 rollback;

@@ -181,24 +181,22 @@ describe('appendPage', () => {
     expect(out.lastPlaced).toBe(9);
   });
 
-  it('adds each page Delta to the session total', () => {
+  it('reports only the latest search because candidate pools can overlap', () => {
     const first = appendPage(null, page(), 0);
-    const out = appendPage(first, page({ page: 1 }), 20);
-    expect(out.skippedKnownCount).toBe(6);
-    expect(out.minutesSaved).toBe(12);
+    const out = appendPage(first, page({ page: 1, skippedKnownCount: 2, minutesSaved: 4 }), 20);
+    expect(out.skippedKnownCount).toBe(2);
+    expect(out.minutesSaved).toBe(4);
   });
 
-  it('lets an unmeasured page contribute nothing rather than erase the total', () => {
-    // Understating what the Delta saved is survivable; claiming a number the
-    // product cannot stand behind is not.
+  it('does not carry an earlier measurement into an unmeasured search', () => {
     const first = appendPage(null, page(), 0);
     const out = appendPage(
       first,
       page({ page: 1, skippedKnownCount: null, minutesSaved: null }),
       20,
     );
-    expect(out.skippedKnownCount).toBe(3);
-    expect(out.minutesSaved).toBe(6);
+    expect(out.skippedKnownCount).toBeNull();
+    expect(out.minutesSaved).toBeNull();
   });
 
   it('stays null until something has actually been measured', () => {

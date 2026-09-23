@@ -148,10 +148,10 @@ export function Topic({ slug, onNavigate }: { slug: string; onNavigate: (to: str
               {source.ideas} {source.ideas === 1 ? 'idea' : 'ideas'}
               {/*
                 Stated in words, not carried by a colour (design law 5), and
-                worded as what it measures: a directly remembered count, not the
+                worded as what it measures: a tracked knowledge-state count, not the
                 Delta's semantic coverage, which stays on the source page.
               */}
-              {source.known > 0 ? ` · ${source.known} you know` : ''}
+              {source.known > 0 ? ` · ${source.known} in your learning history` : ''}
             </p>
           </li>
         ))}

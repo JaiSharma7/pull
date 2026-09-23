@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Enough, PullCard, textAtDepth } from '@wap/ui';
+import { DeltaBanner } from '../components/DeltaBanner.js';
 import { Interrupt, type InterruptAnswer } from '../components/Interrupt.js';
 import * as api from '../lib/api.js';
 import {
@@ -1042,18 +1043,7 @@ export function Feed({
         </p>
       )}
 
-      {/* Guarded on both, not just the count: the banner interpolates
-          minutesSaved, and React renders null as empty — so decoupling them
-          would silently print "about  min saved". */}
-      {feed.skippedKnownCount !== null &&
-        feed.skippedKnownCount > 0 &&
-        feed.minutesSaved !== null && (
-          <p className="meta" data-testid="delta-banner">
-            Skipped {feed.skippedKnownCount} {feed.skippedKnownCount === 1 ? 'idea' : 'ideas'} you
-            already know —{' '}
-            <span style={{ color: 'var(--accent)' }}>about {feed.minutesSaved} min saved</span>
-          </p>
-        )}
+      <DeltaBanner count={feed.skippedKnownCount} estimatedMinutes={feed.minutesSaved} />
 
       {items.map((item) =>
         item.type === 'pull' && muted.has(item.row.work.id) ? (

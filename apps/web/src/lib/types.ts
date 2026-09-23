@@ -31,13 +31,14 @@ export interface InterleaveSlot {
 export interface FeedResponse {
   rows: FeedRow[];
   /**
-   * How many ideas the Delta filtered because the reader already holds them.
-   * null when the Delta never ran (offline) -- distinct from a measured zero.
+   * Matches in this request: direct evidence in the candidate pool plus approved
+   * equivalent ideas in the shortlist. It is not a count of returned cards.
+   * null means the Delta did not run (offline).
    */
   skippedKnownCount: number | null;
   /**
-   * Minutes saved by not re-teaching what the reader knows.
-   * null when the Delta never ran (offline) -- distinct from a measured zero.
+   * Estimated reading minutes in the matched ideas above, not measured time saved.
+   * null means the Delta did not run (offline).
    */
   minutesSaved: number | null;
   interleaveSlots: InterleaveSlot[];

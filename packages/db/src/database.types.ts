@@ -356,6 +356,69 @@ export type Database = {
           },
         ]
       }
+      delta_relations: {
+        Row: {
+          confidence: number | null
+          created_at: string
+          evidence: string | null
+          kind: string
+          model: string | null
+          provenance: string
+          pull_a_id: string
+          pull_b_id: string
+          review_note: string | null
+          reviewed_at: string | null
+          reviewer_refs: string[]
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string
+          evidence?: string | null
+          kind: string
+          model?: string | null
+          provenance: string
+          pull_a_id: string
+          pull_b_id: string
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewer_refs?: string[]
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string
+          evidence?: string | null
+          kind?: string
+          model?: string | null
+          provenance?: string
+          pull_a_id?: string
+          pull_b_id?: string
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewer_refs?: string[]
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delta_relations_pull_a_id_fkey"
+            columns: ["pull_a_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "delta_relations_pull_b_id_fkey"
+            columns: ["pull_b_id"]
+            isOneToOne: false
+            referencedRelation: "pulls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       editions: {
         Row: {
           created_at: string
@@ -2421,6 +2484,7 @@ export type Database = {
       daily_spend_cap_cents: { Args: never; Returns: number }
       delete_my_account: { Args: never; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
+      delta_has_evidence: { Args: { p_pull_id: string }; Returns: boolean }
       disable_generation_dispatcher: { Args: never; Returns: string }
       disable_knowledge_vector_refresh: { Args: never; Returns: string }
       dismissal_damping: { Args: { p_user_id: string }; Returns: number }

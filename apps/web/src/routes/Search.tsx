@@ -273,7 +273,9 @@ export function Search({
                       read last week; the Delta decides what to serve unbidden, not
                       what may be looked for.
                     */}
-                    {idea.alreadyKnown && <span className="meta search__known">You know this</span>}
+                    {idea.alreadyKnown && (
+                      <span className="meta search__known">In your learning history</span>
+                    )}
                   </p>
                 </li>
               ))}
