@@ -146,6 +146,61 @@ hidden contradictions have the highest product cost. Record the baseline and
 reviewed sample size before setting numerical release thresholds. Do not
 convert 31 unlabeled candidates into an accuracy claim.
 
+## Single-reviewer extension and offline triage
+
+The product owner labeled the next 24 distinct public pairs in
+docs/eval/delta-review-queue.csv in display order: eight same claim,
+13 related but distinct, and three unrelated. Together with the first
+pilot, the 48 distinct human-reviewed pairs contain nine same claims,
+28 related pairs, 11 unrelated pairs, and no confirmed contradiction
+or one-sided elaboration. These are one person's labels. The assistant
+cannot supply a second independent human vote.
+
+The recurring distinction in the owner's second batch is strict
+substitutability. Shared vocabulary and a close vector do not make
+two claims the same. Permanent judicial tenure with an expertise
+rationale versus a rights-protection rationale (Q4), the Stoic
+judgment claim with an added revocability claim (Q9), and the
+carbon-dioxide claim with extra physical properties (Q24) were all
+related, not equivalent. The owner marked study-for-action versus
+study-for-character (Q14) unrelated despite proximity. These
+examples make false equivalence more costly than missed redundancy.
+
+scripts/delta-triage.py applies a five-neighbor, lexical-plus-vector
+method to the 2,873 remaining public candidate pairs. It reads 709
+anon-readable public Pull bodies, writes only pair IDs and triage
+metadata to docs/eval/delta-auto-proposals.csv, makes no model call,
+and does not write to the hosted database. Every row has
+can_suppress=false. The buckets are **patterns for prioritization,
+not relationship labels or approval**: 2,561 related-pattern,
+153 distant-pattern, 158 ambiguous, and one potential overlap.
+
+The validation exposes the method's limit. With the new 24 labels
+held out, training on the original pilot agreed on 13/24 and found
+zero of the eight same claims. With the original 24 held out,
+training on the new batch agreed on 12/24 and missed its only same
+claim. Neither fold proposed a false same claim, but that does not
+establish a low false-suppression rate: the tiny sample has no
+catalogue contradiction or elaboration. In the full queue, the
+single potential-overlap proposal (queue row 80) compares "water
+contains hydrogen and oxygen" with "water contains them in a fixed
+two-to-one volumetric ratio." The added ratio makes it unsafe to
+approve as equivalent. It remains unverified.
+
+A separate, no-tools development check used the 24 new labels as
+examples to label the original 24 with Claude Haiku. It agreed on
+17/24, with all seven disagreements between related and unrelated.
+The reverse holdout overcalled same-claim equivalence on multiple
+pairs the owner labeled distinct; making the rubric stricter did
+not remove that error. Three completed checks reported $0.233604
+total in CLI usage. This was offline public-content evaluation,
+not an application read or generation path; no classifier output
+was put in cost_ledger or applied to readers. The evidence rules
+out bulk model approval from this sample. A future generation-time
+classifier must use BAML, reserve and record spend in the application,
+and prove its false-suppression behavior before any automatic edge
+can take effect.
+
 ## Bounded proposal backfill
 
 scripts/delta-proposals.sql defaults to a dry run over ten public idea
