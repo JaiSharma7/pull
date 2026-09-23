@@ -4,9 +4,8 @@ import { supabase } from './supabase.js';
 /**
  * One source, and what a reader still has to learn from it.
  *
- * `get_source_delta` has existed and been tested since round 1 with nothing calling
- * it. It answers the question the product is named for — *you already hold 14 of
- * these 18* — and until now that sentence appeared nowhere a reader could see.
+ * The Source page reports Delta matches for the selected summary. The Library
+ * keeps a separate work-wide count across readable published versions.
  */
 
 /**
@@ -75,6 +74,7 @@ const SUMMARY_COLUMNS =
   'pulls(id, ordinal, headline, body, why_it_matters, explanation)';
 
 interface SummaryRow {
+  id: string;
   title: string | null;
   elevator_pitch: string | null;
   why_it_matters: string | null;
@@ -92,6 +92,7 @@ interface SummaryRow {
 
 function shapeSummary(row: SummaryRow): Omit<SourceDetail, 'work'> {
   return {
+    summaryId: row.id,
     summaryTitle: row.title,
     elevatorPitch: row.elevator_pitch,
     whyItMatters: row.why_it_matters,
@@ -114,6 +115,7 @@ function shapeSummary(row: SummaryRow): Omit<SourceDetail, 'work'> {
 
 export interface SourceDetail {
   work: SourceWork;
+  summaryId: string | null;
   summaryTitle: string | null;
   elevatorPitch: string | null;
   whyItMatters: string | null;
@@ -130,11 +132,9 @@ export interface SourceDetail {
  * summary, and `summary_is_readable` lets them read it — so the canonical page could
  * quietly render their private row instead of the library's, for them and nobody else.
  *
- * And `get_source_delta` counts pulls across every readable published summary of the
- * work, so an unordered `limit(1)` could pair "you already hold 9 of these 18" with a
- * list of nine. The Delta describing a different summary than the one underneath it is
- * worse than no Delta: it is a specific, checkable claim that happens to be false.
- * `published_at` gives the pairing something stable to agree on.
+ * The page asks `get_summary_delta` for this selected summary, so its count
+ * describes the ideas immediately below it. `published_at` makes the canonical
+ * public version deterministic.
  */
 /** The shape PostgREST returns for `WORK_COLUMNS`, before it is given nicer names. */
 interface WorkRow {
@@ -217,7 +217,14 @@ export async function fetchSource(
 
   const summary = (summaryRows ?? [])[0] as SummaryRow | undefined;
   if (!summary) {
-    return { work, summaryTitle: null, elevatorPitch: null, whyItMatters: null, pulls: [] };
+    return {
+      work,
+      summaryId: null,
+      summaryTitle: null,
+      elevatorPitch: null,
+      whyItMatters: null,
+      pulls: [],
+    };
   }
   return { work, ...shapeSummary(summary) };
 }

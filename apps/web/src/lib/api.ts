@@ -54,6 +54,12 @@ export async function fetchSourceDelta(workId: string): Promise<SourceDelta> {
   return data as unknown as SourceDelta;
 }
 
+export async function fetchSummaryDelta(summaryId: string): Promise<SourceDelta> {
+  const { data, error } = await supabase.rpc('get_summary_delta', { p_summary_id: summaryId });
+  if (error) throw rpcError(error);
+  return data as unknown as SourceDelta;
+}
+
 export async function recordRead(pullId: string, dwellMs: number, position: number) {
   const { error } = await supabase.rpc('record_read', {
     p_pull_id: pullId,

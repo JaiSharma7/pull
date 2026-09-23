@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PullCard, clampDepth, depthLevels, textAtDepth } from '@wap/ui';
 import { RememberThis } from '../components/RememberThis.js';
-import { fetchSavedAmong, fetchSourceDelta, savePull, unsavePull } from '../lib/api.js';
+import { fetchSavedAmong, fetchSummaryDelta, savePull, unsavePull } from '../lib/api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import {
   isPlaying,
@@ -21,18 +21,11 @@ import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from
 import { fetchUserQuestions, retireQuestion, type UserQuestion } from '../lib/questions-api.js';
 import { fetchPullLocation, fetchSource, type SourceDetail } from '../lib/source-api.js';
 import type { SourceDelta } from '../lib/types.js';
+import { SourceDeltaSummary } from '../components/SourceDeltaSummary.js';
 
 /**
- * One source, and the Delta against it.
- *
- * `get_source_delta` was implemented, bounded, mutation-tested and called by nothing
- * for two rounds. It answers the sentence this product is built on — *you already
- * hold 14 of these 18, here are the 4 that are new* — and until this screen that
- * sentence existed only in the README.
- *
- * The Delta is reported as **time saved**, never time spent. `docs/product.md` lists
- * engagement metrics as an anti-goal, and the number a reader is shown is the one the
- * product is actually optimising for.
+ * One source and its recorded-knowledge estimate. The SQL counts the selected
+ * readable published summary; an unmatched idea may still be familiar.
  */
 
 /**
@@ -353,6 +346,16 @@ export function Source({
           return;
         }
         setDetail(d);
+        setDelta(null);
+        if (d.summaryId) {
+          fetchSummaryDelta(d.summaryId)
+            .then((next) => {
+              if (live) setDelta(next);
+            })
+            .catch(() => {
+              /* The page stands without its Delta. */
+            });
+        }
         // The summary's own title where it has one, the work's otherwise — the same
         // choice the heading makes, so the tab and the page agree.
         onTitle?.(d.summaryTitle ?? d.work.title);
@@ -375,23 +378,6 @@ export function Source({
           );
         }
         setError(e instanceof Error ? e.message : 'Could not load this source.');
-      });
-
-    /*
-     * The Delta is fetched separately and allowed to fail on its own.
-     *
-     * It is the more interesting half and the more fragile one: it does vector work
-     * over everything the reader knows. If it fails, the source is still worth
-     * reading, so the page renders without the banner rather than not at all —
-     * absence of the Delta is not the same as a Delta of zero, and this is the same
-     * distinction `minutesSaved: number | null` makes in the session rail.
-     */
-    fetchSourceDelta(workId)
-      .then((d) => {
-        if (live) setDelta(d);
-      })
-      .catch(() => {
-        /* The page stands without it. */
       });
 
     return () => {
@@ -691,31 +677,7 @@ export function Source({
         </>
       ) : null}
 
-      {/*
-        The Delta, in the one accent colour, above the ideas rather than below them —
-        a reader deciding whether to spend the next eight minutes should be told what
-        those minutes buy before they start, not congratulated afterwards.
-      */}
-      {delta && delta.total > 0 ? (
-        <p className="source__delta">
-          {delta.known === 0 ? (
-            <>All {delta.total} of these ideas are new to you.</>
-          ) : (
-            <>
-              You already hold <strong>{delta.known}</strong> of these {delta.total}.{' '}
-              <strong className="source__delta-new">{delta.new}</strong>{' '}
-              {delta.new === 1 ? 'is' : 'are'} new
-              {delta.minutesSaved > 0 ? (
-                <>
-                  {' '}
-                  — about <strong>{delta.minutesSaved} min</strong> you do not need to spend again
-                </>
-              ) : null}
-              .
-            </>
-          )}
-        </p>
-      ) : null}
+      <SourceDeltaSummary delta={delta} />
 
       <h2 className="meta source__group">
         {pulls.length} {pulls.length === 1 ? 'idea' : 'ideas'}

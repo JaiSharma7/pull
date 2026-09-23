@@ -118,27 +118,15 @@ export interface LoadedFeed {
   rows: FeedRow[];
   /** In render space: indices into `rows`, not into the page they came from. */
   slots: InterleaveSlot[];
+  /** Latest request only. Candidate pools can overlap across pages. */
   skippedKnownCount: number | null;
+  /** Estimated reading time in those latest-request matches. */
   minutesSaved: number | null;
   /** Planner space, for the next page's `p_last_placed`. */
   lastPlaced: number | null;
   nextPage: number;
   /** The last page came back empty — there is nothing further to load. */
   exhausted: boolean;
-}
-
-/**
- * Add a page's Delta to the running total.
- *
- * A null page contributes nothing rather than poisoning the total to null. That can
- * only understate what the Delta saved the reader, never overstate it, and this is
- * the one number in the product where the direction of the error matters: the rail
- * exists to say what a sitting was worth, and it must not claim more than it can
- * stand behind.
- */
-function addDelta(prev: number | null, next: number | null): number | null {
-  if (next === null) return prev;
-  return (prev ?? 0) + next;
 }
 
 /**
@@ -158,8 +146,8 @@ export function appendPage(
   return {
     rows: [...(prev?.rows ?? []), ...page.rows],
     slots: [...(prev?.slots ?? []), ...rebaseSlots(page.interleaveSlots, offset)],
-    skippedKnownCount: addDelta(prev?.skippedKnownCount ?? null, page.skippedKnownCount),
-    minutesSaved: addDelta(prev?.minutesSaved ?? null, page.minutesSaved),
+    skippedKnownCount: page.skippedKnownCount,
+    minutesSaved: page.minutesSaved,
     // Slots as the page returned them: `lastPlacedAbsolute` works in planner space,
     // so it must not see the render-space rebase. A page that placed nothing leaves
     // the previous page's placement standing rather than clearing the gap.

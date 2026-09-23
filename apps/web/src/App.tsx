@@ -160,7 +160,15 @@ export function App() {
   const [focus, setFocus] = useState(readStoredFocus);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('feed');
-  const [stats, setStats] = useState<FeedStats | null>(null);
+  const [stats, setStats] = useState<{ userId: string; value: FeedStats } | null>(null);
+  const statsUserId = session?.user.id ?? null;
+  const visibleStats = stats?.userId === statsUserId ? stats.value : null;
+  const reportStats = useCallback(
+    (value: FeedStats) => {
+      if (statsUserId !== null) setStats({ userId: statsUserId, value });
+    },
+    [statsUserId],
+  );
   /*
    * The name of whatever is currently open, reported upward by the screen that loads it.
    *
@@ -467,6 +475,7 @@ export function App() {
       const leaving = signedInAs.current;
       signedInAs.current = s?.user.id ?? null;
       if (leaving !== null && leaving !== signedInAs.current) {
+        setStats(null);
         void clearReviewPack(leaving);
         // And the cached feed, which the comment above claimed was covered by the same
         // rule while nothing cleared it. Scoping a store by user keeps one reader's rows
@@ -1103,16 +1112,19 @@ export function App() {
             {session && (
               <div hidden={tab !== 'feed' || routeOpen}>
                 <Feed
+                  key={session.user.id}
                   userId={session.user.id}
-                  onStats={setStats}
+                  onStats={reportStats}
                   refreshKey={prefsSaved}
                   onOpenSource={(id) => navigate(`/source/${id}`)}
                 />
               </div>
             )}
+            {/* A source can show a reader's private summary and Delta. Remount on
+                account changes so old state and in-flight responses disappear. */}
             {sourceId !== null && (
               <Source
-                key={`${sourceId}:${summaryParam ?? ''}`}
+                key={`${sourceId}:${summaryParam ?? ''}:${session?.user.id ?? 'signed-out'}`}
                 workId={sourceId}
                 summaryId={summaryParam ?? undefined}
                 userId={session?.user.id ?? null}
@@ -1398,9 +1410,9 @@ export function App() {
 
         {/*
             The tally is an account of one sitting — ideas met, kept, recalled,
-            and the time the Delta spared. Every number in it is derived from a
-            reader's own history, so for a visitor it would be five zeroes and a
-            dash presented as a result. Omitted rather than emptied.
+            and estimated reading in the latest Delta matches. Reader actions and
+            the latest feed response supply the numbers. For a visitor, the
+            rail would be zeroes and a dash presented as a result.
           */}
         {!visitor && (
           <aside className="shell__aside" aria-label="This session">
@@ -1408,23 +1420,18 @@ export function App() {
               <p className="meta">This session</p>
               <div className="shell__stat">
                 <span>Ideas met</span>
-                <span className="shell__stat-value">{stats?.read ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.read ?? 0}</span>
               </div>
               <div className="shell__stat">
                 <span>Saved</span>
-                <span className="shell__stat-value">{stats?.saved ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.saved ?? 0}</span>
               </div>
               <div className="shell__stat">
                 <span>Recalled</span>
-                <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.recalled ?? 0}</span>
               </div>
             </div>
 
-            {/*
-            Time saved rather than time spent, in the one accent colour — it is
-            the number the product is optimising for, and putting it here keeps
-            it in view during a session instead of only at the end of one.
-          */}
             <div className="shell__group">
               <div
                 style={{
@@ -1451,14 +1458,16 @@ export function App() {
               </div>
 
               <div className="shell__stat">
-                <span>Already knew</span>
-                <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
+                <span>Latest search matches</span>
+                <span className="shell__stat-value">{visibleStats?.skippedKnown ?? '—'}</span>
               </div>
 
               <div className="shell__stat">
-                <span>Time saved</span>
+                <span>Est. reading in matches</span>
                 <span className="shell__stat-value shell__stat-value--accent">
-                  {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
+                  {visibleStats && visibleStats.minutesSaved !== null
+                    ? `${visibleStats.minutesSaved} min`
+                    : '—'}
                 </span>
               </div>
             </div>

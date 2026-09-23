@@ -151,23 +151,21 @@ the `to` pull relative to the `from` pull, so the same edge reads differently fr
 end; `related_pulls` says which side the anchor is on (`direction`), and the client keeps
 one label map per side.
 
-The read path reads `opposes` too, and not as a feature — as a correction.
-Embeddings barely encode negation, so a claim and its contradiction sit closer
-together than two paraphrases of the same claim do. `get_feed` and
-`get_source_delta` therefore drop opposed pairs from the distance comparison
-before deciding what the reader already knows; without that, the Delta hides
-every disagreement. This makes the edges load-bearing rather than decorative: a
-missing `opposes` edge is a contradiction silently suppressed, which is why
-relation extraction is a prerequisite for backfilling real embeddings over
-generated content.
+The Delta uses `delta_relations` for reviewed, unordered Pull pairs. Only an approved
+`equivalent` edge can suppress a different idea, and only when the reader has recent
+successful recall or explicitly marked its counterpart as already known. The latest server-applied relevant attempt and its recorded stability set the
+evidence window; a delayed offline success cannot erase a later applied failure.
+Legacy attempts without recorded stability cannot prove recall. Opening or
+calibrating a card cannot refresh an expired recall. Missing vectors and missing
+relations leave an unverified idea visible.
 
-The exclusion is edge-exact and deliberately so. Widening it by distance — to
-catch the reader who knows a claim through several phrasings while only one
-carries an edge — is unsound, because distance cannot tell a restatement from a
-contradiction either: the widening drops ideas the candidate _agrees_ with and
-serves them as novel. Nor can it be gated on the absence of an `opposes` edge,
-since that absence is the very thing the widening compensates for. Density has
-to come from the edges themselves.
+Legacy `pull_relations` opposition and approved `delta_relations` opposition work in
+either storage direction. They remove the opposed known claim from vector ranking and
+veto a conflicting equivalence for that pair. Embedding distance is a ranking clue,
+not proof of redundancy. The follow-up migration revokes write and TRUNCATE grants on the relation table,
+and get_summary_delta counts one selected summary for the Source page.
+Disabling a bad reviewed edge stops its read-path effect
+without deleting any reader's recall history. See `docs/eval/delta-reliability.md`.
 
 **Interleave tunables live in a table.** `interleave_config` is a single-row
 table with a `check (id)` singleton constraint, so the question rate can be
@@ -201,14 +199,14 @@ ledgered charge. See `20260914010000` and `docs/generation.md`.
 
 ## Indexes on the hot path
 
-| Index                                               | Serves                                                                       |
-| --------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `pulls_embedding_hnsw` (HNSW, cosine)               | the Delta compares every candidate against the user's centroid on every page |
-| `user_knowledge_vectors_hnsw`                       | centroid lookups                                                             |
-| `knowledge_due_idx` (partial)                       | the review queue only ever asks for due rows                                 |
-| `feed_impressions_user_time_idx`                    | recently-seen and repetition penalties                                       |
-| `convictions_one_current_per_pull` (partial unique) | current stance in one lookup                                                 |
-| `works_title_trgm`, `pulls_headline_trgm` (GIN)     | full-text search                                                             |
+| Index                                               | Serves                                               |
+| --------------------------------------------------- | ---------------------------------------------------- |
+| `pulls_embedding_hnsw` (HNSW, cosine)               | semantic search and stored-vector neighbor retrieval |
+| `user_knowledge_vectors_hnsw`                       | centroid lookups                                     |
+| `knowledge_due_idx` (partial)                       | the review queue only ever asks for due rows         |
+| `feed_impressions_user_time_idx`                    | recently-seen and repetition penalties               |
+| `convictions_one_current_per_pull` (partial unique) | current stance in one lookup                         |
+| `works_title_trgm`, `pulls_headline_trgm` (GIN)     | full-text search                                     |
 
 ## Policy posture
 

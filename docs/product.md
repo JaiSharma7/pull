@@ -50,9 +50,10 @@ everything through one generic book-summary shape:
 
 Detailed in `.claude/skills/delta/SKILL.md`. In brief:
 
-1. **The Delta** — the app models what you already know and refuses to re-teach it.
-   Surfaces as a feed filter, as _"4 of 18 are new to you"_ on a source, and as **time
-   saved** rather than time spent.
+1. **The Delta** — the app uses recall evidence and reviewed equivalence to avoid
+   re-teaching matched ideas. A source reports which ideas are confirmed as known
+   and which remain unverified. Estimated reading time in those matches is shown
+   with its counting scope; it is not measured time saved.
 2. **Interleaved Recall** — questions arrive inside the feed at bounded, seeded-random
    moments. Max 3 per session, ≥4 cards apart, never in the first two. Dismissals lower
    the rate; the system backs off rather than nags.
@@ -79,8 +80,8 @@ turning it fetches nothing and regenerates nothing. It is a lens, not a request.
 
 **The labels are computed, never authored.** Each stop shows the reading time for the
 words it reveals, at 210wpm, cumulative from the headline. A dial that said "8 min" over
-300 words would be a lie told on the product's behalf, and time saved is the one number
-the business model rests on. `packages/ui/src/depth.ts` is the whole of that arithmetic
+300 words would be a lie told on the product's behalf. The label estimates reading
+time; it does not measure elapsed time saved. `packages/ui/src/depth.ts` is the whole of that arithmetic
 and calls nothing.
 
 **A short card gets a short dial.** The stops come from the text a Pull actually has —

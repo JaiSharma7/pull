@@ -81,6 +81,12 @@ Three things that measurement changed:
 
 ### The Delta is negation-aware ✅
 
+**Current design (2026-09-22):** Suppression requires recall evidence for the reader's
+own Pull or an approved, reviewed equivalence to one. Vector distance ranks but never
+proves redundancy; a missing relation leaves the idea visible. The discussion below
+records the earlier edge-exact vector design and its measured failure modes. The
+current schema, evaluation, and rollout gates are in `docs/eval/delta-reliability.md`.
+
 The Delta _treated_ cosine distance `< 0.14` as "the reader already knows this",
 hardcoded across six migrations and tuned against synthetic concept-axis vectors. Measured
 against real Gemini embeddings:
@@ -278,17 +284,11 @@ not have to rediscover them.
   here rather than silently deleted because the Fable 5.1 plan was written from this
   paragraph and repeated the gap as a finding; a stale "known gap" is worse than none,
   since a reader trusts it precisely because it sounds like a confession.
-- **The Delta banner counts the pool, not the page.** At the `p_limit` the client actually
-  sends (20), `directly_known` counts over an 800-row candidate pool and `covered_delta`
-  over a 400-row shortlist, while the page shows 20 — so the number describes something
-  forty times larger than what the reader is looking at. So a well-read reader can be told _"skipped 240 ideas you
-  already know"_ above twenty cards. It is a true statement about what the ranker
-  considered and a false one about the page, and the same seconds drive the Enough
-  screen's "against reading the sources in full" — where `estimated_read_seconds` is
-  per-card, not per-source, so that line over-claims independently. Both are copy or
-  counting-scope decisions rather than bugs in the maths, and both predate the negation
-  work; recorded because the function comment that used to assert "describes this page"
-  was corrected rather than carried forward.
+- **The Delta banner counts the pool, not the page.** At the default `p_limit` of 20,
+  direct matches are counted in an 800-row candidate pool and reviewed equivalences
+  in a 400-row shortlist. The current UI calls this the latest search's matches
+  and describes the summed per-card estimates as estimated reading in those
+  matches. It does not sum overlapping candidate pools across pages.
 - **The duplicate `artworks` index is dropped; leaked-password protection is still a
   dashboard toggle.** `artworks_summary_idx` and `artworks_summary_readable_idx` were
   byte-identical — same table, same column, neither partial — and cost double on every
