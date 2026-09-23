@@ -278,7 +278,16 @@ begin
     raise exception 'duplicate reviewer references were accepted';
   exception when check_violation then null;
   end;
-  update public.delta_relations set status='approved',reviewed_at=now(),reviewer_refs=array['test reviewer A','test reviewer B']
+  begin
+    update public.delta_relations set status='approved',reviewed_at=now(),
+      reviewer_refs=array['single human reviewer']
+      where pull_a_id=pair_a and pull_b_id=pair_b;
+    raise exception 'single-reviewer equivalence without a rationale was accepted';
+  exception when check_violation then null;
+  end;
+  update public.delta_relations set status='approved',reviewed_at=now(),
+    reviewer_refs=array['single human reviewer'],
+    review_note='Compared the complete public Pull claims and recorded why they mean the same thing'
     where pull_a_id=pair_a and pull_b_id=pair_b;
   perform pg_temp.must(
     (select updated_at > now()-interval '1 hour' from public.delta_relations

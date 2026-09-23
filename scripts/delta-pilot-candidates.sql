@@ -1,4 +1,4 @@
--- Public catalogue candidate pairs for a small two-reviewer pilot.
+-- Public catalogue candidate pairs for a small single-human pilot.
 -- Headline and source title are public generated metadata; no reader data.
 with public_ideas as materialized (
   select p.id,p.headline,p.embedding,s.work_id,w.title source_title

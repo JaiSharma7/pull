@@ -7,8 +7,8 @@ has separately established knowledge of that very idea.
 
 ## Active decision
 
-The append-only migrations dated 20260922120000, 20260922230000, and
-20260923010000 replace the final get_feed from
+The append-only migrations dated 20260922120000, 20260922230000,
+20260923010000, and 20260923020000 replace the final get_feed from
 20260909050000 and get_source_delta from 20260830222533. Both require a
 knowledge state above the existing 0.7 retrievability floor plus the latest
 relevant recall event: good/easy review, recall, or say-it-back; or easy on the
@@ -34,7 +34,9 @@ impressions, and muted sources retain their ranking and eligibility roles.
 The new relationship table links Pulls, not normalized claims. Its unordered
 pair key prevents duplicate or contradictory proposed kinds for one pair.
 Only an approved equivalence suppresses; approval requires evidence, a review
-timestamp, and two distinct reviewer references. Approval of an uncertain or directionless elaboration label is
+timestamp, and at least one human reviewer reference. A single-reviewer
+equivalence additionally requires an explicit review note. Assistant critique
+is not counted as a reviewer. Approval of an uncertain or directionless elaboration label is
 forbidden. Disabling a bad edge immediately removes its read-path effect
 without touching any reader's knowledge history. The table permits readers
 to see an approved relation only when both endpoint summaries are readable under RLS;
@@ -98,26 +100,33 @@ The existing cost ledger records 213 synthesis calls at median 1.2970 cents
 and 202 embedding calls at median 0.0049 cents. These are measurements of
 different operations, not a price estimate for relationship classification.
 The current proposal backfill makes no provider calls, so its provider spend
-is zero. Human review time is still an unknown input. At most six neighbors per anchor means at most 4,254 directed candidates for 709 anchors before unordered-pair deduplication; actual proposals can be much fewer. Review cost = proposal count × two reviews × measured minutes per review × reviewer hourly cost / 60, plus adjudication time. Measure those inputs in the 31-pair pilot before budgeting the full backfill.
+is zero. Human review time is still an unknown input. At most six neighbors per anchor means at most 4,254 directed candidates for 709 anchors before unordered-pair deduplication; actual proposals can be much fewer. Review cost = proposal count × one human review × measured minutes per review × reviewer hourly cost / 60, plus time to resolve challenged labels. Measure those inputs before budgeting the full backfill.
 
 ## Pilot evaluation
 
-The 31 rows in docs/eval/delta-pilot-candidates.json and the blank reviewer worksheet in docs/eval/delta-pilot-review.csv are a deterministic,
-unlabeled queue drawn from the hosted public catalogue: two anchors per
-selected topic, each with a nearest cross-source neighbor, plus the existing
-opposition. Selection covers large, middle, and small topics. The query in
-scripts/delta-pilot-candidates.sql regenerates it. No model-generated label
-is ground truth.
+The 31 rows in docs/eval/delta-pilot-candidates.json represent 24 distinct
+public-catalogue pairs: two anchors per selected topic, each with a nearest
+cross-source neighbor, plus the existing opposition. Seven rows repeat a pair
+under another topic. Selection covers large, middle, and small topics. The
+query in scripts/delta-pilot-candidates.sql regenerates it. The product owner
+labeled all 24 distinct pairs in docs/eval/delta-pilot-review.csv: one same
+claim, 15 related but distinct, and eight unrelated. No contradiction or
+elaboration was confirmed, so this pilot cannot establish those metrics.
+These are single-human labels, not independently adjudicated ground truth.
 
-Two reviewers independently read the full Pulls and, where available, the
-source material. Each records one of: same claim, related but distinct,
+The product owner is the sole human reviewer for this pilot. The assistant
+compares full public Pulls and challenges doubtful labels, but its judgments
+are not a second human vote. The initial contradiction label for the one
+paraphrase was changed to same claim after comparing both Pull bodies. The
+worksheet records the owner's agreed labels; supporting source passages or
+a reason provenance is unavailable still need to be recorded before any edge
+is approved. A reviewer labels one of: same claim, related but distinct,
 contradiction, elaboration/narrower claim, unrelated despite similar wording,
-or uncertain; the direction for elaboration; supporting passages or a reason
-why provenance is unavailable; and whether the candidate should be hidden
-given proven knowledge of the other claim. Disagreements go to a third
-adjudicator. Equivalent edges require agreement on the same claim, not merely
-the same topic. Reviewer identities and final evidence are recorded on the
-approved row. Keep rejected and uncertain proposals for audit.
+or uncertain; the direction for elaboration and whether proven knowledge
+should hide the candidate are separate decisions. Keep rejected and uncertain
+proposals for audit. The new migration permits one documented human review,
+but these pilot labels are provisional and have no read-path effect until a
+relation is separately approved and the migration is deployed.
 
 The public catalogue currently has no missing embeddings. Test that failure
 mode and the two-private-reader isolation case in the transaction-rolled-back
@@ -169,8 +178,10 @@ proposed status until human review. The read path must never call BAML.
 
 ## Rollout gates
 
-1. Complete two independent labels and adjudication for the public pilot;
-   record the baseline metrics and representative latency under real RLS.
+1. Complete the single-human pilot and expand the reviewed sample until it
+   includes real contradictions and elaborations. Record source evidence,
+   baseline metrics, and representative latency under real RLS. Verify the
+   one-human approval rule and its evidence requirement before activating edges.
 2. Merge only after required CI, opening Codex review, and a clean parallel
    specialist review round under AGENTS.md.
 3. Deploy the migration and copy together; monitor feed/source consistency,
@@ -182,3 +193,23 @@ proposed status until human review. The read path must never call BAML.
    set from the baseline. Disable a bad edge instead of deleting history.
 
 No hosted database rows were changed while preparing this implementation.
+
+
+## Expanded public review queue (2026-09-23)
+
+A read-only export of the hosted public catalogue retrieved 709 ideas across
+217 works; all 709 had embeddings. Applying the same four nearest cross-work
+and two nearest within-work selection as scripts/delta-proposals.sql produced
+4,220 directed neighbors. After unordered-pair deduplication and exclusion of
+the 24 reviewed pilot pairs, docs/eval/delta-review-queue.csv contains 2,897
+unlabeled candidate pairs. It contains only public Pull IDs, headlines, source
+titles, distances, and review fields; no private reader data or vectors are
+exported. Its ordering puts each anchor's nearest neighbors first. A queue
+entry is a retrieval candidate, never a generated or approved relationship.
+
+At one minute per pair, reviewing all 2,897 would take about 48 hours; at
+two minutes, about 97 hours. Those are workload scenarios, not measured review
+times. Work through small, varied batches with the single human reviewer and
+stop once evaluation evidence is sufficient. The first 24-pair pilot found
+only one same-claim pair and no confirmed contradiction, so a larger selected
+sample is needed before release thresholds can be set.
