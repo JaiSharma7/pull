@@ -13,7 +13,7 @@ const verdict = (changes = {}) => ({
 
 function run(changes = {}) {
   return {
-    sources: [{ id: 'source-1', rights: 'self-authored' }],
+    sources: [{ id: 'source-1', rights: 'self-authored', categories: ['notes'] }],
     items: [
       {
         id: 'item-1',
@@ -119,6 +119,7 @@ describe('study generation evaluation', () => {
     data.sources = Array.from({ length: 24 }, (_, index) => ({
       id: 'source-' + (index + 1),
       rights: 'self-authored',
+      categories: ['notes'],
     }));
     data.items = Array.from({ length: 300 }, (_, index) => ({
       ...data.items[0],
@@ -130,6 +131,25 @@ describe('study generation evaluation', () => {
       data.items[index].sourceId = data.sources[index].id;
     }
     assert.equal(evaluateStudyRun(data).gates.minimumFixture, true);
+    assert.equal(evaluateStudyRun(data).gates.fixtureCoverage, false);
+
+    const required = [
+      'ordinary-reading',
+      'notes',
+      'pdf',
+      'docx',
+      'ocr',
+      'table',
+      'long-document',
+      'qualified',
+      'conflicting',
+      'prompt-injection',
+      'unanswerable',
+    ];
+    for (let index = 0; index < required.length; index += 1) {
+      data.sources[index].categories = [required[index]];
+    }
+    assert.equal(evaluateStudyRun(data).gates.fixtureCoverage, true);
   });
 
   it('does not claim ledger completeness without a provider attempt inventory', () => {

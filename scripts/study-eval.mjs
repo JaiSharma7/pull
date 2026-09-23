@@ -2,6 +2,20 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+const REQUIRED_FIXTURE_CATEGORIES = [
+  'ordinary-reading',
+  'notes',
+  'pdf',
+  'docx',
+  'ocr',
+  'table',
+  'long-document',
+  'qualified',
+  'conflicting',
+  'prompt-injection',
+  'unanswerable',
+];
+
 function requireArray(value, name) {
   if (!Array.isArray(value)) throw new Error(name + ' must be an array');
   return value;
@@ -63,8 +77,15 @@ export function evaluateStudyRun(run) {
     providerAttempts.add(attemptId);
   }
 
+  const categoriesBySource = new Map();
   for (const source of sources.values()) {
     requireId(source.rights, 'source rights');
+    const categories = requireArray(source.categories, 'source categories');
+    if (categories.length === 0) throw new Error('source ' + source.id + ' needs categories');
+    categoriesBySource.set(
+      source.id,
+      new Set(categories.map((category) => requireId(category, 'source category'))),
+    );
   }
 
   const costBySource = new Map([...sources.keys()].map((id) => [id, 0]));
@@ -100,12 +121,14 @@ export function evaluateStudyRun(run) {
   let adversarialLeaks = 0;
   let doubleReviewedAdversarial = 0;
   const visibleSourceIds = new Set();
+  const evaluatedSourceIds = new Set();
   let groundedVisible = 0;
   let answerableVisible = 0;
 
   for (const item of items.values()) {
     if (!sources.has(item.sourceId))
       throw new Error('item ' + item.id + ' names an unknown source');
+    evaluatedSourceIds.add(item.sourceId);
     if (item.status !== 'visible' && item.status !== 'quarantined') {
       throw new Error('item ' + item.id + ' has an invalid status');
     }
@@ -153,11 +176,18 @@ export function evaluateStudyRun(run) {
     }
   }
 
+  const coveredCategories = new Set(
+    [...evaluatedSourceIds].flatMap((id) => [...categoriesBySource.get(id)]),
+  );
+  const missingCategories = REQUIRED_FIXTURE_CATEGORIES.filter(
+    (category) => !coveredCategories.has(category),
+  );
   const sourceCosts = [...costBySource.values()].sort((a, b) => a - b);
   const totalCents = sourceCosts.reduce((sum, value) => sum + value, 0);
   const fullyReviewed = visibleItems > 0 && doubleReviewedVisible === visibleItems;
   const gates = {
     minimumFixture: visibleSourceIds.size >= 24 && visibleItems >= 300,
+    fixtureCoverage: missingCategories.length === 0,
     answersSupported:
       fullyReviewed &&
       groundedVisible === visibleItems &&
@@ -188,6 +218,10 @@ export function evaluateStudyRun(run) {
       adversarialLeaks,
       doubleReviewedAdversarial,
       visibleSources: visibleSourceIds.size,
+    },
+    coverage: {
+      present: REQUIRED_FIXTURE_CATEGORIES.filter((category) => coveredCategories.has(category)),
+      missing: missingCategories,
     },
     quality: {
       groundedRate: rate(groundedVisible, visibleItems),
