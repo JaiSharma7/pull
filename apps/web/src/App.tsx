@@ -160,7 +160,15 @@ export function App() {
   const [focus, setFocus] = useState(readStoredFocus);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('feed');
-  const [stats, setStats] = useState<FeedStats | null>(null);
+  const [stats, setStats] = useState<{ userId: string; value: FeedStats } | null>(null);
+  const statsUserId = session?.user.id ?? null;
+  const visibleStats = stats?.userId === statsUserId ? stats.value : null;
+  const reportStats = useCallback(
+    (value: FeedStats) => {
+      if (statsUserId !== null) setStats({ userId: statsUserId, value });
+    },
+    [statsUserId],
+  );
   /*
    * The name of whatever is currently open, reported upward by the screen that loads it.
    *
@@ -467,6 +475,7 @@ export function App() {
       const leaving = signedInAs.current;
       signedInAs.current = s?.user.id ?? null;
       if (leaving !== null && leaving !== signedInAs.current) {
+        setStats(null);
         void clearReviewPack(leaving);
         // And the cached feed, which the comment above claimed was covered by the same
         // rule while nothing cleared it. Scoping a store by user keeps one reader's rows
@@ -1103,8 +1112,9 @@ export function App() {
             {session && (
               <div hidden={tab !== 'feed' || routeOpen}>
                 <Feed
+                  key={session.user.id}
                   userId={session.user.id}
-                  onStats={setStats}
+                  onStats={reportStats}
                   refreshKey={prefsSaved}
                   onOpenSource={(id) => navigate(`/source/${id}`)}
                 />
@@ -1410,15 +1420,15 @@ export function App() {
               <p className="meta">This session</p>
               <div className="shell__stat">
                 <span>Ideas met</span>
-                <span className="shell__stat-value">{stats?.read ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.read ?? 0}</span>
               </div>
               <div className="shell__stat">
                 <span>Saved</span>
-                <span className="shell__stat-value">{stats?.saved ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.saved ?? 0}</span>
               </div>
               <div className="shell__stat">
                 <span>Recalled</span>
-                <span className="shell__stat-value">{stats?.recalled ?? 0}</span>
+                <span className="shell__stat-value">{visibleStats?.recalled ?? 0}</span>
               </div>
             </div>
 
@@ -1449,13 +1459,15 @@ export function App() {
 
               <div className="shell__stat">
                 <span>Latest search matches</span>
-                <span className="shell__stat-value">{stats?.skippedKnown ?? '—'}</span>
+                <span className="shell__stat-value">{visibleStats?.skippedKnown ?? '—'}</span>
               </div>
 
               <div className="shell__stat">
                 <span>Est. reading in matches</span>
                 <span className="shell__stat-value shell__stat-value--accent">
-                  {stats && stats.minutesSaved !== null ? `${stats.minutesSaved} min` : '—'}
+                  {visibleStats && visibleStats.minutesSaved !== null
+                    ? `${visibleStats.minutesSaved} min`
+                    : '—'}
                 </span>
               </div>
             </div>
