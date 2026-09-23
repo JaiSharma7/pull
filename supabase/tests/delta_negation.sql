@@ -99,6 +99,20 @@ begin
   delta := public.get_source_delta(on_liberty);
   perform pg_temp.must((delta->>'known')::int=0,
     'reading without recall must not count as known');
+  -- Pre-outcome legacy events have no recorded stability. Current state can
+  -- grow later through calibration, so such an event cannot prove knowledge.
+  perform set_config('role','postgres',true);
+  insert into public.recall_events (user_id,pull_id,kind,grade)
+    values (reader_a,mill,'recall','easy');
+  update public.knowledge_states set stability=100,last_seen_at=now()
+    where user_id=reader_a and pull_id=mill;
+  perform set_config('role','authenticated',true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub',reader_a,'role','authenticated')::text,true);
+  perform pg_temp.assert_reader();
+  delta := public.get_source_delta(on_liberty);
+  perform pg_temp.must((delta->>'known')::int=0,
+    'legacy recall without recorded stability must remain unverified');
   -- A client clock in the future must not outrank a later failed attempt.
   perform public.grade_recall(mill,'easy',p_kind:='recall',
     p_submitted_at:=now() + interval '1 year');
@@ -484,8 +498,8 @@ begin
     (user_id,pull_id,stability,last_seen_at)
   select reader_a,id,100,now() from public.pulls
     where summary_id=cap_summary and ordinal<=501;
-  insert into public.recall_events (user_id,pull_id,kind,grade)
-  select reader_a,id,'recall','easy' from public.pulls
+  insert into public.recall_events (user_id,pull_id,kind,grade,stability_after)
+  select reader_a,id,'recall','easy',100 from public.pulls
     where summary_id=cap_summary and ordinal<=501;
   perform set_config('role','authenticated',true);
   perform set_config('request.jwt.claims',

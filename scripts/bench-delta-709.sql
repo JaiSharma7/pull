@@ -42,8 +42,8 @@ begin
     (user_id,pull_id,stability,last_seen_at)
   select reader_id,p.id,100,now() from public.pulls p
   where p.summary_id=v_summary_id and p.ordinal<=500;
-  insert into public.recall_events (user_id,pull_id,kind,grade)
-  select reader_id,p.id,'recall','easy' from public.pulls p
+  insert into public.recall_events (user_id,pull_id,kind,grade,stability_after)
+  select reader_id,p.id,'recall','easy',100 from public.pulls p
   where p.summary_id=v_summary_id and p.ordinal<=500;
   perform set_config('delta.bench_reader',reader_id::text,true);
   perform set_config('delta.bench_work',v_work_id::text,true);

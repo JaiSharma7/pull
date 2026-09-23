@@ -155,7 +155,8 @@ The Delta uses `delta_relations` for reviewed, unordered Pull pairs. Only an app
 `equivalent` edge can suppress a different idea, and only when the reader has recent
 successful recall or explicitly marked its counterpart as already known. The latest server-applied relevant attempt and its recorded stability set the
 evidence window; a delayed offline success cannot erase a later applied failure.
-Opening or calibrating a card cannot refresh an expired recall. Missing vectors and missing
+Legacy attempts without recorded stability cannot prove recall. Opening or
+calibrating a card cannot refresh an expired recall. Missing vectors and missing
 relations leave an unverified idea visible.
 
 Legacy `pull_relations` opposition and approved `delta_relations` opposition work in

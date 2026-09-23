@@ -7,14 +7,16 @@ has separately established knowledge of that very idea.
 
 ## Active decision
 
-The append-only migrations dated 20260922120000 and 20260922230000 replace the final get_feed from
+The append-only migrations dated 20260922120000, 20260922230000, and
+20260923010000 replace the final get_feed from
 20260909050000 and get_source_delta from 20260830222533. Both require a
 knowledge state above the existing 0.7 retrievability floor plus the latest
 relevant recall event: good/easy review, recall, or say-it-back; or easy on the
 explicit “Already knew it” Delta probe. A later server-applied forgot/hard answer removes that
 evidence, even if the state remains highly stable. A delayed offline success
 submitted before that failure cannot revive it. An old success expires from its
-recorded event time and stability: opening the card cannot refresh that proof. Calibration, conviction,
+recorded event time and stability: opening the card cannot refresh that proof.
+Legacy events without recorded stability remain unverified until fresh recall. Calibration, conviction,
 counterpull, opening, reading, saving, and impressions do not prove knowledge.
 
 Direct knowledge is never subject to the 500-idea semantic comparison cap.
@@ -85,8 +87,8 @@ text or credential was exported in this audit.
 A local, transaction-rolled-back benchmark built 709 public ideas and 500
 proven-known ideas under authenticated RLS. After bounding ranking-only vector
 comparisons to 100 and applying the known-state cap before history probes,
-ten repeated calls measured Feed p50 223.7 ms and p95 258.1 ms;
-work-wide Source Delta p50 50.9 ms and p95 60.3 ms. An earlier single
+ten repeated calls measured Feed p50 216.6 ms and p95 233.4 ms;
+work-wide Source Delta p50 40.7 ms and p95 43.9 ms. An earlier single
 unbounded-ranking run took about 778 ms for Feed. These are local synthetic
 vectors, not hosted user latency or a release threshold. Re-run
 scripts/bench-delta-709.sql in CI or staging and measure real reader cohorts
