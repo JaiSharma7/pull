@@ -194,7 +194,6 @@ proposed status until human review. The read path must never call BAML.
 
 No hosted database rows were changed while preparing this implementation.
 
-
 ## Expanded public review queue (2026-09-23)
 
 A read-only export of the hosted public catalogue retrieved 709 ideas across
