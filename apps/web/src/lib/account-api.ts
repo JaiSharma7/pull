@@ -227,6 +227,10 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'imports', column: 'user_id', key: 'id' },
   { table: 'import_items', column: 'user_id', key: 'id' },
   { table: 'user_questions', column: 'user_id', key: 'id' },
+  // Private source text and every immutable correction belong in the reader's export.
+  { table: 'study_sources', column: 'owner_id', key: 'id' },
+  { table: 'study_source_versions', column: 'owner_id', key: 'id' },
+  { table: 'study_source_mutations', column: 'owner_id', key: 'client_mutation_id' },
 ];
 
 /*
