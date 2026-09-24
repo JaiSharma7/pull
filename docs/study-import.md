@@ -12,3 +12,9 @@ Studio's **Prepare study material** mode stores an extraction the reader has rev
 The browser extraction is convenience, not proof that the text is complete. The saved version is exactly the text the reader reviewed. Later course generation must treat it as source evidence and retain provenance rather than assuming extraction or model output is correct.
 
 A content-free mutation marker remains after a source is deleted so that retrying a lost save response cannot recreate the deleted text. The 1,000-save lifetime cap also bounds marker storage. This marker is included in account export and removed on account deletion. DOCX extraction verifies actual decompressed bytes in a timed worker before the document parser runs.
+
+## Source URL and goal entry
+
+A signed-in non-guest reader can preview an HTTPS HTML or plain-text page from one of three exact public hosts: en.wikisource.org, classics.mit.edu, or www.gutenberg.org. The server checks each redirect, rejects credentials and custom ports, stops at 1 MB or 20 seconds, and refuses unsupported content types or text over 200,000 characters. It does not store the URL response. Each attempt consumes one of 20 daily URL previews per account, even if extraction fails. The browser receives extracted text and the final URL; the reader checks and edits the text before the existing private save RPC stores a version. The extractor is deliberately simple and may include navigation or miss table structure.
+
+Goal entry searches the existing public catalogue without a model call, then rechecks each candidate's `public_domain` status and source URL against the fixed preview allowlist. A suggestion is an attributed reading to inspect, not a legal guarantee or a generated course. If none qualify, the screen asks the reader to paste notes or upload a file. A selected source still requires extraction review and private-study rights confirmation. Imported text and derivatives never become public through this flow.

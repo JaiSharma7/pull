@@ -2191,6 +2191,24 @@ export type Database = {
         }
         Relationships: []
       }
+      study_url_preview_daily_usage: {
+        Row: {
+          day_utc: string
+          owner_id: string
+          preview_count: number
+        }
+        Insert: {
+          day_utc: string
+          owner_id: string
+          preview_count: number
+        }
+        Update: {
+          day_utc?: string
+          owner_id?: string
+          preview_count?: number
+        }
+        Relationships: []
+      }
       summaries: {
         Row: {
           author_id: string | null
@@ -2835,6 +2853,7 @@ export type Database = {
         Args: { p_cents: number; p_job_id: string; p_step: string }
         Returns: number
       }
+      reserve_study_url_preview: { Args: never; Returns: number }
       resume_path: { Args: { p_path_id: string }; Returns: Json }
       retrievability: {
         Args: { p_at?: string; p_last_seen: string; p_stability: number }
