@@ -38,6 +38,56 @@ export function assertStudyPreviewUrl(raw: string): URL {
   return url;
 }
 
+export const MAX_PREVIEW_REQUEST_BYTES = 4_096;
+
+export async function parseStudyPreviewRequest(req: Request): Promise<string> {
+  if (req.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json' || !req.body) {
+    throw new Error('Provide a JSON source URL.');
+  }
+  const reader = req.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let text = '';
+  let bytes = 0;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => undefined);
+  }, 5_000);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_PREVIEW_REQUEST_BYTES) {
+        await reader.cancel();
+        throw new Error('The URL request is too large.');
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    if (timedOut) throw new Error('The URL request took too long.');
+    text += decoder.decode();
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new Error('Provide a JSON source URL.');
+    }
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      !('url' in body) ||
+      typeof body.url !== 'string'
+    ) {
+      throw new Error('Provide a source URL.');
+    }
+    return assertStudyPreviewUrl(body.url).toString();
+  } finally {
+    clearTimeout(timer);
+    reader.releaseLock();
+  }
+}
+
 function suggestedTitle(url: URL, html: string, isHtml: boolean): string {
   if (isHtml) {
     const match = html.match(/<title(?:\s[^>]*)?>([^<]{1,300})<\/title\s*>/i);

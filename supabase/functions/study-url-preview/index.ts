@@ -1,5 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { assertStudyPreviewUrl, previewStudyUrl } from '../_shared/study-url-preview.ts';
+import { parseStudyPreviewRequest, previewStudyUrl } from '../_shared/study-url-preview.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -22,9 +22,7 @@ Deno.serve(async (req) => {
 
   let url: string;
   try {
-    const body = (await req.json()) as { url?: unknown };
-    if (typeof body?.url !== 'string') return json({ error: 'Provide a source URL.' }, 400);
-    url = assertStudyPreviewUrl(body.url).toString();
+    url = await parseStudyPreviewRequest(req);
   } catch (cause) {
     return json({ error: cause instanceof Error ? cause.message : 'Invalid source URL.' }, 400);
   }

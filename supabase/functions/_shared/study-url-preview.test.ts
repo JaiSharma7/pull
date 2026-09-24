@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertStudyPreviewUrl, previewStudyUrl } from './study-url-preview.js';
+import {
+  assertStudyPreviewUrl,
+  parseStudyPreviewRequest,
+  previewStudyUrl,
+} from './study-url-preview.js';
 
 const html = (text: string, headers: Record<string, string> = {}) =>
   new Response('<title>A reading</title><article><p>' + text + '</p></article>', {
@@ -7,6 +11,26 @@ const html = (text: string, headers: Record<string, string> = {}) =>
   });
 
 describe('study URL preview', () => {
+  it('bounds and validates incoming JSON before reserving a fetch', async () => {
+    const request = (body: string, type = 'application/json') =>
+      new Request('https://example.test/study-url-preview', {
+        method: 'POST',
+        headers: { 'content-type': type },
+        body,
+      });
+    expect(
+      await parseStudyPreviewRequest(
+        request(
+          JSON.stringify({
+            url: 'https://en.wikisource.org/wiki/Reading',
+          }),
+        ),
+      ),
+    ).toBe('https://en.wikisource.org/wiki/Reading');
+    await expect(parseStudyPreviewRequest(request('x'.repeat(5_000)))).rejects.toThrow('too large');
+    await expect(parseStudyPreviewRequest(request('not json'))).rejects.toThrow('JSON');
+    await expect(parseStudyPreviewRequest(request('{}', 'text/plain'))).rejects.toThrow('JSON');
+  });
   it('requires exact HTTPS allowlisted hosts without credentials or custom ports', () => {
     expect(assertStudyPreviewUrl('https://en.wikisource.org/wiki/Reading').hostname).toBe(
       'en.wikisource.org',
