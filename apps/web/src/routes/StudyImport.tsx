@@ -695,11 +695,18 @@ export function StudyImport({ userId }: { userId: string }) {
 
       {isPreviewableStudyUrl(originLabel) && (
         <p className="meta">
-          Extracted from{' '}
-          <a href={originLabel} target="_blank" rel="noopener noreferrer">
-            the original page
-          </a>
-          . Open it to check the text before saving.
+          Source:{' '}
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => {
+              if (!isPreviewableStudyUrl(originLabel)) return;
+              window.open(new URL(originLabel).toString(), '_blank', 'noopener,noreferrer');
+            }}
+          >
+            Open original page
+          </button>
+          . Compare this text with the original before saving.
         </p>
       )}
       {extractionNotes && <p className="meta">{extractionNotes}</p>}
