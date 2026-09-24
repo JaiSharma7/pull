@@ -188,6 +188,8 @@ export function StudyImport({ userId }: { userId: string }) {
     setVersionNo(null);
     setText('');
     setTitle('');
+    setOriginLabel('');
+    setExtractionNotes('');
     setExtraction(null);
     setFile(null);
     setDirty(false);
