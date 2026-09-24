@@ -403,6 +403,10 @@ export function StudyImport({ userId }: { userId: string }) {
     if (saving.current || deleting.current || working || !dirty) return;
     setError('');
     setSavedNotice('');
+    if (mode === 'url' && (!originLabel || urlInput !== originLabel)) {
+      setError('This URL has changed. Preview it again before saving.');
+      return;
+    }
     if (!rightsChecked) {
       setError('Confirm that you may use this material for private study.');
       return;
@@ -440,7 +444,7 @@ export function StudyImport({ userId }: { userId: string }) {
           ? 'This version was already saved. Nothing was duplicated.'
           : 'Private version ' +
               result.versionNo +
-              ' saved. Only the text you approved was stored.',
+              ' saved with your reviewed text and source details.',
       );
       reloadSaved();
     } catch (cause: unknown) {
@@ -468,9 +472,10 @@ export function StudyImport({ userId }: { userId: string }) {
       </p>
       <p className="studio__consent">
         Files are read in this browser. A URL preview fetches an allowlisted public page on our
-        server; review its extracted text before saving. Saving stores only the text you approve in
-        your private account. OCR runs here too, though it may download recognition data. No model
-        processes this material until you separately request generation.
+        server; review its extracted text before saving. Saving stores your approved text and source
+        details privately, including a URL when you use one. The original file or page response is
+        not stored. OCR runs here too, though it may download recognition data. No model processes
+        this material until you separately request generation.
       </p>
 
       <div className="library__filters" role="group" aria-label="Material type">
@@ -509,6 +514,11 @@ export function StudyImport({ userId }: { userId: string }) {
             onChange={(event) => setUrlInput(event.target.value)}
             placeholder="https://en.wikisource.org/wiki/…"
           />
+          {originLabel && urlInput !== originLabel && (
+            <p className="remember__error" role="status">
+              This URL differs from the preview below. Preview it again before saving.
+            </p>
+          )}
           <p className="meta">
             HTTPS pages on Wikisource, MIT Classics, and Project Gutenberg can be previewed. For
             another site, paste text or upload a file. The page may contain navigation or omit
@@ -683,6 +693,15 @@ export function StudyImport({ userId }: { userId: string }) {
         Compare passages, tables, and page order with the original before saving.
       </p>
 
+      {isPreviewableStudyUrl(originLabel) && (
+        <p className="meta">
+          Extracted from{' '}
+          <a href={originLabel} target="_blank" rel="noopener noreferrer">
+            the original page
+          </a>
+          . Open it to check the text before saving.
+        </p>
+      )}
       {extractionNotes && <p className="meta">{extractionNotes}</p>}
 
       {extraction && extraction.sparsePages.length > 0 && (
@@ -748,7 +767,9 @@ export function StudyImport({ userId }: { userId: string }) {
         <button
           type="button"
           className="btn btn--primary"
-          aria-disabled={working || !dirty}
+          aria-disabled={
+            working || !dirty || (mode === 'url' && (!originLabel || urlInput !== originLabel))
+          }
           onClick={() => void save()}
         >
           {working ? 'Working…' : sourceId ? 'Save a corrected version' : 'Save private source'}

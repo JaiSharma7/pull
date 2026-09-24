@@ -143,6 +143,9 @@ describe('buildAccountExport', () => {
     TABLES.set('study_source_mutations', [
       { client_mutation_id: 'mutation-1', owner_id: 'u1', version_id: 'version-1' },
     ]);
+    TABLES.set('study_url_preview_daily_usage', [
+      { day_utc: '2026-09-24', owner_id: 'u1', preview_count: 2 },
+    ]);
     TABLES.set('study_source_versions', [
       {
         id: 'version-1',
@@ -156,6 +159,9 @@ describe('buildAccountExport', () => {
 
     expect(out.data['study_sources']).toHaveLength(1);
     expect(out.data['study_source_mutations']).toHaveLength(1);
+    expect(out.data['study_url_preview_daily_usage']).toEqual([
+      { day_utc: '2026-09-24', owner_id: 'u1', preview_count: 2 },
+    ]);
     expect(out.data['study_source_versions']).toEqual([
       {
         id: 'version-1',
