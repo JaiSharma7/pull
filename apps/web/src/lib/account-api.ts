@@ -231,6 +231,7 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'study_sources', column: 'owner_id', key: 'id' },
   { table: 'study_source_versions', column: 'owner_id', key: 'id' },
   { table: 'study_source_mutations', column: 'owner_id', key: 'client_mutation_id' },
+  { table: 'study_url_preview_daily_usage', column: 'owner_id', key: 'day_utc' },
 ];
 
 /*

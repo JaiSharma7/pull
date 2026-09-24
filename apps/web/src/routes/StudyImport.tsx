@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchImportedItems, fetchImportedWorks } from '../lib/import-api.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { mutationId } from '../lib/submission.js';
+import {
+  fetchStudyUrlPreview,
+  isPreviewableStudyUrl,
+  suggestStudySources,
+  type StudySuggestion,
+} from '../lib/study-source-entry.js';
 import { fitImportSource } from '../lib/studio.js';
 import {
   extractStudyFile,
@@ -24,11 +30,15 @@ import {
   type StudySourceFormat,
 } from '../lib/study-source.js';
 
-type IntakeMode = 'paste' | 'file' | 'highlights';
+type IntakeMode = 'paste' | 'file' | 'highlights' | 'url' | 'goal';
 type Book = { workId: string; title: string; kind: string | null };
 
 export function StudyImport({ userId }: { userId: string }) {
   const [mode, setMode] = useState<IntakeMode>('paste');
+  const [urlInput, setUrlInput] = useState('');
+  const [goal, setGoal] = useState('');
+  const [suggestions, setSuggestions] = useState<StudySuggestion[]>([]);
+  const [goalSearched, setGoalSearched] = useState(false);
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [format, setFormat] = useState<StudySourceFormat>('paste');
@@ -113,6 +123,10 @@ export function StudyImport({ userId }: { userId: string }) {
     selection.current += 1;
     submission.current = null;
     setMode(next);
+    setUrlInput('');
+    setGoal('');
+    setSuggestions([]);
+    setGoalSearched(false);
     setTitle('');
     setText('');
     setFormat(next === 'highlights' ? 'highlights' : 'paste');
@@ -130,6 +144,77 @@ export function StudyImport({ userId }: { userId: string }) {
     setError('');
     setStatus('');
     setSavedNotice('');
+  }
+
+  async function searchGoal() {
+    if (working || saving.current || deleting.current) return;
+    const request = ++selection.current;
+    setWorking(true);
+    setGoalSearched(false);
+    setSuggestions([]);
+    setError('');
+    setStatus('Finding source-backed readings…');
+    try {
+      const found = await suggestStudySources(goal);
+      if (selection.current !== request) return;
+      setSuggestions(found);
+      setGoalSearched(true);
+      setStatus(found.length ? 'Choose a source to preview.' : '');
+    } catch (cause: unknown) {
+      if (selection.current !== request) return;
+      console.error('Could not find study sources', cause);
+      setError('Could not search the public catalogue. Try again or bring your own material.');
+      setStatus('');
+    } finally {
+      if (selection.current === request) setWorking(false);
+    }
+  }
+
+  async function previewUrl(raw: string) {
+    if (working || saving.current || deleting.current || !confirmDiscard()) return;
+    if (!isPreviewableStudyUrl(raw)) {
+      setError(
+        'Use a short HTTPS link from Wikisource, MIT Classics, or Project Gutenberg. For other sites, paste the text.',
+      );
+      return;
+    }
+    const request = ++selection.current;
+    submission.current = null;
+    setWorking(true);
+    setError('');
+    setSavedNotice('');
+    setStatus('Fetching the page for extraction…');
+    setSourceId(null);
+    setVersionNo(null);
+    setText('');
+    setTitle('');
+    setOriginLabel('');
+    setExtractionNotes('');
+    setExtraction(null);
+    setFile(null);
+    setDirty(false);
+    setRightsChecked(false);
+    setSparseChecked(false);
+    try {
+      const result = await fetchStudyUrlPreview(raw);
+      if (selection.current !== request) return;
+      setUrlInput(result.url);
+      setTitle(result.title);
+      setText(result.text);
+      setOriginLabel(result.url);
+      setExtractionNotes(result.notes);
+      setFormat('text');
+      setDirty(true);
+      setStatus(
+        'Preview ready. Compare the text with the linked page and correct it before saving.',
+      );
+    } catch (cause: unknown) {
+      if (selection.current !== request) return;
+      setError(cause instanceof Error ? cause.message : 'Could not preview this URL.');
+      setStatus('');
+    } finally {
+      if (selection.current === request) setWorking(false);
+    }
   }
 
   async function chooseFile(selected: File) {
@@ -320,6 +405,10 @@ export function StudyImport({ userId }: { userId: string }) {
     if (saving.current || deleting.current || working || !dirty) return;
     setError('');
     setSavedNotice('');
+    if (mode === 'url' && (!originLabel || urlInput !== originLabel)) {
+      setError('This URL has changed. Preview it again before saving.');
+      return;
+    }
     if (!rightsChecked) {
       setError('Confirm that you may use this material for private study.');
       return;
@@ -355,7 +444,9 @@ export function StudyImport({ userId }: { userId: string }) {
       setSavedNotice(
         result.replayed
           ? 'This version was already saved. Nothing was duplicated.'
-          : 'Private version ' + result.versionNo + ' saved. The original file was not uploaded.',
+          : 'Private version ' +
+              result.versionNo +
+              ' saved with your reviewed text and source details.',
       );
       reloadSaved();
     } catch (cause: unknown) {
@@ -382,13 +473,15 @@ export function StudyImport({ userId }: { userId: string }) {
         will turn the version you choose into lessons and practice.
       </p>
       <p className="studio__consent">
-        Files are read in this browser. Saving stores the text you approve in your private account;
-        the original file is not uploaded. OCR runs here too, though it may download recognition
-        data. No model processes this material until you separately request generation.
+        Files are read in this browser. A URL preview fetches an allowlisted public page on our
+        server; review its extracted text before saving. Saving stores your approved text and source
+        details privately, including a URL when you use one. The original file or page response is
+        not stored. OCR runs here too, though it may download recognition data. No model processes
+        this material until you separately request generation.
       </p>
 
       <div className="library__filters" role="group" aria-label="Material type">
-        {(['paste', 'file', 'highlights'] as const).map((choice) => (
+        {(['paste', 'file', 'highlights', 'url', 'goal'] as const).map((choice) => (
           <button
             key={choice}
             type="button"
@@ -400,10 +493,112 @@ export function StudyImport({ userId }: { userId: string }) {
               ? 'Paste text'
               : choice === 'file'
                 ? 'Choose a file'
-                : 'Imported highlights'}
+                : choice === 'highlights'
+                  ? 'Imported highlights'
+                  : choice === 'url'
+                    ? 'Source URL'
+                    : 'Start with a goal'}
           </button>
         ))}
       </div>
+
+      {mode === 'url' && (
+        <div className="stack">
+          <label className="field__label" htmlFor="study-source-url">
+            Public source URL
+          </label>
+          <input
+            id="study-source-url"
+            className="field__input"
+            type="url"
+            value={urlInput}
+            disabled={working}
+            onChange={(event) => setUrlInput(event.target.value)}
+            placeholder="https://en.wikisource.org/wiki/…"
+          />
+          {originLabel && urlInput !== originLabel && (
+            <p className="remember__error" role="status">
+              This URL differs from the preview below. Preview it again before saving.
+            </p>
+          )}
+          <p className="meta">
+            HTTPS pages on Wikisource, MIT Classics, and Project Gutenberg can be previewed. For
+            another site, paste text or upload a file. The page may contain navigation or omit
+            tables and footnotes.
+          </p>
+          <p>
+            <button
+              type="button"
+              className="btn btn--plain"
+              disabled={working}
+              onClick={() => void previewUrl(urlInput)}
+            >
+              Preview page
+            </button>
+          </p>
+        </div>
+      )}
+
+      {mode === 'goal' && (
+        <div className="stack">
+          <label className="field__label" htmlFor="study-goal">
+            What do you want to study?
+          </label>
+          <input
+            id="study-goal"
+            className="field__input"
+            value={goal}
+            maxLength={160}
+            disabled={working}
+            onChange={(event) => {
+              setGoal(event.target.value);
+              setGoalSearched(false);
+              setSuggestions([]);
+            }}
+            placeholder="e.g. natural selection"
+          />
+          <p className="meta">
+            Search rights-cleared public readings already in the Archive. Your goal does not create
+            a source or a course by itself.
+          </p>
+          <p>
+            <button
+              type="button"
+              className="btn btn--plain"
+              disabled={working || goal.trim().length < 2}
+              onClick={() => void searchGoal()}
+            >
+              Find readings
+            </button>
+          </p>
+          {suggestions.length > 0 && (
+            <ul className="stack">
+              {suggestions.map((suggestion) => (
+                <li key={suggestion.id}>
+                  <button
+                    type="button"
+                    className="btn btn--plain"
+                    disabled={working}
+                    onClick={() => void previewUrl(suggestion.url)}
+                  >
+                    {suggestion.title}
+                  </button>
+                  {suggestion.description && <p className="meta">{suggestion.description}</p>}
+                  <p className="meta">
+                    Catalogue status: public domain · {new URL(suggestion.url).hostname}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+          {goalSearched && suggestions.length === 0 && (
+            <p className="meta" role="status">
+              No inspectable public-domain source matched this goal. Paste your own notes or upload
+              a document to study it privately.
+            </p>
+          )}
+        </div>
+      )}
 
       {mode === 'file' && (
         <>
@@ -500,6 +695,22 @@ export function StudyImport({ userId }: { userId: string }) {
         Compare passages, tables, and page order with the original before saving.
       </p>
 
+      {isPreviewableStudyUrl(originLabel) && (
+        <p className="meta">
+          Source:{' '}
+          <button
+            type="button"
+            className="btn btn--plain"
+            onClick={() => {
+              if (!isPreviewableStudyUrl(originLabel)) return;
+              window.open(new URL(originLabel).toString(), '_blank', 'noopener,noreferrer');
+            }}
+          >
+            Open original page
+          </button>
+          . Compare this text with the original before saving.
+        </p>
+      )}
       {extractionNotes && <p className="meta">{extractionNotes}</p>}
 
       {extraction && extraction.sparsePages.length > 0 && (
@@ -565,7 +776,9 @@ export function StudyImport({ userId }: { userId: string }) {
         <button
           type="button"
           className="btn btn--primary"
-          aria-disabled={working || !dirty}
+          aria-disabled={
+            working || !dirty || (mode === 'url' && (!originLabel || urlInput !== originLabel))
+          }
           onClick={() => void save()}
         >
           {working ? 'Working…' : sourceId ? 'Save a corrected version' : 'Save private source'}

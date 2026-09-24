@@ -98,7 +98,8 @@ you send (`stashes`, `saved_items`, `notes`, `highlights`, `progress`, `explanat
 `convictions`, `feedback`).
 
 **Private study sources** are extracted text that you review in Studio before saving:
-pasted text, local files, or highlights you already imported. The title, source format,
+pasted text, local files, public URL previews, or highlights you already imported.
+The title, source URL or label, source format,
 extraction notes, text, and each corrected version are stored in `study_sources` and
 `study_source_versions` under your account. The original file is read in your browser and
 is not uploaded. OCR is optional, uses downloaded recognition code/data, and runs on the
@@ -109,6 +110,15 @@ account. Correcting a version appends a new row; earlier text remains in your ac
 export until you delete the source. A content-free save-retry marker remains in
 `study_source_mutations` until account deletion, so a delayed request cannot restore
 the text you deleted.
+
+If you preview a public source URL, your browser sends that URL to our server, which fetches
+an allowlisted page and returns extracted text to this screen. The page host sees the
+server request. The preview response is not saved by this feature. When you save,
+the reviewed text, page URL, title, format, and extraction notes become a private source
+version. Up to twenty preview attempts per
+UTC day are counted in `study_url_preview_daily_usage`, without storing the URL or page
+text in that counter. Those counts are visible in your account export and deleted with
+your account. A learning goal searches the public catalogue without calling a model.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
