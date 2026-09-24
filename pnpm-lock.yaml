@@ -62,6 +62,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.116.0
         version: 2.116.0
+      '@tesseract.js-data/eng':
+        specifier: 1.0.0
+        version: 1.0.0
       '@wap/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -74,6 +77,9 @@ importers:
       idb:
         specifier: ^8.0.3
         version: 8.0.3
+      jszip:
+        specifier: 3.10.2
+        version: 3.10.2
       mammoth:
         specifier: ^1.12.3
         version: 1.12.3
@@ -88,6 +94,9 @@ importers:
         version: 19.3.0(react@19.3.0)
       tesseract.js:
         specifier: ^7.0.0
+        version: 7.0.0
+      tesseract.js-core:
+        specifier: 7.0.0
         version: 7.0.0
     devDependencies:
       '@types/react':
@@ -1548,6 +1557,9 @@ packages:
     peerDependenciesMeta:
       '@opentelemetry/api':
         optional: true
+
+  '@tesseract.js-data/eng@1.0.0':
+    resolution: {integrity: sha512-mbTumm6KQPUHyzTPQaF3ObXYnx0SqqfV2nabqFVQBwD6Kl7PhGSLSzOlfFTWy0P3BjghaSKA2W9GB19Jk+ZcTg==}
 
   '@trickfilm400/rollup-plugin-off-main-thread@3.0.0-pre1':
     resolution: {integrity: sha512-/67zpWDBLV+oYAEL682s1ktXL0HgqX76f6gaVGkGnVZlBbm1zd0v4Bz8MFF2GGhoX9rvfq3KSQHubFHwa6w6/Q==}
@@ -4537,6 +4549,8 @@ snapshots:
       '@supabase/postgrest-js': 2.116.0
       '@supabase/realtime-js': 2.116.0
       '@supabase/storage-js': 2.116.0
+
+  '@tesseract.js-data/eng@1.0.0': {}
 
   '@trickfilm400/rollup-plugin-off-main-thread@3.0.0-pre1':
     dependencies:

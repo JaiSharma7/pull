@@ -53,16 +53,22 @@ export function StudyImport({ userId }: { userId: string }) {
   const [libraryReload, setLibraryReload] = useState(0);
   const [bookReload, setBookReload] = useState(0);
   const selection = useRef(0);
+  const editRevision = useRef(0);
+  const libraryRequest = useRef(0);
   const saving = useRef(false);
+  const deleting = useRef(false);
   const submission = useRef<string | null>(null);
 
   const reloadSaved = useCallback(() => {
+    const request = ++libraryRequest.current;
     fetchStudySources(userId)
       .then((rows) => {
+        if (request !== libraryRequest.current) return;
         setSaved(rows);
         setLibraryError('');
       })
       .catch((cause: unknown) => {
+        if (request !== libraryRequest.current) return;
         console.error('Could not read study sources', cause);
         setLibraryError('Could not read your saved study sources.');
       });
@@ -89,14 +95,21 @@ export function StudyImport({ userId }: { userId: string }) {
   }, [mode, userId, bookReload]);
 
   function edited() {
+    editRevision.current += 1;
     submission.current = null;
     setDirty(true);
     setSavedNotice('');
     setError('');
   }
 
-  function chooseMode(next: IntakeMode) {
-    if (next === mode && sourceId === null) return;
+  function confirmDiscard(): boolean {
+    return !dirty || window.confirm('Discard your unsaved study text?');
+  }
+
+  function chooseMode(next: IntakeMode, force = false) {
+    if (saving.current || (deleting.current && !force) || (next === mode && sourceId === null))
+      return;
+    if (!force && !confirmDiscard()) return;
     selection.current += 1;
     submission.current = null;
     setMode(next);
@@ -120,6 +133,7 @@ export function StudyImport({ userId }: { userId: string }) {
   }
 
   async function chooseFile(selected: File) {
+    if (saving.current || deleting.current || !confirmDiscard()) return;
     const request = ++selection.current;
     submission.current = null;
     setFile(selected);
@@ -197,6 +211,7 @@ export function StudyImport({ userId }: { userId: string }) {
   }
 
   async function chooseBook(book: Book) {
+    if (saving.current || deleting.current || !confirmDiscard()) return;
     const request = ++selection.current;
     submission.current = null;
     setSourceId(null);
@@ -243,6 +258,7 @@ export function StudyImport({ userId }: { userId: string }) {
   }
 
   async function openSaved(row: SavedStudySource) {
+    if (saving.current || deleting.current || !confirmDiscard()) return;
     const request = ++selection.current;
     submission.current = null;
     setWorking(true);
@@ -279,25 +295,29 @@ export function StudyImport({ userId }: { userId: string }) {
   async function removeSaved(row: SavedStudySource) {
     if (
       working ||
+      saving.current ||
+      deleting.current ||
       !window.confirm('Delete this private source and all its versions? This cannot be undone.')
     )
       return;
+    deleting.current = true;
     setWorking(true);
     setError('');
     try {
       await deleteStudySource(userId, row.sourceId);
-      if (sourceId === row.sourceId) chooseMode('paste');
+      if (sourceId === row.sourceId) chooseMode('paste', true);
       reloadSaved();
       setSavedNotice('The private source and its versions were deleted.');
     } catch (cause: unknown) {
       console.error('Could not delete study source', cause);
       setError('Could not delete this source. Try again.');
     } finally {
+      deleting.current = false;
       setWorking(false);
     }
   }
   async function save() {
-    if (saving.current || working || !dirty) return;
+    if (saving.current || deleting.current || working || !dirty) return;
     setError('');
     setSavedNotice('');
     if (!rightsChecked) {
@@ -316,6 +336,7 @@ export function StudyImport({ userId }: { userId: string }) {
       return;
     }
     saving.current = true;
+    const revision = editRevision.current;
     setWorking(true);
     try {
       const result = await saveStudySourceVersion({
@@ -330,7 +351,7 @@ export function StudyImport({ userId }: { userId: string }) {
       submission.current = null;
       setSourceId(result.sourceId);
       setVersionNo(result.versionNo);
-      setDirty(false);
+      if (editRevision.current === revision) setDirty(false);
       setSavedNotice(
         result.replayed
           ? 'This version was already saved. Nothing was duplicated.'
@@ -394,8 +415,10 @@ export function StudyImport({ userId }: { userId: string }) {
             type="file"
             className="field__input"
             accept=".txt,.md,.markdown,.pdf,.docx,.png,.jpg,.jpeg,.webp"
+            disabled={working}
             onChange={(event) => {
               const selected = event.target.files?.[0];
+              event.target.value = '';
               if (selected) void chooseFile(selected);
             }}
           />
@@ -447,6 +470,7 @@ export function StudyImport({ userId }: { userId: string }) {
         className="field__input"
         value={title}
         maxLength={MAX_STUDY_TITLE_CHARS}
+        disabled={working}
         onChange={(event) => {
           edited();
           setTitle(event.target.value);
@@ -463,6 +487,7 @@ export function StudyImport({ userId }: { userId: string }) {
         rows={14}
         value={text}
         maxLength={MAX_STUDY_TEXT_CHARS + 1}
+        disabled={working}
         onChange={(event) => {
           edited();
           setText(event.target.value);
@@ -474,6 +499,8 @@ export function StudyImport({ userId }: { userId: string }) {
         {text.length.toLocaleString()} of {MAX_STUDY_TEXT_CHARS.toLocaleString()} characters.
         Compare passages, tables, and page order with the original before saving.
       </p>
+
+      {extractionNotes && <p className="meta">{extractionNotes}</p>}
 
       {extraction && extraction.sparsePages.length > 0 && (
         <div className="stack">

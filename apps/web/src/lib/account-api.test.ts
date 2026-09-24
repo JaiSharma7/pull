@@ -140,6 +140,9 @@ describe('buildAccountExport', () => {
 
   it('includes the reader’s private source text and version history', async () => {
     TABLES.set('study_sources', [{ id: 'source-1', owner_id: 'u1' }]);
+    TABLES.set('study_source_mutations', [
+      { client_mutation_id: 'mutation-1', owner_id: 'u1', version_id: 'version-1' },
+    ]);
     TABLES.set('study_source_versions', [
       {
         id: 'version-1',
@@ -152,6 +155,7 @@ describe('buildAccountExport', () => {
     const out = await buildAccountExport('u1', null);
 
     expect(out.data['study_sources']).toHaveLength(1);
+    expect(out.data['study_source_mutations']).toHaveLength(1);
     expect(out.data['study_source_versions']).toEqual([
       {
         id: 'version-1',

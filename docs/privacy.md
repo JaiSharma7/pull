@@ -106,7 +106,9 @@ image in your browser. Saving this text does not send it to Google or Anthropic,
 it, or add it to another reader's experience. You can delete the whole source and its
 versions in Studio; they are also included in your account export and deleted with your
 account. Correcting a version appends a new row; earlier text remains in your account
-export until you delete the source.
+export until you delete the source. A content-free save-retry marker remains in
+`study_source_mutations` until account deletion, so a delayed request cannot restore
+the text you deleted.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the

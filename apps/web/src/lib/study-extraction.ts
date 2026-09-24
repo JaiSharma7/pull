@@ -2,6 +2,7 @@ import {
   assemblePdfPages,
   checkPdfPageCount,
   checkStudyFile,
+  checkStudyImageDimensions,
   MAX_STUDY_OCR_PAGES,
   MAX_STUDY_TEXT_CHARS,
   type StudySourceFormat,
@@ -39,6 +40,40 @@ function boundedText(text: string): string {
   return text;
 }
 
+type DocxReply = { text: string; warnings: string[] } | { error: string };
+
+async function readDocx(file: File): Promise<{ text: string; warnings: string[] }> {
+  const bytes = await file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./study-docx.worker.ts', import.meta.url), {
+      type: 'module',
+    });
+    const finish = () => {
+      window.clearTimeout(timeout);
+      worker.terminate();
+    };
+    const timeout = window.setTimeout(() => {
+      finish();
+      reject(new Error('DOCX extraction took too long. Try a shorter document.'));
+    }, 20_000);
+    worker.onmessage = (event: MessageEvent<DocxReply>) => {
+      finish();
+      const reply = event.data;
+      if ('error' in reply) reject(new Error(reply.error));
+      else resolve(reply);
+    };
+    worker.onerror = () => {
+      finish();
+      reject(new Error('This DOCX could not be read in the browser.'));
+    };
+    try {
+      worker.postMessage(bytes, [bytes]);
+    } catch (error) {
+      finish();
+      reject(error);
+    }
+  });
+}
 /**
  * Local extraction only. The binary file is never uploaded; the reader reviews the
  * extracted text before the save RPC receives it.
@@ -62,16 +97,14 @@ export async function extractStudyFile(
   }
   if (format === 'docx') {
     onProgress('Extracting Word document text…');
-    const mammoth = await import('mammoth');
-    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-    const warnings = result.messages.map((message) => message.message).slice(0, 3);
+    const result = await readDocx(file);
     return {
       format,
-      text: boundedText(result.value),
+      text: boundedText(result.text),
       originLabel: file.name,
       notes: [
         'Text extracted locally from DOCX. Images and layout are not preserved.',
-        ...warnings,
+        ...result.warnings,
       ].join(' '),
       pageTexts: null,
       sparsePages: [],
@@ -131,9 +164,17 @@ export async function recognizeStudyFile(
   if (extraction.sparsePages.length > MAX_STUDY_OCR_PAGES) {
     throw new Error('More than five PDF pages need OCR. Split the file into shorter readings.');
   }
-  const { createWorker } = await import('tesseract.js');
+  if (extraction.format === 'image_ocr') {
+    checkStudyImageDimensions(await file.arrayBuffer());
+  }
+  const { createWorker, OEM } = await import('tesseract.js');
   onProgress('Preparing local OCR…');
-  const worker = await createWorker('eng');
+  const worker = await createWorker('eng', OEM.LSTM_ONLY, {
+    workerPath: new URL('/ocr/worker.min.js', window.location.origin).href,
+    corePath: new URL('/ocr/core', window.location.origin).href,
+    langPath: new URL('/ocr/lang', window.location.origin).href,
+    workerBlobURL: false,
+  });
   try {
     if (extraction.format === 'image_ocr') {
       onProgress('Recognizing image text…');
@@ -155,7 +196,25 @@ export async function recognizeStudyFile(
         onProgress('Recognizing PDF page ' + number + '…');
         const page = await pdf.getPage(number);
         const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(1.7, Math.sqrt(4_000_000 / (base.width * base.height)));
+        if (
+          !Number.isFinite(base.width) ||
+          !Number.isFinite(base.height) ||
+          base.width < 1 ||
+          base.height < 1 ||
+          base.width > 20_000 ||
+          base.height > 20_000
+        ) {
+          throw new Error('This PDF page is too large for local OCR. Split the reading.');
+        }
+        const scale = Math.min(
+          1.7,
+          Math.sqrt(4_000_000 / (base.width * base.height)),
+          4095 / base.width,
+          4095 / base.height,
+        );
+        if (scale < 0.2) {
+          throw new Error('This PDF page is too large for readable local OCR.');
+        }
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
         canvas.width = Math.ceil(viewport.width);

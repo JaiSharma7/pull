@@ -67,6 +67,7 @@ export function Studio({
   onNavigate: (to: string) => void;
 }) {
   const [view, setView] = useState<'summary' | 'study'>('summary');
+  const [studyOpened, setStudyOpened] = useState(false);
   return (
     <>
       <div className="stack measure">
@@ -83,16 +84,22 @@ export function Studio({
             type="button"
             className="btn btn--plain library__filter"
             aria-pressed={view === 'study'}
-            onClick={() => setView('study')}
+            onClick={() => {
+              setStudyOpened(true);
+              setView('study');
+            }}
           >
             Prepare study material
           </button>
         </div>
       </div>
-      {view === 'summary' ? (
+      <div hidden={view !== 'summary'}>
         <StudioSummary key={userId} userId={userId} onNavigate={onNavigate} />
-      ) : (
-        <StudyImport key={userId} userId={userId} />
+      </div>
+      {studyOpened && (
+        <div hidden={view !== 'study'}>
+          <StudyImport key={userId} userId={userId} />
+        </div>
       )}
     </>
   );

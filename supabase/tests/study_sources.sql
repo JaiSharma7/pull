@@ -93,7 +93,8 @@ begin
 
   perform pg_temp.become_reader(reader_b);
   if exists (select 1 from public.study_sources where id = saved_source_id)
-     or exists (select 1 from public.study_source_versions where id = version_id) then
+     or exists (select 1 from public.study_source_versions where id = version_id)
+     or exists (select 1 from public.study_source_mutations where owner_id = reader_a) then
     raise exception 'second reader can see private source or version';
   end if;
   refused := false;
@@ -137,13 +138,45 @@ begin
   if exists (select 1 from public.study_source_versions where id = version_id) then
     raise exception 'source deletion left a version behind';
   end if;
+  refused := false;
+  begin
+    perform public.save_study_source_version(
+      'Lost response retry', 'paste', 'The first immutable text.', mutation_1);
+  exception when object_not_in_prerequisite_state then refused := true;
+  end;
+  if not refused or exists (select 1 from public.study_sources where owner_id = reader_a) then
+    raise exception 'a save retry recreated deleted private text';
+  end if;
+  if not exists (select 1 from public.study_source_mutations
+                 where owner_id = reader_a and client_mutation_id = mutation_1
+                   and public.study_source_mutations.version_id is null) then
+    raise exception 'deletion did not keep a content-free retry marker';
+  end if;
   cascade_source_id := (public.save_study_source_version(
     'Account cascade', 'paste', 'Remove on account deletion',
     extensions.gen_random_uuid()) ->> 'sourceId')::uuid;
 
+  -- Content-free retry markers are bounded even when the reader deletes every source.
+  perform pg_temp.as_owner();
+  insert into public.study_source_mutations (owner_id, client_mutation_id)
+  select reader_a, extensions.gen_random_uuid()
+    from generate_series(
+      1,
+      1000 - (select count(*)::integer from public.study_source_mutations where owner_id = reader_a)
+    );
+  perform pg_temp.become_reader(reader_a);
+  refused := false;
+  begin
+    perform public.save_study_source_version(
+      'Over lifetime cap', 'paste', 'A new source', extensions.gen_random_uuid());
+  exception when program_limit_exceeded then refused := true;
+  end;
+  if not refused then raise exception 'deleted-source retries bypassed the lifetime cap'; end if;
+
   perform pg_temp.as_owner();
   delete from auth.users where id = reader_a;
-  if exists (select 1 from public.study_sources where id = cascade_source_id) then
+  if exists (select 1 from public.study_sources where id = cascade_source_id)
+     or exists (select 1 from public.study_source_mutations where owner_id = reader_a) then
     raise exception 'account deletion left private source text behind';
   end if;
 end $test$;

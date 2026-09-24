@@ -3,6 +3,9 @@ node_modules/
 .pnp
 .pnp.js
 
+# Generated from pinned OCR dependencies by scripts/prepare-ocr-assets.mjs
+apps/web/public/ocr/
+
 # build output
 dist/
 build/

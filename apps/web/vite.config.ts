@@ -41,7 +41,7 @@ export default defineConfig({
          * to avoid. A preview opened offline falls back to a system serif; law 3's
          * offline promise covers the app, not a test surface.
          */
-        globIgnores: ['**/source-serif-4-*.woff2'],
+        globIgnores: ['**/source-serif-4-*.woff2', 'ocr/**'],
         navigateFallback: '/index.html',
       },
     }),

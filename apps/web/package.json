@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "node ../../scripts/prepare-ocr-assets.mjs && vite",
+    "build": "node ../../scripts/prepare-ocr-assets.mjs && tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
@@ -17,15 +17,18 @@
     "@fontsource-variable/source-serif-4": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@supabase/supabase-js": "^2.116.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "@wap/db": "workspace:*",
     "@wap/schemas": "workspace:*",
     "@wap/ui": "workspace:*",
     "idb": "^8.0.3",
+    "jszip": "3.10.2",
     "mammoth": "^1.12.3",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "tesseract.js-core": "7.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

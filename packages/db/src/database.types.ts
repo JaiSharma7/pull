@@ -2091,6 +2091,35 @@ export type Database = {
           },
         ]
       }
+      study_source_mutations: {
+        Row: {
+          client_mutation_id: string
+          created_at: string
+          owner_id: string
+          version_id: string | null
+        }
+        Insert: {
+          client_mutation_id: string
+          created_at?: string
+          owner_id: string
+          version_id?: string | null
+        }
+        Update: {
+          client_mutation_id?: string
+          created_at?: string
+          owner_id?: string
+          version_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_source_mutations_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: false
+            referencedRelation: "study_source_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       study_source_versions: {
         Row: {
           client_mutation_id: string
