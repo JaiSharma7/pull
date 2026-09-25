@@ -191,7 +191,7 @@ export function App() {
    * flash the reader's feed at them before the gate appears, and rendering the gate
    * would flash a challenge at everyone who has no factor at all.
    *
-   * Supabase does not enforce this by itself. After an email code the session is
+   * Supabase does not enforce this by itself. After a Google or Microsoft sign-in the session is
    * `aal1` and stays there unless the app asks for a challenge, and no policy here
    * refuses an `aal1` token — so without this a reader who enrolled TOTP, saved their
    * recovery codes and felt safer had exactly the protection they had before, and the
@@ -421,10 +421,10 @@ export function App() {
     /*
      * A session arriving is also the moment `?next=` is spent.
      *
-     * Both ways in end here — a code typed into this tab and a magic link
-     * returning to a fresh document — so this is the one place that knows a
-     * reader has just become somebody with a feed. The address bar is read at
-     * that moment rather than closed over, because on the link path this
+     * Every way in ends here — a guest session started in this tab and an OAuth
+     * redirect returning to a fresh document — so this is the one place that knows
+     * a reader has just become somebody with a feed. The address bar is read at
+     * that moment rather than closed over, because on the redirect path this
      * document has never seen the earlier one.
      *
      * `replaceState`, not `push`: `/?next=…` only ever forwards, so Back must
@@ -1231,7 +1231,7 @@ export function App() {
                 {/*
                   What /account says, because it is what actually happens. This read
                   "everything you have read as a guest carries over when you sign in",
-                  which is false — `signInWithOtp` mints a different `auth.users` row,
+                  which is false — signing in mints a different `auth.users` row,
                   nothing links the two, and 20260901190000 deletes an anonymous user and
                   everything keyed to them a day after last use. It was also the sentence
                   most likely to be acted on: it sat under a prompt to sign in, on a screen
@@ -1276,7 +1276,7 @@ export function App() {
                 */}
                 <p id="guest-consequence">
                   Signing in starts a <strong>fresh account</strong>. This guest session ends when
-                  you do, and it cannot be reopened — there is no address to send a code to — so
+                  you do, and it cannot be reopened — there is no account to sign back in with — so
                   what you have read and stashed as a guest stays behind.
                 </p>
                 {/*

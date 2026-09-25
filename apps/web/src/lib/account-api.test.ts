@@ -78,7 +78,8 @@ vi.mock('./supabase.js', () => {
   return { supabase: { from: (table: string) => builder(table) } };
 });
 
-const { buildAccountExport } = await import('./account-api.js');
+const { buildAccountExport, isRecentSignInRequired } = await import('./account-api.js');
+const { rpcError } = await import('./rpc-error.js');
 
 /** `n` rows whose `id` is a JSON number, as PostgREST renders a bigint. */
 const bigintRows = (n: number) =>
@@ -224,5 +225,18 @@ describe('buildAccountExport', () => {
     expect(Object.keys(out.data)).toContain('history_events');
     expect(Object.keys(out.data)).toContain('feed_impressions');
     expect(Object.keys(out.data)).toContain('recall_events');
+  });
+});
+
+describe('isRecentSignInRequired', () => {
+  it("knows the database's stale-sign-in refusal, and only that", () => {
+    const refusal = rpcError({
+      code: '28000',
+      message: 'Deleting an account needs a recent sign-in.',
+    });
+    expect(isRecentSignInRequired(refusal)).toBe(true);
+    expect(isRecentSignInRequired(rpcError({ code: '42501', message: 'denied' }))).toBe(false);
+    expect(isRecentSignInRequired(new Error('offline'))).toBe(false);
+    expect(isRecentSignInRequired('28000')).toBe(false);
   });
 });

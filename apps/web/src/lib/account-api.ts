@@ -98,6 +98,18 @@ export async function deleteAccount(): Promise<void> {
   await callRpc<null>('delete_my_account');
 }
 
+/**
+ * Whether `delete_my_account` refused because the sign-in is no longer recent.
+ *
+ * The database raises 28000 past its ten-minute boundary, and its message still tells the
+ * reader to "request a new code" -- written when sign-in was by email, which it no longer
+ * is. The dialog checks the session's age before it calls, so this is the race at the
+ * boundary; it is answered with the dialog's own sign-in-again state rather than that text.
+ */
+export function isRecentSignInRequired(error: unknown): boolean {
+  return error instanceof Error && error.name === 'PostgrestError 28000';
+}
+
 // ---------------------------------------------------------------- recovery codes
 
 export async function generateRecoveryCodes(): Promise<string[]> {
@@ -109,8 +121,8 @@ export async function generateRecoveryCodes(): Promise<string[]> {
  *
  * Not to sign in — see 20260901150000. Only GoTrue mints tokens and grants `aal2`, so
  * nothing here can substitute for the factor. Because sign-in is passwordless, taking
- * the factor off is a complete recovery path on its own: the reader can still receive
- * an email code.
+ * the factor off is a complete recovery path on its own: the reader's Google or
+ * Microsoft sign-in is then all the account asks for.
  */
 export async function redeemRecoveryCode(code: string): Promise<boolean> {
   return callRpc<boolean>('redeem_mfa_recovery_code', { p_code: code });
