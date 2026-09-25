@@ -153,7 +153,9 @@ reader's experience. A course (`study_courses`) keeps its goal and the sources i
 of the course rather than a new course. Deleting any source a course was built from deletes
 every version of the course made from it and every cached output made from it, and the
 course itself once it has no sources left. You can also delete a course and keep its
-sources. It is included in your account export and deleted with your account. Whether your account is in the beta is recorded in
+sources; the cached model output made from those sources stays with them until you delete
+the sources. It is included in your account export and deleted with your account. Whether
+your account is in the beta is recorded in
 `study_generation_access`, with any note we wrote when adding you — which you can read,
 and which is in your export.
 
@@ -164,11 +166,13 @@ you report part of a course (`study_reports`), the report and any note you add (
 because it is the record of why something was hidden. If you correct a lesson or question,
 your version is stored alongside the one it replaces, which is kept rather than deleted.
 Answers to a course's questions will be kept in `study_answer_events`; nothing records them
-yet. Which lessons and questions of a course you were shown, finished or skipped, and when
-your device says that happened, are recorded in `study_progress_events` so the course can
-remember your place; being shown something is never counted as remembering it. All of this is readable only by you, is never reviewed by us, is in your export, and
-is deleted with the course — which deleting any of its sources deletes — and with your
-account.
+yet. Which lessons and questions of a course you were shown, finished or skipped are
+recorded in `study_progress_events` so the course can remember your place, with the time
+your device reported (kept within the last thirty days) and the time it reached us; being
+shown something is never counted as remembering it. All of this is readable only by you, is
+never reviewed by us, and is in your export. It is deleted with the version of the course it
+belongs to — which deleting any source of that version deletes — with the course, and with
+your account.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the

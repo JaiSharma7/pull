@@ -6,8 +6,10 @@ learner may be shown. This page covers the structure a reader studies from: the 
 itself, the sources it follows, how it is prepared again when a source changes, and the
 record of what the reader has been shown.
 
-The schema is `supabase/migrations/20260925120000_study_course_structure.sql`. The behaviour
-is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role under RLS.
+The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
+`20260925130000_study_course_review_fixes.sql` superseding parts of it after review. The
+behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
+under RLS.
 
 Nothing here adds a screen: the guided course is a later change, and it reads what this
 page describes.
@@ -27,93 +29,130 @@ study_courses ─── study_course_sources      the course, and the sources it
   two, and nothing of a course is readable by anyone else or by anon.
 - **The bundle** (`study_course_sources`) names sources, not versions: one row per source,
   in the order the reader chose them. A course made from two versions of one source has one
-  entry for it.
+  entry for it, and is prepared again from that source's newest version only.
 - **A generation** (`study_generations`) is one preparation of the course, from the exact
   versions it pinned in `study_generation_sources`. Every generation belongs to a course;
   `enqueue_study_generation` creates the course and its bundle with the first one.
 - **The current generation** is the course's newest generation whose validation has
-  finished: persisted, with its own text decided in the transaction that moved its drafts.
-  A generation still being prepared, or one that failed before it was persisted, does not
-  replace the one before it.
+  finished (persisted, with its own text decided in the transaction that moved its drafts)
+  and that has something a learner may be shown: a validated or suspended lesson or
+  question. Only when no finished generation has, it is the newest finished one. So a
+  generation still being prepared, one that failed before it was persisted, and one that
+  validation held back entirely all leave the one before it current.
 
 ## Preparing a course again
 
 `regenerate_study_course(course, mutation_id, processing_consent)` prepares the course
 again from the newest version of each source in its bundle, for the course's own goal:
 
-- It goes through the same door as the first preparation -- the allowlist, consent, the
-  size limit, the global and per-reader budget, and the shared job counts.
-- It is refused with 55000 while a generation of the course is still queued or running,
-  and when nothing in the bundle has changed since a generation finished: the stage cache
-  would return the same course, and the reader would pay a job for it.
-- A mutation id makes it idempotent, as for the first preparation.
-- **Nothing carries over.** The new generation's lessons and questions are new rows.
-  Progress and proof belong to the rows they were recorded against, so a regenerated course
-  starts again at `not_seen`, and an answer to the old one proves nothing about the new one.
+- It goes through the same door as the first preparation: the allowlist, consent, the size
+  limit, the global and per-reader budget, and the shared job counts.
+- It is refused with 55000 and DETAIL `preparing` while a generation of the course is still
+  queued or running.
+- It is refused with 55000 and DETAIL `unchanged` when a finished generation already used
+  exactly these versions: while the prompt, schema and model are unchanged, the stage cache
+  would return the same course and the reader would pay a job for it. That includes a
+  generation validation held back entirely; a different outcome needs a changed source.
+- A mutation id makes it idempotent, as for the first preparation. A mutation id already
+  used for another course is refused with 22023 rather than answered with that course's job.
+- **Nothing carries over.** The new generation's lessons and questions are new rows, so a
+  regenerated course starts again at `not_seen`, and an answer to the old one proves
+  nothing about the new one.
 
-`study_course_overview.update_available` says when a source in the bundle has a newer
-version than the current generation used.
+`study_course_overview.update_available` says when a bundle source has a newer version than
+the newest finished generation used -- the newest, not the current, so it never offers a
+regeneration that would be refused as unchanged. `newer_generation_held_back` says when that
+newest finished generation is not the current one.
+
+**Responses.** `enqueue_study_generation` and `regenerate_study_course` return
+`{ jobId, generationId, courseId, status, queue, delaySeconds, remainingToday, replayed }`.
+A replay returns `{ jobId, generationId, courseId, status, replayed: true }`, with
+`courseId` null when the generation has since been deleted.
 
 ## Progress
 
-`study_progress_events` records exposure: a lesson shown, read to the end, or skipped, and
-a question shown. It is append-only (a trigger refuses any update), readable only by the
+`study_progress_events` records exposure: a lesson shown, read to the end, or skipped, and a
+question shown. It is append-only (a trigger refuses any update), readable only by the
 reader, and written only through `record_study_progress`:
 
 ```
 record_study_progress([{ clientEventId, kind, lessonId | itemId, occurredAt? }, ...])
   kind: lesson_shown | lesson_read | lesson_skipped | item_shown
+  occurredAt: an ISO-8601 string or epoch milliseconds; the server's time when absent
   -> { recorded, duplicates, refused: [{ index, clientEventId?, reason }] }
 ```
 
 - **Idempotent.** An event with a client event id already recorded is a duplicate, never a
   second row, so an offline queue can replay a batch.
-- **One to a hundred events a call; 2,000 a day.** A batch outside the size is refused with 22023. Past the daily limit an event is refused with `limit`, and the rest of the batch is
-  still recorded.
+- **One to a hundred events a call.** A batch outside that size is refused whole with 22023.
+  Within a batch each event is judged on its own; `index` is its 0-based position, and
+  `clientEventId` is named whenever it parsed.
+- **2,000 a day**, counted by the UTC day the server records them. Once a batch reaches the
+  limit, it and every later event in it is refused with `limit`; the earlier ones are
+  recorded. `limit` is the one refusal that clears: the same event is accepted after 00:00
+  UTC, so a client should keep it queued.
 - **Only the reader's own, and only what could have been shown.** An event on a lesson or
   question that is not the reader's, or does not exist, is refused as `not_found` -- the
-  same answer either way. One on content that was never validated (quarantined or rejected)
-  is refused as `not_shown`. A suspended or retired version was shown once, so it takes
-  events; an offline copy may still be on screen.
+  same answer either way. One on content that was never validated is refused as
+  `not_shown`: a quarantined or rejected version, including a quarantined one the reader
+  retired. A suspended version, or one retired after it was validated, was shown once, so
+  it takes events; an offline copy may still be on screen.
 - **The device's time, clamped.** `occurredAt` is kept within the last thirty days and never
-  in the future. Exposure is never proof, so a device clock can buy nothing.
-- **Refused for good.** A refused event will be refused again; a client can drop it.
+  in the future; the server's `recorded_at` is kept beside it. Exposure is never proof, so a
+  device clock can buy nothing.
+- **`malformed`, `not_found` and `not_shown` are for good.** The same event will be refused
+  again; a client can drop it.
+
+**Exposure follows the reader's corrections; answers do not.** Exposure is read across
+every version of a lesson or question within its generation (its `lineage_id`): the reader
+wrote the correction, so correcting a typo keeps the lesson `read`. Answers and proof stay
+with the version answered: a reader's version is practice, and one question proves nothing
+about another.
 
 **Exposure is not recall.** Being shown a lesson, reading it or seeing a question never
 counts as remembering it. Whether a reader has demonstrated recall is decided only by
 `study_answer_proves_recall` over `study_answer_events` (see
-[`study-validation.md`](./study-validation.md#what-counts-as-recall)).
+[`study-validation.md`](./study-validation.md#what-counts-as-recall)). Nothing records an
+answer yet -- the recorder that grades one on the server is a later change -- so `answered`
+and `recall_demonstrated` below appear only once it exists.
 
 ## The read path
 
-All in SQL, under the reader's RLS (law 2); none of it calls a model.
+All in SQL, under the reader's RLS (law 2); none of it calls a model. The read functions
+give structure and state; the lessons' and questions' own text is read from the
+`study_visible_*` views by id.
 
 **`study_course_overview`**, one row per course:
 
-| Column                                      | Meaning                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------- |
-| `generation_id`                             | The current generation, or null before the first one finishes             |
-| `title`, `overview`, `objectives`, `recap`  | The current generation's own text, only once it is validated              |
-| `latest_generation_id`, `latest_job_status` | The newest generation and its job, current or not                         |
-| `preparing`                                 | A generation of the course is queued or running                           |
-| `update_available`                          | A bundle source has a newer version than the current generation used      |
-| `lessons`, `lessons_read`                   | Validated lessons of the current generation, and how many the reader read |
-| `questions`                                 | Validated questions of the current generation                             |
-| `claims`, `claims_demonstrated`             | Validated claims, and those whose recall the reader has demonstrated      |
+| Column                                            | Meaning                                                                                   |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `course_id`, `goal`, `created_at`, `source_count` | The course, and how many sources its bundle has                                           |
+| `generation_id`                                   | The current generation; null before one finishes, or once a source deletion took them all |
+| `title`, `overview`, `objectives`, `recap`        | The current generation's own text, only once it is validated                              |
+| `disagreements`, `withheld`                       | Likewise: disagreements between sources, and questions the claims cannot answer           |
+| `latest_generation_id`, `latest_job_status`       | The newest generation and its job, current or not                                         |
+| `preparing`                                       | A generation of the course is queued or running                                           |
+| `newer_generation_held_back`                      | The newest finished generation is not current: validation held all of it back             |
+| `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
+| `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
+| `question_count`                                  | Validated questions of the current generation                                             |
+| `claim_count`, `claims_demonstrated_count`        | Validated claims, and those whose recall the reader has demonstrated                      |
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
-order -- unit, then position -- with the unit's number and title, the lesson's title,
-objective, minutes and number of validated questions, and its state: `not_seen`, `shown`,
-`read` or `skipped`, with when it was first shown and read.
+order -- unit, then position -- with the unit's number and title, the lesson's key, title,
+objective, minutes and `question_count`, and its state: `read`, `skipped`, `shown` or
+`not_seen`, with `first_shown_at` and `read_at`.
 
-- A unit is its lessons' `unit_no`, and its title is the one its first lesson carries. A
-  unit is not a row of its own: its number and title are generated with each lesson and
-  validated with it.
-- Progress belongs to the version it was recorded against, so a corrected lesson starts
-  again at `not_seen`.
+- A unit is its lessons' `unit_no`, not a row of its own: its number and title are
+  generated with each lesson and validated with it.
+- A unit's title is the one on the lesson whose unit title a correction changed most
+  recently, or its first lesson's when none was corrected. A reader correcting one lesson's
+  unit title retitles the unit.
 
 **`study_course_questions(course)`**: the current generation's validated questions, lesson
-by lesson in course order and then the course-level ones, each with its state:
+by lesson in course order and then the course-level ones, each with its key, purpose, kind,
+difficulty, authorship and state, with `first_shown_at`, `last_answered_at` and
+`demonstrated_at`:
 
 | State                 | When                                                           |
 | --------------------- | -------------------------------------------------------------- |
@@ -123,6 +162,14 @@ by lesson in course order and then the course-level ones, each with its state:
 | `not_seen`            | Neither                                                        |
 
 `due` belongs to the scheduler, which is a later change: nothing here marks a question due.
+It is orthogonal to these states -- a question can be demonstrated and due -- so it will be a
+column, not a fifth state.
+
+**Nullable columns.** The generated types mark every column a function returns as non-null;
+these can be null, and a client must treat them so: `study_course_generation` (no current
+generation); the outline's `first_shown_at` and `read_at`; the question list's `lesson_id`
+(a course-level question, or one whose lesson was retired), `first_shown_at`,
+`last_answered_at` and `demonstrated_at`.
 
 ## Deletion
 
@@ -132,7 +179,9 @@ by lesson in course order and then the course-level ones, each with its state:
   current generation, and can be prepared again from them. A course whose last source goes
   goes with it.
 - **Deleting a course** (the reader may, directly) deletes all of its generations and
-  cancels a job still preparing it. Its sources stay.
+  cancels a job still preparing it. Its sources stay -- and so does the model output cached
+  from them (`study_stage_cache`), keyed by the source versions rather than the course, until
+  those sources are deleted.
 - **Deleting the account** deletes everything.
 - All three new tables are in the account export.
 
@@ -151,8 +200,9 @@ here take rows in the same order, so none can deadlock with a deletion:
 
 - **28000:** not signed in (or a guest session, for preparation).
 - **P0002:** no such course, including someone else's.
-- **22023:** a malformed request, a batch of the wrong size, or preparation without consent.
-- **55000:** the course is already being prepared, or nothing in its sources has changed; or
-  an update to recorded progress.
+- **22023:** a malformed request, a batch of the wrong size, preparation without consent, or
+  a mutation id already used for another request.
+- **55000:** a regeneration refused, with DETAIL `preparing` or `unchanged`; or an update to
+  recorded progress.
 - **42501, 53400, 23514:** preparation's own refusals -- the beta allowlist, the budget, and
   the daily job ceiling -- as in [`study-generation.md`](./study-generation.md).

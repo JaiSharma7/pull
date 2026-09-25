@@ -27,11 +27,12 @@ User
  ├── study_url_preview_daily_usage                ← the URL-preview quota
  ├── study_generation_access                      ← the course beta allowlist
  ├── study_courses ─── study_course_sources        ← a private course and the sources it
- │    │                                              follows; separate from paths
- │    └── study_progress_events                   ← shown, read, skipped; never proof
+ │                                                   follows; separate from paths; each
+ │                                                   generation below belongs to one
  ├── study_sources ─── study_source_versions       ← private extracted readings
  │    ├── study_generations ─── study_generation_sources   ← one generation of a course,
- │    │                                              from 1-5 versions
+ │    │    │                                         from 1-5 versions
+ │    │    ├── study_progress_events              ← shown, read, skipped; never proof
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
  │    │    ├── study_lessons · study_items            ← study_lesson_claims and
  │    │    │                                             study_item_claims link the claims

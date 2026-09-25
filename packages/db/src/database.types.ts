@@ -3745,24 +3745,27 @@ export type Database = {
     Views: {
       study_course_overview: {
         Row: {
-          claims: number | null
-          claims_demonstrated: number | null
+          claim_count: number | null
+          claims_demonstrated_count: number | null
           course_id: string | null
           created_at: string | null
+          disagreements: Json | null
           generation_id: string | null
           goal: string | null
           latest_generation_id: string | null
           latest_job_status: Database["public"]["Enums"]["job_status"] | null
-          lessons: number | null
-          lessons_read: number | null
+          lesson_count: number | null
+          lessons_read_count: number | null
+          newer_generation_held_back: boolean | null
           objectives: string[] | null
           overview: string | null
           preparing: boolean | null
-          questions: number | null
+          question_count: number | null
           recap: string | null
           source_count: number | null
           title: string | null
           update_available: boolean | null
+          withheld: Json | null
         }
         Relationships: []
       }
@@ -4687,7 +4690,7 @@ export type Database = {
           lesson_position: number
           minutes: number
           objective: string
-          questions: number
+          question_count: number
           read_at: string
           state: string
           title: string

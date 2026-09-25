@@ -376,6 +376,6 @@ claim by claim.
 - **Owner-scoped.** Reports (with their notes), the status log and answers are owner-scoped
   under RLS. A reader reads their own rows and cannot write any of them directly.
 - **Exported.** All three are in the account export.
-- **Deleted with the material.** They go with the course they belong to, which deleting any
-  of its sources removes, and with the account.
+- **Deleted with the material.** They go with the generation of the course they belong
+  to, which deleting any of its sources removes, with the course, and with the account.
 - **Not reviewed by us.** A study report is about the reader's own private course.
