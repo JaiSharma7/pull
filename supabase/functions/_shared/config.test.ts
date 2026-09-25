@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { geminiConfigFrom, resolveProviders, type Env } from './config.ts';
+import { geminiConfigFrom, headerSafeKey, resolveProviders, type Env } from './config.ts';
 import { DEFAULT_SUMMARY_MODELS } from './gemini.ts';
 
 /**
@@ -375,5 +375,26 @@ describe('resolveProviders — the paid fallback', () => {
     );
 
     expect(providers.summary.name).toBe('gemini');
+  });
+});
+
+describe('headerSafeKey', () => {
+  it('trims edge whitespace, as fetch would', () => {
+    expect(headerSafeKey('K', '  abc-123\n')).toBe('abc-123');
+    expect(headerSafeKey('K', '   ')).toBeNull();
+    expect(headerSafeKey('K', null)).toBeNull();
+  });
+
+  it('refuses a key a header cannot carry, naming the setting and never the value', async () => {
+    for (const bad of ['FAKE-KEY-0001\nSECOND-LINE', 'FAKE KEY', 'FAKE\u0000KEY', 'FAKÉ']) {
+      expect(() => headerSafeKey('GOOGLE_AI_API_KEY', bad)).toThrow(/GOOGLE_AI_API_KEY/);
+      expect(() => headerSafeKey('GOOGLE_AI_API_KEY', bad)).not.toThrow(/FAKE/);
+    }
+    await expect(
+      resolveProviders(
+        envOf({ GOOGLE_AI_API_KEY: 'FAKE-KEY-0001\nSECOND-LINE' }),
+        noVault().getSecret,
+      ),
+    ).rejects.toThrow(/GOOGLE_AI_API_KEY/);
   });
 });

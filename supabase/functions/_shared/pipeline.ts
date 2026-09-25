@@ -150,6 +150,15 @@ export interface StepResult {
    * knowledge of *why* a jump is legal stays with the step that established it.
    */
   jumpTo?: Step;
+  /**
+   * Send this same step again instead of recording it.
+   *
+   * For a step whose work is a bounded loop of paid calls that cannot all fit in one
+   * invocation -- `study_extract`, one window per call. The step keeps its own
+   * progress durably (the stage cache) and records its own spend, so the worker writes
+   * no `job_steps` row, advances nothing, and re-sends the message with no delay.
+   */
+  continue?: boolean;
 }
 
 export interface JobRow {

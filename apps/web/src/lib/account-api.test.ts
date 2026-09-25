@@ -18,6 +18,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Rows the fake serves, by table. Set per test. */
 const TABLES = new Map<string, Record<string, unknown>[]>();
+/** The page size each table was last asked for, so a test can pin one. */
+const LIMITS = new Map<string, number>();
 
 vi.mock('./supabase.js', () => {
   /** Enough of PostgREST's builder to run the walk: chainable, and awaitable. */
@@ -34,6 +36,7 @@ vi.mock('./supabase.js', () => {
       },
       limit: (n: number) => {
         limit = n;
+        LIMITS.set(table, n);
         return self;
       },
       gt: (_column: string, value: string) => {
@@ -75,7 +78,8 @@ vi.mock('./supabase.js', () => {
   return { supabase: { from: (table: string) => builder(table) } };
 });
 
-const { buildAccountExport } = await import('./account-api.js');
+const { buildAccountExport, isRecentSignInRequired } = await import('./account-api.js');
+const { rpcError } = await import('./rpc-error.js');
 
 /** `n` rows whose `id` is a JSON number, as PostgREST renders a bigint. */
 const bigintRows = (n: number) =>
@@ -171,6 +175,49 @@ describe('buildAccountExport', () => {
       },
     ]);
   });
+  it('includes what study generation derived from the reader’s material', async () => {
+    TABLES.set('study_generations', [{ id: 'gen-1', owner_id: 'u1', goal: 'Explain it' }]);
+    TABLES.set('study_claims', [{ id: 'claim-1', owner_id: 'u1', statement: 'A claim.' }]);
+    TABLES.set('study_claim_evidence', [{ id: 'ev-1', owner_id: 'u1', span_text: 'A span.' }]);
+    TABLES.set('study_items', [{ id: 'item-1', owner_id: 'u1', prompt: 'A question?' }]);
+
+    const out = await buildAccountExport('u1', null);
+
+    expect(out.data['study_generations']).toHaveLength(1);
+    expect(out.data['study_claims']).toHaveLength(1);
+    expect(out.data['study_claim_evidence']).toHaveLength(1);
+    expect(out.data['study_items']).toHaveLength(1);
+    for (const table of [
+      'study_generation_access',
+      'study_generation_sources',
+      'study_stage_cache',
+      'study_stage_cache_sources',
+      'study_lessons',
+      'study_lesson_claims',
+      'study_item_claims',
+    ]) {
+      expect(Object.keys(out.data)).toContain(table);
+    }
+    expect(out.incomplete).toEqual([]);
+  });
+  it('walks the cached model output in small pages and still takes every row', async () => {
+    TABLES.set(
+      'study_stage_cache',
+      Array.from({ length: 25 }, (_, i) => ({
+        id: `cache-${String(i).padStart(2, '0')}`,
+        owner_id: 'u1',
+      })),
+    );
+
+    const out = await buildAccountExport('u1', null);
+
+    expect(out.data['study_stage_cache']).toHaveLength(25);
+    expect(out.incomplete).toEqual([]);
+    // Pinned: without `page: 10` the walk still takes every row, just in pages of a
+    // hundred rows of up to 400 KB each, so the row count alone cannot tell.
+    expect(LIMITS.get('study_stage_cache')).toBe(10);
+    expect(LIMITS.get('study_claims')).toBe(100);
+  });
   it('names every table it walked, so a missing one is visible in the file', async () => {
     const out = await buildAccountExport('u1', null);
     // Empty tables still appear as empty arrays. A table that vanished from `data`
@@ -178,5 +225,18 @@ describe('buildAccountExport', () => {
     expect(Object.keys(out.data)).toContain('history_events');
     expect(Object.keys(out.data)).toContain('feed_impressions');
     expect(Object.keys(out.data)).toContain('recall_events');
+  });
+});
+
+describe('isRecentSignInRequired', () => {
+  it("knows the database's stale-sign-in refusal, and only that", () => {
+    const refusal = rpcError({
+      code: '28000',
+      message: 'Deleting an account needs a recent sign-in.',
+    });
+    expect(isRecentSignInRequired(refusal)).toBe(true);
+    expect(isRecentSignInRequired(rpcError({ code: '42501', message: 'denied' }))).toBe(false);
+    expect(isRecentSignInRequired(new Error('offline'))).toBe(false);
+    expect(isRecentSignInRequired('28000')).toBe(false);
   });
 });

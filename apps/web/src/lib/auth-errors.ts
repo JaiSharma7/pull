@@ -55,7 +55,7 @@ export function isAnonymousSignInDisabled(error: AuthErrorLike): boolean {
  * The one failure here that closes EVERY route at once, which is why it is worth its own
  * function rather than falling through to `error.message`. Supabase's CAPTCHA protection
  * covers "sign-in, sign-up, and password reset", so switching it on rejects the guest
- * button and the email code with the same 400 — and this app renders no CAPTCHA widget,
+ * button with a 400 — and this app renders no CAPTCHA widget,
  * so nothing it can do will satisfy it. `error.message` in that state reads "captcha
  * protection: request disallowed (no captcha_token found)", which tells a reader nothing
  * and an operator not much more.

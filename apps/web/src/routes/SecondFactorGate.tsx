@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase.js';
  * The screen that makes a second factor mean something.
  *
  * Supabase enrols, challenges and verifies TOTP factors, and it does **not** stop
- * anybody doing anything: after an email code the session is `aal1`, and it stays there
+ * anybody doing anything: after a Google or Microsoft sign-in the session is `aal1`, and it stays there
  * unless the app asks for a challenge. Nothing in Postgres blocks an `aal1` token by
  * default either. So a reader who turned on an authenticator, saved their recovery
  * codes and felt safer had exactly the protection they had before — none — and the app
@@ -105,8 +105,8 @@ export function SecondFactorGate({ onPassed }: { onPassed: () => void }) {
       <hr className="rule" />
 
       <p className="meta">
-        Lost the authenticator? A recovery code removes it, and you can sign in with an email code
-        as before.
+        Lost the authenticator? A recovery code removes it, and you carry on with the Google or
+        Microsoft sign-in you have just used.
       </p>
       <button type="button" className="btn" onClick={() => setRecovering(true)}>
         Use a recovery code

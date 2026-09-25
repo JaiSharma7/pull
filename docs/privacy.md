@@ -1,15 +1,30 @@
 # Privacy Policy
 
-**Effective 23 September 2026.** Every revision of this document is a commit in this
+**Effective 25 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Private study import** is new. When you save material in Studio's Prepare study material
-mode, we store the extracted text you approved and each corrected version in your private
-account. We do not upload the original file, and saving alone does not send the text to a
-model provider. You can delete a study source and all its versions from Studio. See
+**Study course generation** is new, in a limited beta, and the app does not offer it yet.
+When it does, and you ask for a course built from study sources you saved, the title and
+text of the sources you choose are sent to Google's Gemini API to extract claims and write
+lessons and questions, which are stored privately in your account. It happens only when
+you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
+
+This revision also corrects statements that contradicted the rest of this page: the
+summary said a document you submitted for generation outlived your account (it does not),
+this page said you sign in with an emailed code (you sign in with Google or Microsoft) and
+that we do not keep your real name (the name your sign-in account supplies is kept), and
+it said the Anthropic fallback was "not enabled" while listing it as a processor (it is a
+setting the hosted service does not use, and is listed so that turning it on changes
+nothing you were told).
+
+The previous revision, effective 23 September, described private study import. When you
+save material in Studio's Prepare study material mode, we store the extracted text you
+approved and each corrected version in your private account. We do not upload the
+original file, and saving alone does not send the text to a model provider. You can delete
+a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
-The previous revision, effective 15 September, added Anthropic as an optional Studio
+The revision before that, effective 15 September, added Anthropic as an optional Studio
 summary fallback and described feedback sent through Settings. Those disclosures remain below.
 
 ## Scope
@@ -25,8 +40,9 @@ the operator of your own service, and this document says nothing about what you 
 
 ## The short version
 
-- We ask for **an email address**. Not a password, not a phone number, not your real name —
-  and you can look around as a guest without giving us even that.
+- We keep **an email address** from the Google or Microsoft account you sign in with, and
+  the name on that account if it has one. Not a password, not a phone number — and you can
+  look around as a guest without giving us even that.
 - The product keeps a model of **what you have read and what you appear to know**, because
   refusing to re-teach you things is the entire point of it.
 - **No advertising trackers, no third-party analytics, no data sold or shared for anyone
@@ -34,9 +50,10 @@ the operator of your own service, and this document says nothing about what you 
 - **Your reading history never reaches a language model.** This is architectural rather
   than promised — see [What never reaches a model](#what-never-reaches-a-model).
 - Audio and offline reading happen **on your device** and send us nothing.
-- Delete your account and your library, history and knowledge model go with it, in one
-  cascade, immediately — with one exception, a document you submitted for generation, called
-  out under [How long we keep things](#how-long-we-keep-things).
+- Delete your account and your library, history and knowledge model go with it,
+  immediately — documents you submitted for generation included. The few records that
+  survive identify nobody; they are listed under
+  [How long we keep things](#how-long-we-keep-things).
 
 ## What we collect
 
@@ -44,12 +61,12 @@ the operator of your own service, and this document says nothing about what you 
 
 | Data                              | Where it lives        | Why                                                                                                                     |
 | --------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Email address                     | Supabase Auth         | The only way to sign in and the only way to reach you                                                                   |
-| Handle, display name, bio, avatar | `profiles`            | Optional; needed only if you choose to be visible to others                                                             |
+| Email address                     | Supabase Auth         | Identifies your account when you sign in, and the only way to reach you                                                 |
+| Handle, display name, bio, avatar | `profiles`            | Optional, except that the display name starts as the name your sign-in account supplies. Readable only by you           |
 | Topic and reading preferences     | `preference_profiles` | Weights, excluded topics, media kinds, daily minutes, technical level, spoiler tolerance, how often questions interrupt |
 
-Sign-in is a one-time code or link sent to your email. **We never hold a password**, because
-we never set one.
+Sign-in is through Google or Microsoft; see [Who else processes your data](#who-else-processes-your-data).
+**We never hold a password** — you never set one with us, and we never see your provider's.
 
 ### Looking around as a guest
 
@@ -70,10 +87,11 @@ because the session lives in the tab rather than in the browser:
   or public computer "stay signed in" would mean handing the next person one reader's
   stashes, notes and history with no sign-in wall in the way.
 - **It cannot be recovered.** Clear the browser's storage, or open the product on another
-  device, and the session is gone with no way back in. There is nothing to send a code to.
+  device, and the session is gone with no way back in. There is no account to sign back in
+  with.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
-  need an account we can attribute the request to. (The first two are not yet exposed in
-  the app for anyone; the limit is in the database, so it holds whenever they are.)
+  need an account we can attribute the request to. (Publishing is not yet exposed in the
+  app for anyone; the limit is in the database, so it holds whenever it is.)
 - **We delete it for you.** A guest session that has not been used for a day is removed
   **from our database**, along with everything keyed to it, by a sweep that runs every
   hour — so the account goes a little over a day after you last had it open, and never
@@ -119,6 +137,18 @@ version. Up to twenty preview attempts per
 UTC day are counted in `study_url_preview_daily_usage`, without storing the URL or page
 text in that counter. Those counts are visible in your account export and deleted with
 your account. A learning goal searches the public catalogue without calling a model.
+
+**Study courses** are what the beta generates from sources you choose: the goal you
+typed, the claims found in your text with the exact passage each rests on, and draft
+lessons and questions (`study_generations`, `study_claims`, `study_claim_evidence`,
+`study_lessons`, `study_items`, and the tables linking them). The model output they came
+from is cached in `study_stage_cache` so the same text is not sent twice. All of it is
+readable only by you, is not published, and never enters the catalogue or another
+reader's experience. Deleting any source a course was built from deletes that course and
+every cached output made from it. It is included in your account export and deleted with
+your account. Whether your account is in the beta is recorded in
+`study_generation_access`, with any note we wrote when adding you — which you can read,
+and which is in your export.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
@@ -232,9 +262,13 @@ writing a decay score onto every row of your memory.
 ### What the servers record
 
 Ordinary operational records: request logs held by our hosting providers, and — if you ask
-the app to generate a summary — a `generation_jobs` row with your user id, the steps it ran
-(`job_steps`), and what the provider call cost (`cost_ledger`). Rate-limit counters
-(`rate_limits`) exist to stop one account exhausting a shared budget.
+the app to generate a summary or a study course — a `generation_jobs` row with your user id,
+the steps it ran (`job_steps`), and what the provider call cost (`cost_ledger`). A study
+course also records each request made to the model provider (`provider_calls`: when, which
+model, and whether it answered), with no text from your sources in it; these records and
+the costs are kept after the course is deleted, because the charge happened. Per-account
+quotas, counted from your `generation_jobs` and your study spend today, limit how much of a
+shared budget one account can use.
 
 We do not collect precise location, contacts, calendar, photos, or device identifiers for
 advertising.
@@ -263,6 +297,14 @@ it is not published, it never enters the catalogue or anybody else's feed, and i
 deleted with your account like everything else keyed to you. Asking for one needs an
 account, because generation costs real money and a guest session costs nothing to create.
 
+**A study course is the same exception, asked for separately** — and not offered in the
+app yet; the database accepts it only from accounts in the beta. Building one sends the
+title and text of the sources you chose, in passages, to Google's Gemini API, and then
+sends the claims found in them, with their quoted passages, their source titles and your
+goal, to write the lessons and questions. There is no fallback to another provider for
+courses. It needs an account in the beta and your confirmation, each time, that you are
+sending that text.
+
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
 explanation you have written has ever been sent to a provider.** If that feature ships, this
@@ -282,13 +324,13 @@ policy changes first and the change is a commit you can read.
 
 The app uses these services:
 
-| Processor                             | What it handles                                                   | Where                                  |
-| ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
-| **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
-| **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
-| **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
-| **Anthropic** (Claude API)            | The same, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
-| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
+| Processor                             | What it handles                                                           | Where                                  |
+| ------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------- |
+| **Supabase** (and AWS beneath)        | Database, authentication, server functions                                | `ca-central-1`, Canada                 |
+| **Vercel**                            | Serving the web app and its static assets                                 | Global edge network                    |
+| **Google** (Gemini API)               | Generating summaries and study courses — including your own text          | Google's infrastructure                |
+| **Anthropic** (Claude API)            | Studio summaries, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
+| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider         | The selected provider's infrastructure |
 
 Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your
 account identifier, email address and basic profile information needed to sign you in.
@@ -305,9 +347,12 @@ sentence about cross-site tracking below. The fonts are now served from our own 
 so the request no longer happens. It is recorded here rather than quietly fixed because
 a privacy policy that has only ever been right is not evidence of anything.
 
-**If a second model provider is ever switched on**, this table changes before it does.
-The code supports one (`SUMMARY_FALLBACK_PROVIDER`), it is not enabled, and enabling it
-without amending this page would make the sentence above false.
+**Anthropic is listed because it can be switched on, not because it is on.** The fallback is
+a deployment setting (`SUMMARY_FALLBACK_PROVIDER`), not a code change, so this table and the
+Studio's consent line name it before it could ever be used rather than after. Up to this
+revision, every generation the hosted service has recorded ran on Gemini, apart from three
+test runs on the day it launched that called no model at all; none has used Anthropic.
+Study courses cannot use it at all: they call Gemini only.
 
 ## Where your data lives, and transfers
 
@@ -379,7 +424,8 @@ While your account exists, your data exists — unlimited history is one of the 
 this product refuses to charge for, so we are not going to quietly trim it.
 
 You can delete an individual private study source and all its versions from Studio.
-This removes the extracted text for that source without deleting your account.
+This removes the extracted text for that source, and any study course or cached model
+output built from it, without deleting your account.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,
@@ -403,8 +449,10 @@ Four things survive, none of them attached to you:
 - **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
   so deleting an account cannot erase a moderation trail.
 - **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
-  token count and a cost. It never held a user id, and it is how this project can state
-  what generation costs. Nothing in it identifies you.
+  token count and a cost — and `provider_calls` keeps one per request made to a model
+  provider: when, which model, and whether it answered. Neither ever held a user id or
+  any of your text, and they are how this project can state what generation costs.
+  Nothing in them identifies you.
 - **The catalogue entry for a book you imported** — its title and its author, and nothing
   else. Not your highlights, which go; not the page that held them, which goes; not any
   link between it and you, which goes with your account. It stays because deleting it
@@ -446,7 +494,7 @@ Four of these you do yourself, without asking and without waiting, from
 | **Download everything**     | Every row stored against your account, as one JSON file — including each recall attempt as it happened, the reports you have filed, the seeds that decided your reading order, and the vector described above. Paged in a fixed order, so a large library is neither truncated nor double-counted. Two things are held back on purpose: your unspent recovery codes, which exist to be shown once and not written into a file you might email yourself, and the operational rate counters, which are not yours in any meaningful sense. If any table cannot be read, the file names it rather than quietly leaving it out. |
 | **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing CONFIRM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 A note on ending a session, because the honest version is less impressive than the
 usual claim: it stops that device getting a _new_ token. A token it already holds keeps
@@ -495,7 +543,8 @@ to our decision.
 - The browser bundle carries exactly one credential: the Supabase **publishable** key, which
   is designed to be public and which RLS — not secrecy — is what protects. Service keys and
   provider keys exist only server-side.
-- Sign-in codes expire. There is no password to breach because there is no password.
+- Sign-in goes through Google or Microsoft. There is no password with us to breach because
+  we never hold one.
 
 No system is perfectly secure, and we will not pretend otherwise. If a breach affects your
 personal data we will notify you and the relevant regulator as the law requires — within 72

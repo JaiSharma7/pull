@@ -4,6 +4,7 @@ import {
   deleteAccount,
   fetchSessions,
   generateRecoveryCodes,
+  isRecentSignInRequired,
   REAUTH_WINDOW_SECONDS,
   redeemRecoveryCode,
   revokeOtherSessions,
@@ -711,9 +712,15 @@ export function DeleteAccountDialog({
       await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
       window.location.assign('/');
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : 'Could not delete your account. Please try again.',
-      );
+      if (isRecentSignInRequired(error)) {
+        setFresh(false);
+      } else {
+        setError(
+          error instanceof Error
+            ? error.message
+            : 'Could not delete your account. Please try again.',
+        );
+      }
       setBusy(false);
     }
   }

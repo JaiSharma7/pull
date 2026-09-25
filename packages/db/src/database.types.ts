@@ -246,9 +246,11 @@ export type Database = {
           job_id: string | null
           operation: string
           provider: string
+          provider_call_id: string | null
           quantity: number
           step_id: string | null
           unit: string
+          usage_known: boolean
         }
         Insert: {
           cost_cents: number
@@ -257,9 +259,11 @@ export type Database = {
           job_id?: string | null
           operation: string
           provider: string
+          provider_call_id?: string | null
           quantity: number
           step_id?: string | null
           unit: string
+          usage_known?: boolean
         }
         Update: {
           cost_cents?: number
@@ -268,9 +272,11 @@ export type Database = {
           job_id?: string | null
           operation?: string
           provider?: string
+          provider_call_id?: string | null
           quantity?: number
           step_id?: string | null
           unit?: string
+          usage_known?: boolean
         }
         Relationships: [
           {
@@ -278,6 +284,13 @@ export type Database = {
             columns: ["job_id"]
             isOneToOne: false
             referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cost_ledger_provider_call_id_fkey"
+            columns: ["provider_call_id"]
+            isOneToOne: false
+            referencedRelation: "provider_calls"
             referencedColumns: ["id"]
           },
           {
@@ -1605,6 +1618,50 @@ export type Database = {
           },
         ]
       }
+      provider_calls: {
+        Row: {
+          closed_at: string | null
+          endpoint: string
+          http_status: number | null
+          id: string
+          job_id: string | null
+          opened_at: string
+          outcome: string
+          provider: string
+          step: string
+        }
+        Insert: {
+          closed_at?: string | null
+          endpoint: string
+          http_status?: number | null
+          id: string
+          job_id?: string | null
+          opened_at?: string
+          outcome?: string
+          provider: string
+          step: string
+        }
+        Update: {
+          closed_at?: string | null
+          endpoint?: string
+          http_status?: number | null
+          id?: string
+          job_id?: string | null
+          opened_at?: string
+          outcome?: string
+          provider?: string
+          step?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "provider_calls_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pull_relations: {
         Row: {
           created_at: string
@@ -2091,6 +2148,504 @@ export type Database = {
           },
         ]
       }
+      study_claim_evidence: {
+        Row: {
+          claim_id: string
+          end_offset: number | null
+          id: string
+          match: string
+          model_quote: string
+          ordinal: number
+          owner_id: string
+          page: number | null
+          span_text: string | null
+          start_offset: number | null
+        }
+        Insert: {
+          claim_id: string
+          end_offset?: number | null
+          id?: string
+          match: string
+          model_quote: string
+          ordinal: number
+          owner_id: string
+          page?: number | null
+          span_text?: string | null
+          start_offset?: number | null
+        }
+        Update: {
+          claim_id?: string
+          end_offset?: number | null
+          id?: string
+          match?: string
+          model_quote?: string
+          ordinal?: number
+          owner_id?: string
+          page?: number | null
+          span_text?: string | null
+          start_offset?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_claim_evidence_claim_id_owner_id_fkey"
+            columns: ["claim_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_claims"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_claims: {
+        Row: {
+          attribution: string | null
+          claim_key: string
+          created_at: string
+          generation_id: string
+          id: string
+          kind: string
+          model: string
+          owner_id: string
+          prompt_hash: string
+          provider_call_id: string | null
+          qualifications: string[]
+          rejection_reasons: string[]
+          schema_hash: string
+          source_version_id: string
+          statement: string
+          status: string
+        }
+        Insert: {
+          attribution?: string | null
+          claim_key: string
+          created_at?: string
+          generation_id: string
+          id?: string
+          kind: string
+          model: string
+          owner_id: string
+          prompt_hash: string
+          provider_call_id?: string | null
+          qualifications?: string[]
+          rejection_reasons?: string[]
+          schema_hash: string
+          source_version_id: string
+          statement: string
+          status: string
+        }
+        Update: {
+          attribution?: string | null
+          claim_key?: string
+          created_at?: string
+          generation_id?: string
+          id?: string
+          kind?: string
+          model?: string
+          owner_id?: string
+          prompt_hash?: string
+          provider_call_id?: string | null
+          qualifications?: string[]
+          rejection_reasons?: string[]
+          schema_hash?: string
+          source_version_id?: string
+          statement?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_claims_generation_id_owner_id_fkey"
+            columns: ["generation_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_generations"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_claims_provider_call_id_fkey"
+            columns: ["provider_call_id"]
+            isOneToOne: false
+            referencedRelation: "provider_calls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_claims_source_version_id_owner_id_fkey"
+            columns: ["source_version_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_source_versions"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_generation_access: {
+        Row: {
+          granted_at: string
+          note: string | null
+          user_id: string
+        }
+        Insert: {
+          granted_at?: string
+          note?: string | null
+          user_id: string
+        }
+        Update: {
+          granted_at?: string
+          note?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      study_generation_sources: {
+        Row: {
+          generation_id: string
+          id: string
+          owner_id: string
+          position: number
+          source_version_id: string
+        }
+        Insert: {
+          generation_id: string
+          id?: string
+          owner_id: string
+          position: number
+          source_version_id: string
+        }
+        Update: {
+          generation_id?: string
+          id?: string
+          owner_id?: string
+          position?: number
+          source_version_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_generation_sources_generation_id_owner_id_fkey"
+            columns: ["generation_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_generations"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_generation_sources_source_version_id_owner_id_fkey"
+            columns: ["source_version_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_source_versions"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_generations: {
+        Row: {
+          assembled_at: string | null
+          assembly_provenance: Json | null
+          created_at: string
+          disagreements: Json
+          goal: string
+          id: string
+          job_id: string
+          objectives: string[]
+          overview: string | null
+          owner_id: string
+          processing_consent_at: string
+          recap: string | null
+          title: string | null
+          withheld: Json
+        }
+        Insert: {
+          assembled_at?: string | null
+          assembly_provenance?: Json | null
+          created_at?: string
+          disagreements?: Json
+          goal: string
+          id?: string
+          job_id: string
+          objectives?: string[]
+          overview?: string | null
+          owner_id: string
+          processing_consent_at: string
+          recap?: string | null
+          title?: string | null
+          withheld?: Json
+        }
+        Update: {
+          assembled_at?: string | null
+          assembly_provenance?: Json | null
+          created_at?: string
+          disagreements?: Json
+          goal?: string
+          id?: string
+          job_id?: string
+          objectives?: string[]
+          overview?: string | null
+          owner_id?: string
+          processing_consent_at?: string
+          recap?: string | null
+          title?: string | null
+          withheld?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_generations_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: true
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_item_claims: {
+        Row: {
+          claim_id: string
+          id: string
+          item_id: string
+          owner_id: string
+        }
+        Insert: {
+          claim_id: string
+          id?: string
+          item_id: string
+          owner_id: string
+        }
+        Update: {
+          claim_id?: string
+          id?: string
+          item_id?: string
+          owner_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_item_claims_claim_id_owner_id_fkey"
+            columns: ["claim_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_claims"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_item_claims_item_id_owner_id_fkey"
+            columns: ["item_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_items"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_items: {
+        Row: {
+          accepted_answers: string[]
+          answer: string
+          cloze: string | null
+          created_at: string
+          difficulty: number
+          distractors: Json
+          explanation: string
+          generation_id: string
+          id: string
+          item_key: string
+          kind: string
+          lesson_id: string | null
+          model: string
+          owner_id: string
+          pairs: Json
+          prompt: string
+          prompt_hash: string
+          provider_call_id: string | null
+          purpose: string
+          rejection_reasons: string[]
+          schema_hash: string
+          sequence: string[]
+          status: string
+        }
+        Insert: {
+          accepted_answers?: string[]
+          answer: string
+          cloze?: string | null
+          created_at?: string
+          difficulty: number
+          distractors?: Json
+          explanation: string
+          generation_id: string
+          id?: string
+          item_key: string
+          kind: string
+          lesson_id?: string | null
+          model: string
+          owner_id: string
+          pairs?: Json
+          prompt: string
+          prompt_hash: string
+          provider_call_id?: string | null
+          purpose: string
+          rejection_reasons?: string[]
+          schema_hash: string
+          sequence?: string[]
+          status: string
+        }
+        Update: {
+          accepted_answers?: string[]
+          answer?: string
+          cloze?: string | null
+          created_at?: string
+          difficulty?: number
+          distractors?: Json
+          explanation?: string
+          generation_id?: string
+          id?: string
+          item_key?: string
+          kind?: string
+          lesson_id?: string | null
+          model?: string
+          owner_id?: string
+          pairs?: Json
+          prompt?: string
+          prompt_hash?: string
+          provider_call_id?: string | null
+          purpose?: string
+          rejection_reasons?: string[]
+          schema_hash?: string
+          sequence?: string[]
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_items_generation_id_owner_id_fkey"
+            columns: ["generation_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_generations"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_items_lesson_id_owner_id_fkey"
+            columns: ["lesson_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_lessons"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_items_provider_call_id_fkey"
+            columns: ["provider_call_id"]
+            isOneToOne: false
+            referencedRelation: "provider_calls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_lesson_claims: {
+        Row: {
+          claim_id: string
+          id: string
+          lesson_id: string
+          owner_id: string
+        }
+        Insert: {
+          claim_id: string
+          id?: string
+          lesson_id: string
+          owner_id: string
+        }
+        Update: {
+          claim_id?: string
+          id?: string
+          lesson_id?: string
+          owner_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_lesson_claims_claim_id_owner_id_fkey"
+            columns: ["claim_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_claims"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_lesson_claims_lesson_id_owner_id_fkey"
+            columns: ["lesson_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_lessons"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
+      }
+      study_lessons: {
+        Row: {
+          created_at: string
+          example: string | null
+          explanation: string
+          generation_id: string
+          id: string
+          lesson_key: string
+          minutes: number
+          model: string
+          objective: string
+          owner_id: string
+          position: number
+          prompt_hash: string
+          provider_call_id: string | null
+          recap: string
+          rejection_reasons: string[]
+          schema_hash: string
+          status: string
+          title: string
+          unit_no: number
+          unit_title: string
+        }
+        Insert: {
+          created_at?: string
+          example?: string | null
+          explanation: string
+          generation_id: string
+          id?: string
+          lesson_key: string
+          minutes: number
+          model: string
+          objective: string
+          owner_id: string
+          position: number
+          prompt_hash: string
+          provider_call_id?: string | null
+          recap: string
+          rejection_reasons?: string[]
+          schema_hash: string
+          status: string
+          title: string
+          unit_no: number
+          unit_title: string
+        }
+        Update: {
+          created_at?: string
+          example?: string | null
+          explanation?: string
+          generation_id?: string
+          id?: string
+          lesson_key?: string
+          minutes?: number
+          model?: string
+          objective?: string
+          owner_id?: string
+          position?: number
+          prompt_hash?: string
+          provider_call_id?: string | null
+          recap?: string
+          rejection_reasons?: string[]
+          schema_hash?: string
+          status?: string
+          title?: string
+          unit_no?: number
+          unit_title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_lessons_generation_id_owner_id_fkey"
+            columns: ["generation_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_generations"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_lessons_provider_call_id_fkey"
+            columns: ["provider_call_id"]
+            isOneToOne: false
+            referencedRelation: "provider_calls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       study_source_mutations: {
         Row: {
           client_mutation_id: string
@@ -2190,6 +2745,105 @@ export type Database = {
           owner_id?: string
         }
         Relationships: []
+      }
+      study_stage_cache: {
+        Row: {
+          cache_key: string
+          created_at: string
+          id: string
+          job_id: string | null
+          model: string
+          output: Json
+          owner_id: string
+          prompt_hash: string
+          prompt_name: string
+          provider_call_id: string | null
+          provider_signature: string
+          schema_hash: string
+          stage: string
+        }
+        Insert: {
+          cache_key: string
+          created_at?: string
+          id?: string
+          job_id?: string | null
+          model: string
+          output: Json
+          owner_id: string
+          prompt_hash: string
+          prompt_name: string
+          provider_call_id?: string | null
+          provider_signature: string
+          schema_hash: string
+          stage: string
+        }
+        Update: {
+          cache_key?: string
+          created_at?: string
+          id?: string
+          job_id?: string | null
+          model?: string
+          output?: Json
+          owner_id?: string
+          prompt_hash?: string
+          prompt_name?: string
+          provider_call_id?: string | null
+          provider_signature?: string
+          schema_hash?: string
+          stage?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_stage_cache_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "generation_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_stage_cache_provider_call_id_fkey"
+            columns: ["provider_call_id"]
+            isOneToOne: false
+            referencedRelation: "provider_calls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_stage_cache_sources: {
+        Row: {
+          cache_id: string
+          id: string
+          owner_id: string
+          source_version_id: string
+        }
+        Insert: {
+          cache_id: string
+          id?: string
+          owner_id: string
+          source_version_id: string
+        }
+        Update: {
+          cache_id?: string
+          id?: string
+          owner_id?: string
+          source_version_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_stage_cache_sources_cache_id_owner_id_fkey"
+            columns: ["cache_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_stage_cache"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_stage_cache_sources_source_version_id_owner_id_fkey"
+            columns: ["source_version_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_source_versions"
+            referencedColumns: ["id", "owner_id"]
+          },
+        ]
       }
       study_url_preview_daily_usage: {
         Row: {
@@ -2634,6 +3288,15 @@ export type Database = {
         Args: { p_mutation_id?: string; p_target: Json }
         Returns: Json
       }
+      enqueue_study_generation: {
+        Args: {
+          p_goal: string
+          p_mutation_id: string
+          p_processing_consent?: boolean
+          p_source_version_ids: string[]
+        }
+        Returns: Json
+      }
       generate_mfa_recovery_codes: { Args: never; Returns: string[] }
       generation_budget_state: { Args: never; Returns: string }
       generation_secret: { Args: { p_name: string }; Returns: string }
@@ -2721,6 +3384,10 @@ export type Database = {
         Returns: Json
       }
       pause_path: { Args: { p_path_id: string }; Returns: Json }
+      persist_study_course: {
+        Args: { p_job_id: string; p_payload: Json }
+        Returns: Json
+      }
       plan_interleave: {
         Args: {
           p_cards_before?: number
@@ -2810,6 +3477,15 @@ export type Database = {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined
       }
+      record_study_stage: {
+        Args: {
+          p_cache?: Json
+          p_calls: Json
+          p_job_id: string
+          p_step: string
+        }
+        Returns: string
+      }
       redeem_mfa_recovery_code: { Args: { p_code: string }; Returns: boolean }
       refresh_knowledge_vector: {
         Args: { p_user_id?: string }
@@ -2850,6 +3526,10 @@ export type Database = {
         Returns: number
       }
       reserve_budget: {
+        Args: { p_cents: number; p_job_id: string; p_step: string }
+        Returns: number
+      }
+      reserve_study_budget: {
         Args: { p_cents: number; p_job_id: string; p_step: string }
         Returns: number
       }
@@ -2925,6 +3605,24 @@ export type Database = {
       }
       settle_path_progress: { Args: { p_path_id: string }; Returns: boolean }
       spend_today: { Args: never; Returns: number }
+      study_generation_available: { Args: never; Returns: boolean }
+      study_min_job_cents: { Args: never; Returns: number }
+      study_provider_call_audit: {
+        Args: { p_since?: string }
+        Returns: {
+          cost_cents: number
+          journalled: number
+          ledgered: number
+          open_calls: number
+          unledgered: number
+          usage_unknown: number
+        }[]
+      }
+      study_requester_daily_cap_cents: { Args: never; Returns: number }
+      study_requester_spend_today: {
+        Args: { p_requester: string }
+        Returns: number
+      }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean

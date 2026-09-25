@@ -146,12 +146,18 @@ export async function fetchBudgetState(): Promise<BudgetState> {
  * Bounded rather than paged: a reader is capped at fifty jobs a day and this
  * screen is about what is happening now, not about a history. Twelve is more than
  * a page of them.
+ *
+ * Summaries only. A study course is a job too (20260925010000), and this list
+ * describes every row as a summary -- "Done." with nothing to read, a raw
+ * `study_extract` error -- for a feature the app does not offer yet. The course
+ * screens will list their own.
  */
 export async function fetchMyJobs(userId: string, limit = 12): Promise<StudioJob[]> {
   const { data, error } = await supabase
     .from('generation_jobs')
     .select('id, status, current_step, work_id, summary_id, error, created_at, updated_at')
     .eq('requester_id', userId)
+    .in('kind', ['canonical_summary', 'private_summary'])
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw rpcError(error);

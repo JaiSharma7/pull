@@ -47,8 +47,8 @@ else has access to yours.
 
 ## 2. Your account
 
-Sign-in is a code or link sent to your email, so **keeping access to that mailbox is what
-keeps you in control of your account**. There is no password to recover.
+Sign-in is through your Google or Microsoft account, so **keeping control of that account
+is what keeps you in control of yours**. There is no password with us to recover.
 
 You can also look around as a **guest**, without giving us an address. A guest session is
 covered by these Terms exactly as an account is, with three differences. Two follow from
