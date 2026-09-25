@@ -75,9 +75,10 @@ and keeps a failing question or lesson as `rejected` with its reasons:
 
 Everything that passes is `draft`, which means _well-formed and pending validation_, not
 correct. `study_validate` then decides, by deterministic checks in SQL, which drafts are
-`validated` (shown) and which `quarantined`; see [`study-validation.md`](./study-validation.md).
-Groundedness beyond the span, ambiguity and multiple defensible answers remain human
-judgements, and the release gate is the human-reviewed fixture.
+`validated` (may be shown) and which `quarantined`; see
+[`study-validation.md`](./study-validation.md). Groundedness beyond the span, answerability
+(except that a cloze's blank must occur in its claims), ambiguity and multiple defensible
+answers remain human judgements, and the release gate is the human-reviewed fixture.
 
 Unanswerable questions the reader's goal invites are **withheld**, not written: the model
 records them with a reason in `study_generations.withheld`. Disagreements between sources
