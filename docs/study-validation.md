@@ -8,7 +8,7 @@
 - how a corrected version replaces it;
 - why no answer to a retired, suspended or unvalidated question can count as recall.
 
-The schema lives in three migrations, each later one superseding parts of the ones before
+The schema lives in six migrations, each later one superseding parts of the ones before
 after a review round:
 
 - `supabase/migrations/20260925050000_study_validation_and_correction.sql`
@@ -16,6 +16,7 @@ after a review round:
 - `20260925070000_study_validation_parity.sql`
 - `20260925080000_study_validation_review_round_two.sql`
 - `20260925090000_study_validation_sweep_and_proof.sql`
+- `20260925100000_study_validation_review_round_three.sql`
 
 The behaviour is asserted in `supabase/tests/study_validation.sql`: the reader's paths as
 the `authenticated` role under RLS, and the worker's as the service role. That includes a
@@ -43,14 +44,14 @@ draft ──validate──► validated ──report──► suspended ──di
   └──► quarantined ─────┴─── retire / revise ─┴────────► retired
 ```
 
-| Status        | Shown to a learner | Means                                                                                                                          |
-| ------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `draft`       | no                 | Written by the worker and waiting for validation.                                                                              |
-| `rejected`    | no                 | Malformed when generated (`normalizeStudyCourse`). Kept for audit.                                                             |
-| `quarantined` | no                 | Well-formed but failed a check below. Kept with its reasons for audit and human review; the reader can revise it or retire it. |
-| `validated`   | **yes**            | Passed every check, and nothing is holding it back.                                                                            |
-| `suspended`   | no                 | Reported, or it rests on a claim that is reported or retired.                                                                  |
-| `retired`     | no                 | Superseded by a corrected version, or withdrawn. Kept for its history.                                                         |
+| Status        | Shown to a learner | Means                                                                                                                                                             |
+| ------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `draft`       | no                 | Written by the worker and waiting for validation.                                                                                                                 |
+| `rejected`    | no                 | Malformed when generated (`normalizeStudyCourse`). Kept for audit.                                                                                                |
+| `quarantined` | no                 | Well-formed but failed a check below. Kept with its reasons for audit and human review; the reader can revise or retire a lesson or question, and retire a claim. |
+| `validated`   | **yes**            | Passed every check, and nothing is holding it back.                                                                                                               |
+| `suspended`   | no                 | Reported, or it rests on a claim that is reported or retired.                                                                                                     |
+| `retired`     | no                 | Superseded by a corrected version, or withdrawn. Kept for its history.                                                                                            |
 
 **Claims cannot be revised.** A claim can be reported, dismissed and retired, but not
 revised; see [below](#reports-and-corrections). Only lessons and questions have versions.
@@ -76,8 +77,10 @@ calls `validate_study_course`. That function checks every draft claim, then ever
 then every question, then the course's own text. The order matters, because each level asks
 about the one before. Only drafts move, so a retried step changes nothing.
 
-A reader's revision runs the same functions, as the reader's (see below). So no path to a
-visible question skips them.
+A reader's revision runs the same functions, as the reader's (see below). Generated rows
+can only start as `draft` or `rejected` -- a trigger refuses any other status, whichever
+function inserts them -- and any change to a course's own text puts it back to `pending`.
+So no path to a visible question, or to visible course text, skips them.
 
 **A validation that fails is retried later.** If `study_validate` fails three times, or a job
 finished under a worker older than that step, every row would stay a draft forever.
@@ -92,24 +95,24 @@ beside the stranded-job sweep, every five minutes by default. **Deploying this c
 therefore requires re-running `select public.enable_generation_sweeper();`** after the
 migrations, as `scripts/go-live.sh` lists.
 
-| Check                                                                                 | Applies to                                          | Reason                                                                                           |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| A resolved evidence span.                                                             | Claim                                               | `evidence_missing`                                                                               |
-| The span is still the stored text at its offsets.                                     | Claim                                               | `evidence_mismatch`                                                                              |
-| Rests on at least one claim, and all of them are validated.                           | Lesson, question                                    | `no_known_claims`, `cites_unvalidated_claim`                                                     |
-| Its lesson, if it has one, is validated or suspended.                                 | Question                                            | `lesson_unavailable`                                                                             |
-| An answer, a prompt and an explanation, not only whitespace.                          | Question                                            | `answer_missing`, `text_missing`                                                                 |
-| A title, objective, explanation and recap.                                            | Lesson                                              | `text_missing`                                                                                   |
-| One correct choice: no wrong option folds to the answer or an accepted variant.       | Choice question                                     | `distractor_matches_answer`                                                                      |
-| Two to four distinct wrong options (so three to five choices), each with a rationale. | Choice question                                     | `too_few_distractors`, `duplicate_options`, `distractor_without_rationale`, `distractor_missing` |
-| Accepted variants belong only to typed questions, and none folds to nothing.          | Question                                            | `accepted_answer_invalid`                                                                        |
-| Exactly one blank.                                                                    | Cloze                                               | `cloze_malformed`                                                                                |
-| Neither the answer nor any accepted variant is printed in the prompt or cloze.        | Cloze, short recall                                 | `answer_in_prompt`                                                                               |
-| The answer occurs in the text or evidence of the claims the question rests on.        | Cloze, and every typed answer of a reader's version | `answer_not_in_evidence`                                                                         |
-| Three to six distinct steps; two to six pairs, with no side repeated.                 | Ordering, matching                                  | `ordering_malformed`, `matching_malformed`                                                       |
-| Nothing addressed to a model (a heuristic; see below).                                | All text, including a claim's quoted passage        | `instruction_like`                                                                               |
-| No link that is absent from every one of the course's sources (a heuristic).          | All generated text except quoted passages           | `unsourced_link`                                                                                 |
-| No bidi controls, byte-order mark, invisible operators, tag or annotation characters. | A reader's version                                  | `hidden_characters`                                                                              |
+| Check                                                                                                          | Applies to                                          | Reason                                                                                           |
+| -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| A resolved evidence span.                                                                                      | Claim                                               | `evidence_missing`                                                                               |
+| The span is still the stored text at its offsets.                                                              | Claim                                               | `evidence_mismatch`                                                                              |
+| Rests on at least one claim, and all of them are validated.                                                    | Lesson, question                                    | `no_known_claims`, `cites_unvalidated_claim`                                                     |
+| Its lesson, if it has one, is validated or suspended.                                                          | Question                                            | `lesson_unavailable`                                                                             |
+| An answer, a prompt and an explanation, not only whitespace.                                                   | Question                                            | `answer_missing`, `text_missing`                                                                 |
+| A title, objective, explanation and recap.                                                                     | Lesson                                              | `text_missing`                                                                                   |
+| One correct choice: no wrong option folds to the answer or an accepted variant.                                | Choice question                                     | `distractor_matches_answer`                                                                      |
+| Two to four distinct wrong options (so three to five choices), each with a rationale.                          | Choice question                                     | `too_few_distractors`, `duplicate_options`, `distractor_without_rationale`, `distractor_missing` |
+| Accepted variants belong only to typed questions, and none folds to nothing.                                   | Question                                            | `accepted_answer_invalid`                                                                        |
+| Exactly one blank.                                                                                             | Cloze                                               | `cloze_malformed`                                                                                |
+| Neither the answer nor any accepted variant is printed in the prompt or cloze.                                 | Cloze, short recall                                 | `answer_in_prompt`                                                                               |
+| The answer occurs in the text or evidence of the claims the question rests on.                                 | Cloze, and every typed answer of a reader's version | `answer_not_in_evidence`                                                                         |
+| Three to six distinct steps; two to six pairs, with no side repeated.                                          | Ordering, matching                                  | `ordering_malformed`, `matching_malformed`                                                       |
+| Nothing addressed to a model (a heuristic; see below).                                                         | All text, including a claim's quoted passage        | `instruction_like`                                                                               |
+| No link that is absent from every one of the course's sources (a heuristic).                                   | All generated text except quoted passages           | `unsourced_link`                                                                                 |
+| No bidi embeddings, overrides or isolates, byte-order mark, invisible operators, tag or annotation characters. | A reader's version                                  | `hidden_characters`                                                                              |
 
 **How answers are compared.**
 
@@ -143,9 +146,13 @@ migrations, as `scripts/go-live.sh` lists.
   script written without spaces, or at least three otherwise. That catches "DNA", but a
   two-letter answer in a spaced script ("pH") is never flagged.
 
-**The two heuristics.** `instruction_like` and `unsourced_link` read text after NFKC, with
-every format character (`\p{Cf}`, tag characters included) removed, the ideographic full
-stop read as a full stop, and look-alike letters folded.
+**The two heuristics.** `instruction_like` and `unsourced_link` read text after NFKC and
+lower-casing, with every invisible character removed -- `\p{Cf}` and
+`\p{Default_Ignorable_Code_Point}`, tag characters, variation selectors and the combining
+grapheme joiner included, generated by `scripts/study-unicode-classes.mjs` -- and the
+ideographic full stop read as a full stop. `instruction_like` also folds the common Cyrillic
+and Greek look-alikes of Latin letters. `unsourced_link` does not: a link is compared as it is
+written, so `раураl.com` in Cyrillic is a different link from the `paypal.com` a source cites.
 
 - **What `instruction_like` looks for.** Phrases an injected passage uses:
   - "ignore" or "disregard", then within a few words "previous", "prior", "above",
@@ -168,10 +175,13 @@ stop read as a full stop, and look-alike letters folded.
   is the bare host of a link that does. A different page on the same site is not sourced:
   a source citing one page does not vouch for the rest of the site.
 - **What they miss.** A passage that brings its own link passes, because that link is in
-  the source. So does text phrased in a way the patterns do not expect.
+  the source. So does text phrased in a way the patterns do not expect, and a trigger phrase
+  spelled with look-alike letters outside the folded set -- a dotless ı, an Armenian օ, a
+  Cherokee letter -- that NFKC leaves alone.
 - **How cautious they are.** Deliberately. A source genuinely about prompt injection will
-  have claims quarantined, which is where an adversarial item belongs. A false positive is
-  corrected by revising the item, and the evaluation contract
+  have claims quarantined, which is where an adversarial item belongs. A false positive on a
+  lesson or question is corrected by revising it (a lesson's unit title included); one on a
+  claim, by retiring the claim. The evaluation contract
   ([`eval/study-quality.md`](./eval/study-quality.md)) reviews quarantined items too.
 
 **What the checks cannot decide.** Groundedness beyond the evidence span. Answerability,
@@ -225,14 +235,16 @@ field within the limit the table holds it to.
 - Up to 6 steps of 500 characters each.
 - Up to 4 wrong options, with 1,000 characters for the option and 1,000 for its rationale.
 - Up to 6 pairs of 300 characters a side.
-- A lesson's title: 200 characters. Its objective: 500. Its explanation: 6,000. Its
-  example: 2,000. Its recap: 1,000.
+- A lesson's unit title and title: 200 characters each. Its objective: 500. Its
+  explanation: 6,000. Its example: 2,000. Its recap: 1,000.
 
 **Revision keys.**
 
 - Questions: `prompt`, `answer`, `acceptedAnswers`, `distractors` (`[{text, why}]`), `cloze`,
   `sequence`, `pairs` (`[{left, right}]`), `explanation` and `claimIds`.
-- Lessons: `title`, `objective`, `explanation`, `example`, `recap` and `claimIds`.
+- Lessons: `unitTitle`, `title`, `objective`, `explanation`, `example`, `recap` and
+  `claimIds`. A unit title is stored on each lesson, so correcting it on one lesson leaves the
+  unit's other lessons as they are.
 - Given fields replace the old ones and absent fields are kept.
 - A question's kind, purpose, difficulty and lesson are kept, because a different kind of
   question is a different question.
@@ -266,12 +278,17 @@ A correction never edits a question or lesson in place.
   put on the reader's words.
 - **Refused whole.** A revision that fails a check is refused, and nothing changes.
 - **Checked as the reader's.** A reader's version may not contain characters that make text
-  read differently from how it is stored: bidi controls, the byte-order mark, invisible
-  operators, tag and interlinear-annotation characters. Its typed answers must occur in the
-  claims it rests on.
+  read differently from how it is stored: bidi embeddings, overrides and isolates, the
+  byte-order mark, invisible operators, tag and interlinear-annotation characters. The marks
+  right-to-left writing needs (LRM, RLM and the Arabic letter mark) stay allowed, as do the
+  joiners and soft hyphen ordinary text uses. Its typed answers must occur in the claims it
+  rests on.
 - **Practice, not proof.** A reader's version is never proof of recall (below). No check on
   text can stop an author knowing their own answer, so a correction can make a question
-  better to practise with but cannot make the reader's mastery easier to claim.
+  better to practise with but cannot make the reader's mastery easier to claim. The cost: a
+  claim whose model-written questions have all been revised or retired -- a quarantined false
+  positive the reader corrected included -- has no path to proof until a later generation
+  gives it one.
 
 ## The status log
 
@@ -336,7 +353,7 @@ claims its question rests on only when all of these hold:
 The practice, scheduling and Delta changes must build on this function rather than on their
 own reading of the table. `study_proven_claims()` applies the same clauses in one set-based
 query, for speed, and the test suite checks it agrees with `study_answer_proves_recall`
-answer by answer.
+claim by claim.
 
 ## Privacy
 

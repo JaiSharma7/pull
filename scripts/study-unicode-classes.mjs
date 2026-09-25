@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * The two character classes `study_contains_phrase` needs in SQL, generated from the same
- * Unicode properties `containsPhrase` in `supabase/functions/_shared/study.ts` uses:
+ * The character classes the SQL checks need, generated from the same Unicode properties
+ * `containsPhrase` in `supabase/functions/_shared/study.ts` uses:
  *
- *   word      \p{L}, \p{N} and \p{M} -- what continues a word in a spaced script
- *   unspaced  the scripts written without spaces (`UNSPACED_SCRIPT`)
- *   boundary  word and not unspaced: `continuesWord`, as one class a lookaround can use
- *   format    \p{Cf}: the invisible format characters the heuristics strip
+ *   word       \p{L}, \p{N} and \p{M} -- what continues a word in a spaced script
+ *   unspaced   the scripts written without spaces (`UNSPACED_SCRIPT`)
+ *   boundary   word and not unspaced: `continuesWord`, as one class a lookaround can use
+ *   format     \p{Cf}: the invisible format characters answer matching strips
+ *   ignorable  \p{Cf} and \p{Default_Ignorable_Code_Point}: what the instruction and link
+ *              heuristics strip, which answer matching must not (a combining grapheme
+ *              joiner continues a word in `containsPhrase`)
  *
  * Postgres's own `[:alnum:]` and hand-written block ranges disagreed with JavaScript on
  * nearly a thousand code points -- whole Indic blocks, danda included, counted as letters.
@@ -51,6 +54,8 @@ console.log('-- boundary');
 console.log(sqlClass(ranges((c) => WORD.test(c) && !UNSPACED.test(c))));
 console.log('-- format');
 console.log(sqlClass(ranges((c) => /\p{Cf}/u.test(c))));
+console.log('-- ignorable');
+console.log(sqlClass(ranges((c) => /[\p{Cf}\p{Default_Ignorable_Code_Point}]/u.test(c))));
 console.log('-- word');
 console.log(sqlClass(ranges((c) => WORD.test(c))));
 console.log('-- unspaced');

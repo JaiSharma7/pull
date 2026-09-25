@@ -12,10 +12,10 @@
  *   givesAwayIfPrinted with public.study_gives_away
  *
  * over every code point of the Basic Multilingual Plane that Postgres itself considers
- * assigned (so a newer Unicode in Node or Deno is not a difference), and over a curated
- * set of cases the reviews found. `study_contains_phrase` reads more strictly on purpose
- * -- invisible characters removed, look-alike letters folded -- and the curated cases
- * that rely on that are marked.
+ * assigned (so a newer Unicode in Node or Deno is not a difference), a sample of the astral
+ * planes, and a curated set of cases the reviews found. `study_contains_phrase` reads more
+ * loosely on purpose -- invisible format characters removed, look-alike letters folded --
+ * and the curated cases that rely on that are marked.
  *
  * Read-only: every call is an IMMUTABLE function. Runs as part of `pnpm db:test`.
  */
