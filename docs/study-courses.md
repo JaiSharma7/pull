@@ -9,8 +9,9 @@ record of what the reader has been shown.
 The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
 `20260925130000_study_course_review_fixes.sql`, `20260925140000_study_course_locks.sql`,
 `20260925150000_study_course_review_round_two.sql`,
-`20260925160000_study_course_lock_order.sql` and
-`20260925170000_study_course_review_round_three.sql` superseding parts of it after review. The
+`20260925160000_study_course_lock_order.sql`,
+`20260925170000_study_course_review_round_three.sql` and
+`20260925180000_study_course_review_round_four.sql` superseding parts of it after review. The
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
@@ -42,8 +43,9 @@ study_courses ─── study_course_sources      the course, and the sources it
   else the newest with such a question, else the newest finished one. So a generation still
   being prepared, one that failed before it was persisted, and one whose lessons validation
   held back all leave the one before it current. The rule reads the status log, which
-  nothing updates, so what the reader does afterwards -- a report, a withdrawal -- never
-  moves a course to another generation.
+  nothing updates, so a report or a withdrawal never moves a course to another generation.
+  A correction can: correcting a lesson validation held back in a newer generation gives
+  that generation a lesson, so it becomes current, and the reader starts it at `not_seen`.
 
 ## Preparing a course again
 
@@ -77,7 +79,7 @@ generation has finished -- the first failed before it was persisted, or a source
 took them all -- and a regeneration is then accepted, so offer preparation whenever
 `generation_id` is null and nothing is preparing. `newer_generation_held_back` says when
 the newest finished generation is not the current one, and `held_back` when validation
-passed nothing in the current one.
+passed no lesson in the current one.
 
 **Responses.** `enqueue_study_generation` and `regenerate_study_course` return
 `{ jobId, generationId, courseId, status, queue, delaySeconds, remainingToday, replayed }`.
@@ -151,15 +153,16 @@ give structure and state; the lessons' and questions' own text is read from the
 | `latest_generation_id`, `latest_job_status`       | The newest generation and its job, current or not                                         |
 | `preparing`                                       | A generation of the course is queued or running                                           |
 | `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
-| `held_back`                                       | Nothing in the current generation was ever validated: validation held all of it back      |
+| `held_back`                                       | There is a current generation, and validation passed no lesson in it                      |
 | `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
 | `claim_count`, `claims_demonstrated_count`        | Validated claims, and those whose recall the reader has demonstrated                      |
 
 A current generation with no lesson to show is one of two things, and `held_back` says
-which: validation passed nothing in it, or the reader's own reports and withdrawals took
-everything it passed.
+which: validation passed no lesson in it (it may still have course-level questions), or the
+reader's own reports and withdrawals took every lesson it passed. With no current
+generation `held_back` is false; `preparing` and `latest_job_status` say what is happening.
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
 order -- unit, then position -- with the unit's number and title, the lesson's key, title,
@@ -232,10 +235,12 @@ short: the account row, then the reader's study lock, then their sources, then a
 - **The account row first.** Saving a source locks the reader's `auth.users` row and then
   the source; deleting the account locks the row before anything it cascades to. So
   preparation -- a first one or a regeneration -- key-shares the account row before it locks
-  anything, and `delete_my_account` takes its own row before the reader's study lock, which
-  serialises it with an administrator deleting the same account. Nothing holding the study
-  lock ever waits on the account row: a progress batch, a reader's source deletion and
-  `delete_study_course` never touch it.
+  anything, and `delete_my_account` takes its own row, FOR NO KEY UPDATE, before the reader's
+  study lock, which serialises it with an administrator deleting the same account. It is
+  NO KEY UPDATE because the worker locks a job row and then key-shares the account row as it
+  writes (the stage cache, a generated summary): a FOR UPDATE held while the jobs are deleted
+  deadlocked with it. Nothing holding the study lock ever waits on the account row: a
+  progress batch, a reader's source deletion and `delete_study_course` never touch it.
 - **One lock per reader, before their study rows.** `record_study_progress` holds the
   reader's `study_progress:<owner>` advisory lock for its whole call. Every path that deletes
   a reader's study rows takes the same lock before it locks any of them, so the two
