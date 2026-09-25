@@ -34,7 +34,7 @@ import {
   type ProviderName,
   type ProviderTransport,
 } from './provider-journal.ts';
-import { renderStudyPrompt, type StudyPromptName } from './study.ts';
+import { renderStudyPrompt, truncate, type StudyPromptName } from './study.ts';
 
 export interface ProviderCallRecord {
   providerCallId: string;
@@ -111,10 +111,11 @@ function textOf(payload: Record<string, unknown>): { text: string; finishReason?
  */
 export function wellFormed(value: unknown): unknown {
   if (typeof value === 'string') {
-    return value.replace(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-      '\uFFFD',
-    );
+    // Lone surrogates, and U+0000, which jsonb refuses as well ("unsupported Unicode
+    // escape sequence") before the recording function even runs.
+    return value
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
+      .replaceAll('\u0000', '\uFFFD');
   }
   if (Array.isArray(value)) return value.map(wellFormed);
   if (value && typeof value === 'object') {
@@ -205,8 +206,14 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
                   inputTokens: 0,
                   outputTokens: 0,
                   costCents: 0,
-                  usageKnown: false,
+                  // A failed CONNECTION was never sent: known, and free.
+                  usageKnown: e.connectPhase,
                 });
+                // Free, so retried once on the same model, as `callGemini` retries it.
+                if (e.connectPhase) {
+                  if (attempt === 1) continue;
+                  return failed(`Gemini ${model} could not be reached: ${e.message}`, model);
+                }
                 /*
                  * NO RETRY, which is where this parts from `callGemini`. An attempt that
                  * was sent and then dropped may have been billed, and is charged at the
@@ -238,7 +245,7 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
                 costCents: 0,
                 usageKnown: true,
               });
-              lastError = `Gemini ${model} failed: ${response.status} ${detail.slice(0, 200)}`;
+              lastError = `Gemini ${model} failed: ${response.status} ${truncate(detail, 200)}`;
               if (attempt === 1 && isRetryable(response.status)) continue;
               if (isUnavailable(response.status)) break;
               return failed(lastError, model);

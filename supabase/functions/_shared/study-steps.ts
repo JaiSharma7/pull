@@ -160,15 +160,13 @@ async function recordAttempts(
    * `usage_known = false`, so a cost report can tell a ceiling from a measurement.
    */
   /*
-   * Only an attempt that REACHED the provider: aborted after sending, or a 200 whose body
-   * could not be read. A `network_error` -- connection refused, DNS, TLS -- is recorded
-   * at zero, still flagged unknown, as the summary pipeline treats the same failure;
-   * charging it the ceiling put phantom spend on the day for requests nobody served.
+   * Every attempt the provider may have billed without saying what. A connection that
+   * provably failed before sending (refused, DNS, TLS) comes back with its usage KNOWN
+   * to be zero (see `isConnectPhase`), so it is never charged; a reset after the body
+   * went out is not provably free and is charged like any other.
    */
   const calls = outcome.calls.map((c) =>
-    c.usageKnown || c.outcome === 'network_error'
-      ? c
-      : { ...c, costCents: Math.max(c.costCents, ceilingCents) },
+    c.usageKnown ? c : { ...c, costCents: Math.max(c.costCents, ceilingCents) },
   );
   try {
     return await deps.db.recordStage(deps.job.id, step, calls, cache);
@@ -205,7 +203,7 @@ async function recordAttempts(
 function unusable(outcome: StructuredOutcome, usable: boolean, missing: string): string {
   if (!outcome.ok) return outcome.error;
   return usable
-    ? 'the result could not be stored; the study material may have been deleted'
+    ? 'the result could not be stored (the material was deleted, or the database refused it)'
     : `the provider returned ${missing}`;
 }
 

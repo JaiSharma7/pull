@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GeminiConfig } from './gemini.ts';
 import {
   createJournalledTransport,
+  isConnectPhase,
   JournalledRequestError,
   JournalUnavailableError,
   type JournalOpen,
@@ -170,6 +171,30 @@ describe('createJournalledTransport', () => {
   });
 });
 
+describe('isConnectPhase', () => {
+  it('knows a connection that never opened, from Node and from Deno', () => {
+    for (const code of ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT']) {
+      expect(
+        isConnectPhase(Object.assign(new TypeError('fetch failed'), { cause: { code } })),
+      ).toBe(true);
+    }
+    const deno = new TypeError(
+      'error sending request for url (https://generativelanguage.googleapis.com/): ' +
+        'client error (Connect): tcp connect error: Connection refused (os error 111)',
+    );
+    expect(isConnectPhase(deno)).toBe(true);
+  });
+
+  it('treats everything else as possibly sent: a reset, an abort, an unknown shape', () => {
+    const reset = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    expect(isConnectPhase(reset)).toBe(false);
+    expect(isConnectPhase(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(false);
+    expect(isConnectPhase(new Error('socket hang up'))).toBe(false);
+    expect(isConnectPhase('ECONNREFUSED')).toBe(false);
+    expect(isConnectPhase(null)).toBe(false);
+  });
+});
+
 describe('createGeminiStructuredProvider', () => {
   async function run(net: ReturnType<typeof script>, over: Partial<GeminiConfig> = {}) {
     const { journal, rows } = memoryJournal();
@@ -241,6 +266,26 @@ describe('createGeminiStructuredProvider', () => {
       ['network_error', false, 0],
     ]);
     reconciles(outcome, rows);
+  });
+
+  it('retries a connection that never opened once, as known and free', async () => {
+    const refused = () =>
+      Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    const net = script(refused(), ok({ claims: [], gaps: [] }));
+    const { outcome, rows } = await run(net);
+    expect(outcome.ok).toBe(true);
+    expect(net.urls).toHaveLength(2);
+    expect(outcome.calls.map((c) => [c.outcome, c.usageKnown, c.costCents > 0])).toEqual([
+      ['network_error', true, false],
+      ['responded', true, true],
+    ]);
+    reconciles(outcome, rows);
+
+    const twice = script(refused(), refused(), ok({ claims: [], gaps: [] }));
+    const again = await run(twice);
+    expect(again.outcome.ok).toBe(false);
+    expect(twice.urls).toHaveLength(2);
+    expect(again.outcome.calls.every((c) => c.usageKnown && c.costCents === 0)).toBe(true);
   });
 
   it('does not move to the next model after an abort either', async () => {
@@ -346,6 +391,17 @@ describe('createGeminiStructuredProvider', () => {
     expect(outcome.ok).toBe(true);
     const gaps = (outcome.ok ? (outcome.value as { gaps: string[] }).gaps : []) ?? [];
     expect(gaps[0]).toBe('bad \uFFFD escape');
+  });
+
+  it('replaces a NUL the model wrote, which jsonb text would refuse too', async () => {
+    const raw = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: '{"claims":[],"gaps":["a\\u0000b"]}' }] } }],
+      usageMetadata: { promptTokenCount: 1 },
+    });
+    const { outcome } = await run(script(new Response(raw, { status: 200 })));
+    expect(outcome.ok).toBe(true);
+    const gaps = (outcome.ok ? (outcome.value as { gaps: string[] }).gaps : []) ?? [];
+    expect(gaps[0]).toBe('a\uFFFDb');
   });
 
   it('records a redirect as an answer of known cost, and does not follow it', async () => {

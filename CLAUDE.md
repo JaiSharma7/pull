@@ -38,8 +38,8 @@ and reviewers should reject it on that basis alone.
      before the provider is called, so spend is visible while it is in flight.
    - `daily_spend_cap_cents()` is a GLOBAL ceiling (200¢). `enqueue_generation_job` and
      `enqueue_study_generation` refuse at the door once the day cannot fund a whole job,
-     and `reserve_budget` refuses each call, so the worst case for a day is the cap and
-     not the demand.
+     and `reserve_budget` refuses each call — a study call also once its reader's share
+     is spent — so the worst case for a day is the cap and not the demand.
    - One requester gets three fast jobs a day, then a widening stagger, and fifty in
      total — counted across both doors, under one per-requester advisory lock.
    - The result is `private` and never joins the catalogue, so it cannot be a way to

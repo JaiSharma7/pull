@@ -1502,21 +1502,6 @@ export type Database = {
           },
         ]
       }
-      pg_temp_race_ids: {
-        Row: {
-          k: string | null
-          v: string | null
-        }
-        Insert: {
-          k?: string | null
-          v?: string | null
-        }
-        Update: {
-          k?: string | null
-          v?: string | null
-        }
-        Relationships: []
-      }
       preference_profiles: {
         Row: {
           counter_rate: number

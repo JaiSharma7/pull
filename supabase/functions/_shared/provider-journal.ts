@@ -53,13 +53,50 @@ export class JournalUnavailableError extends Error {
 export class JournalledRequestError extends Error {
   readonly callId: string;
   readonly aborted: boolean;
+  /**
+   * The connection itself failed -- refused, DNS, a TLS handshake -- so the request was
+   * provably never sent and nothing can have been billed. Anything else that rejects
+   * (a reset after the body went out, a timeout) may have reached the provider.
+   */
+  readonly connectPhase: boolean;
 
-  constructor(callId: string, cause: unknown, aborted: boolean) {
+  constructor(callId: string, cause: unknown, aborted: boolean, connectPhase = false) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.name = 'JournalledRequestError';
     this.callId = callId;
     this.aborted = aborted;
+    this.connectPhase = connectPhase;
   }
+}
+
+/** Node's (undici) codes for a failure before the request was written. */
+const CONNECT_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/**
+ * Whether a rejected fetch failed while CONNECTING. Deno reports it in the cause's
+ * message ("client error (Connect): tcp connect error ...", DNS and TLS likewise);
+ * Node gives the cause a code. Anything not recognised counts as possibly sent, which
+ * is the expensive direction to be wrong in and therefore the safe one.
+ */
+export function isConnectPhase(e: unknown): boolean {
+  if (isAbort(e)) return false;
+  const cause = (e as { cause?: unknown } | null)?.cause as
+    { code?: unknown; message?: unknown } | undefined;
+  if (typeof cause?.code === 'string' && CONNECT_CODES.has(cause.code)) return true;
+  const text = `${e instanceof Error ? e.message : String(e)} ${typeof cause?.message === 'string' ? cause.message : ''}`;
+  return /client error \(Connect\)/.test(text);
 }
 
 export interface ProviderTransport {
@@ -117,7 +154,7 @@ export function createJournalledTransport(
       await journal.close(id, aborted ? 'aborted' : 'network_error', null).catch((close) => {
         console.error('provider journal: could not close', id, close);
       });
-      throw new JournalledRequestError(id, e, aborted);
+      throw new JournalledRequestError(id, e, aborted, isConnectPhase(e));
     }
 
     await journal.close(id, 'responded', response.status).catch((close) => {

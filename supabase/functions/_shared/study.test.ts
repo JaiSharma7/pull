@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { geminiConfigFrom } from './config.ts';
@@ -21,6 +21,8 @@ import {
   selectAssemblyClaims,
   stageCacheKey,
   STUDY_LIMITS,
+  assemblyArgs,
+  utf8Bytes,
   type ClaimRow,
   type ExtractionRecord,
   type StudySourceText,
@@ -293,6 +295,26 @@ function claimRow(key: string, status: 'draft' | 'rejected' = 'draft'): ClaimRow
   };
 }
 
+/** A claim with every field at its limit, in a script of three UTF-8 bytes a character. */
+function maximalClaim(key: string): ClaimRow {
+  const wide = (n: number) => '検'.repeat(n);
+  return {
+    ...claimRow(key),
+    sourceTitle: wide(200),
+    statement: wide(1000),
+    qualifications: Array.from({ length: 6 }, () => wide(300)),
+    attribution: wide(300),
+    evidence: Array.from({ length: 3 }, () => ({
+      modelQuote: 'q',
+      spanText: wide(2000),
+      start: 0,
+      end: 2000,
+      page: null,
+      match: 'exact' as const,
+    })),
+  };
+}
+
 describe('selectAssemblyClaims and the digest', () => {
   it('shows only grounded claims', () => {
     expect(
@@ -307,6 +329,25 @@ describe('selectAssemblyClaims and the digest', () => {
     expect(picked[0]?.key).toBe('s1c1');
     expect(Number(picked.at(-1)?.key.slice(3))).toBeGreaterThan(290);
     expect(selectAssemblyClaims(many)).toEqual(picked);
+  });
+
+  it('thins the spread until the digest fits its byte budget, deterministically', () => {
+    const many = Array.from({ length: 200 }, (_, i) => maximalClaim(`s1c${i + 1}`));
+    const picked = selectAssemblyClaims(many);
+    expect(picked.length).toBeLessThan(STUDY_LIMITS.maxAssemblyClaims);
+    expect(picked.length).toBeGreaterThan(1);
+    expect(utf8Bytes(claimsDigest(picked))).toBeLessThanOrEqual(STUDY_LIMITS.maxDigestBytes);
+    expect(picked[0]?.key).toBe('s1c1');
+    expect(selectAssemblyClaims(many)).toEqual(picked);
+  });
+
+  it('shows at most two evidence spans per claim, each cut short', () => {
+    const digest = claimsDigest([maximalClaim('s1c1')]);
+    const evidence = digest.slice(digest.indexOf('Evidence: '));
+    expect(evidence.split(' | ')).toHaveLength(STUDY_LIMITS.digestSpans);
+    for (const quote of evidence.slice('Evidence: '.length).split(' | ')) {
+      expect([...quote.slice(1, -1)].length).toBeLessThanOrEqual(STUDY_LIMITS.digestSpanChars);
+    }
   });
 
   it('keeps every claim on one line, so a document cannot forge a claim line', () => {
@@ -520,6 +561,61 @@ describe('normalizeStudyCourse', () => {
     expect(out.items[0]?.rejectionReasons).toContain('answer_in_prompt');
   });
 
+  it('catches a give-away in Korean, and a Latin term inside CJK text', () => {
+    const out = normalizeStudyCourse(
+      {
+        ...base,
+        units: [{ title: 'Unit', lessons: [lesson] }],
+        questions: [
+          q({
+            kind: 'short_recall',
+            prompt: '광합성은 무엇을 만드는가? 광합성은 포도당을 만든다.',
+            answer: '포도당',
+            distractors: [],
+          }),
+          q({
+            kind: 'short_recall',
+            prompt: 'mRNA的作用是什么？mRNA的作用是传递信息。',
+            answer: 'mRNA',
+            distractors: [],
+          }),
+          q({
+            kind: 'cloze',
+            prompt: 'Fill the gap.',
+            cloze: '検索練習は「検索練習」と呼ばれる____である。',
+            answer: '「検索練習」',
+            distractors: [],
+          }),
+        ],
+      },
+      shown,
+    );
+    expect(out.items.map((i) => i.rejectionReasons.includes('answer_in_prompt'))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it('does not call a one-character CJK answer a give-away, which would match everywhere', () => {
+    const out = normalizeStudyCourse(
+      {
+        ...base,
+        units: [{ title: 'Unit', lessons: [lesson] }],
+        questions: [
+          q({
+            kind: 'short_recall',
+            prompt: '水の化学式で、酸素の数は？',
+            answer: '一',
+            distractors: [],
+          }),
+        ],
+      },
+      shown,
+    );
+    expect(out.items[0]?.rejectionReasons).not.toContain('answer_in_prompt');
+  });
+
   it('does not call a choice prompt that names its options a give-away, or match inside words', () => {
     const out = normalizeStudyCourse(
       {
@@ -706,6 +802,45 @@ describe('the door agrees with the providers', () => {
       migration,
     );
     expect(Number(pinned?.[1])).toBe(floor);
+  });
+});
+
+describe("a reader's share fits the calls it pays for", () => {
+  /** The share as the LATEST migration that defines it has it (law 6: each supersedes). */
+  function latestShare(): number {
+    const dir = fileURLToPath(new URL('../../migrations/', import.meta.url));
+    let share: number | null = null;
+    for (const file of readdirSync(dir).sort()) {
+      const m =
+        /function public\.study_requester_daily_cap_cents\(\)[\s\S]*?select (\d+)::numeric/.exec(
+          readFileSync(`${dir}${file}`, 'utf8'),
+        );
+      if (m) share = Number(m[1]);
+    }
+    if (share === null) throw new Error('no migration defines study_requester_daily_cap_cents');
+    return share;
+  }
+
+  it('holds the largest extraction and the largest assembly together, at default Gemini prices', () => {
+    const provider = createGeminiStructuredProvider(
+      geminiConfigFrom({ get: () => undefined }, 'k'),
+    );
+    // A window of four-byte code points at its limit, under a title at its limit.
+    const extraction = provider.worstCaseCentsFor('ExtractStudyClaims', {
+      sourceTitle: '検'.repeat(200),
+      passage: '\u{1D4B3}'.repeat(STUDY_LIMITS.windowChars),
+    });
+    // The fullest digest selectAssemblyClaims will build, under a goal at its limit.
+    const claims = selectAssemblyClaims(
+      Array.from({ length: 200 }, (_, i) => maximalClaim(`s1c${i + 1}`)),
+    );
+    const assembly = provider.worstCaseCentsFor(
+      'AssembleStudyCourse',
+      assemblyArgs('検'.repeat(300), claims),
+    );
+    // A step whose ceiling exceeds the share could never be held, and would wait for
+    // ever; the two together fitting means a new day can always run the next step.
+    expect(extraction + assembly).toBeLessThanOrEqual(latestShare());
   });
 });
 

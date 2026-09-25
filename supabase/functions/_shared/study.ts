@@ -33,6 +33,16 @@ export const STUDY_LIMITS = {
   maxWindows: 16,
   /** Claims the course assembly may see. Beyond this the prompt stops being small. */
   maxAssemblyClaims: 120,
+  /**
+   * The most UTF-8 bytes the claims digest may carry. The assembly's hold is priced from
+   * the prompt's bytes, so an unbounded digest is an unbounded hold -- one that could
+   * exceed a reader's whole daily share and wait for ever. At default prices this keeps
+   * the assembly's ceiling near 30 cents; `study.test.ts` pins that it fits the share.
+   */
+  maxDigestBytes: 200_000,
+  /** Evidence spans per claim, and characters per span, in the digest. */
+  digestSpans: 2,
+  digestSpanChars: 600,
   /** A quote shorter than this matches too easily to prove anything. */
   minQuoteChars: 8,
 } as const;
@@ -574,16 +584,28 @@ export function buildClaimIndex(
  */
 export function selectAssemblyClaims(claims: readonly ClaimRow[]): ClaimRow[] {
   const grounded = claims.filter((c) => c.status === 'draft');
-  const cap = STUDY_LIMITS.maxAssemblyClaims;
-  if (grounded.length <= cap) return grounded;
-  const picked: ClaimRow[] = [];
-  for (let i = 0; i < cap; i++) {
-    picked.push(grounded[Math.floor((i * grounded.length) / cap)] as ClaimRow);
+  const spread = (cap: number): ClaimRow[] => {
+    if (grounded.length <= cap) return grounded;
+    const picked: ClaimRow[] = [];
+    for (let i = 0; i < cap; i++) {
+      picked.push(grounded[Math.floor((i * grounded.length) / cap)] as ClaimRow);
+    }
+    return picked;
+  };
+  // Then within the digest's byte budget, thinning the same even spread until it fits.
+  let cap = Math.min(STUDY_LIMITS.maxAssemblyClaims, grounded.length);
+  let picked = spread(cap);
+  while (cap > 1 && utf8Bytes(claimsDigest(picked)) > STUDY_LIMITS.maxDigestBytes) {
+    cap = Math.max(1, Math.floor(cap * 0.85));
+    picked = spread(cap);
   }
   return picked;
 }
 
-/** The text the assembly reads: one line per claim, keyed, attributed, with evidence. */
+export function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 /**
  * One line per claim, and it stays one line: every field is the reader's text or the
  * model's reading of it, and a newline inside one would let a document write a line that
@@ -600,6 +622,7 @@ function oneLine(text: string): string {
     .trim();
 }
 
+/** The text the assembly reads: one line per claim, keyed, attributed, with evidence. */
 export function claimsDigest(claims: readonly ClaimRow[]): string {
   return claims
     .map((c) => {
@@ -611,7 +634,8 @@ export function claimsDigest(claims: readonly ClaimRow[]): string {
       if (c.attribution) parts.push(`Attributed to: ${oneLine(c.attribution)}.`);
       const quotes = c.evidence
         .filter((e) => e.spanText)
-        .map((e) => `"${oneLine(e.spanText as string)}"`);
+        .slice(0, STUDY_LIMITS.digestSpans)
+        .map((e) => `"${truncate(oneLine(e.spanText as string), STUDY_LIMITS.digestSpanChars)}"`);
       parts.push(`Evidence: ${quotes.join(' | ')}`);
       return parts.join(' ');
     })
@@ -704,28 +728,53 @@ export interface NormalizedCourse {
 
 /** Compare answers the way a reader would see them: case, spacing and punctuation folded. */
 export function answerKey(text: string): string {
-  return text
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[‘’“”"'`.,;:!?()[\]{}]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    text
+      .normalize('NFKC')
+      .toLowerCase()
+      // ASCII and curly quotes and punctuation, and the CJK full stops, commas, brackets
+      // and marks NFKC leaves in place.
+      .replace(/[‘’“”"'`.,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
-/** Whether `phrase` occurs in `text` as whole words, after `answerKey` folding. */
+/**
+ * Scripts where a word does not end at a space: written without spaces (Han, kana, Thai
+ * and its neighbours) or with particles attached to the word (Hangul).
+ */
 const UNSPACED_SCRIPT =
-  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/** A character that continues a spaced-script word: a letter or digit outside those scripts. */
+function continuesWord(ch: string | undefined): boolean {
+  return ch !== undefined && /[\p{L}\p{N}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
+}
+
+/** A phrase short enough to be a give-away: a few words, or a couple of characters of CJK. */
+export function isShortAnswer(answer: string): boolean {
+  const key = answerKey(answer);
+  if (UNSPACED_SCRIPT.test(key)) return [...key].length >= 2 && [...key].length <= 20;
+  return key.length >= 4 && key.split(' ').length <= 6;
+}
 
 /**
- * Whether `phrase` occurs in `text` as whole words, after `answerKey` folding -- or as
- * a plain substring when the phrase is written in a script without spaces between words,
- * where a whole-word test could never match at all.
+ * Whether `phrase` occurs in `text` as a whole word or words, after `answerKey`
+ * folding. A match's edges must not continue a spaced-script word -- so "rest" is not
+ * found in "interesting", and "mRNA" is found in "mRNA的作用" -- and a phrase in a
+ * script without word spaces is matched as a plain substring, where a whole-word test
+ * could never match at all.
  */
 function containsPhrase(text: string, phrase: string): boolean {
   const p = answerKey(phrase);
+  const t = answerKey(text);
   if (p.length === 0) return false;
-  if (UNSPACED_SCRIPT.test(p)) return answerKey(text).includes(p);
-  return ` ${answerKey(text)} `.includes(` ${p} `);
+  if (UNSPACED_SCRIPT.test(p)) return t.includes(p);
+  for (let at = t.indexOf(p); at >= 0; at = t.indexOf(p, at + 1)) {
+    if (!continuesWord(t[at - 1]) && !continuesWord(t[at + p.length])) return true;
+  }
+  return false;
 }
 
 function bounded(value: unknown, max: number, reasons: string[]): string {
@@ -868,7 +917,7 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
       acceptedAnswers = accepted.kept;
       const blanks = cloze ? cloze.split('____').length - 1 : 0;
       if (blanks !== 1) reasons.push('cloze_malformed');
-      else if (answerKey(answer).length >= 3 && containsPhrase(cloze as string, answer)) {
+      else if (isShortAnswer(answer) && containsPhrase(cloze as string, answer)) {
         reasons.push('answer_in_prompt');
       }
     } else if (kind === 'ordering') {
@@ -904,11 +953,9 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
     // question may name its options in the prompt ("retrieval or restudying?") without
     // giving anything away, and a long model answer for short recall shares words with
     // its own prompt; a substring test also found "rest" inside "interesting".
-    const shortAnswer = answerKey(answer);
     if (
       (kind === 'cloze' || kind === 'short_recall') &&
-      shortAnswer.length >= 4 &&
-      shortAnswer.split(' ').length <= 6 &&
+      isShortAnswer(answer) &&
       containsPhrase(prompt, answer)
     ) {
       reasons.push('answer_in_prompt');

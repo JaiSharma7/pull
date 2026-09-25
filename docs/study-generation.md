@@ -125,12 +125,16 @@ An attempt that reached the provider without reporting usage -- sent and then ab
 its timeout, or answered with a body that could not be read -- is charged at the ceiling
 its hold was sized to, with `usage_known = false`. Recorded at zero it would have
 released its hold and let the day's total forget money that may have been spent; a
-report can still tell a ceiling from a measurement by the flag. A connection that failed
-(refused, DNS, TLS) is recorded at zero, also flagged, as the summary pipeline treats the
-same failure. After either, the call stops rather than retrying or moving to the next
-model, so one hold never covers two attempts that may have been billed; answers of known
-cost (a 5xx, a 429) still retry. A redirect is not followed: it is recorded as an answer
-of known zero cost.
+report can still tell a ceiling from a measurement by the flag. The one network failure
+that is known to be free is a connection that never opened -- refused, a DNS failure, a
+TLS failure, a connect timeout (`isConnectPhase` in `_shared/provider-journal.ts`, which
+reads the error codes Node reports and the message Deno does) -- because nothing was sent.
+It is recorded at zero with its usage known, and retried once on the same model. Any
+other network failure, and any error shape the classifier does not recognise, may have
+been sent and is charged at the ceiling. After an attempt of unknown cost the call stops
+rather than retrying or moving to the next model, so one hold never covers two attempts
+that may have been billed; answers of known cost (a 5xx, a 429) still retry. A redirect
+is not followed: it is recorded as an answer of known zero cost.
 
 **Reconciliation.** `study_provider_call_audit(since)` reports journalled attempts, ledgered
 attempts, journalled attempts with no ledger row (should be zero), attempts left open by a
@@ -143,9 +147,24 @@ into a budget wait when the global daily cap cannot fund it, or when the reader'
 share of study spend cannot (`study_requester_daily_cap_cents()`, 60 cents: their study
 jobs' ledger today plus their open holds). The share exists because the cap bounds what
 the product spends and is not a fairness mechanism: without it, one maximal course --
-up to fourteen paid calls -- could reach the cap and close the door on every reader until
-00:00 UTC. It also bounds what a reader's failing jobs can charge at the ceiling. The
-worker settles each hold
+up to seventeen paid calls -- could reach the cap and close the door on every reader until
+00:00 UTC. It also bounds what a reader's failing jobs can charge at the ceiling. Both
+checks are made by `reserve_budget` itself, under one lock, for every study job;
+`reserve_study_budget` is the worker's entry point and adds only the refusal of a job that
+is not a study job, so no caller can take a study hold that skips the share.
+
+A share smaller than one call's ceiling would make that call wait for ever, so the
+ceilings are bounded too. A window is at most 30,000 code points. The claims digest the
+assembly reads is at most 200,000 UTF-8 bytes (`STUDY_LIMITS.maxDigestBytes`): at most two
+evidence spans per claim, each cut to 600 characters, and the even spread of claims
+thinned until it fits. At default prices that puts the largest extraction's ceiling near
+24 cents and the largest assembly's near 28, and `study.test.ts` pins that the two
+together fit the share as the latest migration defines it. A large course can still meet
+its reader's share part-way; the step then waits as any budget wait does, every fifteen
+minutes, and goes on after 00:00 UTC. Raising `GEMINI_MAX_OUTPUT_TOKENS` or the prices far
+past their defaults fails that test until the share is raised with them.
+
+The worker settles each hold
 exactly once, on its way out of the invocation -- through `record_job_step`, the failure
 path, or explicitly when `study_extract` asks to be sent again -- and never inside
 `record_study_stage`, because one settle too many releases a share of a hold that another
@@ -163,7 +182,10 @@ total.
 
 **Caching.** A stage's output is cached per reader under a SHA-256 of the stage, the
 exported prompt and schema, the provider and models, and the exact input -- the version
-and window for an extraction, the goal and the claims for an assembly. An unchanged
+and window for an extraction; for an assembly, the goal, the claims digest and the sorted
+ids of every version in the course, so a course over different material never reuses an
+assembly whose digest happens to match, and the entry is linked to each of those
+versions so deleting any one removes it. An unchanged
 version under an unchanged prompt, schema and model costs nothing to reuse; an edit to the
 BAML source changes the hash and invalidates the entries made under it. The reader is in
 the key and in the table's unique constraint, so one reader's entry never answers another

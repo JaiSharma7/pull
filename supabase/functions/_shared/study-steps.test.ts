@@ -372,30 +372,30 @@ describe('study_extract', () => {
     });
   });
 
-  it('charges a dropped connection nothing, but an attempt that reached the provider its ceiling', async () => {
+  it('charges a connection that never opened nothing, and one that may have sent its ceiling', async () => {
     const mem = memoryDb(generation());
+    const attempt = (id: string, usageKnown: boolean): ProviderCallRecord => ({
+      providerCallId: id,
+      provider: 'gemini',
+      model: 'm',
+      httpStatus: null,
+      outcome: 'network_error',
+      inputTokens: 0,
+      outputTokens: 0,
+      costCents: 0,
+      usageKnown,
+    });
     const refused: StructuredProvider = {
       ...stubStructuredProvider,
       worstCaseCentsFor: () => 16,
       async generate() {
         return {
           ok: false,
-          error: 'connection refused',
+          error: 'connection reset',
           unavailable: false,
           model: 'm',
-          calls: [
-            {
-              providerCallId: 'c1',
-              provider: 'gemini',
-              model: 'm',
-              httpStatus: null,
-              outcome: 'network_error',
-              inputTokens: 0,
-              outputTokens: 0,
-              costCents: 0,
-              usageKnown: false,
-            },
-          ],
+          // Refused before sending (known to be free), then reset after sending.
+          calls: [attempt('c1', true), attempt('c2', false)],
         };
       },
     };
@@ -412,8 +412,11 @@ describe('study_extract', () => {
         provider: refused,
         db: mem.db,
       }),
-    ).rejects.toThrow(/connection refused/);
-    expect(mem.recorded[0]?.calls.map((c) => [c.costCents, c.usageKnown])).toEqual([[0, false]]);
+    ).rejects.toThrow(/connection reset/);
+    expect(mem.recorded[0]?.calls.map((c) => [c.costCents, c.usageKnown])).toEqual([
+      [0, true],
+      [16, false],
+    ]);
   });
 
   it('ledgers the attempts without the cache entry when the entry is what cannot be stored', async () => {

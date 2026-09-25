@@ -370,6 +370,22 @@ begin
   perform pg_temp.as_owner();
   delete from public.cost_ledger where provider = 'share-test';
 
+  -- The share counts open holds as well as the ledger, and binds reserve_budget itself,
+  -- not only the study wrapper: a caller that reached for the summary path's reservation
+  -- could not step around it.
+  perform pg_temp.become_worker();
+  perform public.reserve_budget(the_job, 'study_extract',
+    public.study_requester_daily_cap_cents() - public.study_requester_spend_today(reader_a) - 10);
+  begin
+    perform public.reserve_budget(the_job, 'study_assemble', 16);
+    raise exception 'a hold passed the reader''s share while another hold was open';
+  exception when sqlstate '53400' then
+    if sqlerrm not like '%share%' then raise; end if;
+  end;
+  perform pg_temp.as_owner();
+  update public.budget_reservations set settled_at = now()
+  where job_id = the_job and settled_at is null;
+
   -- ------------------------------------------------------ the span check
   span_at := position(span in note) - 1;
   begin
