@@ -9,6 +9,13 @@ text of the sources you choose are sent to Google's Gemini API to extract claims
 lessons and questions, which are stored privately in your account. It happens only when
 you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
 
+This revision also corrects three statements that contradicted the rest of this page: the
+summary said a document you submitted for generation outlived your account (it does not),
+this page said you sign in with an emailed code (you sign in with Google or Microsoft), and
+it said the Anthropic fallback was "not enabled" while listing it as a processor (it is a
+setting the hosted service does not use, and is listed so that turning it on changes
+nothing you were told).
+
 The previous revision, effective 23 September, described private study import. When you
 save material in Studio's Prepare study material mode, we store the extracted text you
 approved and each corrected version in your private account. We do not upload the original file, and saving alone does not send the text to a
@@ -31,8 +38,9 @@ the operator of your own service, and this document says nothing about what you 
 
 ## The short version
 
-- We ask for **an email address**. Not a password, not a phone number, not your real name —
-  and you can look around as a guest without giving us even that.
+- We keep **an email address**, from the Google or Microsoft account you sign in with. Not
+  a password, not a phone number, not your real name — and you can look around as a guest
+  without giving us even that.
 - The product keeps a model of **what you have read and what you appear to know**, because
   refusing to re-teach you things is the entire point of it.
 - **No advertising trackers, no third-party analytics, no data sold or shared for anyone
@@ -40,9 +48,10 @@ the operator of your own service, and this document says nothing about what you 
 - **Your reading history never reaches a language model.** This is architectural rather
   than promised — see [What never reaches a model](#what-never-reaches-a-model).
 - Audio and offline reading happen **on your device** and send us nothing.
-- Delete your account and your library, history and knowledge model go with it, in one
-  cascade, immediately — with one exception, a document you submitted for generation, called
-  out under [How long we keep things](#how-long-we-keep-things).
+- Delete your account and your library, history and knowledge model go with it,
+  immediately — documents you submitted for generation included. The few records that
+  survive identify nobody; they are listed under
+  [How long we keep things](#how-long-we-keep-things).
 
 ## What we collect
 
@@ -50,12 +59,12 @@ the operator of your own service, and this document says nothing about what you 
 
 | Data                              | Where it lives        | Why                                                                                                                     |
 | --------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Email address                     | Supabase Auth         | The only way to sign in and the only way to reach you                                                                   |
+| Email address                     | Supabase Auth         | Identifies your account when you sign in, and the only way to reach you                                                 |
 | Handle, display name, bio, avatar | `profiles`            | Optional; needed only if you choose to be visible to others                                                             |
 | Topic and reading preferences     | `preference_profiles` | Weights, excluded topics, media kinds, daily minutes, technical level, spoiler tolerance, how often questions interrupt |
 
-Sign-in is a one-time code or link sent to your email. **We never hold a password**, because
-we never set one.
+Sign-in is through Google or Microsoft; see [Who else processes your data](#who-else-processes-your-data).
+**We never hold a password** — you never set one with us, and we never see your provider's.
 
 ### Looking around as a guest
 
@@ -334,9 +343,11 @@ sentence about cross-site tracking below. The fonts are now served from our own 
 so the request no longer happens. It is recorded here rather than quietly fixed because
 a privacy policy that has only ever been right is not evidence of anything.
 
-**If a second model provider is ever switched on**, this table changes before it does.
-The code supports one (`SUMMARY_FALLBACK_PROVIDER`), it is not enabled, and enabling it
-without amending this page would make the sentence above false.
+**Anthropic is listed because it can be switched on, not because it is on.** The fallback is
+a deployment setting (`SUMMARY_FALLBACK_PROVIDER`), not a code change, so this table and the
+Studio's consent line name it before it could ever be used rather than after. Every
+generation the hosted service has recorded, up to this revision, ran on Gemini alone. Study
+courses cannot use it at all: they call Gemini only.
 
 ## Where your data lives, and transfers
 
