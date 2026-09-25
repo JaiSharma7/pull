@@ -29,7 +29,7 @@ counterparts; both run in `pnpm db:test`.
 Nothing here adds a screen. The report, correction and withdrawal controls for lessons and
 claims are in the guided course (see [`study-courses.md`](./study-courses.md#the-screens));
 those for questions, and the server-side recorder that grades an answer and writes it down,
-are the practice change's.
+are in [`study-practice.md`](./study-practice.md).
 
 What this change settles is the rules those screens must obey. Status changes, the checks
 and the proof rule live in the database, where no screen can skip them. What a learner is
@@ -333,11 +333,11 @@ it answered, not its lineage.
   question, so an answer can be neither back-dated into a validated window nor slipped into
   the gap before a report or dismissal commits.
 
-**There is no reader write path, and none for the service role.** `recall_events`, the feed's
-table, accepts rows straight from the browser, grade and all. Generated material must not
-work that way, because this table is what "you know this" will be decided from. The
-practice change adds a recorder that grades the answer on the server, as a definer
-function. Until then, nothing but the database owner can insert.
+**There is no direct write path, for the reader or the service role.** `recall_events`, the
+feed's table, accepts rows straight from the browser, grade and all. Generated material must
+not work that way, because this table is what "you know this" is decided from. The one way
+in is `record_study_answers`, a definer that grades the reader's response on the server
+([`study-practice.md`](./study-practice.md)); nothing else but the database owner can insert.
 
 `study_answer_proves_recall(event_id)` is the one definition of proof. It reads the event
 itself, under the caller's rights, so an event the caller cannot read is not proof.

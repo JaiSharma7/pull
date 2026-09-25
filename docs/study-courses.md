@@ -132,9 +132,8 @@ about another.
 **Exposure is not recall.** Being shown a lesson, reading it or seeing a question never
 counts as remembering it. Whether a reader has demonstrated recall is decided only by
 `study_answer_proves_recall` over `study_answer_events` (see
-[`study-validation.md`](./study-validation.md#what-counts-as-recall)). Nothing records an
-answer yet -- the recorder that grades one on the server is a later change -- so `answered`
-and `recall_demonstrated` below appear only once it exists.
+[`study-validation.md`](./study-validation.md#what-counts-as-recall)). Answers are recorded
+and graded on the server by `record_study_answers` ([`study-practice.md`](./study-practice.md)).
 
 ## The read path
 
@@ -274,9 +273,10 @@ other signed-in destinations give, and a visitor with sign-in.
   screen says so rather than offering to read it. It is an interlude, not a place in the
   queue: it plays ahead of the Pull it interrupts, and when it ends, or the reader leaves the
   lesson, it leaves the queue and the player stops on that Pull.
-- **Progress is sent at once** and kept in memory until the server accepts it; an event
-  refused with `limit` stays and is sent with the next one. A durable offline queue, and
-  questions, are the practice change's.
+- **Progress is sent at once.** An event that cannot reach the server goes into the app's
+  offline queue and is sent when the connection returns; one refused with `limit` is queued
+  for the next day. Questions, placement and review are in
+  [`study-practice.md`](./study-practice.md#the-screens).
 - **Something wrong with a lesson** is answered beside it: report it (a reason, and a
   note if the reader wants), correct it, or withdraw it. A report holds the lesson back at
   once and the session moves on, with an undo; a correction is saved through
