@@ -147,7 +147,8 @@ into a budget wait when the global daily cap cannot fund it, or when the reader'
 share of study spend cannot (`study_requester_daily_cap_cents()`, 60 cents: their study
 jobs' ledger today plus their open holds). The share exists because the cap bounds what
 the product spends and is not a fairness mechanism: without it, one maximal course --
-up to seventeen paid calls -- could reach the cap and close the door on every reader until
+fourteen successful calls, thirteen windows and an assembly, plus any failed attempts
+charged at their ceiling -- could reach the cap and close the door on every reader until
 00:00 UTC. It also bounds what a reader's failing jobs can charge at the ceiling. Both
 checks are made by `reserve_budget` itself, under one lock, for every study job;
 `reserve_study_budget` is the worker's entry point and adds only the refusal of a job that
@@ -158,10 +159,14 @@ ceilings are bounded too. A window is at most 30,000 code points. The claims dig
 assembly reads is at most 200,000 UTF-8 bytes (`STUDY_LIMITS.maxDigestBytes`): at most two
 evidence spans per claim, each cut to 600 characters, and the even spread of claims
 thinned until it fits. At default prices that puts the largest extraction's ceiling near
-24 cents and the largest assembly's near 28, and `study.test.ts` pins that the two
-together fit the share as the latest migration defines it. A large course can still meet
-its reader's share part-way; the step then waits as any budget wait does, every fifteen
-minutes, and goes on after 00:00 UTC. Raising `GEMINI_MAX_OUTPUT_TOKENS` or the prices far
+24 cents and the largest assembly's near 31 (a digest at exactly its limit, under a goal
+at its limit; the header of `20260925040000` says 28, which is what a digest of maximal
+claims reaches, not the bound), and `study.test.ts` pins that the two together fit the
+share as the latest migration defines it. A large course can still meet its reader's
+share part-way; the step then waits as any budget wait does, every fifteen minutes, and
+goes on after 00:00 UTC. The wait count starts again after each window that goes through,
+so a course that needs its reader's share on a further day waits for that day too.
+Raising `GEMINI_MAX_OUTPUT_TOKENS` or the prices far
 past their defaults fails that test until the share is raised with them.
 
 The worker settles each hold

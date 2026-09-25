@@ -701,7 +701,13 @@ Deno.serve(async (req) => {
        * The same step again, now, with no row written. The step has already recorded
        * what it spent and cached what it made, so there is nothing for `record_job_step`
        * to add -- and a `succeeded` row here would make the next delivery resume past a
-       * step that has windows left. The wait counts ride along unchanged.
+       * step that has windows left.
+       *
+       * The budget wait count starts again; the held count rides along. A window went
+       * through, so the day it waited for did reopen, and a large course that meets its
+       * reader's share again tomorrow should wait for that day as the first window did,
+       * not fail on a count it ran up yesterday. Bounded all the same: each continue is
+       * a window cached, and a course has at most thirteen.
        */
       if (result.continue) {
         // This invocation's hold, settled once, as `record_job_step` would have on the
@@ -729,7 +735,7 @@ Deno.serve(async (req) => {
               p_step: step,
               p_delay_seconds: 0,
               p_waits: msg.message.waits ?? 0,
-              p_budget_waits: msg.message.budgetWaits ?? 0,
+              p_budget_waits: 0,
             }),
             'requeue continuing step',
           ) as number | null;

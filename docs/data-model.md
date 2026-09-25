@@ -23,10 +23,11 @@ User
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
  ├── study_sources ─── study_source_versions       ← private extracted readings
- │    └── study_generations                       ← a draft course from 1-5 versions
- │         ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
- │         ├── study_lessons · study_items            ← linked to the claims they cite
- │         └── study_stage_cache                  ← per-reader model output, reused
+ │    ├── study_generations                       ← a draft course from 1-5 versions
+ │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
+ │    │    └── study_lessons · study_items            ← linked to the claims they cite
+ │    └── study_stage_cache                       ← per-reader model output, reused across
+ │                                                   courses; gone with any version it read
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
  ├── feed_recipes · feed_impressions

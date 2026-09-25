@@ -37,7 +37,7 @@ export const STUDY_LIMITS = {
    * The most UTF-8 bytes the claims digest may carry. The assembly's hold is priced from
    * the prompt's bytes, so an unbounded digest is an unbounded hold -- one that could
    * exceed a reader's whole daily share and wait for ever. At default prices this keeps
-   * the assembly's ceiling near 30 cents; `study.test.ts` pins that it fits the share.
+   * the assembly's ceiling near 31 cents; `study.test.ts` pins that it fits the share.
    */
   maxDigestBytes: 200_000,
   /** Evidence spans per claim, and characters per span, in the digest. */

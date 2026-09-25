@@ -90,8 +90,8 @@ because the session lives in the tab rather than in the browser:
   device, and the session is gone with no way back in. There is no account to sign back in
   with.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
-  need an account we can attribute the request to. (The first two are not yet exposed in
-  the app for anyone; the limit is in the database, so it holds whenever they are.)
+  need an account we can attribute the request to. (Publishing is not yet exposed in the
+  app for anyone; the limit is in the database, so it holds whenever it is.)
 - **We delete it for you.** A guest session that has not been used for a day is removed
   **from our database**, along with everything keyed to it, by a sweep that runs every
   hour — so the account goes a little over a day after you last had it open, and never
@@ -349,9 +349,10 @@ a privacy policy that has only ever been right is not evidence of anything.
 
 **Anthropic is listed because it can be switched on, not because it is on.** The fallback is
 a deployment setting (`SUMMARY_FALLBACK_PROVIDER`), not a code change, so this table and the
-Studio's consent line name it before it could ever be used rather than after. Every
-generation the hosted service has recorded, up to this revision, ran on Gemini alone. Study
-courses cannot use it at all: they call Gemini only.
+Studio's consent line name it before it could ever be used rather than after. Up to this
+revision, every generation the hosted service has recorded ran on Gemini, apart from three
+test runs on the day it launched that called no model at all; none has used Anthropic.
+Study courses cannot use it at all: they call Gemini only.
 
 ## Where your data lives, and transfers
 

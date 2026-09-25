@@ -830,13 +830,21 @@ describe("a reader's share fits the calls it pays for", () => {
       sourceTitle: '検'.repeat(200),
       passage: '\u{1D4B3}'.repeat(STUDY_LIMITS.windowChars),
     });
-    // The fullest digest selectAssemblyClaims will build, under a goal at its limit.
-    const claims = selectAssemblyClaims(
-      Array.from({ length: 200 }, (_, i) => maximalClaim(`s1c${i + 1}`)),
-    );
-    const assembly = provider.worstCaseCentsFor(
-      'AssembleStudyCourse',
-      assemblyArgs('検'.repeat(300), claims),
+    // A digest at exactly its byte budget -- the bound, which no real selection passes
+    // (the previous test) -- under a goal at its limit.
+    const digest = '検'.repeat(Math.floor(STUDY_LIMITS.maxDigestBytes / 3));
+    const assembly = provider.worstCaseCentsFor('AssembleStudyCourse', {
+      goal: '検'.repeat(300),
+      claims: digest,
+    });
+    expect(assembly).toBeGreaterThanOrEqual(
+      provider.worstCaseCentsFor(
+        'AssembleStudyCourse',
+        assemblyArgs(
+          '検'.repeat(300),
+          selectAssemblyClaims(Array.from({ length: 200 }, (_, i) => maximalClaim(`s1c${i + 1}`))),
+        ),
+      ),
     );
     // A step whose ceiling exceeds the share could never be held, and would wait for
     // ever; the two together fitting means a new day can always run the next step.
