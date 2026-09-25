@@ -822,7 +822,11 @@ export function containsPhrase(text: string, phrase: string): boolean {
   if (p.length === 0) return false;
   if (UNSPACED_SCRIPT.test(p)) return t.includes(p);
   for (let at = t.indexOf(p); at >= 0; at = t.indexOf(p, at + 1)) {
-    if (!continuesWord(codePointBefore(t, at)) && !continuesWord(codePointAt(t, at + p.length))) {
+    const before = codePointBefore(t, at);
+    const after = codePointAt(t, at + p.length);
+    // A full stop `answerKey` kept stands between two digits, so it continues the number:
+    // 125 is not in 0.125, nor 14 in 3.14.
+    if (!continuesWord(before) && before !== '.' && !continuesWord(after) && after !== '.') {
       return true;
     }
   }

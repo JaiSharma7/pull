@@ -26,8 +26,24 @@ const { answerKey, containsPhrase, givesAwayIfPrinted } =
 
 const DB_URL =
   process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-if (!/@(127\.0\.0\.1|localhost):/.test(DB_URL) || /[?&]host=/.test(DB_URL)) {
-  throw new Error(`refusing to run against ${DB_URL}: this test belongs on the local stack`);
+// Loopback only, and nothing libpq would connect through instead: a second host, `host`,
+// `hostaddr` or `service` in the query. The password is never printed.
+const target = (() => {
+  try {
+    return new URL(DB_URL);
+  } catch {
+    return null;
+  }
+})();
+if (
+  !target ||
+  !/^postgres(ql)?:$/.test(target.protocol) ||
+  !['127.0.0.1', 'localhost'].includes(target.hostname) ||
+  DB_URL.slice(0, DB_URL.indexOf('/', DB_URL.indexOf('@'))).includes(',') ||
+  [...target.searchParams.keys()].some((k) => ['host', 'hostaddr', 'service'].includes(k))
+) {
+  const shown = target ? `${target.protocol}//${target.host}${target.pathname}` : 'that URL';
+  throw new Error(`refusing to run against ${shown}: this test belongs on the local stack`);
 }
 
 function psql(sql) {
@@ -85,6 +101,12 @@ const phrases = [
   ['No punctuation here', ';', false],
   ['The value is 1.5 exactly.', '1.5', true],
   ['The value is 15 exactly.', '1.5', false],
+  ['What is 1000 × 0.125?', '125', false],
+  ['Pi is about 3.14.', '14', false],
+  ['Pi is about 3.14.', '3', false],
+  ['Pi is about 3.14.', '3.14', true],
+  ['数字是3。5个人', '35', true],
+  ['value 35 here', '3。5', true],
   ['Did rеstudying win?', 'restudying', 'strict'],
   ['Did re​studying win?', 'restudying', 'strict'],
 ];

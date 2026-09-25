@@ -846,6 +846,15 @@ describe('answerKey', () => {
     expect(containsPhrase('No punctuation here', ';')).toBe(false);
   });
 
+  it('reads a decimal as one number when finding one text in another', () => {
+    // 1000 × 0.125 does not print its answer, and "about 3.14" is no evidence for 14.
+    expect(containsPhrase('What is 1000 × 0.125?', '125')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '14')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '3')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '3.14')).toBe(true);
+    expect(containsPhrase('Section 3. Then 14 more.', '14')).toBe(true);
+  });
+
   it('keeps an answer that is punctuation, and keeps look-alike letters apart', () => {
     // `;` in a course on C is an answer, not nothing; and ν is not v, nor ρ p.
     expect(answerKey(';')).toBe(';');

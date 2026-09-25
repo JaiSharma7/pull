@@ -34,6 +34,26 @@
 --
 -- 6. GRANTS. The service role kept MAINTAIN on the study tables, and could reschedule the
 --    stranded sweep through `enable_generation_sweeper` though it may not run the sweep.
+--
+-- 7. A NUMBER IS ONE WORD WHEN ONE TEXT IS FOUND IN ANOTHER. Since 20260925080000 a full
+--    stop between two digits is kept, and it read as a word boundary: "125" was found in
+--    "0.125", so a question asking for 1000 × 0.125 printed its own answer, and "14" was
+--    evidenced by "3.14". `containsPhrase` and `study_contains_phrase` now treat that full
+--    stop as part of the number. And the look-alike fold no longer maps the ideographic
+--    full stop to a full stop, which made "3。5" a decimal in SQL and "35" in TypeScript;
+--    the link check, which needs that mapping, has its own text since item 4.
+--
+-- 8. PENDING MEANS PERSISTED AND NOT YET VALIDATED. A course's row exists from the
+--    moment it is queued, so a job that failed before its course was persisted left a row
+--    `pending` for ever: nothing to validate, but in the sweep's index and walked every run,
+--    a cost growing with every failed job. The sweep now reads only persisted courses
+--    (`assembled_at` is set), through an index on exactly those. And persisting a course
+--    always puts its text back to `pending`, even text equal to what was there, so a
+--    validation run before the persist -- which settled the empty text and left the drafts
+--    that followed unswept -- is always followed by one that sees them.
+--
+-- 20260925090000's header says the proven-claims test compares "event by event"; it
+-- compares claim by claim, and the proof rule's clauses are now asserted one by one.
 
 -- ------------------------------------------------------------------ 1. drafts
 
@@ -70,9 +90,11 @@ language plpgsql
 set search_path = ''
 as $fn$
 begin
-  if (new.title, new.overview, new.objectives, new.recap, new.disagreements, new.withheld)
+  if (new.title, new.overview, new.objectives, new.recap, new.disagreements, new.withheld,
+      new.assembled_at)
      is distinct from
-     (old.title, old.overview, old.objectives, old.recap, old.disagreements, old.withheld) then
+     (old.title, old.overview, old.objectives, old.recap, old.disagreements, old.withheld,
+      old.assembled_at) then
     new.text_status := 'pending';
     new.text_failures := '{}';
   end if;
@@ -84,7 +106,7 @@ revoke all on function public.study_course_text_pending()
   from public, anon, authenticated, service_role;
 
 create trigger study_course_text_pending
-  before update of title, overview, objectives, recap, disagreements, withheld
+  before update of title, overview, objectives, recap, disagreements, withheld, assembled_at
   on public.study_generations
   for each row execute function public.study_course_text_pending();
 
@@ -295,3 +317,99 @@ revoke maintain on
 from service_role;
 
 revoke execute on function public.enable_generation_sweeper(text) from service_role;
+
+-- ------------------------------------------------------------------ 7. numbers
+
+/* As 20260925080000, without the ideographic full stop: `answerKey` removes it. */
+create or replace function public.study_normalized(p_text text)
+returns text
+language sql
+immutable
+parallel safe
+set search_path = ''
+as $fn$
+  select translate(
+           regexp_replace(public.study_lower(p_text), public.study_hidden_class(), '', 'g'),
+           'аеорсухіјѕԁԛԝһӏαειкνορτυχ',
+           'aeopcyxijsdqwhlaeikvoptux')
+$fn$;
+
+/* As 20260925080000, and a full stop the fold kept -- one between two digits -- continues the number. */
+create or replace function public.study_contains_phrase(p_text text, p_phrase text)
+returns boolean
+language plpgsql
+immutable
+parallel safe
+set search_path = ''
+as $fn$
+declare
+  loose text := public.study_normalized(p_phrase);
+  p     text;
+begin
+  if public.study_strip_punctuation(loose) = '' then
+    p := public.study_collapse_spaces(loose);
+    return p <> ''
+       and strpos(public.study_collapse_spaces(public.study_normalized(p_text)), p) > 0;
+  end if;
+
+  p := public.study_fold_strict(p_phrase);
+  if p = '' then
+    return false;
+  end if;
+  if p ~ public.study_unspaced_class() then
+    return strpos(public.study_fold_strict(p_text), p) > 0;
+  end if;
+  -- One pass: an occurrence neither preceded nor followed by a character that continues
+  -- a word, or by a full stop inside a number. The phrase is escaped, so nothing in it is
+  -- read as a pattern.
+  return public.study_fold_strict(p_text) ~ (
+    '(?<!' || public.study_boundary_class() || ')(?<!\.)'
+    || regexp_replace(p, '([][(){}.*+?^$|\\-])', '\\\1', 'g')
+    || '(?!' || public.study_boundary_class() || ')(?!\.)');
+end
+$fn$;
+
+-- ------------------------------------------------------------------ 8. the sweep
+
+drop index public.study_generations_pending_idx;
+create index study_generations_pending_idx on public.study_generations (created_at)
+  where text_status = 'pending' and assembled_at is not null;
+
+/* As 20260925090000, over persisted courses only: one that never was has nothing to validate. */
+create or replace function public.validate_stranded_study_courses(
+  p_older_than interval default interval '10 minutes',
+  p_limit integer default 5
+)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  stranded uuid;
+  done     integer := 0;
+begin
+  for stranded in
+    select g.job_id
+    from public.study_generations g
+    join public.generation_jobs j on j.id = g.job_id
+    where g.text_status = 'pending'
+      and g.assembled_at is not null
+      and g.created_at < now() - p_older_than
+      and j.status not in ('queued', 'running')
+    order by g.created_at
+    limit greatest(coalesce(p_limit, 5), 0)
+  loop
+    begin
+      -- Taken without waiting: a course a deletion, a correction or the worker holds is
+      -- left for the next run rather than waited on while this run holds the ones before.
+      perform 1 from public.study_generations g where g.job_id = stranded for update nowait;
+      perform public.validate_study_course(stranded);
+      done := done + 1;
+    exception when others then
+      raise warning 'validate_stranded_study_courses: % skipped: %', stranded, sqlerrm;
+    end;
+  end loop;
+  return done;
+end
+$fn$;

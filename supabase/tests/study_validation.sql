@@ -811,11 +811,14 @@ begin
     raise exception 'a generated claim was persisted already validated';
   exception when invalid_parameter_value then null;
   end;
-  -- Validated before it was persisted, the course's empty text passed; the text persisted
-  -- afterwards is pending again, not shown unchecked.
+  -- Validated before it was persisted, the course's empty text passed. Persisting it --
+  -- even with text as empty as before -- puts it back to pending, so the drafts that
+  -- follow are validated rather than left for good.
   checked := public.validate_study_course(job_3);
+  if (select text_status from public.study_generations where job_id = job_3) <> 'validated' then
+    raise exception 'the empty course was not settled by a validation before its persist';
+  end if;
   perform public.persist_study_course(job_3, jsonb_build_object(
-    'course', jsonb_build_object('title', 'Timing'),
     'claims', jsonb_build_array(
       pg_temp.claim('s1c1', v_a, 'At five minutes, restudying beat the recall test.',
                     'the group that restudied remembered more', note)),

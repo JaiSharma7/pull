@@ -84,13 +84,15 @@ So no path to a visible question, or to visible course text, skips them.
 
 **A validation that fails is retried later.** If `study_validate` fails three times, or a job
 finished under a worker older than that step, every row would stay a draft forever.
-`validate_stranded_study_courses` validates any course whose job has finished, that has
-claims, and whose validation never finished (`text_status` is still `pending`, which the
-same transaction that moves the drafts sets), once it is ten minutes old. It takes at most
-five a run, oldest first, and takes each course's row without waiting: a course a deletion,
-a correction or the worker holds is left for the next run, so the sweep never waits while
-holding another. A partial index keeps the candidates cheap to find however long the
-history. `enable_generation_sweeper()` schedules it
+`validate_stranded_study_courses` validates any course whose job has finished, that was
+persisted, and whose validation never finished, once it is ten minutes old. `text_status`
+marks that last part: persisting a course puts it to `pending`, and the transaction that
+moves the drafts settles it. It takes at most five a run, oldest first, and takes each
+course's row without waiting: a course a deletion, a correction or the worker holds is left
+for the next run, so the sweep never waits while holding another. A partial index on
+persisted, pending courses keeps the candidates cheap to find; a course whose job failed
+before anything was persisted is never one.
+`enable_generation_sweeper()` schedules it
 beside the stranded-job sweep, every five minutes by default. **Deploying this change
 therefore requires re-running `select public.enable_generation_sweeper();`** after the
 migrations, as `scripts/go-live.sh` lists.
@@ -119,7 +121,8 @@ migrations, as `scripts/go-live.sh` lists.
 - **Folding.** Answers are folded the way `answerKey` in `supabase/functions/_shared/study.ts`
   folds them: NFKC, lower case, the same explicit punctuation removed, an apostrophe treated
   as a word break, and JavaScript's whitespace collapsed. A full stop between two digits is
-  kept (1.5 is not 15), and a comma is not (1,000 is 1000). An answer that is only
+  kept (1.5 is not 15), and any other full stop goes, so .5 is 5; a comma goes too (1,000
+  is 1000). An answer that is only
   punctuation (`;` in a course on C) is kept as it is rather than folded to nothing. SQL's
   copy, `study_fold`, is an exact mirror. It lower-cases under the ICU root collation, so it
   folds final sigma and İ as JavaScript does whatever collation the database or the text
@@ -130,7 +133,8 @@ migrations, as `scripts/go-live.sh` lists.
 - **Matching.** A phrase must match as whole words. A phrase containing any character of a
   script written without spaces (Han, kana, Hangul, Thai and its neighbours) matches as a
   substring instead, and a phrase that is only punctuation is looked for in the text with its
-  punctuation kept. What counts as
+  punctuation kept. A decimal is one word: 125 is not found in 0.125, nor 14 in 3.14. What
+  counts as
   a word character (`\p{L}`, `\p{N}`, `\p{M}`) and which scripts are written without spaces
   are generated from the same Unicode properties study.ts uses
   (`scripts/study-unicode-classes.mjs`). So Hindi's danda ends a word in SQL as it does in
