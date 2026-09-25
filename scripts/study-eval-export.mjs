@@ -69,15 +69,27 @@ export function buildStudyEvalRun({ manifest, generations, items, calls, ledger,
 
   const providerAttemptIds = calls.filter((c) => sourceOfJob.has(c.jobId)).map((c) => c.id);
 
+  /*
+   * What a learner could have been shown, by the status `study_validate` and the reader's
+   * corrections left: `validated` is visible; `quarantined`, `rejected` and `suspended`
+   * were held back and are reviewed as quarantined. A `retired` version was superseded
+   * (its replacement is exported instead), and a `draft` never finished validation, so
+   * neither is part of the run.
+   */
+  const exported = {
+    validated: 'visible',
+    quarantined: 'quarantined',
+    rejected: 'quarantined',
+    suspended: 'quarantined',
+  };
   const exportedItems = items
-    .filter((item) => sourceOfGeneration.has(item.generationId))
+    .filter((item) => sourceOfGeneration.has(item.generationId) && exported[item.status])
     .map((item) => {
       const review = reviews[item.id] ?? {};
       return {
         id: item.id,
         sourceId: sourceOfGeneration.get(item.generationId),
-        // `draft` is what validation will decide whether to show; `rejected` never is.
-        status: item.status === 'draft' ? 'visible' : 'quarantined',
+        status: exported[item.status],
         adversarial: review.adversarial === true,
         reviewers: Array.isArray(review.reviewers) ? review.reviewers : [],
         ...(review.adjudicated ? { adjudicated: review.adjudicated } : {}),
