@@ -132,6 +132,33 @@ describe('createJournalledTransport', () => {
     expect(rows.get((err as JournalledRequestError).callId)?.outcome).toBe('aborted');
   });
 
+  it('sends nothing, and says so, when the clock ran out while the journal was written', async () => {
+    const { journal, rows } = memoryJournal();
+    const net = script(ok({ claims: [], gaps: [] }));
+    const t = createJournalledTransport(journal, scope, net.impl, ids);
+    const late = new AbortController();
+    late.abort();
+    const err = await t
+      .fetch('https://generativelanguage.googleapis.com/v1beta/models/m:generateContent', {
+        signal: late.signal,
+      })
+      .catch((e: unknown) => e);
+    expect(net.urls).toHaveLength(0);
+    expect(err).toMatchObject({ aborted: true, connectPhase: true });
+    expect(rows.get((err as JournalledRequestError).callId)?.outcome).toBe('aborted');
+  });
+
+  it("carries the reason Deno and undici put in the cause, not only 'fetch failed'", () => {
+    const e = Object.assign(new TypeError('fetch failed'), {
+      cause: new TypeError(
+        'client error (SendRequest): connection closed before message completed',
+      ),
+    });
+    expect(new JournalledRequestError('c', e, false).message).toBe(
+      'fetch failed: client error (SendRequest): connection closed before message completed',
+    );
+  });
+
   it('keeps the response when only the close fails, leaving the row open for the audit', async () => {
     const { journal, rows } = memoryJournal({ failClose: true });
     const t = createJournalledTransport(journal, scope, script(status(200)).impl, ids);
@@ -183,6 +210,20 @@ describe('isConnectPhase', () => {
         'client error (Connect): tcp connect error: Connection refused (os error 111)',
     );
     expect(isConnectPhase(deno)).toBe(true);
+    // Deno 2: "fetch failed", with the detail in the cause.
+    const deno2 = Object.assign(new TypeError('fetch failed'), {
+      cause: new TypeError('client error (Connect): tcp connect error: Connection refused'),
+    });
+    expect(isConnectPhase(deno2)).toBe(true);
+    const lookup = { code: 'ENOTFOUND', syscall: 'getaddrinfo' };
+    expect(isConnectPhase(Object.assign(new TypeError('fetch failed'), { cause: lookup }))).toBe(
+      true,
+    );
+  });
+
+  it('does not count an unreachable host on an open socket as never sent', () => {
+    const cause = { code: 'EHOSTUNREACH', syscall: 'read' };
+    expect(isConnectPhase(Object.assign(new TypeError('fetch failed'), { cause }))).toBe(false);
   });
 
   it('treats everything else as possibly sent: a reset, an abort, an unknown shape', () => {
@@ -286,6 +327,14 @@ describe('createGeminiStructuredProvider', () => {
     expect(again.outcome.ok).toBe(false);
     expect(twice.urls).toHaveLength(2);
     expect(again.outcome.calls.every((c) => c.usageKnown && c.costCents === 0)).toBe(true);
+  });
+
+  it('never puts the key in an error, whatever the runtime quoted', async () => {
+    const net = script(new TypeError('Invalid header value: "test-key"'));
+    const { outcome } = await run(net);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok ? '' : outcome.error).not.toContain('test-key');
+    expect(outcome.ok ? '' : outcome.error).toContain('[redacted]');
   });
 
   it('does not move to the next model after an abort either', async () => {

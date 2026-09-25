@@ -386,6 +386,15 @@ begin
   update public.budget_reservations set settled_at = now()
   where job_id = the_job and settled_at is null;
 
+  -- The wrapper's one remaining job: refusing a job that is not a study job.
+  perform pg_temp.become_worker();
+  begin
+    perform public.reserve_study_budget(extensions.gen_random_uuid(), 'study_extract', 1);
+    raise exception 'reserve_study_budget accepted a job that is not a study job';
+  exception when sqlstate '22023' then null;
+  end;
+  perform pg_temp.as_owner();
+
   -- ------------------------------------------------------ the span check
   span_at := position(span in note) - 1;
   begin

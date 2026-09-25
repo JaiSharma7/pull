@@ -124,6 +124,28 @@ export function anthropicConfigFrom(env: Env, apiKey: string) {
   };
 }
 
+/**
+ * A key as an HTTP header can carry it, or a refusal that names the setting and never
+ * the value.
+ *
+ * Deno refuses a header value holding a newline or a NUL with an error that QUOTES the
+ * value, and a provider error travels into `job_steps.error`, which the reader who asked
+ * for the job can read -- so a key pasted twice, or a Vault secret with a comment line
+ * under it, would have been handed to them, and charged every attempt at its ceiling
+ * besides. Edge whitespace is trimmed, as fetch would trim it anyway.
+ */
+export function headerSafeKey(setting: string, value: string | null | undefined): string | null {
+  const key = value?.trim();
+  if (!key) return null;
+  if (!/^[\x21-\x7e]+$/.test(key)) {
+    throw new Error(
+      `${setting} holds characters an HTTP header cannot carry (whitespace inside it, a ` +
+        'second line, or a non-ASCII character). Refusing to start rather than send it.',
+    );
+  }
+  return key;
+}
+
 export function geminiConfigFrom(env: Env, apiKey: string): GeminiConfig {
   const configured = env.get('GEMINI_SUMMARY_MODELS');
   return {
@@ -180,7 +202,10 @@ export async function resolveProviders(
   const needsGemini = wantSummary === 'gemini' || wantEmbedding === 'gemini';
   let apiKey: string | null = null;
   if (needsGemini) {
-    apiKey = env.get('GOOGLE_AI_API_KEY') ?? (await getSecret('google_ai_api_key'));
+    apiKey = headerSafeKey(
+      'GOOGLE_AI_API_KEY (or the Vault secret google_ai_api_key)',
+      env.get('GOOGLE_AI_API_KEY') ?? (await getSecret('google_ai_api_key')),
+    );
   }
 
   // Fail before a job is claimed rather than after one is silently mis-served. A worker
@@ -218,7 +243,10 @@ export async function resolveProviders(
   const wantFallback = env.get('SUMMARY_FALLBACK_PROVIDER');
   const anthropicKey =
     wantFallback === 'anthropic'
-      ? (env.get('ANTHROPIC_API_KEY') ?? (await getSecret('anthropic_api_key')))
+      ? headerSafeKey(
+          'ANTHROPIC_API_KEY (or the Vault secret anthropic_api_key)',
+          env.get('ANTHROPIC_API_KEY') ?? (await getSecret('anthropic_api_key')),
+        )
       : null;
 
   const primarySummary =

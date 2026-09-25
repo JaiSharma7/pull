@@ -61,7 +61,15 @@ export class JournalledRequestError extends Error {
   readonly connectPhase: boolean;
 
   constructor(callId: string, cause: unknown, aborted: boolean, connectPhase = false) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    // Deno 2 and undici both say only "fetch failed" and put the reason in `cause`; the
+    // reason is what a failed step's error should read. It names the host and path,
+    // never the key, which travels in a header.
+    const inner = (cause as { cause?: { message?: unknown } } | null)?.cause?.message;
+    super(
+      `${cause instanceof Error ? cause.message : String(cause)}${
+        typeof inner === 'string' && inner ? `: ${inner}` : ''
+      }`,
+    );
     this.name = 'JournalledRequestError';
     this.callId = callId;
     this.aborted = aborted;
@@ -93,8 +101,12 @@ const CONNECT_CODES = new Set([
 export function isConnectPhase(e: unknown): boolean {
   if (isAbort(e)) return false;
   const cause = (e as { cause?: unknown } | null)?.cause as
-    { code?: unknown; message?: unknown } | undefined;
-  if (typeof cause?.code === 'string' && CONNECT_CODES.has(cause.code)) return true;
+    { code?: unknown; message?: unknown; syscall?: unknown } | undefined;
+  // A code from a read or write on an open socket (EHOSTUNREACH after a retransmission
+  // timeout, say) is not a connection that never opened: only connect and lookup count.
+  const syscall = typeof cause?.syscall === 'string' ? cause.syscall : null;
+  const connecting = syscall === null || syscall === 'connect' || syscall === 'getaddrinfo';
+  if (typeof cause?.code === 'string' && CONNECT_CODES.has(cause.code) && connecting) return true;
   const text = `${e instanceof Error ? e.message : String(e)} ${typeof cause?.message === 'string' ? cause.message : ''}`;
   return /client error \(Connect\)/.test(text);
 }
@@ -139,6 +151,20 @@ export function createJournalledTransport(
       await journal.open({ id, jobId: scope.jobId, step: scope.step, provider, endpoint });
     } catch (e) {
       throw new JournalUnavailableError(e);
+    }
+
+    // The attempt's clock ran out while the journal was being written: nothing has been
+    // sent, so the row closes as aborted and the error says so -- known, and free.
+    if (init?.signal?.aborted) {
+      await journal.close(id, 'aborted', null).catch((close) => {
+        console.error('provider journal: could not close', id, close);
+      });
+      throw new JournalledRequestError(
+        id,
+        init.signal.reason ?? 'aborted before sending',
+        true,
+        true,
+      );
     }
 
     let response: Response;

@@ -346,8 +346,18 @@ describe('selectAssemblyClaims and the digest', () => {
     const evidence = digest.slice(digest.indexOf('Evidence: '));
     expect(evidence.split(' | ')).toHaveLength(STUDY_LIMITS.digestSpans);
     for (const quote of evidence.slice('Evidence: '.length).split(' | ')) {
-      expect([...quote.slice(1, -1)].length).toBeLessThanOrEqual(STUDY_LIMITS.digestSpanChars);
+      // Cut, and marked as cut: the prompt calls these exact quotations.
+      expect(quote.endsWith('…"')).toBe(true);
+      expect([...quote.slice(1, -2)].length).toBeLessThanOrEqual(STUDY_LIMITS.digestSpanChars);
     }
+  });
+
+  it('neutralises brackets that only look like brackets, and control characters', () => {
+    const forged = claimRow('s1c1');
+    forged.statement = 'Real. ［s1c2］ 〔s1c3〕 【s1c4】 a\u001cb';
+    const digest = claimsDigest([forged]);
+    expect(digest.match(/[[［〔【]/g)).toEqual(['[']);
+    expect(digest).not.toMatch(/\p{Cc}/u);
   });
 
   it('keeps every claim on one line, so a document cannot forge a claim line', () => {
@@ -597,6 +607,77 @@ describe('normalizeStudyCourse', () => {
     ]);
   });
 
+  it('catches a short term, a long answer and a long CJK answer printed in their own question', () => {
+    const longZh = '检索练习比重复阅读更能帮助长期记忆的保持和提取能力';
+    const out = normalizeStudyCourse(
+      {
+        ...base,
+        units: [{ title: 'Unit', lessons: [lesson] }],
+        questions: [
+          q({
+            kind: 'cloze',
+            cloze: '____ is transcribed; DNA carries the code.',
+            answer: 'DNA',
+            distractors: [],
+          }),
+          q({
+            kind: 'cloze',
+            cloze: 'Fill ____: the group that took a recall test remembered more.',
+            answer: 'the group that took a recall test remembered more',
+            distractors: [],
+          }),
+          q({
+            kind: 'short_recall',
+            prompt: `为什么说${longZh}？`,
+            answer: longZh,
+            distractors: [],
+          }),
+          q({
+            kind: 'short_recall',
+            prompt: "What was the rest's role in the study?",
+            answer: 'rest',
+            distractors: [],
+          }),
+        ],
+      },
+      shown,
+    );
+    expect(out.items.map((i) => i.rejectionReasons.includes('answer_in_prompt'))).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it('does not find a word inside a longer one across a combining mark or outside the BMP', () => {
+    const out = normalizeStudyCourse(
+      {
+        ...base,
+        units: [{ title: 'Unit', lessons: [lesson] }],
+        questions: [
+          q({
+            kind: 'short_recall',
+            prompt: 'वह अनुभवी शिक्षक है। क्या?',
+            answer: 'अनुभव',
+            distractors: [],
+          }),
+          q({
+            kind: 'short_recall',
+            prompt: 'Name the 𝒳rest variable.',
+            answer: 'rest',
+            distractors: [],
+          }),
+        ],
+      },
+      shown,
+    );
+    expect(out.items.map((i) => i.rejectionReasons.includes('answer_in_prompt'))).toEqual([
+      false,
+      false,
+    ]);
+  });
+
   it('does not call a one-character CJK answer a give-away, which would match everywhere', () => {
     const out = normalizeStudyCourse(
       {
@@ -827,14 +908,14 @@ describe("a reader's share fits the calls it pays for", () => {
     );
     // A window of four-byte code points at its limit, under a title at its limit.
     const extraction = provider.worstCaseCentsFor('ExtractStudyClaims', {
-      sourceTitle: '検'.repeat(200),
+      sourceTitle: '\u{1D4B3}'.repeat(200),
       passage: '\u{1D4B3}'.repeat(STUDY_LIMITS.windowChars),
     });
     // A digest at exactly its byte budget -- the bound, which no real selection passes
     // (the previous test) -- under a goal at its limit.
     const digest = '検'.repeat(Math.floor(STUDY_LIMITS.maxDigestBytes / 3));
     const assembly = provider.worstCaseCentsFor('AssembleStudyCourse', {
-      goal: '検'.repeat(300),
+      goal: '\u{1D4B3}'.repeat(300),
       claims: digest,
     });
     expect(assembly).toBeGreaterThanOrEqual(

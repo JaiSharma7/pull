@@ -165,7 +165,9 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
         unavailable = false,
       ): StructuredOutcome => ({
         ok: false,
-        error,
+        // The error reaches `job_steps.error`, which the reader can read. `resolveProviders`
+        // refuses a key a runtime error could quote; this is the second lock on that door.
+        error: error.split(config.apiKey).join('[redacted]'),
         unavailable,
         model,
         calls,

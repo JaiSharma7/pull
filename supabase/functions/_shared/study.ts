@@ -613,12 +613,13 @@ export function utf8Bytes(text: string): number {
  * question could then cite by a real key.
  */
 function oneLine(text: string): string {
-  // `\s` misses NEL (U+0085), and a bracket inside a field could open a key of its own
-  // on the same line; both are neutralised.
+  // `\s` misses NEL (U+0085) and the other control characters, and a bracket inside a
+  // field -- or one that looks like it, fullwidth or CJK -- could open a key of its own
+  // on the same line; all are neutralised.
   return text
-    .replace(/[\s\u0085]+/g, ' ')
-    .replace(/\[/g, '(')
-    .replace(/\]/g, ')')
+    .replace(/[\s\p{Cc}]+/gu, ' ')
+    .replace(/[[［〔【〖〘〚]/g, '(')
+    .replace(/[\]］〕】〗〙〛]/g, ')')
     .trim();
 }
 
@@ -635,7 +636,12 @@ export function claimsDigest(claims: readonly ClaimRow[]): string {
       const quotes = c.evidence
         .filter((e) => e.spanText)
         .slice(0, STUDY_LIMITS.digestSpans)
-        .map((e) => `"${truncate(oneLine(e.spanText as string), STUDY_LIMITS.digestSpanChars)}"`);
+        .map((e) => {
+          const span = oneLine(e.spanText as string);
+          const cut = truncate(span, STUDY_LIMITS.digestSpanChars);
+          // A cut span says so: the prompt calls these exact quotations.
+          return `"${cut}${cut.length < span.length ? '…' : ''}"`;
+        });
       parts.push(`Evidence: ${quotes.join(' | ')}`);
       return parts.join(' ');
     })
@@ -732,9 +738,12 @@ export function answerKey(text: string): string {
     text
       .normalize('NFKC')
       .toLowerCase()
-      // ASCII and curly quotes and punctuation, and the CJK full stops, commas, brackets
-      // and marks NFKC leaves in place.
-      .replace(/[‘’“”"'`.,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
+      // An apostrophe separates, so "rest" is found in "the rest's role"; both sides of
+      // any comparison fold alike, so "don't" still matches "don't".
+      .replace(/[‘’'`]/g, ' ')
+      // Double quotes and punctuation, and the CJK full stops, commas, brackets and
+      // marks NFKC leaves in place.
+      .replace(/[“”".,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
   );
@@ -747,16 +756,35 @@ export function answerKey(text: string): string {
 const UNSPACED_SCRIPT =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
-/** A character that continues a spaced-script word: a letter or digit outside those scripts. */
+/**
+ * A character that continues a spaced-script word: a letter, digit or combining mark
+ * outside those scripts. Read by code point, so a letter outside the BMP is one.
+ */
 function continuesWord(ch: string | undefined): boolean {
-  return ch !== undefined && /[\p{L}\p{N}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
+  return ch !== undefined && /[\p{L}\p{N}\p{M}]/u.test(ch) && !UNSPACED_SCRIPT.test(ch);
 }
 
-/** A phrase short enough to be a give-away: a few words, or a couple of characters of CJK. */
-export function isShortAnswer(answer: string): boolean {
+function codePointBefore(text: string, at: number): string | undefined {
+  if (at <= 0) return undefined;
+  const low = text.charCodeAt(at - 1);
+  const start = low >= 0xdc00 && low <= 0xdfff && at >= 2 ? at - 2 : at - 1;
+  return String.fromCodePoint(text.codePointAt(start) as number);
+}
+
+function codePointAt(text: string, at: number): string | undefined {
+  const cp = text.codePointAt(at);
+  return cp === undefined ? undefined : String.fromCodePoint(cp);
+}
+
+/**
+ * An answer long enough that finding it in its own prompt is a give-away rather than a
+ * coincidence: two characters of a script written without spaces, else three (DNA, ATP).
+ * No upper bound -- a long answer printed verbatim gives itself away all the more.
+ */
+export function givesAwayIfPrinted(answer: string): boolean {
   const key = answerKey(answer);
-  if (UNSPACED_SCRIPT.test(key)) return [...key].length >= 2 && [...key].length <= 20;
-  return key.length >= 4 && key.split(' ').length <= 6;
+  if (UNSPACED_SCRIPT.test(key)) return [...key].length >= 2;
+  return key.length >= 3;
 }
 
 /**
@@ -772,7 +800,9 @@ function containsPhrase(text: string, phrase: string): boolean {
   if (p.length === 0) return false;
   if (UNSPACED_SCRIPT.test(p)) return t.includes(p);
   for (let at = t.indexOf(p); at >= 0; at = t.indexOf(p, at + 1)) {
-    if (!continuesWord(t[at - 1]) && !continuesWord(t[at + p.length])) return true;
+    if (!continuesWord(codePointBefore(t, at)) && !continuesWord(codePointAt(t, at + p.length))) {
+      return true;
+    }
   }
   return false;
 }
@@ -917,7 +947,7 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
       acceptedAnswers = accepted.kept;
       const blanks = cloze ? cloze.split('____').length - 1 : 0;
       if (blanks !== 1) reasons.push('cloze_malformed');
-      else if (isShortAnswer(answer) && containsPhrase(cloze as string, answer)) {
+      else if (givesAwayIfPrinted(answer) && containsPhrase(cloze as string, answer)) {
         reasons.push('answer_in_prompt');
       }
     } else if (kind === 'ordering') {
@@ -955,7 +985,7 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
     // its own prompt; a substring test also found "rest" inside "interesting".
     if (
       (kind === 'cloze' || kind === 'short_recall') &&
-      isShortAnswer(answer) &&
+      givesAwayIfPrinted(answer) &&
       containsPhrase(prompt, answer)
     ) {
       reasons.push('answer_in_prompt');

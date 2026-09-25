@@ -117,6 +117,12 @@ interface ExtractOutput {
 
 interface AssembleOutput {
   cacheId: string;
+  /**
+   * The keys of the claims the model was shown, as it was shown them. `study_ground`
+   * judges citations against this record rather than recomputing the selection, which a
+   * deploy between the two steps could change. Keys only (`s1c3`), never text.
+   */
+  shownKeys?: string[];
 }
 
 async function requireGeneration(deps: StudyDeps, step: StudyStep): Promise<StudyGeneration> {
@@ -395,6 +401,7 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
         claims: claims.length,
         grounded: claims.filter((c) => c.status === 'draft').length,
         shown: shown.length,
+        shownKeys: shown.map((c) => c.key),
       };
       if (hit) return { output: { cacheId: hit.id, cached: true, ...counts } };
 
@@ -444,7 +451,11 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
         generation.sources,
         await extractionRecords(deps, generation, step),
       );
-      const shown = selectAssemblyClaims(claims);
+      // As the assembly recorded it; recomputed only for a job assembled before it did.
+      const recorded = Array.isArray(assembled.shownKeys) ? new Set(assembled.shownKeys) : null;
+      const shown = recorded
+        ? claims.filter((c) => c.status === 'draft' && recorded.has(c.key))
+        : selectAssemblyClaims(claims);
 
       const [course] = await db.loadCachedStages(generation.ownerId, [assembled.cacheId]);
       if (!course || course.stage !== 'assemble') {

@@ -222,6 +222,30 @@ describe('the study pipeline with the stub provider', () => {
     expect(again.calls).toBe(1);
   });
 
+  it('grounds against the claims the assembly recorded it was shown', async () => {
+    const mem = memoryDb(generation());
+    const { outputs } = await walk(mem.db, stubStructuredProvider);
+    const assembled = outputs.study_assemble as { shownKeys: string[] };
+    const persisted = mem.persisted() as { claims: { key: string; status: string }[] };
+    expect(assembled.shownKeys).toEqual(
+      persisted.claims.filter((c) => c.status === 'draft').map((c) => c.key),
+    );
+
+    // Whatever a later deploy would select, ground reads the record: shown nothing, the
+    // course's citations are all unknown.
+    await runStudyStep('study_ground', {
+      job: job(),
+      priorOutputs: { ...outputs, study_assemble: { ...assembled, shownKeys: [] } },
+      provider: stubStructuredProvider,
+      db: mem.db,
+    });
+    const regrounded = mem.persisted() as { items: { rejectionReasons: string[] }[] };
+    expect(regrounded.items.length).toBeGreaterThan(0);
+    expect(regrounded.items.every((i) => i.rejectionReasons.includes('no_known_claims'))).toBe(
+      true,
+    );
+  });
+
   it("never answers one reader from another reader's cache", async () => {
     const mem = memoryDb(generation());
     await walk(mem.db, stubStructuredProvider);
