@@ -73,6 +73,10 @@ export interface OutlineLesson {
   state: LessonState;
   firstShownAt: string | null;
   readAt: string | null;
+  /** Every claim it teaches is remembered now, on strict evidence (the study Delta). */
+  known: boolean;
+  /** The reader's last answer on one of its claims was wrong. */
+  revisit: boolean;
 }
 
 export interface OutlineUnit {
@@ -191,6 +195,8 @@ export function shapeOutline(data: unknown): OutlineUnit[] {
           state: lessonState(r.state),
           firstShownAt: nullableStr(r.first_shown_at),
           readAt: nullableStr(r.read_at),
+          known: r.known === true,
+          revisit: r.revisit === true,
         } satisfies OutlineLesson,
         unitTitle: str(r.unit_title),
       };
@@ -376,6 +382,13 @@ export function courseTitle(course: CourseSummary): string {
   return course.title?.trim() || course.goal.trim() || 'Untitled course';
 }
 
+/** What the outline says of a lesson: what the reader should know about it first. */
+export function lessonLabel(lesson: Pick<OutlineLesson, 'state' | 'known' | 'revisit'>): string {
+  if (lesson.revisit) return 'Worth rereading';
+  if (lesson.known && lesson.state !== 'read') return 'You know this';
+  return lessonStateLabel(lesson.state);
+}
+
 export function lessonStateLabel(state: LessonState): string {
   switch (state) {
     case 'read':
@@ -407,24 +420,44 @@ function finished(lesson: OutlineLesson): boolean {
   return lesson.state === 'read' || lesson.state === 'skipped';
 }
 
+/**
+ * Whether a session should bring this lesson up unasked: one the reader's last answers say
+ * to revisit, or one not yet finished that they do not already know. A known lesson is left
+ * out -- the reader showed they remember every claim it teaches -- and stays in the outline
+ * for whoever wants it.
+ */
+function wanted(lesson: OutlineLesson): boolean {
+  return lesson.revisit || (!finished(lesson) && !lesson.known);
+}
+
 export function allLessons(units: readonly OutlineUnit[]): OutlineLesson[] {
   return units.flatMap((u) => u.lessons);
 }
 
-/** The first lesson not yet read or skipped, in course order; null when all are. */
+/** The lessons later sittings will bring up unasked: to revisit, or still to study. */
+export function lessonsLeft(units: readonly OutlineUnit[]): OutlineLesson[] {
+  return allLessons(units).filter(wanted);
+}
+
+/**
+ * The lesson a session starts with: the first to revisit, else the first unfinished one the
+ * reader does not already know, in course order; null when there is none.
+ */
 export function nextLesson(units: readonly OutlineUnit[]): OutlineLesson | null {
-  return allLessons(units).find((l) => !finished(l)) ?? null;
+  const lessons = allLessons(units);
+  return lessons.find((l) => l.revisit) ?? lessons.find((l) => wanted(l)) ?? null;
 }
 
 /** About ten minutes: the session the product is built around. */
 export const SESSION_MINUTES = 10;
 
 /**
- * The lessons of one session, from `startId` (or the next unfinished lesson) onwards:
- * unfinished lessons in course order until their minutes reach the budget. A session
- * does not cross into a new unit once it has at least half its budget, so it ends at a
- * natural break rather than a lesson into the next topic. Always at least one lesson
- * when any is unfinished; empty when none is.
+ * The lessons of one session: lessons to revisit first, then from `startId` (or the next
+ * wanted lesson) onwards, the unfinished lessons the reader does not already know, in
+ * course order until their minutes reach the budget. A lesson the reader opens is always in
+ * it, known or not. A session does not cross into a new unit once it has at least half its
+ * budget, so it ends at a natural break. Always at least one lesson when any is wanted;
+ * empty when none is.
  */
 export function planSession(
   units: readonly OutlineUnit[],
@@ -433,10 +466,11 @@ export function planSession(
 ): OutlineLesson[] {
   const lessons = allLessons(units);
   const from = startId ? lessons.findIndex((l) => l.lessonId === startId) : -1;
-  const candidates = (from >= 0 ? lessons.slice(from) : lessons).filter(
-    (l, i) => (from >= 0 && i === 0) || !finished(l),
+  const revisits = from >= 0 ? [] : lessons.filter((l) => l.revisit);
+  const onward = (from >= 0 ? lessons.slice(from) : lessons).filter(
+    (l, i) => ((from >= 0 && i === 0) || wanted(l)) && !revisits.includes(l),
   );
-  return fillSession(candidates, budget);
+  return fillSession([...revisits, ...onward], budget);
 }
 
 /** Lessons in order until their minutes reach the budget, ending at a unit break. */

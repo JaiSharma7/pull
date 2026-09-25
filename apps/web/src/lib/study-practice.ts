@@ -21,6 +21,8 @@ export interface QuestionEntry {
   kind: StudyKind;
   state: QuestionState;
   authoredBy: 'model' | 'reader';
+  /** When the claims it tests fall due for review; null before it is answered. */
+  dueAt: string | null;
 }
 
 /** A question's own text, from `study_visible_items`. */
@@ -63,6 +65,7 @@ export function shapeQuestionEntries(data: unknown): QuestionEntry[] {
         kind,
         state: oneOf(r.state, STATES, 'not_seen'),
         authoredBy: r.authored_by === 'reader' ? 'reader' : 'model',
+        dueAt: nullableStr(r.due_at),
       } satisfies QuestionEntry;
     })
     .filter((q): q is QuestionEntry => q !== null);
@@ -302,4 +305,18 @@ export function shapeAnswersRecorded(data: unknown): AnswersRecorded {
       provesRecall: x.provesRecall === true,
     })),
   };
+}
+
+// ------------------------------------------------------------------ delayed review
+
+/**
+ * The questions due for review at `now`, soonest-due first: those whose claims the reader
+ * last got wrong come due at once, the rest when their claims' recall has fallen to 0.9.
+ * A question never answered is not due -- it has nothing to review yet.
+ */
+export function dueQuestions(entries: readonly QuestionEntry[], now: Date): QuestionEntry[] {
+  const at = now.getTime();
+  return entries
+    .filter((q) => q.dueAt !== null && Date.parse(q.dueAt) <= at)
+    .sort((a, b) => Date.parse(a.dueAt as string) - Date.parse(b.dueAt as string));
 }

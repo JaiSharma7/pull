@@ -12,6 +12,7 @@ import {
   courseSelectionProblem,
   courseStatus,
   courseTitle,
+  lessonLabel,
   lessonStateLabel,
   newerPreparationComing,
   newerPreparationFailed,
@@ -594,5 +595,61 @@ describe('correcting a lesson', () => {
     expect(reportRefusal('54000')).toMatch(/as many reports/);
     expect(reportRefusal('P0002')).toBe('It is no longer in your course.');
     expect(reportRefusal(undefined)).toBeNull();
+  });
+});
+
+describe('the study Delta in a session', () => {
+  const lesson = (
+    id: string,
+    unitNo: number,
+    extra: Partial<OutlineUnit['lessons'][number]> = {},
+  ): OutlineUnit['lessons'][number] => ({
+    lessonId: id,
+    lessonKey: id,
+    position: 1,
+    unitNo,
+    title: id,
+    objective: '',
+    minutes: 3,
+    questionCount: 0,
+    state: 'not_seen',
+    firstShownAt: null,
+    readAt: null,
+    known: false,
+    revisit: false,
+    ...extra,
+  });
+  const units: OutlineUnit[] = [
+    {
+      unitNo: 1,
+      title: 'One',
+      lessons: [lesson('a', 1, { state: 'read' }), lesson('b', 1, { known: true }), lesson('c', 1)],
+    },
+    { unitNo: 2, title: 'Two', lessons: [lesson('d', 2, { state: 'read', revisit: true })] },
+  ];
+
+  it('revisits first, leaves known lessons out, and keeps a lesson the reader opens', () => {
+    expect(nextLesson(units)?.lessonId).toBe('d');
+    expect(planSession(units).map((l) => l.lessonId)).toEqual(['d', 'c']);
+    // Opened by the reader, a known lesson is read; the session still stops at the unit's end.
+    expect(planSession(units, 'b').map((l) => l.lessonId)).toEqual(['b', 'c']);
+  });
+
+  it('says why in the outline', () => {
+    expect(lessonLabel({ state: 'read', known: false, revisit: true })).toBe('Worth rereading');
+    expect(lessonLabel({ state: 'not_seen', known: true, revisit: false })).toBe('You know this');
+    expect(lessonLabel({ state: 'read', known: true, revisit: false })).toBe('Read');
+  });
+
+  it('has nothing to plan when everything is known or finished', () => {
+    const done: OutlineUnit[] = [
+      {
+        unitNo: 1,
+        title: 'One',
+        lessons: [lesson('a', 1, { known: true }), lesson('b', 1, { state: 'read' })],
+      },
+    ];
+    expect(nextLesson(done)).toBeNull();
+    expect(planSession(done)).toEqual([]);
   });
 });

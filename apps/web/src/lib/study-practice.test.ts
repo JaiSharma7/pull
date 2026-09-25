@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { gradeStudyResponse, needsSelfGrade, studyFold } from './study-grade.js';
 import {
   choiceOptions,
+  dueQuestions,
   clozeParts,
   confirmFirst,
   firstAnswer,
@@ -62,6 +63,7 @@ describe('shaping questions', () => {
         kind: 'cloze',
         state: 'answered',
         authoredBy: 'model',
+        dueAt: null,
       },
     ]);
   });
@@ -274,5 +276,31 @@ describe('what the recorder answers', () => {
         },
       ],
     });
+  });
+});
+
+describe('delayed review', () => {
+  const entry = (itemId: string, dueAt: string | null) => ({
+    itemId,
+    lessonId: null,
+    purpose: 'practice' as const,
+    kind: 'cloze' as const,
+    state: 'answered' as const,
+    authoredBy: 'model' as const,
+    dueAt,
+  });
+
+  it('asks what is due now, soonest first, and nothing never answered', () => {
+    const now = new Date('2026-09-25T12:00:00Z');
+    const due = dueQuestions(
+      [
+        entry('later', '2026-09-26T00:00:00Z'),
+        entry('never', null),
+        entry('second', '2026-09-25T11:00:00Z'),
+        entry('first', '2026-09-20T00:00:00Z'),
+      ],
+      now,
+    );
+    expect(due.map((q) => q.itemId)).toEqual(['first', 'second']);
   });
 });

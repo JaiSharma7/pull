@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from 'react';
 import {
-  lessonStateLabel,
+  lessonLabel,
   minutesLabel,
   type CourseSummary,
   type LessonClaim,
@@ -53,7 +53,7 @@ export function CourseOutline({
           </h2>
           <ol className="course__lessons">
             {unit.lessons.map((lesson) => {
-              const label = lessonStateLabel(lesson.state);
+              const label = lessonLabel(lesson);
               const current = lesson.lessonId === currentLessonId;
               return (
                 <li key={lesson.lessonId} className="course__lesson">

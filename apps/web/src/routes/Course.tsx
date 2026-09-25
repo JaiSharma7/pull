@@ -29,6 +29,7 @@ import {
   lessonRevision,
   newerPreparationComing,
   newerPreparationFailed,
+  lessonsLeft,
   nextLesson,
   draftUnsaved,
   passageWindow,
@@ -65,7 +66,12 @@ import {
   type HeldBack,
   type ReportTarget,
 } from '../lib/study-course-api.js';
-import { knownLessons, placementOffered, type QuestionEntry } from '../lib/study-practice.js';
+import {
+  dueQuestions,
+  knownLessons,
+  placementOffered,
+  type QuestionEntry,
+} from '../lib/study-practice.js';
 import { sendProgress } from '../lib/study-sync.js';
 import { mutationId } from '../lib/submission.js';
 
@@ -707,8 +713,17 @@ export function Course({
     ].map((q) => q.itemId);
   };
 
+  /**
+   * What a review asks: the questions due now -- a wrong answer's at once, the rest as their
+   * claims' recall falls to 0.9 -- and, when none is due, the course's review questions.
+   */
+  const reviewItems = () => {
+    const due = dueQuestions(questions, new Date()).map((q) => q.itemId);
+    return due.length > 0 ? due : questionsFor('review');
+  };
+
   const startPractice = (mode: 'placement' | 'review') => {
-    const itemIds = questionsFor(mode);
+    const itemIds = mode === 'review' ? reviewItems() : questionsFor(mode);
     if (itemIds.length === 0) return;
     leaveLesson();
     setNotice(null);
@@ -1394,7 +1409,12 @@ export function Course({
 
   const next = nextLesson(shownUnits);
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
-  const reviewCount = questionsFor('review').length;
+  const dueCount = dueQuestions(questions, new Date()).length;
+  const reviewCount = dueCount > 0 ? dueCount : questionsFor('review').length;
+  const reviewLabel =
+    dueCount > 0
+      ? `${dueCount === 1 ? 'One question is' : `${dueCount} questions are`} due for review`
+      : `Review questions (${reviewCount})`;
   const placementCount = questionsFor('placement').length;
   // Offered until it is answered: answering changes no lesson's state, so the lessons alone
   // would offer it again and again; and a check only seen -- left at its first question, or
@@ -1409,7 +1429,7 @@ export function Course({
     const covered = view.plan
       .filter((p) => readHere.has(p.lessonId))
       .map((p) => ({ title: p.title, recap: recaps[p.lessonId] ?? null }));
-    const remaining = lessons.filter((l) => l.state !== 'read' && l.state !== 'skipped').length;
+    const remaining = lessonsLeft(shownUnits).length;
     return (
       <section className="stack measure course">
         <div className="course__bar">
@@ -1432,7 +1452,9 @@ export function Course({
               className="btn btn--plain"
               onClick={() => startPractice('review')}
             >
-              Or answer the course’s review questions ({reviewCount})
+              {dueCount > 0
+                ? `Or review what is due (${dueCount})`
+                : `Or answer the course’s review questions (${reviewCount})`}
             </button>
           </p>
         )}
@@ -1571,7 +1593,7 @@ export function Course({
                 )}
                 {reviewCount > 0 && !untouched && (
                   <button type="button" className="btn" onClick={() => startPractice('review')}>
-                    Review questions ({reviewCount})
+                    {reviewLabel}
                   </button>
                 )}
               </div>
