@@ -7,12 +7,14 @@
  */
 import { rpcError, sqlState } from './rpc-error.js';
 import {
+  shapeClaims,
   shapeCourseSummaries,
   shapeCourseSummary,
   shapeLessonContent,
   shapeOutline,
   shapeProgressResult,
   type CourseSummary,
+  type LessonClaim,
   type LessonContent,
   type LessonDraft,
   type OutlineUnit,
@@ -108,18 +110,31 @@ export async function fetchLesson(
   const lesson = lessonRead.data?.[0];
   if (!lesson) return null;
   if (links.error) throw rpcError(links.error);
-  const claimIds = (links.data ?? []).map((l) => l.claim_id);
+  const gathered = await fetchClaimRows(
+    (links.data ?? []).map((l) => l.claim_id),
+    signal,
+  );
+  return shapeLessonContent({ lesson, ...gathered });
+}
 
-  // The claims a learner may be shown, and then only their evidence: a claim validation
-  // held back keeps its passages off the screen with it.
-  const claims = claimIds.length
-    ? await abortable(
-        supabase
-          .from('study_visible_claims')
-          .select('id, statement, qualifications, attribution, source_version_id')
-          .in('id', claimIds),
-      )
-    : { data: [], error: null };
+/**
+ * The claims named, as a learner may see them, with their passages and their sources'
+ * titles. Only the visible claims, and then only their evidence: a claim validation held
+ * back keeps its passages off the screen with it.
+ */
+async function fetchClaimRows(
+  claimIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ claims: unknown; evidence: unknown; versions: unknown }> {
+  const abortable = <T extends { abortSignal: (s: AbortSignal) => T }>(q: T): T =>
+    signal ? q.abortSignal(signal) : q;
+  if (claimIds.length === 0) return { claims: [], evidence: [], versions: [] };
+  const claims = await abortable(
+    supabase
+      .from('study_visible_claims')
+      .select('id, statement, qualifications, attribution, source_version_id')
+      .in('id', [...claimIds]),
+  );
   if (claims.error) throw rpcError(claims.error);
   const shownIds = (claims.data ?? []).map((c) => c.id).filter(Boolean) as string[];
   const versionIds = [
@@ -141,13 +156,23 @@ export async function fetchLesson(
   ]);
   if (evidence.error) throw rpcError(evidence.error);
   if (versions.error) throw rpcError(versions.error);
+  return { claims: claims.data, evidence: evidence.data, versions: versions.data };
+}
 
-  return shapeLessonContent({
-    lesson,
-    claims: claims.data,
-    evidence: evidence.data,
-    versions: versions.data,
-  });
+/** The claims a question rests on, with their passages: what a hint shows. */
+export async function fetchItemClaims(
+  itemId: string,
+  signal?: AbortSignal,
+): Promise<LessonClaim[]> {
+  const request = supabase.from('study_item_claims').select('claim_id').eq('item_id', itemId);
+  const links = await (signal ? request.abortSignal(signal) : request);
+  if (links.error) throw rpcError(links.error);
+  return shapeClaims(
+    await fetchClaimRows(
+      (links.data ?? []).map((l) => l.claim_id),
+      signal,
+    ),
+  );
 }
 
 /** Whether a lesson is shown to the reader now: one read of the visible lessons. */

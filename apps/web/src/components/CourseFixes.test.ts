@@ -34,7 +34,7 @@ describe('ReportForm', () => {
       }),
     );
     expect(html).toContain('This is not what my source says');
-    expect(html).toContain('every lesson that rests on it');
+    expect(html).toContain('every lesson and question that rests on it');
     expect(html).toMatch(/role="alert"[^>]*>That is as many reports/);
   });
 });
