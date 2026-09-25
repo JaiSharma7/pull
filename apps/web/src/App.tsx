@@ -1195,6 +1195,7 @@ export function App() {
             {courseId !== null && !guest && session && (
               <Course
                 key={courseId}
+                userId={session.user.id}
                 courseId={decodeSegment(courseId)}
                 onNavigate={navigate}
                 onTitle={reportRouteTitle}

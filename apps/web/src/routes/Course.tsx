@@ -10,6 +10,7 @@ import {
   StoppingPoint,
 } from '../components/CourseParts.js';
 import { HeldBackList, LessonCorrectionForm, ReportForm } from '../components/CourseFixes.js';
+import { CoursePractice, type PracticeMode } from '../components/CoursePractice.js';
 import { usePlayer } from '../components/PlayerProvider.js';
 import { isOfflineFailure } from '../lib/offline.js';
 import { sqlDetail, sqlState } from '../lib/rpc-error.js';
@@ -44,7 +45,6 @@ import {
   type OutlineLesson,
   type OutlineUnit,
   type PlannedLesson,
-  type ProgressEvent,
   type LessonProgressKind,
   type ReportReason,
 } from '../lib/study-course.js';
@@ -55,8 +55,8 @@ import {
   fetchLesson,
   fetchOutline,
   fetchSourceText,
+  fetchCourseQuestions,
   lessonShown,
-  recordProgress,
   regenerateCourse,
   reportContent,
   restoreReported,
@@ -65,6 +65,8 @@ import {
   type HeldBack,
   type ReportTarget,
 } from '../lib/study-course-api.js';
+import { knownLessons, type QuestionEntry } from '../lib/study-practice.js';
+import { sendProgress } from '../lib/study-sync.js';
 import { mutationId } from '../lib/submission.js';
 
 /** How often a course being prepared is looked at again. */
@@ -79,7 +81,18 @@ type FixForm = 'report' | 'correct' | 'withdraw' | `claim:${string}`;
 type View =
   | { kind: 'overview' }
   | { kind: 'session'; plan: PlannedLesson[]; index: number }
-  | { kind: 'stop'; plan: PlannedLesson[] };
+  | { kind: 'stop'; plan: PlannedLesson[] }
+  | {
+      kind: 'practice';
+      mode: PracticeMode;
+      itemIds: string[];
+      heading: string;
+      doneLabel: string;
+      /** Where the reader goes when the questions are done: on in the session, or back. */
+      then: View;
+    }
+  /** What a placement check found: the lessons it suggests the reader already knows. */
+  | { kind: 'placed'; known: string[] };
 
 /**
  * Where focus goes after a control that replaced itself is gone, and how many times the
@@ -92,10 +105,12 @@ type FocusTarget = { id: string; draws: number } | null;
 const FOCUS_WAIT_DRAWS = 60;
 
 export function Course({
+  userId,
   courseId,
   onNavigate,
   onTitle,
 }: {
+  userId: string;
   courseId: string;
   onNavigate: (to: string) => void;
   onTitle?: (title: string | null) => void;
@@ -138,7 +153,7 @@ export function Course({
   const [leaving, setLeaving] = useState<null | 'top' | 'bottom'>(null);
   const [notice, setNotice] = useState<{ text: string; undo: ReportTarget | null } | null>(null);
   const [held, setHeld] = useState<HeldBack[]>([]);
-  const pending = useRef<ProgressEvent[]>([]);
+  const [questions, setQuestions] = useState<QuestionEntry[]>([]);
   const regeneration = useRef<string | null>(null);
   const shownFor = useRef<string | null>(null);
 
@@ -177,16 +192,18 @@ export function Course({
         onTitle?.(null);
         return;
       }
-      const [outline, heldBack] = summary.generationId
+      const [outline, heldBack, questionList] = summary.generationId
         ? await Promise.all([
             fetchOutline(courseId, controller.signal),
             fetchHeldBack(summary.generationId, controller.signal),
+            fetchCourseQuestions(courseId, controller.signal),
           ])
-        : [[], []];
+        : [[], [], []];
       if (controller.signal.aborted) return;
       setCourse(summary);
       setUnits(outline);
       setHeld(heldBack);
+      setQuestions(questionList);
       setMissing(false);
       setError(null);
       setSettled(true);
@@ -286,59 +303,31 @@ export function Course({
   const shownUnits = applyProgress(units, recorded);
 
   /*
-   * Every event is sent with its own client id, and anything not yet accepted is sent
-   * again with the next one, when the connection returns, and as the screen closes:
-   * `record_study_progress` records each id once, so a retry after a lost response is
-   * harmless. A durable offline queue is the practice change's.
+   * Every event is sent with its own client id, at once. One that cannot reach the server,
+   * or that today's limit refuses, is kept in the app's offline queue and sent later
+   * (`study-sync.ts`); `record_study_progress` records each id once, so a replay is
+   * harmless. The screen moves on at once either way.
    */
-  const flush = useCallback(() => {
-    const batch = pending.current;
-    if (batch.length === 0) return;
-    recordProgress(batch)
-      .then((result) => {
-        const retry = new Set(
-          result.refused.filter((x) => x.reason === 'limit').map((x) => x.clientEventId),
-        );
-        pending.current = pending.current.filter(
-          (e) => !batch.includes(e) || retry.has(e.clientEventId),
-        );
-        setProgressNote(
-          retry.size > 0
-            ? 'Today’s reading record is full, so what you read now may not be kept. It resets at 00:00 UTC.'
-            : null,
-        );
-      })
-      .catch((e: unknown) => {
-        console.error('Recording progress failed', e);
-        setProgressNote(
-          isOfflineFailure(e)
-            ? 'You look offline. Your place in the course will be saved when you reconnect.'
-            : 'Your place in the course could not be saved just now; it will be tried again.',
-        );
-      });
-  }, []);
-
   const send = useCallback(
     (kind: LessonProgressKind, lessonId: string) => {
       setRecorded((r) => [...r, { kind, lessonId }]);
-      pending.current = [
-        ...pending.current,
-        { clientEventId: mutationId(), kind, lessonId, occurredAt: new Date().toISOString() },
-      ].slice(-100);
-      flush();
+      void sendProgress(userId, {
+        clientEventId: mutationId(),
+        kind,
+        lessonId,
+        occurredAt: new Date().toISOString(),
+      }).then((sent) =>
+        setProgressNote(
+          sent === 'queued'
+            ? 'Saved on this device. Your place will be recorded when it can be sent.'
+            : sent === 'failed'
+              ? 'Your place in the course could not be saved just now.'
+              : null,
+        ),
+      );
     },
-    [flush],
+    [userId],
   );
-
-  // What has not been accepted is sent again when the connection returns, and once more
-  // as the screen closes -- the request outlives the component.
-  useEffect(() => {
-    window.addEventListener('online', flush);
-    return () => {
-      window.removeEventListener('online', flush);
-      flush();
-    };
-  }, [flush]);
 
   // ---------------------------------------------------------------- the lesson on screen
   const current = view.kind === 'session' ? (view.plan[view.index] ?? null) : null;
@@ -660,21 +649,84 @@ export function Course({
     // Only a lesson the reader was shown is recorded. One that would not open -- held back
     // by a report on a claim it shares, withdrawn in another tab, or unreachable offline --
     // was never seen, and a skip recorded for it kept it out of every later session.
-    if (lesson?.lessonId === currentId) {
+    const shown = lesson?.lessonId === currentId ? lesson : null;
+    if (shown) {
       send(kind, currentId);
       if (kind === 'lesson_read') setSittingReads((r) => [...r, currentId]);
     }
     leaveLesson();
     setNotice(null);
-    if (view.index + 1 < view.plan.length) {
-      setView({ ...view, index: view.index + 1 });
-    } else {
-      setView({ kind: 'stop', plan: view.plan });
-      // The end of a sitting is a new screen: a keyboard or screen-reader reader starts at
-      // its heading, as they do at a lesson's.
-      focusAfter('course-stop-title');
-    }
+    const onward: View =
+      view.index + 1 < view.plan.length
+        ? { ...view, index: view.index + 1 }
+        : { kind: 'stop', plan: view.plan };
+    // A lesson read is practised before the session goes on: its own questions, those the
+    // reader has not yet shown they remember.
+    const practice =
+      kind === 'lesson_read' && shown
+        ? questions
+            .filter(
+              (q) =>
+                q.lessonId === currentId &&
+                q.purpose === 'practice' &&
+                q.state !== 'recall_demonstrated',
+            )
+            .map((q) => q.itemId)
+        : [];
+    setView(
+      practice.length > 0
+        ? {
+            kind: 'practice',
+            mode: 'practice',
+            itemIds: practice,
+            heading: shown ? `Practise “${shown.title}”` : 'Practise',
+            doneLabel: onward.kind === 'session' ? 'Next lesson' : 'Finish the session',
+            then: onward,
+          }
+        : onward,
+    );
+    // The end of a sitting is a new screen, and so is practice: each starts at its heading.
+    if (practice.length === 0 && onward.kind === 'stop') focusAfter('course-stop-title');
     window.scrollTo(0, 0);
+  };
+
+  /** The course's questions of one purpose, those not yet demonstrated first. */
+  const questionsFor = (purpose: QuestionEntry['purpose']) => {
+    const of = questions.filter((q) => q.purpose === purpose);
+    return [
+      ...of.filter((q) => q.state !== 'recall_demonstrated'),
+      ...of.filter((q) => q.state === 'recall_demonstrated'),
+    ].map((q) => q.itemId);
+  };
+
+  const startPractice = (mode: 'placement' | 'review') => {
+    const itemIds = questionsFor(mode);
+    if (itemIds.length === 0) return;
+    leaveLesson();
+    setNotice(null);
+    setView({
+      kind: 'practice',
+      mode,
+      itemIds,
+      heading: mode === 'placement' ? 'What you already know' : 'Review',
+      doneLabel: mode === 'placement' ? 'See what this suggests' : 'Back to the course',
+      then: { kind: 'overview' },
+    });
+    window.scrollTo(0, 0);
+  };
+
+  /** Skip the lessons a placement check suggested, as the reader chose to. */
+  const skipKnown = (lessonIds: readonly string[]) => {
+    for (const id of lessonIds) send('lesson_skipped', id);
+    setNotice({
+      text:
+        lessonIds.length === 1
+          ? 'Skipped one lesson you already know. It stays in the outline if you want it.'
+          : `Skipped ${lessonIds.length} lessons you already know. They stay in the outline if you want them.`,
+      undo: null,
+    });
+    setView({ kind: 'overview' });
+    focusAfter('course-notice');
   };
 
   const toggleListen = () => {
@@ -941,6 +993,98 @@ export function Course({
   const status = courseStatus(course);
   const title = courseTitle(course);
 
+  if (view.kind === 'practice') {
+    return (
+      <CoursePractice
+        key={view.itemIds.join(',')}
+        userId={userId}
+        itemIds={view.itemIds}
+        mode={view.mode}
+        heading={view.heading}
+        doneLabel={view.doneLabel}
+        onDone={(first) => {
+          // The answers change what the course shows: read the question list again.
+          setAttempt((n) => n + 1);
+          if (view.mode === 'placement') {
+            setView({
+              kind: 'placed',
+              known: knownLessons(
+                first,
+                lessons.map((l) => l.lessonId),
+              ),
+            });
+            focusAfter('course-placed-title');
+          } else {
+            setView(view.then);
+            if (view.then.kind === 'overview') focusAfter('course-title');
+          }
+          window.scrollTo(0, 0);
+        }}
+        onLeave={() => {
+          setAttempt((n) => n + 1);
+          setView(view.mode === 'practice' ? view.then : { kind: 'overview' });
+          if (view.mode !== 'practice') focusAfter('course-title');
+        }}
+      />
+    );
+  }
+
+  if (view.kind === 'placed') {
+    const lessonById = new Map(lessons.map((l) => [l.lessonId, l]));
+    const known = view.known
+      .map((id) => lessonById.get(id))
+      .filter((l): l is OutlineLesson => l !== undefined);
+    return (
+      <section className="stack measure course">
+        <div className="course__bar">{back}</div>
+        <p className="meta">What you already know</p>
+        {known.length > 0 ? (
+          <>
+            <h1 className="display" tabIndex={-1} id="course-placed-title">
+              You may already know {known.length === 1 ? 'one lesson' : `${known.length} lessons`}.
+            </h1>
+            <p>
+              You answered every check question for these without help. Skipping them starts you
+              further in; they stay in the outline if you want them later.
+            </p>
+            <ul className="course__covered">
+              {known.map((l) => (
+                <li key={l.lessonId}>{l.title}</li>
+              ))}
+            </ul>
+            <div className="course__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => skipKnown(known.map((l) => l.lessonId))}
+              >
+                Skip {known.length === 1 ? 'it' : 'them'}
+              </button>
+              <button type="button" className="btn" onClick={toOverview}>
+                Read everything
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h1 className="display" tabIndex={-1} id="course-placed-title">
+              Start from the beginning.
+            </h1>
+            <p>
+              The check did not show any lesson you already know well enough to skip, so the course
+              starts at its first lesson.
+            </p>
+            <p>
+              <button type="button" className="btn btn--primary" onClick={toOverview}>
+                Back to the course
+              </button>
+            </p>
+          </>
+        )}
+      </section>
+    );
+  }
+
   if (view.kind === 'session' && current) {
     // One primary control on the screen: while a fix form is open, its own button is it.
     const fixing = fix !== null || claimReport !== null;
@@ -1205,6 +1349,8 @@ export function Course({
 
   const next = nextLesson(shownUnits);
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
+  const reviewCount = questionsFor('review').length;
+  const placementCount = questionsFor('placement').length;
 
   if (view.kind === 'stop') {
     // What this sitting read, from the lessons it planned and the reads it recorded -- not
@@ -1230,6 +1376,17 @@ export function Course({
           onDone={toOverview}
           onContinue={next ? () => startSession(next) : null}
         />
+        {reviewCount > 0 && (
+          <p>
+            <button
+              type="button"
+              className="btn btn--plain"
+              onClick={() => startPractice('review')}
+            >
+              Or answer the course’s review questions ({reviewCount})
+            </button>
+          </p>
+        )}
       </section>
     );
   }
@@ -1238,6 +1395,8 @@ export function Course({
   // first of those, and a skipped lesson is offered again rather than counted as finished.
   const courseEnded = status === 'ready' && lessons.length > 0 && next === null;
   const readCount = lessons.filter((l) => l.state === 'read').length;
+  // A course nobody has opened yet: nothing shown, read or skipped.
+  const untouched = lessons.length > 0 && lessons.every((l) => l.state === 'not_seen');
 
   return (
     <section className="stack measure course">
@@ -1356,7 +1515,23 @@ export function Course({
                     </button>
                   )
                 )}
+                {untouched && placementCount > 0 && (
+                  <button type="button" className="btn" onClick={() => startPractice('placement')}>
+                    Check what you already know first
+                  </button>
+                )}
+                {reviewCount > 0 && !untouched && (
+                  <button type="button" className="btn" onClick={() => startPractice('review')}>
+                    Review questions ({reviewCount})
+                  </button>
+                )}
               </div>
+              {untouched && placementCount > 0 && (
+                <p>
+                  {placementCount === 1 ? 'One question' : `${placementCount} questions`}, to find
+                  lessons you could skip. Nothing is skipped unless you choose to.
+                </p>
+              )}
               <CourseOutline
                 units={shownUnits}
                 currentLessonId={next?.lessonId ?? null}
