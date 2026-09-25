@@ -4500,6 +4500,7 @@ export type Database = {
       study_fold_strict: { Args: { p_text: string }; Returns: string }
       study_generation_available: { Args: never; Returns: boolean }
       study_gives_away: { Args: { p_answer: string }; Returns: boolean }
+      study_heuristic_spaced: { Args: { p_text: string }; Returns: string }
       study_heuristic_text: { Args: { p_text: string }; Returns: string }
       study_hidden_class: { Args: never; Returns: string }
       study_hidden_problems: { Args: { p_texts: string[] }; Returns: string[] }
