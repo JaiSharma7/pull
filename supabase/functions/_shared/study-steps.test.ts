@@ -42,6 +42,7 @@ function memoryDb(
   const reserved: { step: string; cents: number }[] = [];
   const journalled: JournalOpen[] = [];
   let persisted: unknown = null;
+  const validatedJobs: string[] = [];
   let recordFailures = opts.failRecord ?? 0;
   const journal: ProviderJournal = {
     async open(call) {
@@ -97,9 +98,21 @@ function memoryDb(
       persisted = payload;
       return { replayed: false };
     },
+    async validateCourse(jobId) {
+      validatedJobs.push(jobId);
+      return { claims: { validated: 1 } };
+    },
     journal,
   };
-  return { db, cache, recorded, reserved, journalled, persisted: () => persisted };
+  return {
+    db,
+    cache,
+    recorded,
+    reserved,
+    journalled,
+    validatedJobs,
+    persisted: () => persisted,
+  };
 }
 
 const job = (over: Partial<JobRow> = {}): JobRow => ({
@@ -190,6 +203,9 @@ describe('the study pipeline with the stub provider', () => {
     expect(payload.lessons.length).toBeGreaterThan(0);
     expect(payload.items.every((i) => i.claimKeys.length > 0)).toBe(true);
     expect(outputs.study_ground).toMatchObject({ withheld: 1 });
+    // And the course is validated last, by the database's checks, with no model.
+    expect(mem.validatedJobs).toEqual([job().id]);
+    expect(outputs.study_validate).toEqual({ claims: { validated: 1 } });
   });
 
   it("writes ids and counts to step outputs, never the reader's text", async () => {

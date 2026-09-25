@@ -7,7 +7,9 @@ repository, so what changed and when is public history rather than a claim.
 When it does, and you ask for a course built from study sources you saved, the title and
 text of the sources you choose are sent to Google's Gemini API to extract claims and write
 lessons and questions, which are stored privately in your account. It happens only when
-you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
+you ask and confirm. If you report part of a course as wrong or correct it, the report, the
+corrected version and the record of what was shown when are kept with the course, privately.
+See [What never reaches a model](#what-never-reaches-a-model).
 
 This revision also corrects statements that contradicted the rest of this page: the
 summary said a document you submitted for generation outlived your account (it does not),
@@ -305,6 +307,12 @@ goal, to write the lessons and questions. There is no fallback to another provid
 courses. It needs an account in the beta and your confirmation, each time, that you are
 sending that text.
 
+If you report part of a course as wrong, or correct it, the report, the corrected version and
+the history of what was shown when are kept with the course, readable only by you, and
+included in your account export. Checking a course, reporting it and correcting it involve
+no model. Answers you give to a course's questions will be recorded the same way once
+practice arrives; none are recorded yet.
+
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
 explanation you have written has ever been sent to a provider.** If that feature ships, this
@@ -425,7 +433,8 @@ this product refuses to charge for, so we are not going to quietly trim it.
 
 You can delete an individual private study source and all its versions from Studio.
 This removes the extracted text for that source, and any study course or cached model
-output built from it, without deleting your account.
+output built from it, with the course's reports, history and answers, without deleting your
+account.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,

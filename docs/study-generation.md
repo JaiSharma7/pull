@@ -2,9 +2,9 @@
 
 A reader's own source versions become a claim map with exact evidence, then a draft
 course: an overview, objectives, short lessons, and varied questions, each tied to the
-claims it rests on. This page covers the generation half. Validation, quarantine and
-correction, the guided course, and practice come in later changes; nothing described here
-is shown to a learner yet.
+claims it rests on. This page covers the generation half; what a learner may be shown, and
+how a reader corrects it, is [`study-validation.md`](./study-validation.md). The guided
+course and practice come in later changes, so nothing is shown to a learner yet.
 
 ## The pipeline
 
@@ -18,6 +18,8 @@ study_extract                     ExtractStudyClaims, once per window      (cach
 study_assemble                    AssembleStudyCourse over grounded claims (cached)
         │
 study_ground                      resolve evidence, check, write rows      (no model)
+        │
+study_validate                    validated or quarantined, checks in SQL  (no model)
 ```
 
 The steps run on the same worker, queue and dispatcher as the canonical pipeline, as a
@@ -72,9 +74,10 @@ and keeps a failing question or lesson as `rejected` with its reasons:
 | text fits its column                                                      | `too_long`                                                              |
 
 Everything that passes is `draft`, which means _well-formed and pending validation_, not
-correct. Answerability, ambiguity, multiple defensible answers and prompt injection that
-survived as content are the next change's validation and quarantine, and the release gate
-is the human-reviewed fixture.
+correct. `study_validate` then decides, by deterministic checks in SQL, which drafts are
+`validated` (shown) and which `quarantined`; see [`study-validation.md`](./study-validation.md).
+Groundedness beyond the span, ambiguity and multiple defensible answers remain human
+judgements, and the release gate is the human-reviewed fixture.
 
 Unanswerable questions the reader's goal invites are **withheld**, not written: the model
 records them with a reason in `study_generations.withheld`. Disagreements between sources
@@ -233,7 +236,6 @@ two independently written records.
 
 ## Not yet
 
-- Validation, quarantine, reporting and correction with versioned identities.
 - Course containers, progress events, and the learner-facing screens.
 - An Anthropic fallback for the study stages: the adapter journals and ledgers per attempt,
   and the Anthropic provider has not been taught that yet. When every Gemini model is

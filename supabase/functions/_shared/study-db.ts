@@ -160,6 +160,13 @@ export function createStudyDb(supabase: Db): StudyDb {
       ) as Record<string, unknown>;
     },
 
+    async validateCourse(jobId) {
+      return must(
+        await supabase.rpc('validate_study_course', { p_job_id: jobId }),
+        'validate study course',
+      ) as Record<string, unknown>;
+    },
+
     journal: {
       async open(call) {
         must(

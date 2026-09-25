@@ -261,6 +261,11 @@ const EXPORTED: { table: string; column: string; key: string; page?: number }[] 
   { table: 'study_lesson_claims', column: 'owner_id', key: 'id' },
   { table: 'study_items', column: 'owner_id', key: 'id' },
   { table: 'study_item_claims', column: 'owner_id', key: 'id' },
+  // What the reader did with it (20260925050000): the reports they filed, every status
+  // their claims, lessons and questions have had, and the answers recorded against them.
+  { table: 'study_reports', column: 'owner_id', key: 'id' },
+  { table: 'study_status_log', column: 'owner_id', key: 'id' },
+  { table: 'study_answer_events', column: 'owner_id', key: 'id' },
 ];
 
 /*

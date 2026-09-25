@@ -25,7 +25,10 @@ User
  ├── study_sources ─── study_source_versions       ← private extracted readings
  │    ├── study_generations                       ← a draft course from 1-5 versions
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
- │    │    └── study_lessons · study_items            ← linked to the claims they cite
+ │    │    ├── study_lessons · study_items            ← linked to the claims they cite;
+ │    │    │                                             versioned, one live per lineage
+ │    │    ├── study_reports · study_status_log       ← a reader's reports; every status
+ │    │    └── study_answer_events                    ← answers; the proof rule reads these
  │    └── study_stage_cache                       ← per-reader model output, reused across
  │                                                   courses; gone with any version it read
  ├── user_questions                               ← questions you wrote yourself
