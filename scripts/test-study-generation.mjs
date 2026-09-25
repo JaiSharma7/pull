@@ -378,7 +378,7 @@ try {
   const [current, outlined, listed, bundled] = psql(`
     select count(*) from public.study_course_overview o
       join public.study_generations g on g.course_id = o.course_id
-      where g.job_id = '${first}' and o.generation_id = g.id and o.lessons = 1 and o.questions = 2;
+      where g.job_id = '${first}' and o.generation_id = g.id and o.lesson_count = 1 and o.question_count = 2;
     select count(*) from public.study_generations g
       cross join lateral public.study_course_outline(g.course_id) o where g.job_id = '${first}';
     select count(*) from public.study_generations g

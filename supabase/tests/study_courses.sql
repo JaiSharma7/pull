@@ -466,6 +466,15 @@ begin
   if rows <> 'q1:shown,q2:recall_demonstrated,q3:answered' then
     raise exception 'question states are %', rows;
   end if;
+  -- The question list's set-based proof agrees with the rule, question by question.
+  if exists (
+    select 1 from public.study_course_questions(course_a) q
+    where (q.demonstrated_at is not null) <> exists (
+      select 1 from public.study_answer_events a
+      where a.item_id = q.item_id and public.study_answer_proves_recall(a.id))
+  ) then
+    raise exception 'study_course_questions disagrees with study_answer_proves_recall';
+  end if;
   if (select claims_demonstrated_count from public.study_course_overview where course_id = course_a) <> 1
      or (select demonstrated_at from public.study_course_questions(course_a) where item_id = q2)
         is null then
@@ -506,11 +515,20 @@ begin
      or exists (select 1 from public.study_course_questions(course_a)) then
     raise exception 'another reader saw a course that is not theirs';
   end if;
-  delete from public.study_courses where id = course_a;
-  if not found then null; end if;
+  begin
+    perform public.delete_study_course(course_a);
+    raise exception 'another reader deleted a course';
+  exception when no_data_found then null;
+  end;
+  perform pg_temp.become_reader(reader_a);
+  begin
+    delete from public.study_courses where id = course_a;
+    raise exception 'a course was deleted directly rather than through delete_study_course';
+  exception when insufficient_privilege then null;
+  end;
   perform pg_temp.as_owner();
   if not exists (select 1 from public.study_courses where id = course_a) then
-    raise exception 'another reader deleted a course';
+    raise exception 'a course was deleted by someone other than its reader';
   end if;
 
   -- ---------------------------------------------------------------- regeneration
@@ -669,7 +687,7 @@ begin
   end if;
 
   -- A reader deletes a course and keeps the source; the job preparing it is cancelled.
-  delete from public.study_courses where id = course_c;
+  perform public.delete_study_course(course_c);
   perform pg_temp.as_owner();
   if exists (select 1 from public.study_courses where id = course_c)
      or exists (select 1 from public.study_generations where job_id = job_c)
@@ -693,7 +711,9 @@ begin
      or has_table_privilege('service_role', 'public.study_courses', 'insert')
      or has_table_privilege('service_role', 'public.study_course_sources', 'insert')
      or has_table_privilege('service_role', 'public.study_progress_events', 'insert')
-     or has_table_privilege('authenticated', 'public.study_course_sources', 'delete') then
+     or has_table_privilege('authenticated', 'public.study_course_sources', 'delete')
+     or has_table_privilege('authenticated', 'public.study_courses', 'delete')
+     or has_function_privilege('anon', 'public.delete_study_course(uuid)', 'execute') then
     raise exception 'a course table or function is reachable where it should not be';
   end if;
   -- Private courses and the public curated paths share nothing.

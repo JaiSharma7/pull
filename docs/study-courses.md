@@ -7,7 +7,8 @@ itself, the sources it follows, how it is prepared again when a source changes, 
 record of what the reader has been shown.
 
 The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
-`20260925130000_study_course_review_fixes.sql` superseding parts of it after review. The
+`20260925130000_study_course_review_fixes.sql` and `20260925140000_study_course_locks.sql`
+superseding parts of it after review. The
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
@@ -178,28 +179,40 @@ generation); the outline's `first_shown_at` and `read_at`; the question list's `
   and cancels a job still preparing one. A course that keeps other sources stays, with no
   current generation, and can be prepared again from them. A course whose last source goes
   goes with it.
-- **Deleting a course** (the reader may, directly) deletes all of its generations and
-  cancels a job still preparing it. Its sources stay -- and so does the model output cached
-  from them (`study_stage_cache`), keyed by the source versions rather than the course, until
-  those sources are deleted.
+- **Deleting a course** is `delete_study_course(course)` (P0002 when it is not the
+  reader's): it deletes all of the course's generations and cancels a job still preparing
+  one. Its sources stay -- and so does the model output cached from them
+  (`study_stage_cache`), keyed by the source versions rather than the course, until those
+  sources are deleted. There is no direct DELETE on the table: the function takes the
+  course's sources before the course, the order a source deletion takes them.
 - **Deleting the account** deletes everything.
 - All three new tables are in the account export.
 
 ## Lock order
 
-A source deletion takes the source, then its versions, then -- through triggers -- the
-generations built on them and, when it was the bundle's last source, the course. The writers
-here take rows in the same order, so none can deadlock with a deletion:
+Two things keep the writers here from deadlocking with each other and with deletion; both
+were reproduced as deadlocks with real sessions before they were in place.
 
-- A progress event references the generation and then the lesson or question, and never the
-  course.
-- `enqueue_study_generation` links the bundle's sources before the generation's versions.
-- A regeneration key-shares the bundle's sources before it touches the course.
+- **One lock per reader for progress and deletion.** `record_study_progress` holds the
+  reader's `study_progress:<owner>` advisory lock for its whole call, and deleting one of
+  the reader's sources or courses takes the same lock before its cascade reaches any
+  generation, lesson or question (a `before delete` trigger). A batch never touches sources
+  or courses, so the two serialise rather than meeting in opposite orders -- a batch may
+  hold events for two generations, which a deletion takes in whatever order its cascade
+  reaches them. It also serialises two deletions of one reader's sources.
+- **Sources before courses.** Foreign-key cascades run level by level: a source deletion
+  takes the source, its versions and its bundle rows, and then -- through the trigger, when
+  it was the last source -- the course. So everything else that locks a course takes its
+  sources first: `delete_study_course` and a regeneration key-share the bundle's sources
+  before the course, and `enqueue_study_generation` links a new course's sources before
+  its versions. The last-source trigger takes the course row before it looks for the
+  bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
 
 ## Errors
 
 - **28000:** not signed in (or a guest session, for preparation).
-- **P0002:** no such course, including someone else's.
+- **P0002:** no such course, including someone else's -- from a regeneration or
+  `delete_study_course`.
 - **22023:** a malformed request, a batch of the wrong size, preparation without consent, or
   a mutation id already used for another request.
 - **55000:** a regeneration refused, with DETAIL `preparing` or `unchanged`; or an update to

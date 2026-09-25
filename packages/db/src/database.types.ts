@@ -4264,6 +4264,7 @@ export type Database = {
       counterpulls_for_work: { Args: { p_work_id: string }; Returns: Json }
       daily_spend_cap_cents: { Args: never; Returns: number }
       delete_my_account: { Args: never; Returns: undefined }
+      delete_study_course: { Args: { p_course_id: string }; Returns: undefined }
       delta_covered_distance: { Args: never; Returns: number }
       delta_has_evidence: { Args: { p_pull_id: string }; Returns: boolean }
       disable_generation_dispatcher: { Args: never; Returns: string }
