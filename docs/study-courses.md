@@ -8,8 +8,9 @@ record of what the reader has been shown.
 
 The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
 `20260925130000_study_course_review_fixes.sql`, `20260925140000_study_course_locks.sql`,
-`20260925150000_study_course_review_round_two.sql` and
-`20260925160000_study_course_lock_order.sql` superseding parts of it after review. The
+`20260925150000_study_course_review_round_two.sql`,
+`20260925160000_study_course_lock_order.sql` and
+`20260925170000_study_course_review_round_three.sql` superseding parts of it after review. The
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
@@ -37,10 +38,12 @@ study_courses ─── study_course_sources      the course, and the sources it
   `enqueue_study_generation` creates the course and its bundle with the first one.
 - **The current generation** is chosen among the course's finished generations (persisted,
   with their own text decided in the transaction that moved their drafts): the newest with
-  a lesson that can be shown -- validated, or suspended and able to return once its report
-  is resolved -- else the newest with such a question, else the newest finished one. So a
-  generation still being prepared, one that failed before it was persisted, and one whose
-  lessons validation held back all leave the one before it current.
+  a lesson that was ever validated -- by validation, or as the reader's own correction --
+  else the newest with such a question, else the newest finished one. So a generation still
+  being prepared, one that failed before it was persisted, and one whose lessons validation
+  held back all leave the one before it current. The rule reads the status log, which
+  nothing updates, so what the reader does afterwards -- a report, a withdrawal -- never
+  moves a course to another generation.
 
 ## Preparing a course again
 
@@ -48,13 +51,17 @@ study_courses ─── study_course_sources      the course, and the sources it
 again from the newest version of each source in its bundle, for the course's own goal:
 
 - It goes through the same door as the first preparation: the allowlist, consent, the size
-  limit, the global and per-reader budget, and the shared job counts.
+  limit, the global and per-reader budget, and the shared job counts. The newest versions
+  can together pass the size limit where the ones the course was made from did not; it is
+  then refused with 22023 and DETAIL `too_large`, however often it is asked, until the
+  reader saves a shorter version or deletes a source.
 - It is refused with 55000 and DETAIL `preparing` while a generation of the course is still
   queued or running.
 - It is refused with 55000 and DETAIL `unchanged` when a finished generation already used
   exactly these versions: while the prompt, schema and model are unchanged, the stage cache
   would return the same course and the reader would pay a job for it. That includes a
-  generation validation held back entirely; a different outcome needs a changed source.
+  generation whose lessons validation held back; a different outcome needs a changed
+  source.
 - A mutation id makes it idempotent, as for the first preparation. A mutation id already
   used for another course is refused with 22023 rather than answered with that course's job.
 - **Nothing carries over.** The new generation's lessons and questions are new rows, so a
@@ -64,11 +71,13 @@ again from the newest version of each source in its bundle, for the course's own
 `study_course_overview.update_available` says when a bundle source has a newer version than
 the newest finished generation used -- the newest, not the current, so it never offers a
 regeneration that would be refused as unchanged. It does not know whether one is already
-being prepared: offer preparation only when `preparing` is false. It is also false when no
+being prepared, or whether the newest versions pass the size limit: offer preparation only
+when `preparing` is false, and say `too_large` in words. It is also false when no
 generation has finished -- the first failed before it was persisted, or a source deletion
 took them all -- and a regeneration is then accepted, so offer preparation whenever
 `generation_id` is null and nothing is preparing. `newer_generation_held_back` says when
-the newest finished generation is not the current one.
+the newest finished generation is not the current one, and `held_back` when validation
+passed nothing in the current one.
 
 **Responses.** `enqueue_study_generation` and `regenerate_study_course` return
 `{ jobId, generationId, courseId, status, queue, delaySeconds, remainingToday, replayed }`.
@@ -84,7 +93,8 @@ reader, and written only through `record_study_progress`:
 ```
 record_study_progress([{ clientEventId, kind, lessonId | itemId, occurredAt? }, ...])
   kind: lesson_shown | lesson_read | lesson_skipped | item_shown
-  occurredAt: an ISO-8601 string, or epoch milliseconds as a JSON number; the server's time
+  occurredAt: an ISO-8601 string with an offset (one without is read as UTC, and other forms
+              Postgres reads are accepted), or epoch milliseconds as a JSON number; the server's time
               when absent or null; any other type is malformed
   -> { recorded, duplicates, refused: [{ index, clientEventId?, reason }] }
 ```
@@ -140,11 +150,16 @@ give structure and state; the lessons' and questions' own text is read from the
 | `disagreements`, `withheld`                       | Likewise: disagreements between sources, and questions the claims cannot answer           |
 | `latest_generation_id`, `latest_job_status`       | The newest generation and its job, current or not                                         |
 | `preparing`                                       | A generation of the course is queued or running                                           |
-| `newer_generation_held_back`                      | The newest finished generation is not current: validation held all of it back             |
+| `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
+| `held_back`                                       | Nothing in the current generation was ever validated: validation held all of it back      |
 | `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
 | `claim_count`, `claims_demonstrated_count`        | Validated claims, and those whose recall the reader has demonstrated                      |
+
+A current generation with no lesson to show is one of two things, and `held_back` says
+which: validation passed nothing in it, or the reader's own reports and withdrawals took
+everything it passed.
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
 order -- unit, then position -- with the unit's number and title, the lesson's key, title,
@@ -156,6 +171,11 @@ objective, minutes and `question_count`, and its state: `read`, `skipped`, `show
 - A unit's title is the one on the lesson whose unit title a correction changed most
   recently, or its first lesson's when none was corrected. A reader correcting one lesson's
   unit title retitles the unit.
+- Read the unit's title from the outline, not from a lesson's own row in
+  `study_visible_lessons`: each lesson keeps the title it was generated or corrected with,
+  so after a correction made through another lesson the two differ. The outline's title
+  follows the lessons it shows, so while the lesson that carried a retitle is reported, the
+  unit reads as it did before.
 
 **`study_course_questions(course)`**: the current generation's validated questions, lesson
 by lesson in course order and then the course-level ones, each with its key, purpose, kind,
@@ -173,7 +193,9 @@ difficulty, authorship and state, with `first_shown_at`, `last_answered_at` and
 It is orthogonal to these states -- a question can be demonstrated and due -- so it will be a
 column, not a fifth state.
 
-A question's `lesson_id` names only a lesson the outline shows. A question whose lesson is
+In this list, a question's `lesson_id` names only a lesson the outline shows -- so group
+questions by the list's `lesson_id`, not by the one on `study_visible_items`, which keeps the
+lesson it was generated with. A question whose lesson is
 held back -- reported, or quarantined -- reads as course-level until the lesson returns.
 
 **Nullable columns.** The generated types mark every column a function returns as non-null;
@@ -182,7 +204,7 @@ generation); the outline's `first_shown_at` and `read_at`; the question list's `
 (a course-level question, or one whose lesson is retired or held back), `first_shown_at`,
 `last_answered_at` and `demonstrated_at`. The overview is a view, so its generated types
 mark every column nullable; these never are: `course_id`, `goal`, `created_at`, every
-count, `preparing`, `newer_generation_held_back`, `update_available`, and `objectives`,
+count, `preparing`, `newer_generation_held_back`, `held_back`, `update_available`, and `objectives`,
 `disagreements` and `withheld` (empty rather than null while the text is not validated).
 
 ## Deletion
@@ -203,24 +225,32 @@ count, `preparing`, `newer_generation_held_back`, `update_available`, and `objec
 
 ## Lock order
 
-Two rules keep the writers here from deadlocking with each other and with deletion; every
-order below was reproduced as a deadlock with real sessions before it was in place.
+Three rules keep the writers here from deadlocking with each other and with deletion; every
+order below was reproduced as a deadlock with real sessions before it was in place. In
+short: the account row, then the reader's study lock, then their sources, then a course.
 
-- **One lock per reader, before any row.** `record_study_progress` holds the reader's
-  `study_progress:<owner>` advisory lock for its whole call. Every path that deletes a
-  reader's study rows takes the same lock before it locks any row, so the two serialise
-  rather than meeting in opposite orders -- a batch may hold events for two generations,
-  which a deletion takes in whatever order its cascade reaches them:
+- **The account row first.** Saving a source locks the reader's `auth.users` row and then
+  the source; deleting the account locks the row before anything it cascades to. So
+  preparation -- a first one or a regeneration -- key-shares the account row before it locks
+  anything, and `delete_my_account` takes its own row before the reader's study lock, which
+  serialises it with an administrator deleting the same account. Nothing holding the study
+  lock ever waits on the account row: a progress batch, a reader's source deletion and
+  `delete_study_course` never touch it.
+- **One lock per reader, before their study rows.** `record_study_progress` holds the
+  reader's `study_progress:<owner>` advisory lock for its whole call. Every path that deletes
+  a reader's study rows takes the same lock before it locks any of them, so the two
+  serialise rather than meeting in opposite orders -- a batch may hold events for two
+  generations, which a deletion takes in whatever order its cascade reaches them:
   - a reader's own DELETE on `study_sources`, from a statement-level trigger that takes the
     lock of the reader making it (RLS confines the statement to their rows) -- so a
     deletion of several sources and one of a single source cannot take them in opposite
     orders;
   - `delete_study_course`, before it touches the course's sources;
-  - `delete_my_account`, before its first delete: it deletes the reader's jobs first, and
-    those cascade to every generation, lesson and question;
+  - `delete_my_account`, after its account row and before its first delete: it deletes the
+    reader's jobs first, and those cascade to every generation, lesson and question;
   - a deletion of the `auth.users` row from outside the app -- the dashboard, the admin
     API -- from a trigger on that row, before any cascade, for an account with study
-    sources. A batch or a reader's deletion never waits on that row.
+    sources.
 
   A row-level trigger on `study_sources` and `study_courses` takes it too, and finds it
   already held on every path above; it covers a deletion that reaches them some other way.
@@ -233,8 +263,9 @@ order below was reproduced as a deadlock with real sessions before it was in pla
   its versions. The last-source trigger takes the course row before it looks for the
   bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
 
-What remains is a reader deleting their account at the moment an administrator deletes it
-too. Postgres detects that deadlock and ends one of the two, and the other completes.
+**Deleting many accounts in one statement** takes one study lock for each account with study
+sources, and every one of them is held in Postgres's shared lock table until the statement
+commits. Purge accounts in batches of a few hundred, not in one statement.
 
 ## Errors
 
@@ -243,13 +274,16 @@ HTTP status: PostgREST answers P0002 and 55000 with a 500.
 
 - **42501:** a signed-out caller, refused by the functions' grants before they run (HTTP
   401); preparation refused with DETAIL `beta` for a reader outside the beta, or DETAIL
-  `unavailable` for a chosen source version that is not, or is no longer, theirs.
-- **28000:** a guest session, refused by preparation.
+  `unavailable` for a chosen source version that is not, or is no longer, theirs; or a
+  direct write to any of these tables, which no reader holds a grant for (HTTP 403).
+- **28000:** a guest session, refused by preparation -- or an account deleted while the
+  request was on its way.
 - **P0002:** no such course, including someone else's -- from a regeneration or
   `delete_study_course`.
-- **22023:** a malformed request, a batch of the wrong size, preparation without consent, or
-  a mutation id already used for another request.
-- **55000:** a regeneration refused, with DETAIL `preparing` or `unchanged`; or an update to
-  recorded progress.
+- **22023:** preparation over the size limit, with DETAIL `too_large`; otherwise a malformed
+  request, a batch of the wrong size, preparation without consent, or a mutation id already
+  used for another request.
+- **55000:** a regeneration refused, with DETAIL `preparing` or `unchanged`. (An update to
+  recorded progress is 55000 too, but only the service role could attempt one.)
 - **53400, 23514:** preparation's budget and daily job ceiling, as in
   [`study-generation.md`](./study-generation.md).

@@ -3752,6 +3752,7 @@ export type Database = {
           disagreements: Json | null
           generation_id: string | null
           goal: string | null
+          held_back: boolean | null
           latest_generation_id: string | null
           latest_job_status: Database["public"]["Enums"]["job_status"] | null
           lesson_count: number | null
@@ -4733,6 +4734,10 @@ export type Database = {
       study_fold: { Args: { p_text: string }; Returns: string }
       study_fold_strict: { Args: { p_text: string }; Returns: string }
       study_generation_available: { Args: never; Returns: boolean }
+      study_generation_rank: {
+        Args: { p_generation_id: string }
+        Returns: number
+      }
       study_gives_away: { Args: { p_answer: string }; Returns: boolean }
       study_heuristic_spaced: { Args: { p_text: string }; Returns: string }
       study_heuristic_text: { Args: { p_text: string }; Returns: string }

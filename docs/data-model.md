@@ -138,9 +138,10 @@ journal and ledger keep no content and are kept. See
 the reader's goal and, in `study_course_sources`, the sources the course follows; each
 `study_generations` row is one preparation of it from the versions it pinned. Regenerating
 after a source changes adds a generation to the same course rather than a new course. The
-current generation is the newest finished one with a lesson that can be shown, else with a
-question, else the newest finished -- so a regeneration whose lessons were all held back
-does not replace one the reader is studying. A regeneration carries nothing over: its
+current generation is the newest finished one with a lesson that was ever validated, else
+with such a question, else the newest finished -- so a regeneration whose lessons were all
+held back does not replace one the reader is studying, and nothing the reader does
+afterwards, such as withdrawing lessons, moves the course back to an older one. A regeneration carries nothing over: its
 lessons and questions are new rows. Within a generation, what the reader was shown, read or
 skipped (`study_progress_events`) follows a lesson or question across the reader's own
 corrections; answers and proof stay with the version answered. A course goes with its last
