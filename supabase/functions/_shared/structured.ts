@@ -9,9 +9,10 @@
  * it. So `generate` never throws for a provider failure; it returns the outcome AND the
  * attempts, and the step records the attempts before it decides anything else.
  *
- * The retry policy is the summary provider's, imported rather than restated: two
- * attempts per model on a 5xx or a dropped connection, the next model on 404/429/503,
- * stop on anything else, all inside one wall-clock budget.
+ * The retry policy is the summary provider's for answers of known cost -- two attempts
+ * per model on a 5xx, the next model on 404/429/503, stop on anything else, all inside
+ * one wall-clock budget -- and stricter for the rest: after an attempt that was sent and
+ * may have been billed without saying so, it stops, so one hold never covers two.
  *
  * Law 2: called only by the worker's study steps, at generation time.
  */
@@ -46,8 +47,9 @@ export interface ProviderCallRecord {
   costCents: number;
   /**
    * False when the provider may have charged without saying what: a request that was
-   * sent and then aborted or dropped, or a 200 whose body could not be read. The cost
-   * is recorded as zero and the row says the zero is not a measurement.
+   * sent and then aborted or dropped, or a 200 whose body could not be read. The step
+   * charges it at the ceiling its hold was sized to, and the row says the figure is a
+   * ceiling rather than a measurement.
    */
   usageKnown: boolean;
 }
@@ -98,6 +100,29 @@ function textOf(payload: Record<string, unknown>): { text: string; finishReason?
     text,
     finishReason: typeof candidate.finishReason === 'string' ? candidate.finishReason : undefined,
   };
+}
+
+/**
+ * Replace lone surrogates with U+FFFD, through the whole parsed value.
+ *
+ * `JSON.parse` accepts a `\\ud800` escape the model wrote and `JSON.stringify` writes it
+ * back out, and jsonb refuses it -- which failed the cache insert and, with it, the
+ * ledger rows recorded in the same call.
+ */
+export function wellFormed(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+      '\uFFFD',
+    );
+  }
+  if (Array.isArray(value)) return value.map(wellFormed);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [wellFormed(k) as string, wellFormed(v)]),
+    );
+  }
+  return value;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -182,8 +207,15 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
                   costCents: 0,
                   usageKnown: false,
                 });
-                // The same single retry `callGemini` gives a dropped connection.
-                if (attempt === 1) continue;
+                /*
+                 * NO RETRY, which is where this parts from `callGemini`. An attempt that
+                 * was sent and then dropped may have been billed, and is charged at the
+                 * ceiling of the ONE hold this call took; a retry, or the next model,
+                 * would be a second possibly-billed attempt under the same hold, and the
+                 * day could pass the cap by a ceiling per attempt while it was in flight.
+                 * Answers of known cost (a 5xx, a 429) still retry and fall through: they
+                 * cost nothing. The step's own retry takes a fresh hold.
+                 */
                 return failed(`Gemini ${model} request failed: ${e.message}`, model);
               }
               return failed(e instanceof Error ? e.message : String(e), model);
@@ -255,7 +287,7 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
               return failed(`Gemini returned no text (finishReason: ${finishReason})`, model);
             }
             try {
-              return { ok: true, value: JSON.parse(text) as unknown, model, calls };
+              return { ok: true, value: wellFormed(JSON.parse(text)), model, calls };
             } catch {
               // No excerpt: this message lands in `job_steps.error`, and model output here is
               // derived from the reader's text, which must not outlive a deleted source.

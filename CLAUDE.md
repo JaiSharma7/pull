@@ -27,8 +27,9 @@ and reviewers should reject it on that basis alone.
    imported — or for a study course built from sources they saved, and that is a model
    call per reader per document, which is the ratio above pointing the wrong way. A course
    is several calls rather than one (a bounded extraction per window of each source, then
-   one assembly), each reserved and ledgered on its own; the cap below, not a per-job call
-   count, is what bounds the day. It is sanctioned because every term that makes the ratio
+   one assembly), each reserved and ledgered on its own; the cap below and each reader's
+   daily share of study spend (`study_requester_daily_cap_cents()`), not a per-job call
+   count, are what bound the day. It is sanctioned because every term that makes the ratio
    dangerous is capped in the schema rather than in a comment:
 
    - It is never in a read path. Nothing renders by calling a model; a Studio job is

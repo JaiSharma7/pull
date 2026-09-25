@@ -501,6 +501,25 @@ describe('normalizeStudyCourse', () => {
     expect(out.items[0]?.rejectionReasons).toContain(reason);
   });
 
+  it('still catches a give-away in a script written without spaces', () => {
+    const out = normalizeStudyCourse(
+      {
+        ...base,
+        units: [{ title: 'Unit', lessons: [lesson] }],
+        questions: [
+          q({
+            kind: 'short_recall',
+            prompt: '什么是检索练习？检索练习是指主动回忆。',
+            answer: '检索练习',
+            distractors: [],
+          }),
+        ],
+      },
+      shown,
+    );
+    expect(out.items[0]?.rejectionReasons).toContain('answer_in_prompt');
+  });
+
   it('does not call a choice prompt that names its options a give-away, or match inside words', () => {
     const out = normalizeStudyCourse(
       {

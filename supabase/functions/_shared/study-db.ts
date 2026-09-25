@@ -127,7 +127,8 @@ export function createStudyDb(supabase: Db): StudyDb {
     },
 
     async reserveBudget(jobId, step, cents) {
-      const { error } = await supabase.rpc('reserve_budget', {
+      // The study door: the reader's own daily share first, then the global cap.
+      const { error } = await supabase.rpc('reserve_study_budget', {
         p_job_id: jobId,
         p_step: step,
         p_cents: cents,

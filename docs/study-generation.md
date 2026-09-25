@@ -121,11 +121,16 @@ and a replay neither doubles a charge nor adds it to the job twice. A charge is 
 rolled back because the reader deleted the material mid-call (only the cache entry is
 skipped), nor because they deleted their account (the attempt is ledgered with no job).
 
-An attempt the provider may have billed without reporting usage -- sent and then aborted
-or dropped, or answered with a body that could not be read -- is charged at the ceiling
+An attempt that reached the provider without reporting usage -- sent and then aborted at
+its timeout, or answered with a body that could not be read -- is charged at the ceiling
 its hold was sized to, with `usage_known = false`. Recorded at zero it would have
 released its hold and let the day's total forget money that may have been spent; a
-report can still tell a ceiling from a measurement by the flag.
+report can still tell a ceiling from a measurement by the flag. A connection that failed
+(refused, DNS, TLS) is recorded at zero, also flagged, as the summary pipeline treats the
+same failure. After either, the call stops rather than retrying or moving to the next
+model, so one hold never covers two attempts that may have been billed; answers of known
+cost (a 5xx, a 429) still retry. A redirect is not followed: it is recorded as an answer
+of known zero cost.
 
 **Reconciliation.** `study_provider_call_audit(since)` reports journalled attempts, ledgered
 attempts, journalled attempts with no ledger row (should be zero), attempts left open by a
@@ -134,7 +139,13 @@ column is an alert.
 
 **The budget.** Each call reserves its worst case immediately before it is sent (the
 provider's output ceiling plus the byte length of the prompt and schema) and is refused
-into a budget wait when the global daily cap cannot fund it. The worker settles each hold
+into a budget wait when the global daily cap cannot fund it, or when the reader's own
+share of study spend cannot (`study_requester_daily_cap_cents()`, 60 cents: their study
+jobs' ledger today plus their open holds). The share exists because the cap bounds what
+the product spends and is not a fairness mechanism: without it, one maximal course --
+up to fourteen paid calls -- could reach the cap and close the door on every reader until
+00:00 UTC. It also bounds what a reader's failing jobs can charge at the ceiling. The
+worker settles each hold
 exactly once, on its way out of the invocation -- through `record_job_step`, the failure
 path, or explicitly when `study_extract` asks to be sent again -- and never inside
 `record_study_stage`, because one settle too many releases a share of a hold that another

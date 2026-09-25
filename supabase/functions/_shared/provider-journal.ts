@@ -107,9 +107,9 @@ export function createJournalledTransport(
     let response: Response;
     try {
       // Never followed. A 307/308 would re-send the reader's text and the key header to
-      // wherever it pointed, and the hop would go unjournalled. A provider that redirects
-      // is a failed request, recorded as one.
-      response = await inner(input, { ...init, redirect: 'error' });
+      // wherever it pointed, and the hop would go unjournalled. `manual` hands the 3xx
+      // back as the answer it is -- recorded, of known zero cost, and not retried.
+      response = await inner(input, { ...init, redirect: 'manual' });
     } catch (e) {
       const aborted = isAbort(e);
       // Logged rather than thrown: the request's own failure is the error that matters,

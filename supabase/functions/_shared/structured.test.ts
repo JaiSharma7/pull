@@ -153,7 +153,7 @@ describe('createJournalledTransport', () => {
       method: 'POST',
       redirect: 'follow',
     });
-    expect(seen[0]?.redirect).toBe('error');
+    expect(seen[0]?.redirect).toBe('manual');
     expect(seen[0]?.method).toBe('POST');
   });
 
@@ -232,16 +232,31 @@ describe('createGeminiStructuredProvider', () => {
     reconciles(outcome, rows);
   });
 
-  it('marks a dropped connection as usage unknown, retries once, then fails', async () => {
-    const { outcome, rows } = await run(
-      script(new Error('socket hang up'), new Error('socket hang up')),
-    );
+  it('stops after a dropped connection: one possibly-billed attempt per hold, never two', async () => {
+    const net = script(new Error('socket hang up'), ok({ claims: [], gaps: [] }));
+    const { outcome, rows } = await run(net);
     expect(outcome.ok).toBe(false);
+    expect(net.urls).toHaveLength(1);
     expect(outcome.calls.map((c) => [c.outcome, c.usageKnown, c.costCents])).toEqual([
-      ['network_error', false, 0],
       ['network_error', false, 0],
     ]);
     reconciles(outcome, rows);
+  });
+
+  it('does not move to the next model after an abort either', async () => {
+    const abort = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const net = script(abort, ok({ claims: [], gaps: [] }));
+    const { outcome } = await run(net);
+    expect(outcome.ok).toBe(false);
+    expect(net.urls).toHaveLength(1);
+    expect(outcome.calls[0]).toMatchObject({ outcome: 'aborted', usageKnown: false });
+  });
+
+  it('still retries and falls through on answers of known cost', async () => {
+    const net = script(status(503), status(503), status(429), ok({ claims: [], gaps: [] }));
+    const { outcome } = await run(net, { summaryModels: ['a', 'b', 'c'] });
+    expect(outcome.ok).toBe(true);
+    expect(net.urls).toHaveLength(4);
   });
 
   it('reports unavailable, with every attempt, when the whole chain is out', async () => {
@@ -318,6 +333,39 @@ describe('createGeminiStructuredProvider', () => {
     expect(Date.now() - started).toBeLessThan(2000);
     expect(outcome.ok).toBe(false);
     expect(outcome.calls[0]).toMatchObject({ httpStatus: 200, usageKnown: false });
+  });
+
+  it('replaces a lone surrogate the model wrote, which jsonb would refuse', async () => {
+    const raw = JSON.stringify({
+      candidates: [
+        { content: { parts: [{ text: '{"claims":[],"gaps":["bad \\ud800 escape"]}' }] } },
+      ],
+      usageMetadata: { promptTokenCount: 1 },
+    });
+    const { outcome } = await run(script(new Response(raw, { status: 200 })));
+    expect(outcome.ok).toBe(true);
+    const gaps = (outcome.ok ? (outcome.value as { gaps: string[] }).gaps : []) ?? [];
+    expect(gaps[0]).toBe('bad \uFFFD escape');
+  });
+
+  it('records a redirect as an answer of known cost, and does not follow it', async () => {
+    const seen: RequestInit[] = [];
+    const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return new Response('', { status: 307, headers: { location: 'https://example.com/' } });
+    }) as typeof fetch;
+    const { journal, rows } = memoryJournal();
+    const outcome = await createGeminiStructuredProvider(config()).generate(
+      'ExtractStudyClaims',
+      args,
+      createJournalledTransport(journal, scope, impl, ids),
+    );
+    expect(seen[0]?.redirect).toBe('manual');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.calls).toEqual([
+      expect.objectContaining({ httpStatus: 307, usageKnown: true, costCents: 0 }),
+    ]);
+    expect([...rows.values()][0]?.outcome).toBe('responded');
   });
 
   it('records a 200 whose body cannot be read as usage unknown', async () => {

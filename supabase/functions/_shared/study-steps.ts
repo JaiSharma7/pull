@@ -78,9 +78,15 @@ export interface StudyDb {
   ): Promise<CachedStage | null>;
   /** The entries with these ids that belong to this owner. */
   loadCachedStages(ownerId: string, ids: readonly string[]): Promise<CachedStage[]>;
-  /** Hold `cents` against the day's cap; throws `BudgetExhaustedError` when refused. */
+  /**
+   * Hold `cents` against the reader's daily study share and then the day's cap; throws
+   * `BudgetExhaustedError` when either refuses.
+   */
   reserveBudget(jobId: string, step: string, cents: number): Promise<void>;
-  /** Ledger every attempt, cache the result if any, settle the hold. Returns the cache id. */
+  /**
+   * Ledger every attempt and cache the result if any. Returns the cache id, or null when
+   * there was nothing to cache or the course is gone. Does NOT settle: the worker does.
+   */
   recordStage(
     jobId: string,
     step: string,
@@ -153,8 +159,16 @@ async function recordAttempts(
    * cap that sometimes refuses too much is a cap; one that forgets is not. The row keeps
    * `usage_known = false`, so a cost report can tell a ceiling from a measurement.
    */
+  /*
+   * Only an attempt that REACHED the provider: aborted after sending, or a 200 whose body
+   * could not be read. A `network_error` -- connection refused, DNS, TLS -- is recorded
+   * at zero, still flagged unknown, as the summary pipeline treats the same failure;
+   * charging it the ceiling put phantom spend on the day for requests nobody served.
+   */
   const calls = outcome.calls.map((c) =>
-    c.usageKnown ? c : { ...c, costCents: Math.max(c.costCents, ceilingCents) },
+    c.usageKnown || c.outcome === 'network_error'
+      ? c
+      : { ...c, costCents: Math.max(c.costCents, ceilingCents) },
   );
   try {
     return await deps.db.recordStage(deps.job.id, step, calls, cache);
@@ -162,6 +176,15 @@ async function recordAttempts(
     try {
       return await deps.db.recordStage(deps.job.id, step, calls, cache);
     } catch (e) {
+      // The attempts matter more than the cache: if the entry is what Postgres refused,
+      // ledger them without it and let the step fail and retry.
+      if (cache) {
+        const ledgered = await deps.db.recordStage(deps.job.id, step, calls, null).then(
+          () => true,
+          () => false,
+        );
+        if (ledgered) return null;
+      }
       throw new BilledStepError(
         `${step}: could not record provider attempts: ${e instanceof Error ? e.message : String(e)}`,
         {
@@ -182,7 +205,7 @@ async function recordAttempts(
 function unusable(outcome: StructuredOutcome, usable: boolean, missing: string): string {
   if (!outcome.ok) return outcome.error;
   return usable
-    ? 'the study material for this job was deleted'
+    ? 'the result could not be stored; the study material may have been deleted'
     : `the provider returned ${missing}`;
 }
 
@@ -231,7 +254,9 @@ async function assemblyKey(
     ownerId: generation.ownerId,
     version,
     providerSignature: deps.provider.signature,
-    input: [args.goal, args.claims],
+    // The course's own versions too: an entry is linked to the sources of the course that
+    // made it, and a course over a different set should not depend on those links.
+    input: [generation.sources.map((s) => s.versionId).sort(), args.goal, args.claims],
   });
 }
 

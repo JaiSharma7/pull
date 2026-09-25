@@ -591,7 +591,13 @@ export function selectAssemblyClaims(claims: readonly ClaimRow[]): ClaimRow[] {
  * question could then cite by a real key.
  */
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  // `\s` misses NEL (U+0085), and a bracket inside a field could open a key of its own
+  // on the same line; both are neutralised.
+  return text
+    .replace(/[\s\u0085]+/g, ' ')
+    .replace(/\[/g, '(')
+    .replace(/\]/g, ')')
+    .trim();
 }
 
 export function claimsDigest(claims: readonly ClaimRow[]): string {
@@ -707,9 +713,19 @@ export function answerKey(text: string): string {
 }
 
 /** Whether `phrase` occurs in `text` as whole words, after `answerKey` folding. */
+const UNSPACED_SCRIPT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/**
+ * Whether `phrase` occurs in `text` as whole words, after `answerKey` folding -- or as
+ * a plain substring when the phrase is written in a script without spaces between words,
+ * where a whole-word test could never match at all.
+ */
 function containsPhrase(text: string, phrase: string): boolean {
   const p = answerKey(phrase);
-  return p.length > 0 && ` ${answerKey(text)} `.includes(` ${p} `);
+  if (p.length === 0) return false;
+  if (UNSPACED_SCRIPT.test(p)) return answerKey(text).includes(p);
+  return ` ${answerKey(text)} `.includes(` ${p} `);
 }
 
 function bounded(value: unknown, max: number, reasons: string[]): string {

@@ -75,6 +75,7 @@ declare
   call_1    uuid := extensions.gen_random_uuid();
   call_2    uuid := extensions.gen_random_uuid();
   call_late uuid := extensions.gen_random_uuid();
+  b_job     uuid;
   stray     uuid := extensions.gen_random_uuid();
   cache_id  uuid;
   persisted jsonb;
@@ -227,6 +228,7 @@ begin
   if queued ->> 'queue' <> 'normal' or (queued ->> 'delaySeconds')::int <= 0 then
     raise exception 'a fourth job of the day was not staggered: %', queued;
   end if;
+  b_job := (queued ->> 'jobId')::uuid;
 
   -- ------------------------------------------------------- the worker's writes
   -- The journal and the worker's functions are out of a reader's reach.
@@ -337,6 +339,36 @@ begin
   if audit.journalled <> 3 or audit.ledgered <> 2 or audit.unledgered <> 1 then
     raise exception 'audit did not see the unledgered attempt: %', audit;
   end if;
+
+  -- ------------------------------------------------- one reader's share of the day
+  -- A reader whose study jobs have used most of their share is refused a hold that would
+  -- pass it, and a new course at the door; another reader is not affected.
+  perform pg_temp.as_owner();
+  insert into public.cost_ledger (job_id, provider, operation, unit, quantity, cost_cents)
+  values (the_job, 'share-test', 'study_extract', 'tokens', 0,
+          public.study_requester_daily_cap_cents() - 10);
+  perform pg_temp.become_worker();
+  begin
+    perform public.reserve_study_budget(the_job, 'study_assemble', 16);
+    raise exception 'a hold passed the reader''s share of the day';
+  exception when sqlstate '53400' then null;
+  end;
+  perform public.reserve_study_budget(b_job, 'study_extract', 16);
+  perform public.settle_budget(b_job, 'study_extract');
+  perform pg_temp.become_reader(reader_a);
+  begin
+    perform public.enqueue_study_generation(array[v_a2], 'goal', extensions.gen_random_uuid(), true);
+    raise exception 'a course was queued past the reader''s share';
+  exception when sqlstate '53400' then null;
+  end;
+  perform pg_temp.become_reader(reader_b);
+  begin
+    perform public.reserve_study_budget(b_job, 'study_extract', 1);
+    raise exception 'a reader called the worker''s reservation';
+  exception when insufficient_privilege then null;
+  end;
+  perform pg_temp.as_owner();
+  delete from public.cost_ledger where provider = 'share-test';
 
   -- ------------------------------------------------------ the span check
   span_at := position(span in note) - 1;

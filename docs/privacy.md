@@ -264,8 +264,9 @@ the app to generate a summary or a study course — a `generation_jobs` row with
 the steps it ran (`job_steps`), and what the provider call cost (`cost_ledger`). A study
 course also records each request made to the model provider (`provider_calls`: when, which
 model, and whether it answered), with no text from your sources in it; these records and
-the costs are kept after the course is deleted, because the charge happened. Rate-limit counters
-(`rate_limits`) exist to stop one account exhausting a shared budget.
+the costs are kept after the course is deleted, because the charge happened. Rate-limit
+counters (`rate_limits`) and per-account quotas limit how much of a shared budget one
+account can use.
 
 We do not collect precise location, contacts, calendar, photos, or device identifiers for
 advertising.

@@ -706,10 +706,13 @@ Deno.serve(async (req) => {
       if (result.continue) {
         // This invocation's hold, settled once, as `record_job_step` would have on the
         // way to the next step. The step recorded its charges and does not settle.
-        must(
-          await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step }),
-          'settle continuing step',
-        );
+        //
+        // Logged, not thrown: a settle whose response was lost may well have committed,
+        // and the failure path would settle again -- a share of somebody else's hold.
+        // A hold that really was left open is the sweep's and the TTL's to release.
+        const settled = await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step });
+        if (settled.error)
+          console.error('could not settle continuing step', jobId, step, settled.error);
         /*
          * A requeue that fails is not a failed attempt: the step did its work and the
          * cache holds it. The message is left for its visibility timeout to redeliver,

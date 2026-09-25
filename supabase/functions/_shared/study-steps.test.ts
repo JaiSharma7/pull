@@ -315,8 +315,9 @@ describe('study_extract', () => {
     expect(mem.cache).toEqual([]);
   });
 
-  it('carries the summed usage when the attempts cannot be recorded twice over', async () => {
-    const mem = memoryDb(generation(), { failRecord: 2 });
+  it('carries the summed usage when the attempts cannot be recorded at all', async () => {
+    // Twice with the cache entry, then once without it: every recording fails.
+    const mem = memoryDb(generation(), { failRecord: 3 });
     const billed: StructuredProvider = {
       ...stubStructuredProvider,
       async generate() {
@@ -369,6 +370,78 @@ describe('study_extract', () => {
       outputTokens: 50,
       costCents: 0.3,
     });
+  });
+
+  it('charges a dropped connection nothing, but an attempt that reached the provider its ceiling', async () => {
+    const mem = memoryDb(generation());
+    const refused: StructuredProvider = {
+      ...stubStructuredProvider,
+      worstCaseCentsFor: () => 16,
+      async generate() {
+        return {
+          ok: false,
+          error: 'connection refused',
+          unavailable: false,
+          model: 'm',
+          calls: [
+            {
+              providerCallId: 'c1',
+              provider: 'gemini',
+              model: 'm',
+              httpStatus: null,
+              outcome: 'network_error',
+              inputTokens: 0,
+              outputTokens: 0,
+              costCents: 0,
+              usageKnown: false,
+            },
+          ],
+        };
+      },
+    };
+    const prepared = await runStudyStep('study_prepare', {
+      job: job(),
+      priorOutputs: {},
+      provider: refused,
+      db: mem.db,
+    });
+    await expect(
+      runStudyStep('study_extract', {
+        job: job(),
+        priorOutputs: { study_prepare: prepared.output },
+        provider: refused,
+        db: mem.db,
+      }),
+    ).rejects.toThrow(/connection refused/);
+    expect(mem.recorded[0]?.calls.map((c) => [c.costCents, c.usageKnown])).toEqual([[0, false]]);
+  });
+
+  it('ledgers the attempts without the cache entry when the entry is what cannot be stored', async () => {
+    const mem = memoryDb(generation());
+    let calls = 0;
+    const original = mem.db.recordStage;
+    mem.db.recordStage = async (jobId, step, attempts, cache) => {
+      calls += 1;
+      if (cache) throw new Error('invalid input syntax for type json');
+      return original(jobId, step, attempts, cache);
+    };
+    const prepared = await runStudyStep('study_prepare', {
+      job: job(),
+      priorOutputs: {},
+      provider: stubStructuredProvider,
+      db: mem.db,
+    });
+    await expect(
+      runStudyStep('study_extract', {
+        job: job(),
+        priorOutputs: { study_prepare: prepared.output },
+        provider: stubStructuredProvider,
+        db: mem.db,
+      }),
+    ).rejects.toThrow(/could not be stored/);
+    expect(calls).toBe(3);
+    expect(mem.recorded).toHaveLength(1);
+    expect(mem.recorded[0]?.cache).toBeNull();
   });
 
   it('charges an attempt of unknown cost at the ceiling it reserved, not at zero', async () => {

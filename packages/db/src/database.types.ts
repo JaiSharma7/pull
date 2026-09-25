@@ -1502,6 +1502,21 @@ export type Database = {
           },
         ]
       }
+      pg_temp_race_ids: {
+        Row: {
+          k: string | null
+          v: string | null
+        }
+        Insert: {
+          k?: string | null
+          v?: string | null
+        }
+        Update: {
+          k?: string | null
+          v?: string | null
+        }
+        Relationships: []
+      }
       preference_profiles: {
         Row: {
           counter_rate: number
@@ -3529,6 +3544,10 @@ export type Database = {
         Args: { p_cents: number; p_job_id: string; p_step: string }
         Returns: number
       }
+      reserve_study_budget: {
+        Args: { p_cents: number; p_job_id: string; p_step: string }
+        Returns: number
+      }
       reserve_study_url_preview: { Args: never; Returns: number }
       resume_path: { Args: { p_path_id: string }; Returns: Json }
       retrievability: {
@@ -3613,6 +3632,11 @@ export type Database = {
           unledgered: number
           usage_unknown: number
         }[]
+      }
+      study_requester_daily_cap_cents: { Args: never; Returns: number }
+      study_requester_spend_today: {
+        Args: { p_requester: string }
+        Returns: number
       }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
