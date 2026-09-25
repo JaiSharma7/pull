@@ -137,6 +137,7 @@ declare
   q_quar    uuid;
   q_fixed   uuid;
   job_2     uuid;
+  job_3     uuid;
   stamped   timestamptz;
   st        text;
   reasons   text[];
@@ -543,6 +544,22 @@ begin
   if public.study_answer_proves_recall(e_during) then
     raise exception 'an answer given while the question was suspended counts as recall';
   end if;
+
+  -- The set-based list of proven claims agrees with the proof rule, answer by answer.
+  if exists (
+    select 1 from public.study_answer_events e
+    join public.study_item_claims ic on ic.item_id = e.item_id
+    where public.study_answer_proves_recall(e.id)
+      and not exists (select 1 from public.study_proven_claims() p where p.claim_id = ic.claim_id)
+  ) or exists (
+    select 1 from public.study_proven_claims() p
+    where not exists (select 1 from public.study_answer_events e
+                      join public.study_item_claims ic on ic.item_id = e.item_id
+                      where ic.claim_id = p.claim_id and public.study_answer_proves_recall(e.id))
+  ) or not exists (select 1 from public.study_proven_claims()) then
+    raise exception 'study_proven_claims disagrees with study_answer_proves_recall';
+  end if;
+
   begin
     perform public.dismiss_study_report(report_c);
     raise exception 'a resolved report was dismissed twice';
@@ -720,6 +737,34 @@ begin
       where id = (checked ->> 'generationId')::uuid and overview is null and title is null
         and goal = 'Prepare for a discussion') <> 1 then
     raise exception 'a course whose own text was held back disappeared, or kept its text';
+  end if;
+
+  -- A course left a draft -- its validation step never ran -- is validated by the sweep
+  -- once its job has finished and ten minutes have passed.
+  job_3 := (public.enqueue_study_generation(array[v_a], 'Revise for a test',
+                                            extensions.gen_random_uuid(), true) ->> 'jobId')::uuid;
+  perform pg_temp.become_worker();
+  perform public.persist_study_course(job_3, jsonb_build_object(
+    'course', jsonb_build_object('title', 'Timing'),
+    'claims', jsonb_build_array(
+      pg_temp.claim('s1c1', v_a, 'At five minutes, restudying beat the recall test.',
+                    'the group that restudied remembered more', note)),
+    'provenance', jsonb_build_object('promptHash', repeat('a', 64),
+                                     'schemaHash', repeat('b', 64), 'model', 'm')));
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'failed' where id = job_3;
+  update public.study_generations set created_at = now() - interval '1 hour' where job_id = job_3;
+  -- The sweep runs in a statement of its own: a check in the same statement would read
+  -- the course from that statement's snapshot, taken before the sweep changed it.
+  n := public.validate_stranded_study_courses();
+  if n < 1
+     or (select text_status from public.study_generations where job_id = job_3) <> 'validated'
+     or exists (select 1 from public.study_claims c join public.study_generations g
+                on g.id = c.generation_id where g.job_id = job_3 and c.status = 'draft') then
+    raise exception 'the sweep did not validate a course left as drafts (it validated %)', n;
+  end if;
+  if public.validate_stranded_study_courses() <> 0 then
+    raise exception 'the sweep validated a course twice';
   end if;
   perform pg_temp.as_owner();
 

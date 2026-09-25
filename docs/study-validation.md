@@ -15,6 +15,7 @@ after a review round:
 - `20260925060000_study_validation_review_fixes.sql`
 - `20260925070000_study_validation_parity.sql`
 - `20260925080000_study_validation_review_round_two.sql`
+- `20260925090000_study_validation_sweep_and_proof.sql`
 
 The behaviour is asserted in `supabase/tests/study_validation.sql`: the reader's paths as
 the `authenticated` role under RLS, and the worker's as the service role. That includes a
@@ -81,8 +82,12 @@ visible question skips them.
 **A validation that fails is retried later.** If `study_validate` fails three times, or a job
 finished under a worker older than that step, every row would stay a draft forever.
 `validate_stranded_study_courses` validates any course whose job has finished, that has
-claims, and that still holds drafts or unvalidated course text, once it is ten minutes old.
-It takes at most twenty a run, oldest first. `enable_generation_sweeper()` schedules it
+claims, and whose validation never finished (`text_status` is still `pending`, which the
+same transaction that moves the drafts sets), once it is ten minutes old. It takes at most
+five a run, oldest first, and takes each course's row without waiting: a course a deletion,
+a correction or the worker holds is left for the next run, so the sweep never waits while
+holding another. A partial index keeps the candidates cheap to find however long the
+history. `enable_generation_sweeper()` schedules it
 beside the stranded-job sweep, every five minutes by default. **Deploying this change
 therefore requires re-running `select public.enable_generation_sweeper();`** after the
 migrations, as `scripts/go-live.sh` lists.
@@ -329,7 +334,9 @@ claims its question rests on only when all of these hold:
 - a claim suspended under a question.
 
 The practice, scheduling and Delta changes must build on this function rather than on their
-own reading of the table.
+own reading of the table. `study_proven_claims()` applies the same clauses in one set-based
+query, for speed, and the test suite checks it agrees with `study_answer_proves_recall`
+answer by answer.
 
 ## Privacy
 
