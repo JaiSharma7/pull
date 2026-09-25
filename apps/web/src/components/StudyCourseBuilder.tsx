@@ -38,6 +38,10 @@ export function StudyCourseBuilder({
   // with a way to ask again -- not as the beta's refusal, which it is not.
   const [checkFailed, setCheckFailed] = useState<string | null>(null);
   const [check, setCheck] = useState(0);
+  // Asked again from its own button: the section stays drawn while it asks, and its heading
+  // takes focus when the answer comes, rather than focus falling to the top of the page.
+  const [checking, setChecking] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const controller = new AbortController();
     courseBuildingAvailable(controller.signal)
@@ -53,62 +57,79 @@ export function StudyCourseBuilder({
             ? 'Whether courses are open to this account needs a connection to check.'
             : 'Whether courses are open to this account could not be checked just now.',
         );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setChecking(false);
       });
     return () => controller.abort();
   }, [check]);
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!asked.current || checking) return;
+    asked.current = false;
+    heading.current?.focus();
+  }, [checking]);
 
   // A version no longer saved cannot stay chosen.
   const present = new Set(sources.map((s) => s.id));
   const selected = chosen.filter((id) => present.has(id));
 
-  if (checkFailed) {
+  const title = (
+    <h2
+      id="course-builder-heading"
+      ref={heading}
+      tabIndex={-1}
+      style={{ fontSize: 'var(--step-1)' }}
+    >
+      Make a course from your sources
+    </h2>
+  );
+
+  if (checkFailed || checking) {
     return (
       <section className="stack" aria-labelledby="course-builder-heading">
-        <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
-          Make a course from your sources
-        </h2>
-        <p>{checkFailed}</p>
-        <p>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setCheckFailed(null);
-              setCheck((n) => n + 1);
-            }}
-          >
-            Check again
-          </button>
-        </p>
+        {title}
+        <p role="status">{checking ? 'Checking…' : checkFailed}</p>
+        {!checking && (
+          <p>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                asked.current = true;
+                setChecking(true);
+                setCheck((n) => n + 1);
+              }}
+            >
+              Check again
+            </button>
+          </p>
+        )}
       </section>
     );
   }
 
   if (available === null) return null;
 
-  // Said even with nothing saved, so a reader sent here to make a course learns how.
-  if (available && sources.length === 0) {
-    return (
-      <section className="stack" aria-labelledby="course-builder-heading">
-        <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
-          Make a course from your sources
-        </h2>
-        <p>Save a source above, then make a course from it here.</p>
-      </section>
-    );
-  }
-  if (sources.length === 0) return null;
-
+  // Said with or without saved sources: a reader sent here to make a course learns whether
+  // they can before they save anything.
   if (!available) {
     return (
       <section className="stack" aria-labelledby="course-builder-heading">
-        <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
-          Make a course from your sources
-        </h2>
+        {title}
         <p>
           Courses are in a limited beta and are not open to this account yet. Your saved sources
           stay private either way.
         </p>
+      </section>
+    );
+  }
+
+  if (sources.length === 0) {
+    return (
+      <section className="stack" aria-labelledby="course-builder-heading">
+        {title}
+        <p>Save a source above, then make a course from it here.</p>
       </section>
     );
   }
@@ -174,9 +195,7 @@ export function StudyCourseBuilder({
 
   return (
     <section className="stack" aria-labelledby="course-builder-heading">
-      <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
-        Make a course from your sources
-      </h2>
+      {title}
       <p className="studio__consent">
         Making a course sends the title and text of the sources you choose, and what you say the
         course is for, to Google’s Gemini API, which finds the claims in them and writes short

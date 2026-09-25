@@ -23,15 +23,25 @@ import {
 } from './study-course.js';
 import { supabase } from './supabase.js';
 
-export async function fetchCourses(signal?: AbortSignal): Promise<CourseSummary[]> {
+/** How many courses the list shows: the newest. */
+export const COURSE_LIST_LIMIT = 200;
+
+/**
+ * The reader's courses, newest first, and whether there are more than the list shows -- one
+ * more is asked for, so a long list says it was cut rather than silently losing its end.
+ */
+export async function fetchCourses(
+  signal?: AbortSignal,
+): Promise<{ courses: CourseSummary[]; more: boolean }> {
   const request = supabase
     .from('study_course_overview')
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(200);
+    .limit(COURSE_LIST_LIMIT + 1);
   const { data, error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw rpcError(error);
-  return shapeCourseSummaries(data);
+  const courses = shapeCourseSummaries(data);
+  return { courses: courses.slice(0, COURSE_LIST_LIMIT), more: courses.length > COURSE_LIST_LIMIT };
 }
 
 /** A course id's shape. Anything else is no course, not a request Postgres refuses. */
@@ -126,6 +136,14 @@ export async function fetchLesson(
     evidence: evidence.data,
     versions: versions.data,
   });
+}
+
+/** Whether a lesson is shown to the reader now: one read of the visible lessons. */
+export async function lessonShown(lessonId: string, signal?: AbortSignal): Promise<boolean> {
+  const request = supabase.from('study_visible_lessons').select('id').eq('id', lessonId);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw rpcError(error);
+  return (data ?? []).length > 0;
 }
 
 /** The full text of one of the reader's source versions, to show a passage in context. */

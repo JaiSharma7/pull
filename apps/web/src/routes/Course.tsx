@@ -29,7 +29,10 @@ import {
   newerPreparationComing,
   newerPreparationFailed,
   nextLesson,
+  draftUnsaved,
   passageWindow,
+  planAfterCorrection,
+  planLessons,
   planSession,
   planSkipped,
   preparationRefusal,
@@ -40,6 +43,7 @@ import {
   type LessonDraft,
   type OutlineLesson,
   type OutlineUnit,
+  type PlannedLesson,
   type ProgressEvent,
   type ProgressKind,
   type ReportReason,
@@ -51,6 +55,7 @@ import {
   fetchLesson,
   fetchOutline,
   fetchSourceText,
+  lessonShown,
   recordProgress,
   regenerateCourse,
   reportContent,
@@ -68,36 +73,20 @@ const PREPARING_POLL_MS = 15_000;
 /** The player's id for a lesson read aloud; never a Pull's id. */
 const lessonTrackId = (lessonId: string) => `study-lesson:${lessonId}`;
 
-/**
- * A lesson as its session planned it, with its unit's title. A session keeps these for its
- * whole length rather than looking ids up in the outline: a newer preparation finishing
- * mid-session replaces the outline, and a session reading from it lost its unit titles, its
- * recap list, and the unit title a correction starts from.
- */
-interface Planned {
-  lessonId: string;
-  title: string;
-  unitNo: number;
-  unitTitle: string;
-}
-
 type View =
   | { kind: 'overview' }
-  | { kind: 'session'; plan: Planned[]; index: number }
-  | { kind: 'stop'; plan: Planned[] };
+  | { kind: 'session'; plan: PlannedLesson[]; index: number }
+  | { kind: 'stop'; plan: PlannedLesson[] };
 
-function planned(units: readonly OutlineUnit[], lessons: readonly OutlineLesson[]): Planned[] {
-  const titles = new Map(units.map((u) => [u.unitNo, u.title]));
-  return lessons.map((l) => ({
-    lessonId: l.lessonId,
-    title: l.title,
-    unitNo: l.unitNo,
-    unitTitle: titles.get(l.unitNo) ?? '',
-  }));
-}
+/**
+ * Where focus goes after a control that replaced itself is gone, and how many times the
+ * screen has been drawn since: a target that never appears is forgotten rather than taking
+ * focus whenever it does.
+ */
+type FocusTarget = { id: string; draws: number } | null;
 
-/** Where focus goes after a control that replaced itself is gone. */
-type FocusTarget = string | null;
+/** How many draws a focus target waits for its element: a few loads' worth. */
+const FOCUS_WAIT_DRAWS = 60;
 
 export function Course({
   courseId,
@@ -125,6 +114,9 @@ export function Course({
   const [textFailed, setTextFailed] = useState<Record<string, string>>({});
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [recaps, setRecaps] = useState<Record<string, string>>({});
+  // The lessons read in this sitting, for the end of it: not the outline's reads, which
+  // count earlier sittings, nor this page's, which count a lesson read then skipped now.
+  const [sittingReads, setSittingReads] = useState<string[]>([]);
   const [consent, setConsent] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -136,8 +128,9 @@ export function Course({
   const [fixError, setFixError] = useState<string | null>(null);
   // A correction in progress, kept here so closing its form does not throw it away.
   const [draft, setDraft] = useState<{ lessonId: string; value: LessonDraft } | null>(null);
-  // Done or Skip pressed once over an unsaved correction: the next press leaves it.
-  const [leaving, setLeaving] = useState(false);
+  // A way out pressed once over an unsaved correction -- the course's title above the lesson,
+  // or Done and Skip below it -- and said beside it: the next press leaves it.
+  const [leaving, setLeaving] = useState<null | 'top' | 'bottom'>(null);
   const [notice, setNotice] = useState<{ text: string; undo: ReportTarget | null } | null>(null);
   const [held, setHeld] = useState<HeldBack[]>([]);
   const pending = useRef<ProgressEvent[]>([]);
@@ -152,13 +145,17 @@ export function Course({
    */
   const focusNext = useRef<FocusTarget>(null);
   const focusAfter = (id: string) => {
-    focusNext.current = id;
+    focusNext.current = { id, draws: 0 };
   };
   useEffect(() => {
-    const id = focusNext.current;
-    if (id === null) return;
-    const target = document.getElementById(id);
-    if (!target) return;
+    const next = focusNext.current;
+    if (next === null) return;
+    const target = document.getElementById(next.id);
+    if (!target) {
+      next.draws += 1;
+      if (next.draws > FOCUS_WAIT_DRAWS) focusNext.current = null;
+      return;
+    }
     focusNext.current = null;
     target.focus();
   });
@@ -203,10 +200,20 @@ export function Course({
   // A course being prepared is looked at again until it is ready, or has failed -- including
   // one saved and awaiting its validation, and a newer version of one being read. Only on
   // the course page: a session walks the lessons it planned, and has nothing to redraw.
+  // Every fifteen seconds for the first five minutes, then every minute: a course awaiting
+  // the validation sweep can take its ten minutes and more.
   const watching = course !== null && awaitingPreparation(course) && view.kind === 'overview';
+  const polls = useRef(0);
   useEffect(() => {
-    if (!watching) return;
-    const timer = window.setTimeout(() => setAttempt((n) => n + 1), PREPARING_POLL_MS);
+    if (!watching) {
+      polls.current = 0;
+      return;
+    }
+    const delay = polls.current < 20 ? PREPARING_POLL_MS : 4 * PREPARING_POLL_MS;
+    const timer = window.setTimeout(() => {
+      polls.current += 1;
+      setAttempt((n) => n + 1);
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [watching, attempt]);
 
@@ -219,25 +226,41 @@ export function Course({
    * voices because it is `localOnly` (`lib/player.ts`).
    */
   const player = usePlayer();
-  const lessonTrack = useRef<string | null>(null);
-  const playing = player.state.status === 'playing' ? currentTrack(player.state) : null;
-  const listening = lesson !== null && playing?.id === lessonTrackId(lesson.lessonId);
-  /** Take the lesson this screen queued out of the player, stopping it if it is on. */
-  const silence = () => {
-    const id = lessonTrack.current;
-    if (id === null) return;
-    lessonTrack.current = null;
-    // Playing or paused on it: stop, so removing it does not start whatever comes next.
-    if (player.state.status !== 'idle' && currentTrack(player.state)?.id === id) player.stop();
-    player.remove(id);
-  };
+  const { dismiss } = player;
+  // Every lesson this screen handed the player, so leaving takes all of them back -- a
+  // correction or a second lesson must not orphan the first in the queue.
+  const queuedLessons = useRef(new Set<string>());
+  const onTrack = currentTrack(player.state);
+  const onLessonTrack = lesson !== null && onTrack?.id === lessonTrackId(lesson.lessonId);
+  const listening = onLessonTrack && player.state.status === 'playing';
+  const paused = onLessonTrack && player.state.status === 'paused';
+  /**
+   * Take lessons this screen queued out of the player -- one, or all of them -- stopping
+   * rather than moving on if one is on. `dismiss` decides on the player's state when it
+   * runs, not on what this screen last drew.
+   */
+  const silence = useCallback(
+    (lessonId?: string) => {
+      const ids = lessonId ? [lessonTrackId(lessonId)] : [...queuedLessons.current];
+      for (const id of ids) {
+        queuedLessons.current.delete(id);
+        dismiss(id);
+      }
+    },
+    [dismiss],
+  );
 
-  // Nothing this screen queued outlives it.
-  const leave = useRef(silence);
+  // Nothing this screen queued outlives it, and neither does the title it gave the page --
+  // which can be the reader's own goal.
+  useEffect(() => () => silence(), [silence]);
+  useEffect(() => () => onTitle?.(null), [onTitle]);
+
+  // The lesson on screen, for answers that arrive after the reader may have moved on: a
+  // report, a withdrawal or a correction acts on its own lesson, not on whatever is shown.
+  const onScreen = useRef<string | null>(null);
   useEffect(() => {
-    leave.current = silence;
-  });
-  useEffect(() => () => leave.current(), []);
+    onScreen.current = lesson?.lessonId ?? null;
+  }, [lesson]);
 
   // A lesson is the reader's own material, so it is read only by a voice on this device;
   // voices arrive after the page does, so the answer is read again when they change.
@@ -315,8 +338,11 @@ export function Course({
         setLessonError(content ? null : 'This lesson is no longer available.');
         if (content) {
           setRecaps((r) => ({ ...r, [currentId]: content.recap }));
-          // Once the lesson is drawn, not in a frame that can come before it.
-          focusNext.current = 'course-lesson-title';
+          // Once the lesson is drawn, not in a frame that can come before it -- unless the
+          // reader is on the notice that says why this lesson replaced the last one.
+          if (document.activeElement?.id !== 'course-notice') {
+            focusNext.current = { id: 'course-lesson-title', draws: 0 };
+          }
         }
         if (content && shownFor.current !== currentId) {
           shownFor.current = currentId;
@@ -334,14 +360,7 @@ export function Course({
     return () => controller.abort();
   }, [currentId, send]);
 
-  // The end of a session is a new screen: a keyboard or screen-reader reader starts at its
-  // heading, as they do at a lesson's.
-  useEffect(() => {
-    if (view.kind === 'stop') document.getElementById('course-stop-title')?.focus();
-  }, [view.kind]);
-
   const lessons = allLessons(shownUnits);
-  const lessonById = new Map(lessons.map((l) => [l.lessonId, l]));
 
   const closeFixes = () => {
     setFix(null);
@@ -356,15 +375,30 @@ export function Course({
     setLessonError(null);
     closeFixes();
     setDraft(null);
-    setLeaving(false);
+    setLeaving(null);
   };
 
-  /** Take the lesson on screen out of this session -- reported or withdrawn -- and go on. */
-  const dropCurrent = () => {
-    if (view.kind !== 'session') return;
-    const plan = view.plan.filter((_, i) => i !== view.index);
-    leaveLesson();
-    setView(view.index < plan.length ? { ...view, plan } : { kind: 'stop', plan });
+  /**
+   * Take a lesson out of the session -- reported or withdrawn -- after the server said so.
+   * From the session as it is then: the reader may have gone back to the course page, or on
+   * to another lesson, while the answer was on its way, and neither is undone by it.
+   */
+  const dropLesson = (lessonId: string) => {
+    setView((v) => {
+      if (v.kind !== 'session') return v;
+      const at = v.plan.findIndex((p) => p.lessonId === lessonId);
+      if (at < 0) return v;
+      const plan = v.plan.filter((_, i) => i !== at);
+      const index = at < v.index ? v.index - 1 : v.index;
+      return index < plan.length ? { ...v, plan, index } : { kind: 'stop', plan };
+    });
+    silence(lessonId);
+    if (onScreen.current !== lessonId) return;
+    setLesson(null);
+    setLessonError(null);
+    closeFixes();
+    setDraft(null);
+    setLeaving(null);
     // Said in the notice, which is where the reader looks next.
     focusAfter('course-notice');
     window.scrollTo(0, 0);
@@ -372,11 +406,7 @@ export function Course({
 
   // A correction typed and not saved, to the lesson on screen.
   const unsaved =
-    lesson !== null &&
-    current !== null &&
-    draft !== null &&
-    draft.lessonId === lesson.lessonId &&
-    lessonRevision(lessonDraft(lesson, current.unitTitle), draft.value) !== null;
+    lesson !== null && current !== null && draftUnsaved(lesson, current.unitTitle, draft);
 
   const fixFailed = (e: unknown, refusal: string | null) => {
     setFixError(
@@ -404,7 +434,8 @@ export function Course({
             : 'Reported the claim. The lessons that rest on it are held back until you restore it.',
         undo: { kind, id },
       });
-      dropCurrent();
+      // A claim report holds back the lesson it was reported from.
+      dropLesson(lesson.lessonId);
       setAttempt((n) => n + 1);
     } catch (e: unknown) {
       fixFailed(e, reportRefusal(sqlState(e)));
@@ -423,7 +454,7 @@ export function Course({
         text: `Withdrew “${lesson.title}” from this course. Its questions stay in the course.`,
         undo: null,
       });
-      dropCurrent();
+      dropLesson(lesson.lessonId);
       setAttempt((n) => n + 1);
     } catch (e: unknown) {
       fixFailed(e, reportRefusal(sqlState(e)));
@@ -448,23 +479,19 @@ export function Course({
       // The new version takes the old one's place in the session. The reader's place in
       // it follows the lesson's lineage, so it is not shown again as new.
       shownFor.current = newId;
-      closeFixes();
-      setDraft(null);
-      setLeaving(false);
-      setLesson(null);
+      // The old version's words stop; the new one is read aloud only when asked.
+      silence(oldId);
+      if (onScreen.current === oldId) {
+        closeFixes();
+        setDraft(null);
+        setLeaving(null);
+        setLesson(null);
+      }
       // From the session as it is when the save lands, not as it was when it began.
       setView((v) =>
         v.kind !== 'session'
           ? v
-          : {
-              ...v,
-              plan: v.plan.map((p) => {
-                const unit = p.unitNo === unitNo ? { ...p, unitTitle: after.unitTitle.trim() } : p;
-                return p.lessonId === oldId
-                  ? { ...unit, lessonId: newId, title: after.title.trim() }
-                  : unit;
-              }),
-            },
+          : { ...v, plan: planAfterCorrection(v.plan, oldId, newId, unitNo, after) },
       );
       setNotice({
         text: 'Saved your correction. The lesson now reads as you wrote it.',
@@ -488,16 +515,6 @@ export function Course({
     setWorking(true);
     try {
       await restoreReported(target);
-      let text =
-        target.kind === 'lesson'
-          ? 'Restored. The lesson is back in the course.'
-          : 'Restored. The claim is back in the course, with the lessons that rest on it.';
-      if (target.kind === 'lesson' && (await fetchLesson(target.id)) === null) {
-        text =
-          'Restored your report, but the lesson is still held back: a claim it rests on is reported. Restore the claim to bring it back.';
-      }
-      setNotice({ text, undo: null });
-      setAttempt((n) => n + 1);
     } catch (e: unknown) {
       // Said where the reader is -- in a session or on the course -- with the undo kept.
       setNotice({
@@ -508,25 +525,58 @@ export function Course({
             }`,
         undo: target,
       });
-    } finally {
       setWorking(false);
       focusAfter('course-notice');
+      return;
     }
+    // Restored: the course is read again whatever follows. Whether the lesson now shows is
+    // asked on its own, so a failure to ask cannot be told as a failure to restore.
+    setAttempt((n) => n + 1);
+    let text =
+      target.kind === 'lesson'
+        ? 'Restored. The lesson is back in the course.'
+        : 'Restored. The claim is back in the course.';
+    if (target.kind === 'lesson') {
+      const shown = await lessonShown(target.id).catch(() => null);
+      if (shown === false) {
+        text =
+          'Restored your report. The lesson is still not shown: a claim it rests on is reported, or it has been withdrawn or replaced.';
+      } else if (shown === null) {
+        text = 'Restored.';
+      }
+    }
+    setNotice({ text, undo: null });
+    setWorking(false);
+    focusAfter('course-notice');
   };
 
-  const begin = (plan: Planned[]) => {
+  const begin = (plan: PlannedLesson[]) => {
     if (plan.length === 0) return;
     leaveLesson();
     setNotice(null);
+    setSittingReads([]);
     setView({ kind: 'session', plan, index: 0 });
     window.scrollTo(0, 0);
   };
 
   const startSession = (from: OutlineLesson | null) =>
-    begin(planned(shownUnits, planSession(shownUnits, from?.lessonId ?? null)));
+    begin(planLessons(shownUnits, planSession(shownUnits, from?.lessonId ?? null)));
 
   /** Back to the course page, with focus on its title. */
+  /**
+   * Leaving the lesson over a correction typed and not saved asks once, as Done and Skip do:
+   * the first press says so, the second leaves it.
+   */
+  const mayLeave = (where: 'top' | 'bottom') => {
+    if (unsaved && leaving === null) {
+      setLeaving(where);
+      return false;
+    }
+    return true;
+  };
+
   const toOverview = () => {
+    if (!mayLeave('top')) return;
     leaveLesson();
     setView({ kind: 'overview' });
     focusAfter('course-title');
@@ -536,20 +586,23 @@ export function Course({
   const advance = (kind: 'lesson_read' | 'lesson_skipped') => {
     if (view.kind !== 'session' || !currentId || working) return;
     // A correction typed and not saved is not dropped on one press.
-    if (unsaved && !leaving) {
-      setLeaving(true);
-      return;
-    }
+    if (!mayLeave('bottom')) return;
     // Only a lesson the reader was shown is recorded. One that would not open -- held back
     // by a report on a claim it shares, withdrawn in another tab, or unreachable offline --
     // was never seen, and a skip recorded for it kept it out of every later session.
-    if (lesson?.lessonId === currentId) send(kind, currentId);
+    if (lesson?.lessonId === currentId) {
+      send(kind, currentId);
+      if (kind === 'lesson_read') setSittingReads((r) => [...r, currentId]);
+    }
     leaveLesson();
     setNotice(null);
     if (view.index + 1 < view.plan.length) {
       setView({ ...view, index: view.index + 1 });
     } else {
       setView({ kind: 'stop', plan: view.plan });
+      // The end of a sitting is a new screen: a keyboard or screen-reader reader starts at
+      // its heading, as they do at a lesson's.
+      focusAfter('course-stop-title');
     }
     window.scrollTo(0, 0);
   };
@@ -557,7 +610,12 @@ export function Course({
   const toggleListen = () => {
     if (!lesson) return;
     if (listening) {
-      silence();
+      silence(lesson.lessonId);
+      return;
+    }
+    // Paused from the player's bar: go on from where it stopped rather than from the top.
+    if (paused) {
+      player.resume();
       return;
     }
     const text = [lesson.title, lesson.objective, lesson.explanation, lesson.example, lesson.recap]
@@ -567,7 +625,10 @@ export function Course({
     // `localOnly` holds the player to that, and keeps the lesson out of its stored queue.
     if (!localVoice) return;
     const id = lessonTrackId(lesson.lessonId);
-    lessonTrack.current = id;
+    // Any other lesson this screen queued goes first: an interlude ends on what it
+    // interrupted, and that must not be an earlier lesson.
+    for (const other of queuedLessons.current) if (other !== id) dismiss(other);
+    queuedLessons.current = new Set([id]);
     player.playNow({ id, title: lesson.title, text, localOnly: true });
   };
 
@@ -658,6 +719,8 @@ export function Course({
       regeneration.current = null;
       setConsent(false);
       setAttempt((n) => n + 1);
+      // The section goes once the course reads as preparing; the line saying so takes focus.
+      focusAfter('course-preparing');
     } catch (e: unknown) {
       const state = sqlState(e);
       // As in the builder: only a refusal ends this request, and a new request is agreed
@@ -684,6 +747,13 @@ export function Course({
    * Armed, then done, as every destructive action in `Account.tsx` is: the first press
    * says what goes, beside the control, and the second does it.
    */
+  /** The course is deleted: say so, and take its title -- perhaps the reader's goal -- off. */
+  const gone = () => {
+    setDeleted(true);
+    onTitle?.(null);
+    focusAfter('course-title');
+  };
+
   const remove = async () => {
     if (!course || working) return;
     if (!armed) {
@@ -695,11 +765,11 @@ export function Course({
     setActionError(null);
     try {
       await deleteCourse(course.courseId);
-      setDeleted(true);
+      gone();
     } catch (e: unknown) {
       // Already gone -- deleted in another tab, or with its last source -- is done.
       if (sqlState(e) === 'P0002') {
-        setDeleted(true);
+        gone();
         return;
       }
       // Still armed, so the warning and "Deleting…" stay where the reader pressed.
@@ -714,16 +784,24 @@ export function Course({
   };
 
   // ---------------------------------------------------------------- rendering
-  const noticeLine = notice && (
-    <p id="course-notice" className="course__notice" role="status" tabIndex={-1}>
-      {notice.text}{' '}
-      {notice.undo && (
+  // Always drawn, empty or not: a live region added together with its text is not reliably
+  // announced, and this is the line that says what just happened.
+  const noticeLine = (
+    <p
+      id="course-notice"
+      className={notice ? 'course__notice' : 'sr-only'}
+      role="status"
+      tabIndex={notice ? -1 : undefined}
+    >
+      {notice?.text}
+      {notice?.undo && ' '}
+      {notice?.undo && (
         <button
           type="button"
           className="btn btn--plain"
           aria-disabled={working}
           onClick={() => {
-            const target = notice.undo;
+            const target = notice?.undo;
             if (target) void restore(target);
           }}
         >
@@ -796,6 +874,12 @@ export function Course({
   if (view.kind === 'session' && current) {
     // One primary control on the screen: while a fix form is open, its own button is it.
     const fixing = fix !== null || claimReport !== null;
+    const unsavedLine = (
+      <p role="status">
+        Your correction to this lesson is not saved. Press again to leave it unsaved, or save it
+        under “Something wrong with this lesson?”.
+      </p>
+    );
     const cancelFix = (focus: string) => {
       closeFixes();
       focusAfter(focus);
@@ -811,6 +895,7 @@ export function Course({
           </span>
         </div>
         {noticeLine}
+        {leaving === 'top' && unsavedLine}
         {lessonError && (
           <p className="remember__error" role="alert">
             {lessonError}
@@ -828,7 +913,11 @@ export function Course({
               (localVoice ? (
                 <p>
                   <button type="button" className="btn btn--plain" onClick={toggleListen}>
-                    {listening ? 'Stop reading the lesson aloud' : 'Read this lesson aloud'}
+                    {listening
+                      ? 'Stop reading the lesson aloud'
+                      : paused
+                        ? 'Resume reading the lesson aloud'
+                        : 'Read this lesson aloud'}
                   </button>
                 </p>
               ) : (
@@ -837,7 +926,12 @@ export function Course({
                   sent to a speech service.
                 </p>
               ))}
-            <details className="course__sources">
+            <details
+              className="course__sources"
+              onToggle={(e) => {
+                if (!(e.currentTarget as HTMLDetailsElement).open) setClaimReport(null);
+              }}
+            >
               <summary>Where this comes from in your material</summary>
               <LessonSources
                 claims={lesson.claims}
@@ -868,8 +962,18 @@ export function Course({
                 }
               />
             </details>
-            {/* Not controlled: Cancel closes a form, not the section the reader opened. */}
-            <details className="course__sources course__fix">
+            {/* Not controlled: Cancel closes a form, not the section the reader opened. Folding
+                the section closes its form (a correction is kept in `draft`), so Done is the
+                screen's primary control again. */}
+            <details
+              className="course__sources course__fix"
+              onToggle={(e) => {
+                if (!(e.currentTarget as HTMLDetailsElement).open) {
+                  setFix(null);
+                  setFixError(null);
+                }
+              }}
+            >
               <summary id="course-fix-summary">Something wrong with this lesson?</summary>
               {fix === null && (
                 <>
@@ -877,7 +981,9 @@ export function Course({
                     Report it and it is held back at once; correct it and it reads as you write it;
                     or withdraw it from the course for good.
                   </p>
-                  {unsaved && <p>Your correction is not saved yet. Correct it to go on with it.</p>}
+                  {unsaved && leaving === null && (
+                    <p>Your correction is not saved yet. Correct it to go on with it.</p>
+                  )}
                   <div className="course__actions">
                     <button
                       type="button"
@@ -895,6 +1001,8 @@ export function Course({
                       onClick={() => {
                         setClaimReport(null);
                         setFix('correct');
+                        // Back at the form, the reader is deciding again.
+                        setLeaving(null);
                       }}
                     >
                       Correct it
@@ -934,12 +1042,12 @@ export function Course({
                   error={fixError}
                   onDraft={(value) => {
                     setDraft({ lessonId: lesson.lessonId, value });
-                    setLeaving(false);
+                    setLeaving(null);
                   }}
                   onSave={(value) => void correct(value)}
                   onCancel={() => {
                     setDraft(null);
-                    setLeaving(false);
+                    setLeaving(null);
                     cancelFix('course-fix-summary');
                   }}
                 />
@@ -978,12 +1086,7 @@ export function Course({
           </>
         )}
         {progressNote && <p role="status">{progressNote}</p>}
-        {leaving && (
-          <p role="status">
-            Your correction to this lesson is not saved. Save it, or press again to leave it
-            unsaved.
-          </p>
-        )}
+        {leaving === 'bottom' && unsavedLine}
         <div className="course__actions">
           <button
             type="button"
@@ -991,7 +1094,7 @@ export function Course({
             aria-disabled={!lesson || working}
             onClick={() => lesson && advance('lesson_read')}
           >
-            {view.index + 1 < view.plan.length ? 'Done — next lesson' : 'Done'}
+            {view.index + 1 < view.plan.length ? 'Done — next lesson' : 'Finish the sitting'}
           </button>
           {/* A lesson that would not open was never seen, so going past it records nothing. */}
           <button
@@ -1011,18 +1114,21 @@ export function Course({
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
 
   if (view.kind === 'stop') {
-    // What this sitting read, from the lessons it planned: a newer preparation that
-    // arrived meanwhile has other lessons, and none of these in its outline.
-    const readHere = new Set(
-      recorded.filter((r) => r.kind === 'lesson_read').map((r) => r.lessonId),
-    );
+    // What this sitting read, from the lessons it planned and the reads it recorded -- not
+    // the outline, which counts earlier sittings' reads, and after a newer preparation
+    // arrives has none of these lessons at all.
+    const readHere = new Set(sittingReads);
     const covered = view.plan
-      .filter((p) => readHere.has(p.lessonId) || lessonById.get(p.lessonId)?.state === 'read')
+      .filter((p) => readHere.has(p.lessonId))
       .map((p) => ({ title: p.title, recap: recaps[p.lessonId] ?? null }));
     const remaining = lessons.filter((l) => l.state !== 'read' && l.state !== 'skipped').length;
     return (
       <section className="stack measure course">
-        <div className="course__bar">{back}</div>
+        <div className="course__bar">
+          <button type="button" className="btn btn--plain meta" onClick={toOverview}>
+            ← {title}
+          </button>
+        </div>
         {noticeLine}
         <StoppingPoint
           covered={covered}
@@ -1051,7 +1157,7 @@ export function Course({
       {noticeLine}
 
       {status === 'preparing' && (
-        <p role="status">
+        <p id="course-preparing" role="status" tabIndex={-1}>
           This course is being prepared from your sources. It usually takes a few minutes; this page
           checks again on its own.
         </p>
@@ -1064,8 +1170,8 @@ export function Course({
       )}
       {status === 'empty' && (
         <p role="status">
-          A source this course was prepared from was deleted, and the lessons made from it went with
-          it. Prepare it again from the{' '}
+          A source this course was prepared from was deleted, and this version of the course went
+          with it: its lessons, its questions and your place in it. Prepare it again from the{' '}
           {course.sourceCount === 1 ? 'source' : `${course.sourceCount} sources`} it still follows,
           or delete it.
         </p>
@@ -1105,7 +1211,7 @@ export function Course({
             </div>
           )}
           {newerPreparationComing(course) && (
-            <p role="status">
+            <p id="course-preparing" role="status" tabIndex={-1}>
               A newer version of this course is being prepared. You can keep reading this one.
             </p>
           )}
@@ -1142,7 +1248,7 @@ export function Course({
                     className="btn btn--primary"
                     onClick={() => startSession(next)}
                   >
-                    {readCount === 0 && skipped === 0
+                    {lessons.every((l) => l.state === 'not_seen')
                       ? 'Start the course'
                       : 'Continue where you left off'}
                   </button>
@@ -1151,7 +1257,7 @@ export function Course({
                     <button
                       type="button"
                       className="btn btn--primary"
-                      onClick={() => begin(planned(shownUnits, planSkipped(shownUnits)))}
+                      onClick={() => begin(planLessons(shownUnits, planSkipped(shownUnits)))}
                     >
                       Go back to what you skipped
                     </button>
@@ -1165,7 +1271,7 @@ export function Course({
               />
             </>
           )}
-          {courseEnded && <CourseRecap course={course} allRead={skipped === 0} />}
+          {courseEnded && <CourseRecap course={course} />}
           <HeldBackList
             items={held}
             working={working}
@@ -1176,7 +1282,8 @@ export function Course({
 
       <hr className="rule" />
       {(course.updateAvailable || status === 'failed' || status === 'empty') &&
-        !course.preparing && (
+        !course.preparing &&
+        !course.awaitingValidation && (
           <div className="stack">
             <h2 className="course__subheading">Prepare this course again</h2>
             <p>

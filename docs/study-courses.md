@@ -153,7 +153,7 @@ give structure and state; the lessons' and questions' own text is read from the
 | `preparing`                                       | A generation of the course is queued or running                                           |
 | `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
 | `held_back`                                       | There is a current generation, and validation passed no lesson in it                      |
-| `awaiting_validation`                             | The newest generation is saved and waits for the validation sweep, whatever its job says  |
+| `awaiting_validation`                             | The newest generation is saved and waits for the validation sweep, for up to a day        |
 | `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
@@ -166,9 +166,13 @@ generation `held_back` is false; `preparing` and `latest_job_status` say what is
 
 `awaiting_validation` is the one thing `latest_job_status` cannot say. A job whose
 validation step runs out of retries ends `failed` with its course already saved, and
-`validate_stranded_study_courses` validates that course within minutes. The column is the
-sweep's own predicate -- the job has ended, the text is still pending, there are claims --
-so a screen shows such a course as on its way rather than failed
+`validate_stranded_study_courses` takes that course up once it is ten minutes old, five a
+run. `study_generation_awaiting_validation` says which generations are coming that way --
+the job has ended, the course is saved (`assembled_at`, as the sweep keys on), its text is
+pending -- for a day, after which one validation keeps refusing stops standing in the
+reader's way. A screen shows such a course as on its way rather than failed;
+`update_available` is judged against it, so it is not offered again; and preparing the
+course again is refused with `preparing` while it awaits, as while a job is queued or running
 (`20260925190000_study_course_awaiting_validation.sql`).
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
@@ -227,14 +231,16 @@ other signed-in destinations give, and a visitor with sign-in.
   only when `study_generation_available()` says the reader is in the beta, and it keeps one
   mutation id across retries of the same request, dropping it only once the server has
   answered with a refusal -- so a lost response is answered by the course already queued.
-- **`/courses`** lists the reader's courses from `study_course_overview`, each with where it
+- **`/courses`** lists the reader's 200 newest courses from `study_course_overview`, saying so
+  when there are more, each with where it
   stands: being prepared, could not be prepared, a source deleted, or lessons read. With no
   course yet, it sends the reader to Studio's study material (`/studio?view=study`), where
   the builder says to save a source first when there is none.
 - **`/course/:id`** is one course: its overview and objectives, the outline by unit, and a
   way in. While a generation is on its way -- a job queued or running, or one saved and
   `awaiting_validation`, including a newer version of a course being read -- the course
-  page looks again every fifteen seconds. A session does not: it walks the lessons it
+  page looks again every fifteen seconds for five minutes, then every minute. A session does
+  not: it walks the lessons it
   planned, with their titles and unit titles, so a newer version that arrives meanwhile
   changes nothing under it. An address that is not a course id reads as no such course.
 - **A session** is about ten minutes: unfinished lessons in course order until their
@@ -255,8 +261,9 @@ other signed-in destinations give, and a visitor with sign-in.
   speaks at a time and the player's controls reach it. Such a track is spoken only by a
   voice installed on the device -- the reader's chosen voice when it is local, else the
   local one in their language -- and never stored with the queue; without a local voice the
-  screen says so rather than offering to read it. Leaving the lesson takes it out of the
-  queue.
+  screen says so rather than offering to read it. It is an interlude, not a place in the
+  queue: it plays ahead of the Pull it interrupts, and when it ends, or the reader leaves the
+  lesson, it leaves the queue and the player stops on that Pull.
 - **Progress is sent at once** and kept in memory until the server accepts it; an event
   refused with `limit` stays and is sent with the next one. A durable offline queue, and
   questions, are the practice change's.
@@ -271,8 +278,9 @@ other signed-in destinations give, and a visitor with sign-in.
   twice, or from two tabs, would otherwise keep it held back. It reads the open reports and
   each one's title or statement from the tables, since reported content is what the visible
   views hide, and says after a Restore whether the lesson is back or still held by a claim.
-  A correction being typed is kept while its form is closed, and Done or Skip over one not
-  saved asks once before leaving it.
+  A correction being typed is kept while its form is closed, and leaving the lesson over one
+  not saved -- Done, Skip or back to the course -- asks once. An answer that arrives after
+  the reader moved on acts on its own lesson, not on the one shown.
 - **Preparing again** is offered when `update_available`, or when there is no current
   generation and nothing is on its way; it asks for consent each time. **Deleting** calls
   `delete_study_course` and says the course is deleted, including when it had already

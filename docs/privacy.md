@@ -448,11 +448,13 @@ land, picking a remote voice will be a trade you make knowingly. Today the app m
 quieter choice on your behalf.
 
 A lesson of your own study course is read more strictly still, because it is made from your
-material rather than from a published Pull: only a local voice in a language you read ever
-speaks it, and when your device has none the app says so and does not offer to read it.
-A lesson you listen to joins your listening queue while the page is open, so the player's
-controls reach it, but it is never stored with the queue on your device: closing the page,
-leaving the lesson or signing out forgets it.
+material rather than from a published Pull: only a voice on your device ever speaks it --
+the voice you chose, when it is one, and otherwise a local voice in a language you read --
+and when your device has none the app says so and does not offer to read it. A lesson you
+listen to joins your listening queue while the page is open, so the player's controls reach
+it, and its title shows where the player's does: on the player bar, and in your device's
+media controls and lock screen. It is never stored with the queue on your device: when it
+ends, when you leave the lesson or close the page, or when you sign out, it is gone.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's

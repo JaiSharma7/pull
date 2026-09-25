@@ -54,7 +54,13 @@ export interface Track {
   /**
    * A reader's own material -- a study lesson -- rather than a published Pull. Spoken
    * only in a voice on this device (`SpeakOptions.localOnly`), and never written to
-   * storage: `serialize` leaves it out, so it lasts as long as the page and no longer.
+   * storage: `serialize` leaves it out and `hydrate` refuses it, so it lasts as long as the
+   * page and no longer.
+   *
+   * AND AN INTERLUDE, NOT A PLACE IN THE QUEUE. `playNow` puts it at the cursor, ahead of
+   * the Pull it interrupts, and when it ends -- or is dismissed -- it leaves the queue and
+   * the player stops on that Pull. Treated as an ordinary track, a lesson finishing started
+   * the next Pull on its own, and one played over a paused Pull skipped it.
    */
   localOnly?: true;
 }
@@ -129,6 +135,12 @@ export type PlayerAction =
   /** Stop, keeping the queue and the position in it. */
   | { type: 'stop' }
   | { type: 'remove'; id: string }
+  /**
+   * Take a track out, and if it is the one playing or paused, stop rather than start the
+   * next: what a screen that queued a track does when the reader leaves it. Decided on the
+   * state as it is when dispatched, not as a screen last saw it.
+   */
+  | { type: 'dismiss'; id: string }
   | { type: 'clear' }
   | { type: 'setRate'; rate: number }
   | { type: 'setVoice'; voiceURI: string | null }
@@ -139,6 +151,32 @@ export type PlayerAction =
    * token is not the current epoch or nothing is playing: see `epoch`.
    */
   | { type: 'ended'; token: number; now?: number };
+
+/** The current track leaves the queue and the player stops on what it interrupted. */
+function endInterlude(state: PlayerState): PlayerState {
+  const queue = state.queue.filter((_, i) => i !== state.index);
+  return {
+    ...state,
+    queue,
+    index: queue.length === 0 ? 0 : Math.min(state.index, queue.length - 1),
+    status: 'idle',
+    sleepUntil: null,
+  };
+}
+
+/** A local-only track, played at the cursor so the track it interrupts stays next. */
+function interlude(state: PlayerState, track: Track): PlayerState {
+  const at = state.queue.findIndex((t) => t.id === track.id);
+  const queue = [...state.queue];
+  let index = state.index;
+  if (at >= 0) {
+    queue.splice(at, 1);
+    if (at < index) index -= 1;
+  }
+  index = Math.min(index, queue.length);
+  queue.splice(index, 0, track);
+  return { ...state, queue, index, status: 'playing', epoch: state.epoch + 1 };
+}
 
 export function clampRate(rate: number): number {
   return Math.min(MAX_RATE, Math.max(MIN_RATE, rate));
@@ -269,6 +307,7 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
     }
 
     case 'playNow': {
+      if (action.track.localOnly) return interlude(state, action.track);
       const at = state.queue.findIndex((t) => t.id === action.track.id);
 
       // Already the one playing: start it again rather than reordering around it —
@@ -308,13 +347,21 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
     }
 
     case 'next':
-      return state.status === 'idle' ? state : advance(state, action.now);
+      if (state.status === 'idle') return state;
+      return currentTrack(state)?.localOnly ? endInterlude(state) : advance(state, action.now);
 
     case 'ended':
       // A stale ending is not rare: it is what `speak` fires for the previous
       // utterance while starting the next one. See `epoch`.
       if (state.status !== 'playing' || action.token !== state.epoch) return state;
-      return advance(state, action.now);
+      return currentTrack(state)?.localOnly ? endInterlude(state) : advance(state, action.now);
+
+    case 'dismiss': {
+      const at = state.queue.findIndex((t) => t.id === action.id);
+      if (at < 0) return state;
+      if (at === state.index && state.status !== 'idle') return endInterlude(state);
+      return playerReducer(state, { type: 'remove', id: action.id });
+    }
 
     case 'prev': {
       if (state.status === 'idle' || state.index === 0) return state;
@@ -503,7 +550,9 @@ export function hydrate(
     typeof s.index === 'number' && Number.isInteger(s.index) ? Math.max(0, s.index) : 0;
   let retainedBefore = 0;
   for (const [position, entry] of (Array.isArray(s.queue) ? s.queue : []).entries()) {
-    if (!isTrack(entry) || seen.has(entry.id)) continue;
+    // A local-only track is never stored; one found here did not come from `serialize`,
+    // and would come back without the flag that keeps it off remote voices.
+    if (!isTrack(entry) || seen.has(entry.id) || 'localOnly' in entry) continue;
     seen.add(entry.id);
     if (position < storedIndex) retainedBefore += 1;
     queue.push({ id: entry.id, title: entry.title, text: entry.text });

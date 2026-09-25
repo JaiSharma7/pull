@@ -601,6 +601,58 @@ describe('listening settings', () => {
   });
 });
 
+describe('a local-only track is an interlude', () => {
+  const lesson: Track = { id: 'lesson', title: 'Lesson', text: 'PRIVATE', localOnly: true };
+  const ids = (state: PlayerState) => state.queue.map((t) => t.id);
+
+  it('plays ahead of the Pull it interrupts, and ends on it, stopped', () => {
+    // Treated as a track, the lesson ending started the next Pull by itself.
+    const playingA = run([{ type: 'enqueue', tracks: [track('a'), track('b')] }]);
+    const during = playerReducer(playingA, { type: 'playNow', track: lesson });
+    expect(ids(during)).toEqual(['lesson', 'a', 'b']);
+    expect(currentTrack(during)?.id).toBe('lesson');
+    expect(during.status).toBe('playing');
+    const after = playerReducer(during, { type: 'ended', token: during.epoch });
+    expect(ids(after)).toEqual(['a', 'b']);
+    expect(currentTrack(after)?.id).toBe('a');
+    expect(after.status).toBe('idle');
+    // Next from the lesson is the same end.
+    expect(playerReducer(during, { type: 'next' })).toEqual(after);
+  });
+
+  it('keeps a paused or stopped Pull next rather than skipping it', () => {
+    const pausedOnB = run([
+      { type: 'enqueue', tracks: [track('a'), track('b')] },
+      { type: 'next' },
+      { type: 'pause' },
+    ]);
+    const during = playerReducer(pausedOnB, { type: 'playNow', track: lesson });
+    expect(ids(during)).toEqual(['a', 'lesson', 'b']);
+    const dismissed = playerReducer(during, { type: 'dismiss', id: 'lesson' });
+    expect(ids(dismissed)).toEqual(['a', 'b']);
+    expect(currentTrack(dismissed)?.id).toBe('b');
+    expect(dismissed.status).toBe('idle');
+  });
+
+  it('dismissing what is not on takes it out and leaves the rest alone', () => {
+    const playingA = run([{ type: 'enqueue', tracks: [track('a'), track('b')] }]);
+    const dismissed = playerReducer(playingA, { type: 'dismiss', id: 'b' });
+    expect(ids(dismissed)).toEqual(['a']);
+    expect(dismissed.status).toBe('playing');
+    expect(playerReducer(playingA, { type: 'dismiss', id: 'nothing' })).toBe(playingA);
+  });
+
+  it('is never brought back from storage, even when stored by hand', () => {
+    const raw = JSON.stringify({
+      v: 1,
+      owner: 'u1',
+      queue: [{ id: 'a', title: 'A', text: 'A' }, { ...lesson }],
+      index: 1,
+    });
+    expect(hydrate(raw, 'u1', 0).queue.map((t) => t.id)).toEqual(['a']);
+  });
+});
+
 describe('serialize and hydrate', () => {
   const full = run([
     { type: 'enqueue', tracks: three },

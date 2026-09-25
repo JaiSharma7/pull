@@ -446,6 +446,62 @@ function fillSession(candidates: readonly OutlineLesson[], budget: number): Outl
   return plan;
 }
 
+/**
+ * A lesson as its session planned it, with its unit's title. A session keeps these for its
+ * whole length rather than looking ids up in the outline: a newer preparation finishing
+ * mid-session replaces the outline, and a session reading from it lost its unit titles, its
+ * recap list, and the unit title a correction starts from.
+ */
+export interface PlannedLesson {
+  lessonId: string;
+  title: string;
+  unitNo: number;
+  unitTitle: string;
+}
+
+export function planLessons(
+  units: readonly OutlineUnit[],
+  lessons: readonly OutlineLesson[],
+): PlannedLesson[] {
+  const titles = new Map(units.map((u) => [u.unitNo, u.title]));
+  return lessons.map((l) => ({
+    lessonId: l.lessonId,
+    title: l.title,
+    unitNo: l.unitNo,
+    unitTitle: titles.get(l.unitNo) ?? '',
+  }));
+}
+
+/**
+ * A session's plan after a correction: the new version takes the old one's place, with its
+ * title, and a changed unit title renames the whole unit, as the outline will.
+ */
+export function planAfterCorrection(
+  plan: readonly PlannedLesson[],
+  oldId: string,
+  newId: string,
+  unitNo: number,
+  after: Pick<LessonDraft, 'title' | 'unitTitle'>,
+): PlannedLesson[] {
+  return plan.map((p) => {
+    const unit = p.unitNo === unitNo ? { ...p, unitTitle: after.unitTitle.trim() } : p;
+    return p.lessonId === oldId ? { ...unit, lessonId: newId, title: after.title.trim() } : unit;
+  });
+}
+
+/** Whether the reader has typed a correction to this lesson and not saved it. */
+export function draftUnsaved(
+  lesson: LessonContent,
+  unitTitle: string,
+  draft: { lessonId: string; value: LessonDraft } | null,
+): boolean {
+  return (
+    draft !== null &&
+    draft.lessonId === lesson.lessonId &&
+    lessonRevision(lessonDraft(lesson, unitTitle), draft.value) !== null
+  );
+}
+
 /** The lessons the reader skipped, in course order. */
 export function skippedLessons(units: readonly OutlineUnit[]): OutlineLesson[] {
   return allLessons(units).filter((l) => l.state === 'skipped');

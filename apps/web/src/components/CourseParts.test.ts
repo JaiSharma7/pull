@@ -185,16 +185,14 @@ describe('CourseRecap', () => {
         { prompt: 'Does retrieval work better for everyone?', reason: 'The note does not say.' },
       ],
     }) as CourseSummary;
-    const html = renderToStaticMarkup(createElement(CourseRecap, { course, allRead: true }));
-    expect(html).toContain('Every lesson read');
+    const html = renderToStaticMarkup(createElement(CourseRecap, { course }));
+    // How many were read is the progress line's to say; skipped lessons are not read ones.
+    expect(html).toContain('The end of the course');
+    expect(html).not.toContain('Every lesson read');
     expect(html).toContain('Timing matters.');
     expect(html).toContain('Where your sources disagree');
     expect(html).toContain('The notes differ on timing.');
     expect(html).toContain('What your sources cannot answer');
     expect(html).toContain('Does retrieval work better for everyone?');
-    // Skipped lessons are not read ones.
-    expect(
-      renderToStaticMarkup(createElement(CourseRecap, { course, allRead: false })),
-    ).not.toContain('Every lesson read');
   });
 });

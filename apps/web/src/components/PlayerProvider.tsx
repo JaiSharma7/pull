@@ -92,6 +92,8 @@ export interface PlayerApi {
   resume: () => void;
   stop: () => void;
   remove: (id: string) => void;
+  /** Take a track out, stopping rather than moving on if it is the one on. */
+  dismiss: (id: string) => void;
   clear: () => void;
   setRate: (rate: number) => void;
   setVoice: (voiceURI: string | null) => void;
@@ -156,6 +158,7 @@ export type PlayerActions = Pick<
   | 'resume'
   | 'stop'
   | 'remove'
+  | 'dismiss'
   | 'clear'
 >;
 
@@ -509,6 +512,7 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
   const resume = useCallback(() => dispatch({ type: 'resume' }), []);
   const stop = useCallback(() => dispatch({ type: 'stop' }), []);
   const remove = useCallback((id: string) => dispatch({ type: 'remove', id }), []);
+  const dismiss = useCallback((id: string) => dispatch({ type: 'dismiss', id }), []);
   const clear = useCallback(() => dispatch({ type: 'clear' }), []);
 
   const setRate = useCallback(
@@ -565,6 +569,7 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
       resume,
       stop,
       remove,
+      dismiss,
       clear,
       setRate,
       setVoice,
@@ -581,6 +586,7 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
       resume,
       stop,
       remove,
+      dismiss,
       clear,
       setRate,
       setVoice,
@@ -627,9 +633,10 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
       resume,
       stop,
       remove,
+      dismiss,
       clear,
     }),
-    [enqueue, playNow, next, prev, pause, resume, stop, remove, clear],
+    [enqueue, playNow, next, prev, pause, resume, stop, remove, dismiss, clear],
   );
 
   return (

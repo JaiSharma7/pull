@@ -6,7 +6,7 @@ import {
   courseTitle,
   type CourseSummary,
 } from '../lib/study-course.js';
-import { fetchCourses } from '../lib/study-course-api.js';
+import { COURSE_LIST_LIMIT, fetchCourses } from '../lib/study-course-api.js';
 
 function statusLine(course: CourseSummary): string {
   switch (courseStatus(course)) {
@@ -30,6 +30,7 @@ export function Courses({
   onNavigate: (to: string) => void;
 }) {
   const [courses, setCourses] = useState<CourseSummary[]>([]);
+  const [more, setMore] = useState(false);
   const [settled, setSettled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
@@ -38,9 +39,10 @@ export function Courses({
   useEffect(() => {
     const controller = new AbortController();
     fetchCourses(controller.signal)
-      .then((items) => {
+      .then((list) => {
         if (controller.signal.aborted) return;
-        setCourses(items);
+        setCourses(list.courses);
+        setMore(list.more);
         setError(null);
         setSettled(true);
       })
@@ -121,6 +123,12 @@ export function Courses({
               </li>
             ))}
           </ol>
+          {more && (
+            <p>
+              Showing your {COURSE_LIST_LIMIT} newest courses. Older ones are still in your account;
+              delete courses you are done with to see them here.
+            </p>
+          )}
           <p className="meta">
             That is every course. They are private to you, and new ones are made in Studio.
           </p>

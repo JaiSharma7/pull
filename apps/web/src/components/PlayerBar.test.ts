@@ -44,6 +44,7 @@ function render(state: PlayerState, extra: Partial<PlayerApi> = {}): string {
     resume: vi.fn(),
     stop: vi.fn(),
     remove: vi.fn(),
+    dismiss: vi.fn(),
     clear: vi.fn(),
     setRate: vi.fn(),
     setVoice: vi.fn(),

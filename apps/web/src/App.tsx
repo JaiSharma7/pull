@@ -485,6 +485,9 @@ export function App() {
         // rule while nothing cleared it. Scoping a store by user keeps one reader's rows
         // out of the next reader's screen; it does not take them off the machine.
         void clearCachedPulls(leaving);
+        // And the page's title, which a course sets from the reader's own goal: the next
+        // person at the machine must not find it on the tab over the sign-in screen.
+        setRouteTitle(null);
       }
 
       setSession(s);

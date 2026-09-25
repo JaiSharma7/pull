@@ -27,7 +27,13 @@ import {
   shapeProgressResult,
   skippedLessons,
   type CourseSummary,
+  type LessonContent,
   type OutlineUnit,
+  planLessons,
+  planAfterCorrection,
+  draftUnsaved,
+  lessonDraft,
+  allLessons,
 } from './study-course.js';
 
 const overviewRow = {
@@ -306,6 +312,63 @@ describe('applyProgress', () => {
     );
     expect(states.l1).toBe('read');
     expect(states.l2).toBe('read');
+  });
+});
+
+describe('planLessons and planAfterCorrection', () => {
+  it('keeps each planned lesson with its unit title', () => {
+    const units = outline();
+    const plan = planLessons(units, planSession(units));
+    expect(plan[0]).toEqual({
+      lessonId: 'id-l2',
+      title: 'Lesson l2',
+      unitNo: 1,
+      unitTitle: 'Timing',
+    });
+  });
+
+  it('puts a correction in its lesson\u2019s place, and renames its whole unit', () => {
+    const plan = planLessons(outline(), allLessons(outline()));
+    const after = planAfterCorrection(plan, 'id-l1', 'id-l1b', 1, {
+      title: ' Five minutes later ',
+      unitTitle: 'When to test',
+    });
+    expect(after.map((p) => p.lessonId)).toEqual(['id-l1b', 'id-l2', 'id-l3', 'id-l4', 'id-l5']);
+    expect(after[0]?.title).toBe('Five minutes later');
+    expect(after.filter((p) => p.unitNo === 1).map((p) => p.unitTitle)).toEqual([
+      'When to test',
+      'When to test',
+    ]);
+    expect(after[2]?.unitTitle).toBe('Spacing');
+  });
+});
+
+describe('draftUnsaved', () => {
+  const lesson = shapeLessonContent({
+    lesson: {
+      id: 'l1',
+      title: 'Five minutes later',
+      objective: 'Explain it.',
+      explanation: 'Restudying won.',
+      example: null,
+      recap: 'Restudying won early.',
+      minutes: 3,
+    },
+    claims: [],
+    evidence: [],
+    versions: [],
+  }) as LessonContent;
+
+  it('is true only for a changed draft of this lesson', () => {
+    const same = lessonDraft(lesson, 'Timing');
+    expect(draftUnsaved(lesson, 'Timing', null)).toBe(false);
+    expect(draftUnsaved(lesson, 'Timing', { lessonId: 'l1', value: same })).toBe(false);
+    expect(
+      draftUnsaved(lesson, 'Timing', { lessonId: 'l1', value: { ...same, recap: 'Changed.' } }),
+    ).toBe(true);
+    expect(
+      draftUnsaved(lesson, 'Timing', { lessonId: 'l9', value: { ...same, recap: 'Changed.' } }),
+    ).toBe(false);
   });
 });
 

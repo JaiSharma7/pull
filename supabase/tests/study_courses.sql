@@ -255,6 +255,18 @@ begin
       (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
   end if;
 
+  -- A job that ends before its course is saved leaves nothing to validate: failed, not
+  -- awaiting.
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'failed' where id = job_1;
+  perform pg_temp.become_reader(reader_a);
+  if exists (select 1 from public.study_course_overview
+             where course_id = course_a and (awaiting_validation or preparing)) then
+    raise exception 'a job that failed before saving read as coming';
+  end if;
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'queued' where id = job_1;
+
   -- ---------------------------------------------------------------- the worker prepares it
   perform pg_temp.become_worker();
   perform public.persist_study_course(job_1, pg_temp.course(v1, v2, note1, note2));
@@ -667,6 +679,47 @@ begin
 
   perform pg_temp.become_worker();
   perform public.persist_study_course(job_2, pg_temp.course(v1b, v2, note1 || ' Revised.', note2));
+
+  -- Saved, the job still running: preparing, and not yet awaiting validation.
+  perform pg_temp.become_reader(reader_a);
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and preparing and not awaiting_validation) then
+    raise exception 'a saved generation whose job runs on did not read as preparing: %',
+      (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
+  end if;
+  -- The job ends before validation: the old generation is still read, the new one awaits,
+  -- and it is neither offered nor accepted again.
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'failed' where id = job_2;
+  perform pg_temp.become_reader(reader_a);
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and generation_id = gen_1
+                   and latest_generation_id = gen_2 and awaiting_validation
+                   and not preparing and not update_available) then
+    raise exception 'a newer generation awaiting validation did not say so: %',
+      (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
+  end if;
+  begin
+    perform public.regenerate_study_course(course_a, extensions.gen_random_uuid(), true);
+    raise exception 'a regeneration was accepted while one awaits its validation';
+  exception when object_not_in_prerequisite_state then
+    get stacked diagnostics d = pg_exception_detail;
+    if d is distinct from 'preparing' then
+      raise exception 'a regeneration refused while one awaits said %', d;
+    end if;
+  end;
+  -- For a day: one validation keeps refusing stops standing in the reader's way.
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() - interval '25 hours' where id = gen_2;
+  perform pg_temp.become_reader(reader_a);
+  if exists (select 1 from public.study_course_overview
+             where course_id = course_a and awaiting_validation) then
+    raise exception 'a generation awaited its validation for more than a day';
+  end if;
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() where id = gen_2;
+
+  perform pg_temp.become_worker();
   perform public.validate_study_course(job_2);
   perform pg_temp.as_owner();
   update public.generation_jobs set status = 'succeeded' where id = job_2;

@@ -233,12 +233,12 @@ export function StoppingPoint({
 
 /**
  * The end of the course: its closing summary, and what the sources cannot settle. Shown once
- * every lesson is read or skipped; it says "every lesson read" only when that is true.
+ * every lesson is read or skipped; how many were read is the progress line's to say.
  */
-export function CourseRecap({ course, allRead }: { course: CourseSummary; allRead: boolean }) {
+export function CourseRecap({ course }: { course: CourseSummary }) {
   return (
     <section className="stack course__recap" aria-labelledby="course-recap-title">
-      <p className="meta">{allRead ? 'Every lesson read' : 'The end of the course'}</p>
+      <p className="meta">The end of the course</p>
       <h2 id="course-recap-title">What to remember</h2>
       {course.recap ? <Paragraphs text={course.recap} /> : null}
       {course.disagreements.length > 0 && (
@@ -262,7 +262,7 @@ export function CourseRecap({ course, allRead }: { course: CourseSummary; allRea
             {course.withheld.map((w, i) => (
               <li key={i}>
                 {w.prompt}
-                {w.reason ? <span className="meta"> — {w.reason}</span> : null}
+                {w.reason ? <span> — {w.reason}</span> : null}
               </li>
             ))}
           </ul>

@@ -4735,6 +4735,10 @@ export type Database = {
       study_fold: { Args: { p_text: string }; Returns: string }
       study_fold_strict: { Args: { p_text: string }; Returns: string }
       study_generation_available: { Args: never; Returns: boolean }
+      study_generation_awaiting_validation: {
+        Args: { p_generation_id: string }
+        Returns: boolean
+      }
       study_generation_rank: {
         Args: { p_generation_id: string }
         Returns: number
