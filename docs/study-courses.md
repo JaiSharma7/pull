@@ -212,9 +212,9 @@ difficulty, authorship and state, with `first_shown_at`, `last_answered_at` and
 | `shown`               | Shown, not answered                                            |
 | `not_seen`            | Neither                                                        |
 
-`due` belongs to the scheduler, which is a later change: nothing here marks a question due.
-It is orthogonal to these states -- a question can be demonstrated and due -- so it will be a
-column, not a fifth state.
+`due` is orthogonal to these states -- a question can be demonstrated and due -- so it is a
+column, `due_at`, not a fifth state; the outline likewise gains `known` and `revisit`. Both
+come from the study Delta ([`study-adaptation.md`](./study-adaptation.md)).
 
 In this list, a question's `lesson_id` names only a lesson the outline shows -- so group
 questions by the list's `lesson_id`, not by the one on `study_visible_items`, which keeps the

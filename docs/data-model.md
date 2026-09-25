@@ -1,6 +1,6 @@
 # Data model
 
-77 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+78 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -34,6 +34,8 @@ User
  │    │    │                                         from 1-5 versions
  │    │    ├── study_progress_events              ← shown, read, skipped; never proof
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
+ │    │    │    └── study_claim_memory          ← what the reader's answers left of each
+ │    │    │                                      claim; the study Delta reads it
  │    │    ├── study_lessons · study_items            ← study_lesson_claims and
  │    │    │                                             study_item_claims link the claims
  │    │    │                                             they cite; versioned, one live

@@ -49,6 +49,8 @@ record_study_answers([{ clientEventId, itemId, response, selfGrade?, hinted? }, 
   first, as a progress batch does, then share-locks the batch's questions in id order, as a
   claim report and a lesson's correction or withdrawal lock them (see
   [Lock order](./study-courses.md#lock-order)).
+- **It moves the memory** of each claim the answer tests, in the same transaction
+  ([`study-adaptation.md`](./study-adaptation.md#the-memory)).
 
 ## Grading
 
