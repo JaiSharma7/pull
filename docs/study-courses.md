@@ -7,8 +7,9 @@ itself, the sources it follows, how it is prepared again when a source changes, 
 record of what the reader has been shown.
 
 The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
-`20260925130000_study_course_review_fixes.sql`, `20260925140000_study_course_locks.sql` and
-`20260925150000_study_course_review_round_two.sql` superseding parts of it after review. The
+`20260925130000_study_course_review_fixes.sql`, `20260925140000_study_course_locks.sql`,
+`20260925150000_study_course_review_round_two.sql` and
+`20260925160000_study_course_lock_order.sql` superseding parts of it after review. The
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
@@ -202,16 +203,28 @@ count, `preparing`, `newer_generation_held_back`, `update_available`, and `objec
 
 ## Lock order
 
-Two things keep the writers here from deadlocking with each other and with deletion; both
-were reproduced as deadlocks with real sessions before they were in place.
+Two rules keep the writers here from deadlocking with each other and with deletion; every
+order below was reproduced as a deadlock with real sessions before it was in place.
 
-- **One lock per reader for progress and deletion.** `record_study_progress` holds the
-  reader's `study_progress:<owner>` advisory lock for its whole call, and deleting one of
-  the reader's sources or courses takes the same lock before its cascade reaches any
-  generation, lesson or question (a `before delete` trigger). A batch never touches sources
-  or courses, so the two serialise rather than meeting in opposite orders -- a batch may
-  hold events for two generations, which a deletion takes in whatever order its cascade
-  reaches them. It also serialises two deletions of one reader's sources.
+- **One lock per reader, before any row.** `record_study_progress` holds the reader's
+  `study_progress:<owner>` advisory lock for its whole call. Every path that deletes a
+  reader's study rows takes the same lock before it locks any row, so the two serialise
+  rather than meeting in opposite orders -- a batch may hold events for two generations,
+  which a deletion takes in whatever order its cascade reaches them:
+  - a reader's own DELETE on `study_sources`, from a statement-level trigger that takes the
+    lock of the reader making it (RLS confines the statement to their rows) -- so a
+    deletion of several sources and one of a single source cannot take them in opposite
+    orders;
+  - `delete_study_course`, before it touches the course's sources;
+  - `delete_my_account`, before its first delete: it deletes the reader's jobs first, and
+    those cascade to every generation, lesson and question;
+  - a deletion of the `auth.users` row from outside the app -- the dashboard, the admin
+    API -- from a trigger on that row, before any cascade, for an account with study
+    sources. A batch or a reader's deletion never waits on that row.
+
+  A row-level trigger on `study_sources` and `study_courses` takes it too, and finds it
+  already held on every path above; it covers a deletion that reaches them some other way.
+
 - **Sources before courses.** Foreign-key cascades run level by level: a source deletion
   takes the source, its versions and its bundle rows, and then -- through the trigger, when
   it was the last source -- the course. So everything else that locks a course takes its
@@ -219,6 +232,9 @@ were reproduced as deadlocks with real sessions before they were in place.
   before the course, and `enqueue_study_generation` links a new course's sources before
   its versions. The last-source trigger takes the course row before it looks for the
   bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
+
+What remains is a reader deleting their account at the moment an administrator deletes it
+too. Postgres detects that deadlock and ends one of the two, and the other completes.
 
 ## Errors
 

@@ -787,6 +787,99 @@ begin
 end
 $test$;
 
+/* Does this session hold a reader's study lock (`study_progress:<reader>`)? */
+create or replace function pg_temp.holds_study_lock(p_uid uuid)
+returns boolean language sql as $fn$
+  with k as (select pg_catalog.hashtextextended('study_progress:' || p_uid::text, 0) as key)
+  select exists (
+    select 1 from pg_catalog.pg_locks l, k
+    where l.locktype = 'advisory' and l.pid = pg_catalog.pg_backend_pid() and l.granted
+      and l.objsubid = 1
+      and l.classid = ((k.key >> 32) & 4294967295)::oid
+      and l.objid = (k.key & 4294967295)::oid)
+$fn$;
+
+/*
+ * Whether the reader's lock was already held as a source row was deleted: named to fire
+ * before `study_sources_hold_course_writes`, which would take it itself.
+ */
+create temp table study_lock_probe (source_id uuid, held boolean);
+create function public.study_test_lock_probe()
+returns trigger language plpgsql as $fn$
+begin
+  insert into pg_temp.study_lock_probe values (old.id, pg_temp.holds_study_lock(old.owner_id));
+  return old;
+end $fn$;
+create trigger a_study_test_lock_probe before delete on public.study_sources
+  for each row execute function public.study_test_lock_probe();
+
+/*
+ * The lock order (docs/study-courses.md). A deadlock needs two sessions, which this suite
+ * does not have; what it can hold is the order that prevents one -- every path that deletes
+ * a reader's study rows takes the reader's lock before it locks any row.
+ */
+do $locks$
+declare
+  plain    uuid := extensions.gen_random_uuid();
+  studying uuid := extensions.gen_random_uuid();
+  guest    uuid := extensions.gen_random_uuid();
+  src      text;
+begin
+  insert into auth.users
+    (id, instance_id, aud, role, email, encrypted_password,
+     email_confirmed_at, created_at, updated_at, is_anonymous,
+     raw_app_meta_data, raw_user_meta_data)
+  values
+    (plain, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'study-lock-plain@example.test', '', now(), now(), now(), false, '{}', '{}'),
+    (studying, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'study-lock-studying@example.test', '', now(), now(), now(), false, '{}', '{}'),
+    (guest, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     null, '', null, now(), now(), true, '{}', '{}');
+
+  -- A reader's own DELETE takes the lock before any row: from a statement trigger, which
+  -- fires even when the statement matches nothing -- a row trigger would not.
+  perform pg_temp.become_reader(plain);
+  delete from public.study_sources where id = extensions.gen_random_uuid();
+  perform pg_temp.as_owner();
+  if not pg_temp.holds_study_lock(plain) then
+    raise exception 'a reader''s source deletion did not take their lock before any row';
+  end if;
+
+  -- An account deleted from outside the app takes it before its cascade: when the account
+  -- has study sources, and only then.
+  perform pg_temp.become_reader(studying);
+  perform public.save_study_source_version('Lock order', 'paste', 'A note.',
+                                           extensions.gen_random_uuid());
+  perform pg_temp.as_owner();
+  if pg_temp.holds_study_lock(studying) then
+    raise exception 'saving a source took the reader''s study lock';
+  end if;
+  delete from auth.users where id = studying;
+  if (select bool_and(held) from pg_temp.study_lock_probe) is not true then
+    raise exception 'deleting an account with study sources reached them before its lock';
+  end if;
+  delete from auth.users where id = guest;
+  if pg_temp.holds_study_lock(guest) then
+    raise exception 'deleting an account with no study sources took a lock for it';
+  end if;
+
+  -- The two functions take it first: before `delete_my_account`'s first delete, which
+  -- cascades to every generation, and before `delete_study_course` locks a source.
+  src := (select prosrc from pg_proc where oid = 'public.delete_my_account()'::regprocedure);
+  if position('study_progress:' in src) = 0
+     or position('study_progress:' in src) > position('delete from public.generation_jobs' in src)
+  then
+    raise exception 'delete_my_account does not take the study lock before its first delete';
+  end if;
+  src := (select prosrc from pg_proc where oid = 'public.delete_study_course(uuid)'::regprocedure);
+  if position('study_progress:' in src) = 0
+     or position('study_progress:' in src) > position('for key share' in src) then
+    raise exception 'delete_study_course does not take the study lock before the sources';
+  end if;
+end
+$locks$;
+
 select 'study courses: ok';
 
 rollback;
