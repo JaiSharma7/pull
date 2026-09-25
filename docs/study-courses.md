@@ -283,7 +283,8 @@ other signed-in destinations give, and a visitor with sign-in.
   `revise_study_lesson` as a new version that keeps the reader's place, and its failed
   checks are said in words; a withdrawal asks first. Each claim in "where this comes from"
   can be reported too, which holds back the lessons resting on it. The course page lists
-  what the reader has reported and not settled, one entry per lesson or claim, each with a
+  what the reader has reported and not settled, one entry per lesson, claim or question
+  ([`study-practice.md`](./study-practice.md#the-screens)), each with a
   Restore that dismisses every open report on it (`dismiss_study_report`) -- a report sent
   twice, or from two tabs, would otherwise keep it held back. It reads the open reports and
   each one's title or statement from the tables, since reported content is what the visible

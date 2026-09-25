@@ -88,9 +88,8 @@ export function CoursePractice({
       itemId: current.itemId,
       occurredAt: new Date().toISOString(),
     });
-    window.requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>('.study-q__prompt')?.focus(),
-    );
+    // After the commit that drew it, so the prompt is there to take focus.
+    document.querySelector<HTMLElement>('.study-q__prompt')?.focus();
   }, [current, userId]);
 
   const finish = () => onDone([...first.current.values()]);

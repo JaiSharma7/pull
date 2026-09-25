@@ -25,6 +25,12 @@ const REPORT_QUESTION: Record<ReportKind, string> = {
   item: 'What is wrong with this question?',
 };
 
+const HELD_KIND: Record<ReportKind, string> = {
+  lesson: 'Lesson',
+  claim: 'Claim',
+  item: 'Question',
+};
+
 const REPORT_EFFECT: Record<ReportKind, string> = {
   lesson: 'Reporting holds the lesson back from this course at once. You can restore it later.',
   claim:
@@ -265,8 +271,7 @@ export function HeldBackList({
         {items.map((item) => (
           <li key={`${item.kind}:${item.id}`} className="course__held-item">
             <span>
-              <span className="meta">{item.kind === 'lesson' ? 'Lesson' : 'Claim'}</span>{' '}
-              {item.label}
+              <span className="meta">{HELD_KIND[item.kind]}</span> {item.label}
             </span>
             <button
               type="button"

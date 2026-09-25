@@ -286,16 +286,17 @@ export async function dismissReport(reportId: string): Promise<void> {
   if (error) throw rpcError(error);
 }
 
-/** Something the reader can report: a lesson or a claim. */
+/** Something the reader can report: a lesson, a claim or a question. */
 export interface ReportTarget {
   kind: ReportKind;
   id: string;
 }
 
-const REPORT_COLUMN = { lesson: 'lesson_id', claim: 'claim_id' } as const satisfies Record<
-  ReportKind,
-  string
->;
+const REPORT_COLUMN = {
+  lesson: 'lesson_id',
+  claim: 'claim_id',
+  item: 'item_id',
+} as const satisfies Record<ReportKind, string>;
 
 /**
  * Restore something the reader reported, by dismissing every open report on it.
@@ -348,8 +349,8 @@ export interface HeldBack extends ReportTarget {
 
 /**
  * What the reader has reported in a generation and not yet settled: their open reports on
- * lessons and on claims -- a reported claim holds back every lesson resting on it -- each
- * with what it names. Read from the tables, not the visible views, because reported content
+ * lessons, claims and questions -- a reported claim holds back every lesson and question
+ * resting on it -- each with what it names. Read from the tables, not the visible views, because reported content
  * is exactly what the views hide; only a title or a statement is read.
  */
 export async function fetchHeldBack(
@@ -361,17 +362,17 @@ export async function fetchHeldBack(
   const reports = await abortable(
     supabase
       .from('study_reports')
-      .select('id, lesson_id, claim_id, created_at')
+      .select('id, lesson_id, claim_id, item_id, created_at')
       .eq('generation_id', generationId)
       .eq('status', 'open')
-      .is('item_id', null)
       .order('created_at', { ascending: true }),
   );
   if (reports.error) throw rpcError(reports.error);
   const rows = reports.data ?? [];
   const lessonIds = [...new Set(rows.map((r) => r.lesson_id).filter(Boolean))] as string[];
   const claimIds = [...new Set(rows.map((r) => r.claim_id).filter(Boolean))] as string[];
-  const [lessons, claims] = await Promise.all([
+  const itemIds = [...new Set(rows.map((r) => r.item_id).filter(Boolean))] as string[];
+  const [lessons, claims, items] = await Promise.all([
     lessonIds.length
       ? abortable(
           supabase
@@ -390,22 +391,33 @@ export async function fetchHeldBack(
             .in('id', claimIds),
         )
       : Promise.resolve({ data: [], error: null }),
+    itemIds.length
+      ? abortable(
+          supabase
+            .from('study_items')
+            .select('id, prompt')
+            .eq('status', 'suspended')
+            .in('id', itemIds),
+        )
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (lessons.error) throw rpcError(lessons.error);
   if (claims.error) throw rpcError(claims.error);
+  if (items.error) throw rpcError(items.error);
   const labels = new Map<string, string>([
     ...(lessons.data ?? []).map((l) => [l.id, l.title] as [string, string]),
     ...(claims.data ?? []).map((c) => [c.id, c.statement] as [string, string]),
+    ...(items.data ?? []).map((i) => [i.id, i.prompt] as [string, string]),
   ]);
   // One entry per lesson or claim however many reports it has; restoring it settles all.
   const seen = new Set<string>();
   const held: HeldBack[] = [];
   for (const r of rows) {
-    const target = r.lesson_id ?? r.claim_id;
+    const target = r.lesson_id ?? r.claim_id ?? r.item_id;
     const label = target ? labels.get(target) : undefined;
     if (!target || label === undefined || seen.has(target)) continue;
     seen.add(target);
-    held.push({ kind: r.lesson_id ? 'lesson' : 'claim', id: target, label });
+    held.push({ kind: r.lesson_id ? 'lesson' : r.claim_id ? 'claim' : 'item', id: target, label });
   }
   return held;
 }

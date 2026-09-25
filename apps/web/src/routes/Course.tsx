@@ -589,7 +589,9 @@ export function Course({
     let text =
       target.kind === 'lesson'
         ? 'Restored. The lesson is back in the course.'
-        : 'Restored. The claim is back in the course.';
+        : target.kind === 'item'
+          ? 'Restored. The question is back in the course.'
+          : 'Restored. The claim is back in the course.';
     if (target.kind === 'lesson') {
       const shown = await lessonShown(target.id).catch(() => null);
       if (shown === false) {

@@ -272,6 +272,7 @@
 /* The course's progress, said in words above its bar. */
 .course__progress > .meta {
   margin: 0 0 var(--space-2);
+}
 
 /* A practice question: the prompt reads like a heading, the verdict is said in words. */
 .study-q__prompt {
