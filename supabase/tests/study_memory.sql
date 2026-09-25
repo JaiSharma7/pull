@@ -1,0 +1,321 @@
+-- The study Delta (20260925210000): the memory of each claim and what reads as known from
+-- it. False suppression is the first risk, so most of this is what must NOT make a lesson
+-- read as known. Reader paths run as `authenticated` under RLS.
+begin;
+
+create or replace function pg_temp.become_reader(p_uid uuid)
+returns void language plpgsql as $fn$
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', p_uid, 'role', 'authenticated', 'is_anonymous', false)::text, true);
+  if current_user <> 'authenticated' then
+    raise exception 'RLS assertions must run as authenticated, not %', current_user;
+  end if;
+end $fn$;
+
+create or replace function pg_temp.become_worker()
+returns void language plpgsql as $fn$
+begin
+  perform set_config('role', 'service_role', true);
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+end $fn$;
+
+create or replace function pg_temp.as_owner()
+returns void language plpgsql as $fn$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $fn$;
+
+grant execute on function pg_temp.become_reader(uuid) to authenticated, service_role;
+grant execute on function pg_temp.become_worker() to authenticated, service_role;
+grant execute on function pg_temp.as_owner() to authenticated, service_role;
+
+create or replace function pg_temp.claim(
+  p_key text, p_version uuid, p_statement text, p_span text, p_note text
+)
+returns jsonb language sql as $fn$
+  select jsonb_build_object(
+    'key', p_key, 'sourceVersionId', p_version, 'kind', 'finding', 'statement', p_statement,
+    'status', 'draft',
+    'evidence', jsonb_build_array(jsonb_build_object(
+      'modelQuote', p_span, 'spanText', p_span, 'start', position(p_span in p_note) - 1,
+      'end', position(p_span in p_note) - 1 + char_length(p_span), 'match', 'exact')),
+    'provenance', jsonb_build_object('promptHash', repeat('a', 64),
+                                      'schemaHash', repeat('b', 64), 'model', 'm'))
+$fn$;
+
+create or replace function pg_temp.lesson(p_key text, p_position int, p_claims text[])
+returns jsonb language sql as $fn$
+  select jsonb_build_object(
+    'key', p_key, 'position', p_position, 'unitNo', 1, 'unitTitle', 'Timing',
+    'title', 'Lesson ' || p_key, 'objective', 'Explain the contrast.',
+    'explanation', 'The result depended on the delay.', 'example', null,
+    'recap', 'Timing matters.', 'minutes', 3, 'status', 'draft',
+    'claimKeys', to_jsonb(p_claims))
+$fn$;
+
+/* A question with every field given, so each kind can be built as it is stored. */
+create or replace function pg_temp.q(
+  p_key text, p_lesson text, p_kind text, p_prompt text, p_answer text, p_claims text[],
+  p_extra jsonb default '{}'::jsonb
+)
+returns jsonb language sql as $fn$
+  select jsonb_build_object(
+    'key', p_key, 'lessonKey', p_lesson, 'purpose', 'practice', 'kind', p_kind,
+    'prompt', p_prompt, 'answer', p_answer, 'acceptedAnswers', '[]'::jsonb,
+    'distractors', '[]'::jsonb, 'cloze', null, 'sequence', '[]'::jsonb,
+    'pairs', '[]'::jsonb, 'explanation', 'Because the note says so.', 'difficulty', 1,
+    'status', 'draft', 'claimKeys', to_jsonb(p_claims)) || p_extra
+$fn$;
+
+grant execute on function pg_temp.claim(text, uuid, text, text, text) to service_role;
+grant execute on function pg_temp.lesson(text, int, text[]) to service_role;
+grant execute on function pg_temp.q(text, text, text, text, text, text[], jsonb) to service_role;
+
+/* Record one answer and hand back its result, or its refusal. */
+create or replace function pg_temp.answer(
+  p_item uuid, p_response jsonb, p_self text default null, p_hinted boolean default null,
+  p_client uuid default extensions.gen_random_uuid()
+)
+returns jsonb language sql as $fn$
+  select public.record_study_answers(jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+    'clientEventId', p_client, 'itemId', p_item, 'response', p_response,
+    'selfGrade', p_self, 'hinted', p_hinted))))
+$fn$;
+grant execute on function pg_temp.answer(uuid, jsonb, text, boolean, uuid) to authenticated;
+
+do $test$
+declare
+  reader   uuid := extensions.gen_random_uuid();
+  other    uuid := extensions.gen_random_uuid();
+  note     text := 'Roediger and Karpicke had students read prose. On a final test five '
+                   'minutes later, the group that restudied remembered more. On final tests '
+                   'two days and one week later, the group that had taken the recall test '
+                   'remembered more.';
+  saved    jsonb;
+  v        uuid;
+  out      jsonb;
+  job      uuid;
+  gen      uuid;
+  course   uuid;
+  l1       uuid;
+  l2       uuid;
+  l3       uuid;
+  c1       uuid;
+  c2       uuid;
+  q1       uuid;
+  q3       uuid;
+  q5       uuid;
+  q5_mine  uuid;
+  rep      uuid;
+  r        jsonb;
+  st       double precision;
+begin
+  insert into auth.users
+    (id, instance_id, aud, role, email, encrypted_password,
+     email_confirmed_at, created_at, updated_at, is_anonymous,
+     raw_app_meta_data, raw_user_meta_data)
+  values
+    (reader, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'study-memory@example.test', '', now(), now(), now(), false, '{}', '{}'),
+    (other, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+     'study-memory-other@example.test', '', now(), now(), now(), false, '{}', '{}');
+  insert into public.study_generation_access (user_id) values (reader);
+
+  perform pg_temp.become_reader(reader);
+  saved := public.save_study_source_version('Prose memory', 'paste', note,
+                                            extensions.gen_random_uuid());
+  v := (saved ->> 'versionId')::uuid;
+  out := public.enqueue_study_generation(array[v], 'Explain the argument',
+                                         extensions.gen_random_uuid(), true);
+  job := (out ->> 'jobId')::uuid;
+  gen := (out ->> 'generationId')::uuid;
+  course := (out ->> 'courseId')::uuid;
+
+  perform pg_temp.become_worker();
+  perform public.persist_study_course(job, jsonb_build_object(
+    'course', jsonb_build_object('title', 'Immediate versus delayed',
+                                 'objectives', jsonb_build_array('Explain the contrast.')),
+    'claims', jsonb_build_array(
+      pg_temp.claim('s1c1', v, 'At five minutes, restudying beat the recall test.',
+                    'the group that restudied remembered more', note),
+      pg_temp.claim('s1c2', v, 'After a week, the recall test group remembered more.',
+                    'the group that had taken the recall test remembered more', note)),
+    'lessons', jsonb_build_array(
+      pg_temp.lesson('l1', 1, array['s1c1']),
+      pg_temp.lesson('l2', 2, array['s1c2']),
+      pg_temp.lesson('l3', 3, array['s1c1', 's1c2'])),
+    'items', jsonb_build_array(
+      pg_temp.q('q1', 'l2', 'multiple_choice', 'Which group remembered more after a week?',
+                'The recall test group', array['s1c2'], jsonb_build_object('distractors',
+                  jsonb_build_array(
+                    jsonb_build_object('text', 'The restudy group', 'why', 'Only at five minutes.'),
+                    jsonb_build_object('text', 'Neither group', 'why', 'The note reports a difference.')))),
+      pg_temp.q('q3', 'l1', 'short_recall', 'Which strategy won at five minutes?',
+                'restudying', array['s1c1']),
+      pg_temp.q('q5', 'l1', 'short_recall', 'What did the winning group do at five minutes?',
+                'restudied', array['s1c1'])),
+    'provenance', jsonb_build_object('promptHash', repeat('a', 64),
+                                     'schemaHash', repeat('b', 64), 'model', 'm')));
+  perform public.validate_study_course(job);
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'succeeded' where id = job;
+
+  select id into l1 from public.study_lessons where generation_id = gen and lesson_key = 'l1';
+  select id into l2 from public.study_lessons where generation_id = gen and lesson_key = 'l2';
+  select id into l3 from public.study_lessons where generation_id = gen and lesson_key = 'l3';
+  select id into c1 from public.study_claims where generation_id = gen and claim_key = 's1c1';
+  select id into c2 from public.study_claims where generation_id = gen and claim_key = 's1c2';
+  select id into q1 from public.study_items where generation_id = gen and item_key = 'q1';
+  select id into q3 from public.study_items where generation_id = gen and item_key = 'q3';
+  select id into q5 from public.study_items where generation_id = gen and item_key = 'q5';
+  if (select count(*) from public.study_lessons
+      where generation_id = gen and status = 'validated') is distinct from 3::bigint
+     or (select count(*) from public.study_items
+         where generation_id = gen and status = 'validated') is distinct from 3::bigint then
+    raise exception 'the fixture did not validate as expected';
+  end if;
+
+  perform pg_temp.become_reader(reader);
+  if exists (select 1 from public.study_course_outline(course) where known or revisit) then
+    raise exception 'a lesson read as known before anything was answered';
+  end if;
+
+  -- ---------------------------------------------------------------- what proves nothing
+  -- Exposure.
+  perform public.record_study_progress(jsonb_build_array(
+    jsonb_build_object('clientEventId', extensions.gen_random_uuid(), 'kind', 'lesson_read',
+                       'lessonId', l1)));
+  -- A self-graded answer, however right.
+  perform pg_temp.answer(q3, '"reading it again"', 'correct');
+  -- A hinted one.
+  perform pg_temp.answer(q3, '"restudying"', null, true);
+  -- An answer to the reader's own version.
+  q5_mine := public.revise_study_item(q5, '{"prompt": "What did the group that won at five minutes do?"}');
+  perform pg_temp.answer(q5_mine, '"restudied"');
+  -- An answer to a question held back by a report.
+  rep := public.report_study_content('item', q3, 'ambiguous', null);
+  perform pg_temp.answer(q3, '"restudying"');
+  perform public.dismiss_study_report(rep);
+  if (select known from public.study_course_outline(course) where lesson_id = l1)
+     is distinct from false
+     or exists (select 1 from public.study_claim_memory where claim_id = c1) then
+    raise exception 'exposure, a self-grade, a hint, a reader''s version or a held-back '
+                    'question made a lesson read as known';
+  end if;
+
+  -- ---------------------------------------------------------------- proof
+  r := pg_temp.answer(q3, '"restudying"');
+  if (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not true then
+    raise exception 'the proving answer did not prove: %', r;
+  end if;
+  if (select known from public.study_course_outline(course) where lesson_id = l1)
+     is distinct from true then
+    raise exception 'a lesson whose claim was proven did not read as known';
+  end if;
+  -- A lesson with two claims, one proven, is not known.
+  if (select known from public.study_course_outline(course) where lesson_id = l3)
+     is distinct from false then
+    raise exception 'a lesson read as known with one of its two claims unproven';
+  end if;
+  select stability into st from public.study_claim_memory where claim_id = c1;
+  if st is distinct from 2.7::double precision then
+    raise exception 'a first success did not grow stability as grade_recall does: %', st;
+  end if;
+  -- Proving it again the same day is repetition, not spacing.
+  perform pg_temp.answer(q3, '"restudying"');
+  if (select stability from public.study_claim_memory where claim_id = c1) is distinct from st then
+    raise exception 'answering again the same day grew stability';
+  end if;
+  -- The proof expires with its stability: a month on, it is not known.
+  if (select known from public.study_claim_knowledge(course, now() + interval '30 days')
+      where claim_id = c1) is distinct from false
+     or (select known from public.study_claim_knowledge(course, now() + interval '1 day')
+         where claim_id = c1) is distinct from true then
+    raise exception 'a proof did not expire with its stability';
+  end if;
+  -- Due one stability after the success.
+  if (select due_at from public.study_course_questions(course) where item_id = q3)
+     is distinct from (select last_success_at + make_interval(secs => stability * 86400)
+                       from public.study_claim_memory where claim_id = c1) then
+    raise exception 'a proven question is not due one stability after its success';
+  end if;
+
+  r := pg_temp.answer(q1, '"The recall test group"');
+  if (select string_agg(known::text, ',' order by lesson_position)
+      from public.study_course_outline(course)) is distinct from 'true,true,true' then
+    raise exception 'proving every claim did not make every lesson known';
+  end if;
+
+  -- A report after the proof withdraws it: the proof is re-read, not remembered.
+  rep := public.report_study_content('item', q1, 'ambiguous', null);
+  if (select known from public.study_course_outline(course) where lesson_id = l2)
+     is distinct from false then
+    raise exception 'a proof survived a report of the question that gave it';
+  end if;
+  perform public.dismiss_study_report(rep);
+  if (select known from public.study_course_outline(course) where lesson_id = l2)
+     is distinct from true then
+    raise exception 'dismissing the report did not restore the proof';
+  end if;
+
+  -- ---------------------------------------------------------------- a lapse
+  perform pg_temp.answer(q3, '"memorising it"', 'incorrect');
+  -- A self-graded wrong answer is practice too: no lapse from it.
+  if (select last_outcome from public.study_claim_memory where claim_id = c1)
+     is distinct from 'success' then
+    raise exception 'a self-graded answer moved the memory';
+  end if;
+  perform pg_temp.answer(q1, '"The restudy group"');
+  if (select known from public.study_course_outline(course) where lesson_id = l2)
+     is distinct from false
+     or (select revisit from public.study_course_outline(course) where lesson_id = l2)
+        is distinct from true
+     or (select known from public.study_course_outline(course) where lesson_id = l3)
+        is distinct from false
+     or (select due_at from public.study_course_questions(course) where item_id = q1)
+        > clock_timestamp()
+     or (select lapses from public.study_claim_memory where claim_id = c2) is distinct from 1 then
+    raise exception 'a wrong answer did not take the claim''s knowledge away at once: %',
+      (select jsonb_agg(to_jsonb(o)) from public.study_course_outline(course) o);
+  end if;
+  -- The retry that follows it is hinted, so it cannot give the knowledge back.
+  r := pg_temp.answer(q1, '"The recall test group"');
+  if (r -> 'results' -> 0 ->> 'hinted')::boolean is not true
+     or (select known from public.study_course_outline(course) where lesson_id = l2)
+        is distinct from false
+     or (select last_outcome from public.study_claim_memory where claim_id = c2)
+        is distinct from 'lapse' then
+    raise exception 'a retry after a wrong answer restored knowledge';
+  end if;
+
+  -- ---------------------------------------------------------------- reach
+  perform pg_temp.become_reader(other);
+  if exists (select 1 from public.study_claim_memory)
+     or exists (select 1 from public.study_claim_knowledge(course)) then
+    raise exception 'another reader could see this reader''s memory';
+  end if;
+  perform pg_temp.become_reader(reader);
+  if has_table_privilege('authenticated', 'public.study_claim_memory', 'insert')
+     or has_table_privilege('authenticated', 'public.study_claim_memory', 'update')
+     or has_table_privilege('service_role', 'public.study_claim_memory', 'insert')
+     or has_function_privilege('authenticated', 'public.study_remember(uuid)', 'execute')
+     or has_function_privilege('anon', 'public.study_claim_knowledge(uuid, timestamptz)',
+                               'execute') then
+    raise exception 'the memory is writable, or readable by anon';
+  end if;
+
+  -- Deleting the source takes the memory with the claims.
+  delete from public.study_sources where owner_id = reader;
+  perform pg_temp.as_owner();
+  if exists (select 1 from public.study_claim_memory where owner_id = reader) then
+    raise exception 'the memory outlived its claims';
+  end if;
+end
+$test$;
+
+select 'study memory: ok';
+
+rollback;
