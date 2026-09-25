@@ -205,8 +205,10 @@ now writes it, narrowed to two values, and `enqueue_study_generation` writes the
 | `study_course`      | A draft course built from a reader's own study sources. See `study-generation.md`. |
 
 **The column is descriptive, and it is worth being exact about that**, because the table
-above reads like an enforcement mechanism and is not one yet. Nothing in
-`supabase/functions` branches on `kind`. What actually keeps a private summary private is
+above reads like an enforcement mechanism and is not one yet. The only branch on `kind` in
+`supabase/functions` separates study courses, which walk their own graph
+(`study-graph.ts`), from summaries; nothing distinguishes the two summary kinds. What
+actually keeps a private summary private is
 `generation_jobs.visibility` — which defaults to `private`, which `enqueue_generation_job`
 refuses to take from the client, and which `template` passes to `summaries.visibility` —
 plus the `moderate` step, which re-checks rights immediately before publication and
@@ -216,8 +218,9 @@ somewhere to branch when `embed_private` and `relate_only` arrive. Validating it
 buys a refusal for a typo rather than a job nothing will ever pick up, which is worth
 having and is not the same as enforcement.
 
-A private summary is the one place a reader's own content reaches a model provider, and
-it happens because they asked. `docs/privacy.md` says so in the reader's words.
+A private summary and a study course are the two places a reader's own content reaches a
+model provider, and both happen because they asked. `docs/privacy.md` says so in the
+reader's words.
 
 **An imported book gains a summary, not a second `works` row.** `upsertWork` keys on
 `content_hash`, which is the right identity for a canonical source and the wrong one for

@@ -704,17 +704,43 @@ Deno.serve(async (req) => {
        * step that has windows left. The wait counts ride along unchanged.
        */
       if (result.continue) {
-        const requeued = must(
-          await supabase.rpc('requeue_generation_message', {
-            p_msg_id: msg.msg_id,
-            p_job_id: jobId,
-            p_step: step,
-            p_delay_seconds: 0,
-            p_waits: msg.message.waits ?? 0,
-            p_budget_waits: msg.message.budgetWaits ?? 0,
-          }),
-          'requeue continuing step',
-        ) as number | null;
+        // This invocation's hold, settled once, as `record_job_step` would have on the
+        // way to the next step. The step recorded its charges and does not settle.
+        must(
+          await supabase.rpc('settle_budget', { p_job_id: jobId, p_step: step }),
+          'settle continuing step',
+        );
+        /*
+         * A requeue that fails is not a failed attempt: the step did its work and the
+         * cache holds it. The message is left for its visibility timeout to redeliver,
+         * and that delivery resumes at the next uncached window. Going through the
+         * failure path instead would count an attempt that did not fail, and settle a
+         * second time.
+         */
+        let requeued: number | null;
+        try {
+          requeued = must(
+            await supabase.rpc('requeue_generation_message', {
+              p_msg_id: msg.msg_id,
+              p_job_id: jobId,
+              p_step: step,
+              p_delay_seconds: 0,
+              p_waits: msg.message.waits ?? 0,
+              p_budget_waits: msg.message.budgetWaits ?? 0,
+            }),
+            'requeue continuing step',
+          ) as number | null;
+        } catch (requeueError) {
+          processed.push({
+            jobId,
+            step,
+            attempt,
+            ok: true,
+            continuing: true,
+            error: String(requeueError),
+          });
+          continue;
+        }
         processed.push({
           jobId,
           step,

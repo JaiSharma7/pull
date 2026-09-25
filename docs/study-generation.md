@@ -25,7 +25,7 @@ separate graph (`supabase/functions/_shared/study-graph.ts`). A message names it
 and a `study_*` step belongs to that graph.
 
 **Two model calls, split for cost.** `ExtractStudyClaims` reads one window of one version
-(at most 30,000 UTF-16 units, ending at a paragraph or sentence break where one falls in
+(at most 30,000 characters, ending at a paragraph or sentence break where one falls in
 the last fifth) and is independent of the goal, so its output is reused by every course
 built from that version. `AssembleStudyCourse` reads only the grounded claims and their
 quoted evidence, never the source text, so its input stays small. At the source limits
@@ -116,10 +116,16 @@ transport, not by the accounting.
 (`_shared/structured.ts`) returns one record per HTTP attempt -- the 503 it retried, the
 429 that moved to the next model, a request aborted at its timeout -- and
 `record_study_stage` writes one `cost_ledger` row for each, with `provider_call_id`, in the
-same transaction as the cache entry and the budget settlement. It refuses a record for a
-call the journal never saw, and a replay neither doubles a charge nor adds it to the job
-twice. An attempt the provider may have billed without reporting usage is recorded at zero
-with `usage_known = false` rather than with an invented number.
+same transaction as the cache entry. It refuses a record for a call the journal never saw,
+and a replay neither doubles a charge nor adds it to the job twice. A charge is never
+rolled back because the reader deleted the material mid-call (only the cache entry is
+skipped), nor because they deleted their account (the attempt is ledgered with no job).
+
+An attempt the provider may have billed without reporting usage -- sent and then aborted
+or dropped, or answered with a body that could not be read -- is charged at the ceiling
+its hold was sized to, with `usage_known = false`. Recorded at zero it would have
+released its hold and let the day's total forget money that may have been spent; a
+report can still tell a ceiling from a measurement by the flag.
 
 **Reconciliation.** `study_provider_call_audit(since)` reports journalled attempts, ledgered
 attempts, journalled attempts with no ledger row (should be zero), attempts left open by a
@@ -128,7 +134,17 @@ column is an alert.
 
 **The budget.** Each call reserves its worst case immediately before it is sent (the
 provider's output ceiling plus the byte length of the prompt and schema) and is refused
-into a budget wait when the global daily cap cannot fund it. `enqueue_study_generation`
+into a budget wait when the global daily cap cannot fund it. The worker settles each hold
+exactly once, on its way out of the invocation -- through `record_job_step`, the failure
+path, or explicitly when `study_extract` asks to be sent again -- and never inside
+`record_study_stage`, because one settle too many releases a share of a hold that another
+delivery of the same step may still be spending under.
+
+**Retries are bounded per step, not per window.** Only a failed attempt writes a
+`job_steps` row, so `MAX_ATTEMPTS` (three) counts failures across the whole extraction:
+a job whose windows fail three times in total fails, however many windows succeeded in
+between. That errs toward stopping spend on a source that keeps failing, and a failed
+job's cached windows are reused if the reader asks again. `enqueue_study_generation`
 refuses at the door when the day cannot fund `study_min_job_cents()` (31: one minimal
 extraction and one minimal assembly), and counts a study job against the same per-reader
 allowance as every other generation job: three fast a day, a stagger past that, fifty in

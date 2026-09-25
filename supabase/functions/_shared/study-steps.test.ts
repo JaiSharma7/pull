@@ -371,6 +371,89 @@ describe('study_extract', () => {
     });
   });
 
+  it('charges an attempt of unknown cost at the ceiling it reserved, not at zero', async () => {
+    const mem = memoryDb(generation());
+    const dropped: StructuredProvider = {
+      ...stubStructuredProvider,
+      worstCaseCentsFor: () => 16,
+      async generate() {
+        return {
+          ok: false,
+          error: 'socket hang up',
+          unavailable: false,
+          model: 'm',
+          calls: [
+            {
+              providerCallId: 'c1',
+              provider: 'gemini',
+              model: 'm',
+              httpStatus: null,
+              outcome: 'aborted',
+              inputTokens: 0,
+              outputTokens: 0,
+              costCents: 0,
+              usageKnown: false,
+            },
+            {
+              providerCallId: 'c2',
+              provider: 'gemini',
+              model: 'm',
+              httpStatus: 503,
+              outcome: 'responded',
+              inputTokens: 0,
+              outputTokens: 0,
+              costCents: 0,
+              usageKnown: true,
+            },
+          ],
+        };
+      },
+    };
+    const prepared = await runStudyStep('study_prepare', {
+      job: job(),
+      priorOutputs: {},
+      provider: dropped,
+      db: mem.db,
+    });
+    await expect(
+      runStudyStep('study_extract', {
+        job: job(),
+        priorOutputs: { study_prepare: prepared.output },
+        provider: dropped,
+        db: mem.db,
+      }),
+    ).rejects.toThrow(/socket hang up/);
+    expect(mem.reserved).toEqual([{ step: 'study_extract', cents: 16 }]);
+    expect(
+      mem.recorded[0]?.calls.map((c) => [c.providerCallId, c.costCents, c.usageKnown]),
+    ).toEqual([
+      ['c1', 16, false],
+      ['c2', 0, true],
+    ]);
+  });
+
+  it("links a course's cached assembly to every source, not only those it was shown", async () => {
+    const two = generation(NOTE, {
+      sources: [
+        { versionId: VERSION, position: 1, title: 'Notes', format: 'paste', text: NOTE },
+        {
+          versionId: '00000000-0000-4000-8000-000000000002',
+          position: 2,
+          title: 'Empty',
+          format: 'paste',
+          text: 'Too short.',
+        },
+      ],
+    });
+    const mem = memoryDb(two);
+    await walk(mem.db, stubStructuredProvider);
+    const assembled = mem.recorded.find((r) => r.cache?.stage === 'assemble');
+    expect(assembled?.cache?.sourceVersionIds).toEqual([
+      VERSION,
+      '00000000-0000-4000-8000-000000000002',
+    ]);
+  });
+
   it('retries a recording that failed once, and succeeds', async () => {
     const mem = memoryDb(generation(), { failRecord: 1 });
     const prepared = await runStudyStep('study_prepare', {

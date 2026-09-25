@@ -261,6 +261,14 @@ async function walk(jobId, fetchImpl) {
         fetchImpl,
       });
       assert(attempt < 20, `${step} never stopped continuing`);
+      // The worker settles a continuing step's hold itself; `record_study_stage` does not.
+      if (result.continue) {
+        const { error: settleError } = await supabase.rpc('settle_budget', {
+          p_job_id: jobId,
+          p_step: step,
+        });
+        if (settleError) throw settleError;
+      }
     } while (result.continue);
     const { error: recordError } = await supabase.rpc('record_job_step', {
       p_job_id: jobId,

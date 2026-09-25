@@ -22,12 +22,12 @@ import { PROMPTS, promptFor } from './prompts.ts';
 export const STUDY_LIMITS = {
   maxSources: 5,
   maxTotalChars: 200_000,
-  /** One extraction call reads at most this many UTF-16 units of one version. */
+  /** One extraction call reads at most this many code points of one version. */
   windowChars: 30_000,
   /**
    * A window may end early at a paragraph or sentence boundary, but never before this
    * share of `windowChars`. So every window but a version's last is at least 24,000
-   * units, and 200,000 characters over five versions is at most 13 windows.
+   * code points, and 200,000 characters over five versions is at most 13 windows.
    */
   minWindowShare: 0.8,
   maxWindows: 16,
@@ -125,14 +125,31 @@ function safeCut(text: string, at: number): number {
   return at;
 }
 
+/** The UTF-16 index `points` code points after `from`, or the end of the text. */
+function advanceCodePoints(text: string, from: number, points: number): number {
+  let i = from;
+  for (let n = 0; n < points && i < text.length; n++) {
+    i += isHighSurrogate(text.charCodeAt(i)) && i + 1 < text.length ? 2 : 1;
+  }
+  return i;
+}
+
 /**
  * Where to end a window that starts at `start`: the last paragraph break, else the
  * last sentence end, inside the final fifth of the allowance -- else a hard cut.
+ *
+ * Measured in CODE POINTS, the unit the 200,000-character limit counts. Measured in
+ * UTF-16 units, a source written mostly outside the Basic Multilingual Plane is twice
+ * as long, and five of them planned past `maxWindows` and failed at `study_prepare`.
  */
 function windowEnd(text: string, start: number): number {
-  const limit = start + STUDY_LIMITS.windowChars;
+  const limit = advanceCodePoints(text, start, STUDY_LIMITS.windowChars);
   if (limit >= text.length) return text.length;
-  const floor = start + Math.floor(STUDY_LIMITS.windowChars * STUDY_LIMITS.minWindowShare);
+  const floor = advanceCodePoints(
+    text,
+    start,
+    Math.floor(STUDY_LIMITS.windowChars * STUDY_LIMITS.minWindowShare),
+  );
   const region = text.slice(floor, limit);
   const paragraph = region.lastIndexOf('\n\n');
   if (paragraph >= 0) return floor + paragraph + 2;
@@ -193,9 +210,15 @@ export function codePointIndexer(text: string): (utf16Index: number) => number {
  */
 export function pageIndexer(format: string, text: string): (utf16Index: number) => number | null {
   if (format !== 'pdf' && format !== 'pdf_ocr') return () => null;
+  // Only the importer's own markers: each at the top of a page block (the start of the
+  // text, or after the blank line `assemblePdfPages` joins pages with), numbered 1, 2,
+  // 3 in order. A body line that happens to read "Page 7" breaks the sequence and is
+  // not a page, and there is no page 0 for `study_claim_evidence.page` to refuse.
   const marks: { at: number; page: number }[] = [];
-  for (const m of text.matchAll(/(^|\n)Page (\d{1,4})\n/g)) {
-    marks.push({ at: (m.index ?? 0) + (m[1] ?? '').length, page: Number(m[2]) });
+  for (const m of text.matchAll(/(^|\n\n)Page (\d{1,4})\n/g)) {
+    const page = Number(m[2]);
+    if (page !== (marks.at(-1)?.page ?? 0) + 1) continue;
+    marks.push({ at: (m.index ?? 0) + (m[1] ?? '').length, page });
   }
   return (i) => {
     let page: number | null = null;
@@ -235,8 +258,13 @@ function fold(text: string): { folded: string; origin: number[] } {
       else if (ch === ' ') ch = ' ';
       ch = ch.toLowerCase();
     }
-    folded += ch;
-    origin.push(i);
+    // One origin entry per folded UTF-16 unit, not per source character: lowercasing
+    // can lengthen a string ('\u0130' becomes two units), and an origin array one short
+    // shifts every span after it onto the wrong text.
+    for (let unit = 0; unit < ch.length; unit++) {
+      folded += ch[unit];
+      origin.push(i);
+    }
   }
   return { folded, origin };
 }
@@ -397,6 +425,17 @@ const LIMITS = {
   spanText: 2000,
 } as const;
 
+/**
+ * Cut to at most `max` UTF-16 units without splitting a surrogate pair. A lone high
+ * surrogate is invalid in jsonb, and one at the end of a truncated field made Postgres
+ * refuse the whole course -- permanently, since the model output it came from is cached.
+ */
+export function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  return isHighSurrogate(cut.charCodeAt(cut.length - 1)) ? cut.slice(0, -1) : cut;
+}
+
 function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -409,7 +448,7 @@ function strings(value: unknown, max: number, eachMax: number): { kept: string[]
     const s = str(v);
     if (!s) continue;
     if (s.length > eachMax) long = true;
-    kept.push(s.slice(0, eachMax));
+    kept.push(truncate(s, eachMax));
     if (kept.length >= max) break;
   }
   return { kept, long };
@@ -484,7 +523,7 @@ export function buildClaimIndex(
       const quotes = strings(claim.evidence, 3, 5000).kept;
       const evidence: EvidenceRow[] = quotes.map((quote) => {
         const span = resolveQuote(source.text, quote, extraction.window, folded);
-        const modelQuote = quote.slice(0, LIMITS.modelQuote);
+        const modelQuote = truncate(quote, LIMITS.modelQuote);
         if (!span || span.end - span.start > LIMITS.spanText) {
           return {
             modelQuote,
@@ -512,9 +551,9 @@ export function buildClaimIndex(
         position: source.position,
         sourceTitle: source.title,
         kind,
-        statement: statement.slice(0, LIMITS.statement),
+        statement: truncate(statement, LIMITS.statement),
         qualifications: qualifications.kept,
-        attribution: attributionRaw ? attributionRaw.slice(0, LIMITS.attribution) : null,
+        attribution: attributionRaw ? truncate(attributionRaw, LIMITS.attribution) : null,
         evidence,
         status: reasons.length > 0 ? 'rejected' : 'draft',
         rejectionReasons: [...new Set(reasons)],
@@ -545,14 +584,28 @@ export function selectAssemblyClaims(claims: readonly ClaimRow[]): ClaimRow[] {
 }
 
 /** The text the assembly reads: one line per claim, keyed, attributed, with evidence. */
+/**
+ * One line per claim, and it stays one line: every field is the reader's text or the
+ * model's reading of it, and a newline inside one would let a document write a line that
+ * looks like a claim of its own -- `[s1c2] (Source 1: ...) ... Evidence: "..."` -- which a
+ * question could then cite by a real key.
+ */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 export function claimsDigest(claims: readonly ClaimRow[]): string {
   return claims
     .map((c) => {
-      const parts = [`[${c.key}] (Source ${c.position}: ${c.sourceTitle}) ${c.statement}`];
+      const parts = [
+        `[${c.key}] (Source ${c.position}: ${oneLine(c.sourceTitle)}) ${oneLine(c.statement)}`,
+      ];
       if (c.qualifications.length > 0)
-        parts.push(`Qualifications: ${c.qualifications.join('; ')}.`);
-      if (c.attribution) parts.push(`Attributed to: ${c.attribution}.`);
-      const quotes = c.evidence.filter((e) => e.spanText).map((e) => `"${e.spanText}"`);
+        parts.push(`Qualifications: ${c.qualifications.map(oneLine).join('; ')}.`);
+      if (c.attribution) parts.push(`Attributed to: ${oneLine(c.attribution)}.`);
+      const quotes = c.evidence
+        .filter((e) => e.spanText)
+        .map((e) => `"${oneLine(e.spanText as string)}"`);
       parts.push(`Evidence: ${quotes.join(' | ')}`);
       return parts.join(' ');
     })
@@ -653,11 +706,17 @@ export function answerKey(text: string): string {
     .trim();
 }
 
+/** Whether `phrase` occurs in `text` as whole words, after `answerKey` folding. */
+function containsPhrase(text: string, phrase: string): boolean {
+  const p = answerKey(phrase);
+  return p.length > 0 && ` ${answerKey(text)} `.includes(` ${p} `);
+}
+
 function bounded(value: unknown, max: number, reasons: string[]): string {
   const s = str(value);
   if (s.length > max) {
     reasons.push('too_long');
-    return s.slice(0, max);
+    return truncate(s, max);
   }
   return s;
 }
@@ -695,7 +754,7 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
   const units = Array.isArray(course.units) ? course.units.slice(0, 6) : [];
   units.forEach((unitRaw, unitIndex) => {
     const unit = (unitRaw ?? {}) as Record<string, unknown>;
-    const unitTitle = str(unit.title).slice(0, 200) || `Unit ${unitIndex + 1}`;
+    const unitTitle = truncate(str(unit.title), 200) || `Unit ${unitIndex + 1}`;
     const unitLessons = Array.isArray(unit.lessons) ? unit.lessons.slice(0, 4) : [];
     for (const lessonRaw of unitLessons) {
       const lesson = (lessonRaw ?? {}) as Record<string, unknown>;
@@ -765,8 +824,11 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
     let pairs: { left: string; right: string }[] = [];
 
     if (CHOICE_KINDS.has(kind)) {
-      const rawDistractors = Array.isArray(q.distractors) ? q.distractors.slice(0, 4) : [];
+      const rawDistractors = Array.isArray(q.distractors) ? q.distractors : [];
+      // Over the limit is a malformed question, not one to trim quietly into a draft.
+      if (rawDistractors.length > 4) reasons.push('too_many_distractors');
       distractors = rawDistractors
+        .slice(0, 4)
         .map((d) => {
           const entry = (d ?? {}) as Record<string, unknown>;
           return {
@@ -790,22 +852,21 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
       acceptedAnswers = accepted.kept;
       const blanks = cloze ? cloze.split('____').length - 1 : 0;
       if (blanks !== 1) reasons.push('cloze_malformed');
-      else if (
-        answerKey(answer).length >= 3 &&
-        answerKey(cloze as string).includes(answerKey(answer))
-      ) {
+      else if (answerKey(answer).length >= 3 && containsPhrase(cloze as string, answer)) {
         reasons.push('answer_in_prompt');
       }
     } else if (kind === 'ordering') {
-      const steps = strings(q.sequence, 6, 500);
-      sequence = steps.kept;
+      const steps = strings(q.sequence, 7, 500);
+      sequence = steps.kept.slice(0, 6);
       if (steps.long) reasons.push('too_long');
       const distinct = new Set(sequence.map(answerKey));
-      if (sequence.length < 3 || distinct.size !== sequence.length)
+      if (steps.kept.length > 6 || sequence.length < 3 || distinct.size !== sequence.length)
         reasons.push('ordering_malformed');
     } else if (kind === 'matching') {
-      const rawPairs = Array.isArray(q.pairs) ? q.pairs.slice(0, 6) : [];
+      const rawPairs = Array.isArray(q.pairs) ? q.pairs : [];
+      if (rawPairs.length > 6) reasons.push('matching_malformed');
       pairs = rawPairs
+        .slice(0, 6)
         .map((p) => {
           const entry = (p ?? {}) as Record<string, unknown>;
           return {
@@ -823,15 +884,16 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
       acceptedAnswers = accepted.kept;
     }
 
-    // Only where the answer is a short phrase: a long model answer for short recall
-    // shares words with its own prompt without giving anything away.
+    // Typed answers only, and only a short phrase, matched as whole words. A choice
+    // question may name its options in the prompt ("retrieval or restudying?") without
+    // giving anything away, and a long model answer for short recall shares words with
+    // its own prompt; a substring test also found "rest" inside "interesting".
     const shortAnswer = answerKey(answer);
     if (
-      kind !== 'ordering' &&
-      kind !== 'matching' &&
+      (kind === 'cloze' || kind === 'short_recall') &&
       shortAnswer.length >= 4 &&
       shortAnswer.split(' ').length <= 6 &&
-      answerKey(prompt).includes(shortAnswer)
+      containsPhrase(prompt, answer)
     ) {
       reasons.push('answer_in_prompt');
     }
@@ -863,23 +925,26 @@ export function normalizeStudyCourse(raw: unknown, shown: readonly ClaimRow[]): 
       const entry = (d ?? {}) as Record<string, unknown>;
       return {
         claimKeys: cite(entry.claimKeys, 6),
-        description: str(entry.description).slice(0, 1000),
+        description: truncate(str(entry.description), 1000),
       };
     })
     .filter((d) => d.claimKeys.length >= 2 && d.description);
   const withheld = (Array.isArray(course.withheld) ? course.withheld.slice(0, 10) : [])
     .map((w) => {
       const entry = (w ?? {}) as Record<string, unknown>;
-      return { prompt: str(entry.prompt).slice(0, 1000), reason: str(entry.reason).slice(0, 1000) };
+      return {
+        prompt: truncate(str(entry.prompt), 1000),
+        reason: truncate(str(entry.reason), 1000),
+      };
     })
     .filter((w) => w.prompt);
 
   return {
     course: {
-      title: str(course.title).slice(0, 200) || null,
-      overview: str(course.overview).slice(0, 2000) || null,
+      title: truncate(str(course.title), 200) || null,
+      overview: truncate(str(course.overview), 2000) || null,
       objectives: strings(course.objectives, 6, 500).kept,
-      recap: str(course.recap).slice(0, 2000) || null,
+      recap: truncate(str(course.recap), 2000) || null,
       disagreements,
       withheld,
     },

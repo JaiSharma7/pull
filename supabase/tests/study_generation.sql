@@ -74,6 +74,7 @@ declare
   gen_id    uuid;
   call_1    uuid := extensions.gen_random_uuid();
   call_2    uuid := extensions.gen_random_uuid();
+  call_late uuid := extensions.gen_random_uuid();
   stray     uuid := extensions.gen_random_uuid();
   cache_id  uuid;
   persisted jsonb;
@@ -300,9 +301,16 @@ begin
   end if;
   select cost_cents into cost from public.generation_jobs where id = the_job;
   if cost <> 0.1575 then raise exception 'the job was charged % cents, not 0.1575', cost; end if;
+  -- Recording -- twice, above -- does not settle: the worker settles each hold exactly
+  -- once on its way out, and a settle here would be one too many.
+  select count(*) into n from public.budget_reservations br
+   where br.job_id = the_job and br.step = 'study_extract' and br.settled_at is null
+     and br.open_calls = 1;
+  if n <> 1 then raise exception 'recording the stage settled the hold itself'; end if;
+  perform public.settle_budget(the_job, 'study_extract');
   select count(*) into n from public.budget_reservations br
    where br.job_id = the_job and br.step = 'study_extract' and br.settled_at is null;
-  if n <> 0 then raise exception 'recording the stage left its hold open'; end if;
+  if n <> 0 then raise exception 'the worker''s one settle left the hold open'; end if;
 
   perform pg_temp.become_worker();
   begin
@@ -479,6 +487,53 @@ begin
   -- The audit trail outlives the material: no content in it, and the charge happened.
   select count(*) into n from public.cost_ledger where provider_call_id in (call_1, call_2);
   if n <> 2 then raise exception 'deleting the material removed ledger rows'; end if;
+
+  -- A paid call that returns AFTER the reader deleted the material is still ledgered,
+  -- against its own journal row; only the cache entry is skipped.
+  perform pg_temp.become_worker();
+  insert into public.provider_calls (id, job_id, step, provider, endpoint, outcome, http_status, closed_at)
+  values (call_late, the_job, 'study_extract', 'gemini', 'models/m:generateContent',
+          'responded', 200, now());
+  if public.record_study_stage(
+       the_job, 'study_extract',
+       jsonb_build_array(jsonb_build_object('providerCallId', call_late, 'provider', 'gemini',
+                                            'costCents', 0.4, 'usageKnown', true)),
+       jsonb_build_object('stage', 'extract', 'cacheKey', repeat('9', 64),
+                          'output', jsonb_build_object('claims', '[]'::jsonb),
+                          'promptName', 'ExtractStudyClaims', 'promptHash', repeat('a', 64),
+                          'schemaHash', repeat('b', 64), 'providerSignature', 'gemini:m',
+                          'model', 'm', 'providerCallId', call_late,
+                          'sourceVersionIds', jsonb_build_array(v_a1))) is not null then
+    raise exception 'cached output for material that was deleted';
+  end if;
+  perform pg_temp.as_owner();
+  select count(*) into n from public.cost_ledger where provider_call_id = call_late;
+  if n <> 1 then raise exception 'a call that returned after deletion was not ledgered'; end if;
+
+  -- A paid call that returns after its reader deleted the ACCOUNT: the job row is gone
+  -- and the journal row detached, and the charge is still ledgered, with no job.
+  perform pg_temp.become_worker();
+  insert into public.provider_calls (id, job_id, step, provider, endpoint, outcome, http_status, closed_at)
+  values (stray, null, 'study_assemble', 'gemini', 'models/m:generateContent', 'responded', 200, now())
+  on conflict (id) do update set job_id = null;
+  if public.record_study_stage(
+       extensions.gen_random_uuid(), 'study_assemble',
+       jsonb_build_array(jsonb_build_object('providerCallId', stray, 'provider', 'gemini',
+                                            'costCents', 0.7)), null) is not null then
+    raise exception 'recording for a deleted job returned a cache id';
+  end if;
+  perform pg_temp.as_owner();
+  select count(*) into n from public.cost_ledger where provider_call_id = stray and job_id is null;
+  if n <> 1 then raise exception 'a call whose job was deleted was not ledgered'; end if;
+
+  -- The door's arithmetic is for signed-in readers and the worker, not for anon.
+  perform set_config('role', 'anon', true);
+  begin
+    perform public.study_min_job_cents();
+    raise exception 'anon can execute study_min_job_cents';
+  exception when insufficient_privilege then null;
+  end;
+  perform pg_temp.as_owner();
 
   -- Account deletion takes the rest of the reader's study rows with it.
   delete from auth.users where id = reader_b;

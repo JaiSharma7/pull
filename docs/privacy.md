@@ -3,19 +3,19 @@
 **Effective 25 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Study course generation** is new, in a limited beta. If you are in the beta and ask
-Studio to build a course from study sources you saved, the text of the sources you choose
-is sent to Google's Gemini API to extract claims and write lessons and questions, which
-are stored privately in your account. It happens only when you ask and confirm. See
-[What never reaches a model](#what-never-reaches-a-model).
+**Study course generation** is new, in a limited beta, and the app does not offer it yet.
+When it does, and you ask for a course built from study sources you saved, the title and
+text of the sources you choose are sent to Google's Gemini API to extract claims and write
+lessons and questions, which are stored privately in your account. It happens only when
+you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
 
 The previous revision, effective 23 September, described private study import. When you
-save material in Studio's Prepare study material mode, we store the extracted text you approved and each corrected version in your private
-account. We do not upload the original file, and saving alone does not send the text to a
+save material in Studio's Prepare study material mode, we store the extracted text you
+approved and each corrected version in your private account. We do not upload the original file, and saving alone does not send the text to a
 model provider. You can delete a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
-The previous revision, effective 15 September, added Anthropic as an optional Studio
+The revision before that, effective 15 September, added Anthropic as an optional Studio
 summary fallback and described feedback sent through Settings. Those disclosures remain below.
 
 ## Scope
@@ -133,8 +133,10 @@ lessons and questions (`study_generations`, `study_claims`, `study_claim_evidenc
 from is cached in `study_stage_cache` so the same text is not sent twice. All of it is
 readable only by you, is not published, and never enters the catalogue or another
 reader's experience. Deleting any source a course was built from deletes that course and
-its cached output. It is included in your account export and deleted with your account.
-Whether your account is in the beta is recorded in `study_generation_access`.
+every cached output made from it. It is included in your account export and deleted with
+your account. Whether your account is in the beta is recorded in
+`study_generation_access`, with any note we wrote when adding you — which you can read,
+and which is in your export.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
@@ -276,17 +278,19 @@ is unavailable. You are doing that deliberately, but it is your content reaching
 provider, and it deserves stating plainly rather than leaving as an implication: what
 never reaches a model is your **reading** — not something you supplied to be summarised.
 
-**A study course is the same exception, asked for separately.** Building one sends the
-text of the sources you chose, in passages, to Google's Gemini API, and then sends the
-claims found in it, with their quoted passages and your goal, to write the lessons and
-questions. There is no fallback to another provider for courses. It needs an account in
-the beta and your confirmation, each time, that you are sending that text.
-
 The Studio says that sentence on the screen, above the box, before you have typed anything
 — not in this policy alone. The summary it writes is **private**: it is readable by you,
 it is not published, it never enters the catalogue or anybody else's feed, and it is
 deleted with your account like everything else keyed to you. Asking for one needs an
 account, because generation costs real money and a guest session costs nothing to create.
+
+**A study course is the same exception, asked for separately** — and not offered in the
+app yet; the database accepts it only from accounts in the beta. Building one sends the
+title and text of the sources you chose, in passages, to Google's Gemini API, and then
+sends the claims found in them, with their quoted passages, their source titles and your
+goal, to write the lessons and questions. There is no fallback to another provider for
+courses. It needs an account in the beta and your confirmation, each time, that you are
+sending that text.
 
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
@@ -311,7 +315,7 @@ The app uses these services:
 | ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
 | **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
 | **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
-| **Google** (Gemini API)               | Generating summaries — including a document you submit            | Google's infrastructure                |
+| **Google** (Gemini API)               | Generating summaries and study courses — including your own text  | Google's infrastructure                |
 | **Anthropic** (Claude API)            | The same, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
 | **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
 
@@ -428,8 +432,10 @@ Four things survive, none of them attached to you:
 - **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
   so deleting an account cannot erase a moderation trail.
 - **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
-  token count and a cost. It never held a user id, and it is how this project can state
-  what generation costs. Nothing in it identifies you.
+  token count and a cost — and `provider_calls` keeps one per request made to a model
+  provider: when, which model, and whether it answered. Neither ever held a user id or
+  any of your text, and they are how this project can state what generation costs.
+  Nothing in them identifies you.
 - **The catalogue entry for a book you imported** — its title and its author, and nothing
   else. Not your highlights, which go; not the page that held them, which goes; not any
   link between it and you, which goes with your account. It stays because deleting it

@@ -141,6 +141,22 @@ describe('createJournalledTransport', () => {
     expect([...rows.values()][0]?.outcome).toBe('open');
   });
 
+  it('refuses to follow a redirect, which would re-send the text and the key elsewhere', async () => {
+    const { journal } = memoryJournal();
+    const seen: RequestInit[] = [];
+    const inner = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return status(200);
+    }) as typeof fetch;
+    const t = createJournalledTransport(journal, scope, inner, ids);
+    await t.fetch('https://generativelanguage.googleapis.com/v1beta/models/m:generateContent', {
+      method: 'POST',
+      redirect: 'follow',
+    });
+    expect(seen[0]?.redirect).toBe('error');
+    expect(seen[0]?.method).toBe('POST');
+  });
+
   it('never journals the API key or a query string', async () => {
     const { journal, rows } = memoryJournal();
     const t = createJournalledTransport(journal, scope, script(status(200)).impl, ids);
@@ -259,6 +275,49 @@ describe('createGeminiStructuredProvider', () => {
     const b = await run(script(garbled));
     expect(b.outcome.ok).toBe(false);
     expect(b.outcome.calls[0]?.inputTokens).toBe(10);
+  });
+
+  it.each([
+    ['a null body', 'null'],
+    [
+      'parts that are not an array',
+      JSON.stringify({
+        candidates: [{ content: { parts: 'x' } }],
+        usageMetadata: { promptTokenCount: 3 },
+      }),
+    ],
+    ['candidates that are not an array', JSON.stringify({ candidates: 7 })],
+  ])('records rather than throws on a malformed 200: %s', async (_label, raw) => {
+    const { outcome, rows } = await run(script(new Response(raw, { status: 200 })));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.calls).toHaveLength(1);
+    reconciles(outcome, rows);
+  });
+
+  it('keeps the attempt on the clock while the body is still arriving', async () => {
+    // Headers now, body never: the timer must still abort the read.
+    const stalled = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      const body = new ReadableStream({
+        start(controller) {
+          signal.addEventListener('abort', () =>
+            controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+    const { journal } = memoryJournal();
+    const provider = createGeminiStructuredProvider(config({ timeoutMs: 50, budgetMs: 200 }));
+    const started = Date.now();
+    const outcome = await provider.generate(
+      'ExtractStudyClaims',
+      args,
+      createJournalledTransport(journal, scope, stalled, ids),
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.calls[0]).toMatchObject({ httpStatus: 200, usageKnown: false });
   });
 
   it('records a 200 whose body cannot be read as usage unknown', async () => {

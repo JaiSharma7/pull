@@ -519,8 +519,8 @@ function StudioSummary({
       */}
       <p className="studio__consent">
         This text is sent to a model provider to write the summary — Google, or Anthropic if Google
-        is unavailable. It is the one thing this product sends to a model provider, and it happens
-        because you asked.
+        is unavailable. Your own text reaches a model provider only when you ask, as you are doing
+        here.
       </p>
 
       {budget && <p className="meta">{budgetLine(budget)}</p>}

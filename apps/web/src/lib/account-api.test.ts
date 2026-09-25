@@ -196,6 +196,20 @@ describe('buildAccountExport', () => {
     }
     expect(out.incomplete).toEqual([]);
   });
+  it('walks the cached model output in small pages and still takes every row', async () => {
+    TABLES.set(
+      'study_stage_cache',
+      Array.from({ length: 25 }, (_, i) => ({
+        id: `cache-${String(i).padStart(2, '0')}`,
+        owner_id: 'u1',
+      })),
+    );
+
+    const out = await buildAccountExport('u1', null);
+
+    expect(out.data['study_stage_cache']).toHaveLength(25);
+    expect(out.incomplete).toEqual([]);
+  });
   it('names every table it walked, so a missing one is visible in the file', async () => {
     const out = await buildAccountExport('u1', null);
     // Empty tables still appear as empty arrays. A table that vanished from `data`

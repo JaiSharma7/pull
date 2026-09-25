@@ -106,7 +106,10 @@ export function createJournalledTransport(
 
     let response: Response;
     try {
-      response = await inner(input, init);
+      // Never followed. A 307/308 would re-send the reader's text and the key header to
+      // wherever it pointed, and the hop would go unjournalled. A provider that redirects
+      // is a failed request, recorded as one.
+      response = await inner(input, { ...init, redirect: 'error' });
     } catch (e) {
       const aborted = isAbort(e);
       // Logged rather than thrown: the request's own failure is the error that matters,

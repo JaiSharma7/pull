@@ -86,14 +86,22 @@ function geminiSchemaFor(name: StudyPromptName): GeminiSchema {
   return schema;
 }
 
+/** Defensive about every level: a malformed 200 must be recorded, never thrown past. */
 function textOf(payload: Record<string, unknown>): { text: string; finishReason?: string } {
-  const candidates = payload.candidates as
-    { content?: { parts?: { text?: string }[] }; finishReason?: string }[] | undefined;
-  const candidate = candidates?.[0];
+  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+  const candidate = (candidates[0] ?? {}) as { content?: unknown; finishReason?: unknown };
+  const parts = (candidate.content as { parts?: unknown } | null | undefined)?.parts;
+  const text = Array.isArray(parts)
+    ? parts.map((p) => (typeof p?.text === 'string' ? (p.text as string) : '')).join('')
+    : '';
   return {
-    text: candidate?.content?.parts?.map((p) => p.text ?? '').join('') ?? '',
-    finishReason: candidate?.finishReason,
+    text,
+    finishReason: typeof candidate.finishReason === 'string' ? candidate.finishReason : undefined,
   };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function createGeminiStructuredProvider(config: GeminiConfig): StructuredProvider {
@@ -145,101 +153,116 @@ export function createGeminiStructuredProvider(config: GeminiConfig): Structured
 
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), Math.min(perAttemptMs, left));
-          let response: Response;
+          /*
+           * The timer runs until the BODY has been read, not only the headers: a response
+           * that stalls mid-body would otherwise wait on no clock at all, until the
+           * platform killed the invocation with its hold open and its attempt unledgered.
+           * `callGemini` clears in `finally` for the same reason.
+           */
           try {
-            response = await transport.fetch(`${API_ROOT}/models/${model}:generateContent`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
-              body,
-              signal: controller.signal,
-            });
-          } catch (e) {
-            clearTimeout(timer);
-            if (e instanceof JournalUnavailableError) return failed(e.message, model);
-            if (e instanceof JournalledRequestError) {
+            let response: Response;
+            try {
+              response = await transport.fetch(`${API_ROOT}/models/${model}:generateContent`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+                body,
+                signal: controller.signal,
+              });
+            } catch (e) {
+              if (e instanceof JournalUnavailableError) return failed(e.message, model);
+              if (e instanceof JournalledRequestError) {
+                calls.push({
+                  providerCallId: e.callId,
+                  provider: 'gemini',
+                  model,
+                  httpStatus: null,
+                  outcome: e.aborted ? 'aborted' : 'network_error',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  costCents: 0,
+                  usageKnown: false,
+                });
+                // The same single retry `callGemini` gives a dropped connection.
+                if (attempt === 1) continue;
+                return failed(`Gemini ${model} request failed: ${e.message}`, model);
+              }
+              return failed(e instanceof Error ? e.message : String(e), model);
+            }
+
+            const callId = transport.callIdOf(response);
+            if (!callId)
+              return failed('provider transport returned an unjournalled response', model);
+
+            if (!response.ok) {
+              const detail = await response.text().catch(() => '');
               calls.push({
-                providerCallId: e.callId,
+                providerCallId: callId,
                 provider: 'gemini',
                 model,
-                httpStatus: null,
-                outcome: e.aborted ? 'aborted' : 'network_error',
+                httpStatus: response.status,
+                outcome: 'responded',
+                inputTokens: 0,
+                outputTokens: 0,
+                costCents: 0,
+                usageKnown: true,
+              });
+              lastError = `Gemini ${model} failed: ${response.status} ${detail.slice(0, 200)}`;
+              if (attempt === 1 && isRetryable(response.status)) continue;
+              if (isUnavailable(response.status)) break;
+              return failed(lastError, model);
+            }
+
+            // Past here the provider has answered, and has charged for it.
+            let payload: unknown;
+            try {
+              payload = await response.json();
+            } catch {
+              payload = undefined;
+            }
+            if (!isObject(payload)) {
+              calls.push({
+                providerCallId: callId,
+                provider: 'gemini',
+                model,
+                httpStatus: response.status,
+                outcome: 'responded',
                 inputTokens: 0,
                 outputTokens: 0,
                 costCents: 0,
                 usageKnown: false,
               });
-              // The same single retry `callGemini` gives a dropped connection.
-              if (attempt === 1) continue;
-              return failed(`Gemini ${model} request failed: ${e.message}`, model);
+              return failed(`Gemini ${model} returned an unreadable body`, model);
             }
-            return failed(e instanceof Error ? e.message : String(e), model);
-          }
-          clearTimeout(timer);
 
-          const callId = transport.callIdOf(response);
-          if (!callId) return failed('provider transport returned an unjournalled response', model);
-
-          if (!response.ok) {
-            const detail = await response.text().catch(() => '');
+            const meta = isObject(payload.usageMetadata)
+              ? (payload.usageMetadata as Parameters<typeof computeUsage>[0])
+              : undefined;
+            const usage = computeUsage(meta, config);
             calls.push({
               providerCallId: callId,
               provider: 'gemini',
               model,
               httpStatus: response.status,
               outcome: 'responded',
-              inputTokens: 0,
-              outputTokens: 0,
-              costCents: 0,
-              usageKnown: true,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              costCents: usage.costCents,
+              usageKnown: meta !== undefined,
             });
-            lastError = `Gemini ${model} failed: ${response.status} ${detail.slice(0, 200)}`;
-            if (attempt === 1 && isRetryable(response.status)) continue;
-            if (isUnavailable(response.status)) break;
-            return failed(lastError, model);
-          }
 
-          // Past here the provider has answered, and has charged for it.
-          let payload: Record<string, unknown>;
-          try {
-            payload = (await response.json()) as Record<string, unknown>;
-          } catch (e) {
-            calls.push({
-              providerCallId: callId,
-              provider: 'gemini',
-              model,
-              httpStatus: response.status,
-              outcome: 'responded',
-              inputTokens: 0,
-              outputTokens: 0,
-              costCents: 0,
-              usageKnown: false,
-            });
-            return failed(`Gemini ${model} returned an unreadable body: ${String(e)}`, model);
-          }
-
-          const meta = payload.usageMetadata as Parameters<typeof computeUsage>[0];
-          const usage = computeUsage(meta, config);
-          calls.push({
-            providerCallId: callId,
-            provider: 'gemini',
-            model,
-            httpStatus: response.status,
-            outcome: 'responded',
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            costCents: usage.costCents,
-            usageKnown: meta != null,
-          });
-
-          const { text, finishReason } = textOf(payload);
-          if (!text)
-            return failed(`Gemini returned no text (finishReason: ${finishReason})`, model);
-          try {
-            return { ok: true, value: JSON.parse(text) as unknown, model, calls };
-          } catch {
-            // No excerpt: this message lands in `job_steps.error`, and model output here is
-            // derived from the reader's text, which must not outlive a deleted source.
-            return failed(`Gemini returned unparseable JSON (${text.length} characters)`, model);
+            const { text, finishReason } = textOf(payload);
+            if (!text) {
+              return failed(`Gemini returned no text (finishReason: ${finishReason})`, model);
+            }
+            try {
+              return { ok: true, value: JSON.parse(text) as unknown, model, calls };
+            } catch {
+              // No excerpt: this message lands in `job_steps.error`, and model output here is
+              // derived from the reader's text, which must not outlive a deleted source.
+              return failed(`Gemini returned unparseable JSON (${text.length} characters)`, model);
+            }
+          } finally {
+            clearTimeout(timer);
           }
         }
       }

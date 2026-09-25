@@ -170,7 +170,7 @@ export async function unusedRecoveryCodeCount(): Promise<number> {
  * total order and a usable cursor: the primary key where it is a single `id`, and the
  * other half of a composite key where it is not.
  */
-const EXPORTED: { table: string; column: string; key: string }[] = [
+const EXPORTED: { table: string; column: string; key: string; page?: number }[] = [
   { table: 'profiles', column: 'id', key: 'id' },
   { table: 'preference_profiles', column: 'user_id', key: 'user_id' },
   { table: 'stashes', column: 'user_id', key: 'id' },
@@ -239,7 +239,9 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'study_generation_access', column: 'user_id', key: 'user_id' },
   { table: 'study_generations', column: 'owner_id', key: 'id' },
   { table: 'study_generation_sources', column: 'owner_id', key: 'id' },
-  { table: 'study_stage_cache', column: 'owner_id', key: 'id' },
+  // Ten to a page: one cached model output can be a few hundred kilobytes, and a hundred
+  // of them is a response body in the tens of megabytes.
+  { table: 'study_stage_cache', column: 'owner_id', key: 'id', page: 10 },
   { table: 'study_stage_cache_sources', column: 'owner_id', key: 'id' },
   { table: 'study_claims', column: 'owner_id', key: 'id' },
   { table: 'study_claim_evidence', column: 'owner_id', key: 'id' },
@@ -283,7 +285,7 @@ export async function buildAccountExport(
   const data: Record<string, unknown[]> = {};
   const incomplete: { table: string; reason: string }[] = [];
 
-  for (const { table, column, key } of EXPORTED) {
+  for (const { table, column, key, page: pageSize = PAGE } of EXPORTED) {
     const rows: unknown[] = [];
     try {
       // The cursor: the `key` of the last row taken, or nothing on the first page.
@@ -297,13 +299,13 @@ export async function buildAccountExport(
           // every row has a distinct place in it — which is what makes it usable as a
           // cursor as well as an order.
           .order(key, { ascending: true })
-          .limit(PAGE);
+          .limit(pageSize);
         if (after !== null) query = query.gt(key, after);
         const { data: page, error } = await query;
         if (error) throw rpcError(error);
         const got = (page ?? []) as unknown[];
         rows.push(...got);
-        if (got.length < PAGE) break;
+        if (got.length < pageSize) break;
         const last = got[got.length - 1] as Record<string, unknown>;
         const cursor = last[key];
         /*

@@ -143,23 +143,47 @@ async function recordAttempts(
   step: StudyStep,
   outcome: StructuredOutcome,
   cache: StudyStagePayload | null,
+  ceilingCents: number,
 ): Promise<string | null> {
+  /*
+   * An attempt whose cost the provider never reported -- sent, then aborted or dropped,
+   * or answered with a body that could not be read -- may still have been billed. It is
+   * charged at the ceiling the hold was sized to, not at zero: recorded at zero, it would
+   * release its hold and the day's total would forget money that may have been spent. A
+   * cap that sometimes refuses too much is a cap; one that forgets is not. The row keeps
+   * `usage_known = false`, so a cost report can tell a ceiling from a measurement.
+   */
+  const calls = outcome.calls.map((c) =>
+    c.usageKnown ? c : { ...c, costCents: Math.max(c.costCents, ceilingCents) },
+  );
   try {
-    return await deps.db.recordStage(deps.job.id, step, outcome.calls, cache);
+    return await deps.db.recordStage(deps.job.id, step, calls, cache);
   } catch {
     try {
-      return await deps.db.recordStage(deps.job.id, step, outcome.calls, cache);
+      return await deps.db.recordStage(deps.job.id, step, calls, cache);
     } catch (e) {
       throw new BilledStepError(
         `${step}: could not record provider attempts: ${e instanceof Error ? e.message : String(e)}`,
         {
-          usage: sumUsage(outcome.calls),
+          usage: sumUsage(calls),
           model: outcome.model ?? undefined,
           provider: deps.provider.name,
         },
       );
     }
   }
+}
+
+/**
+ * Why a recorded call produced nothing to go on with. A usable answer with no cache id
+ * means `record_study_stage` found the course deleted: the attempts are ledgered, and
+ * there is nothing left to cache for.
+ */
+function unusable(outcome: StructuredOutcome, usable: boolean, missing: string): string {
+  if (!outcome.ok) return outcome.error;
+  return usable
+    ? 'the study material for this job was deleted'
+    : `the provider returned ${missing}`;
 }
 
 function lastCallId(outcome: StructuredOutcome): string | null {
@@ -285,11 +309,8 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
         if (called) return { continue: true, model };
 
         const args = extractionArgs(source, window);
-        await db.reserveBudget(
-          job.id,
-          step,
-          provider.worstCaseCentsFor('ExtractStudyClaims', args),
-        );
+        const ceiling = provider.worstCaseCentsFor('ExtractStudyClaims', args);
+        await db.reserveBudget(job.id, step, ceiling);
         const transport = createJournalledTransport(
           db.journal,
           { jobId: job.id, step },
@@ -314,11 +335,10 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
                 sourceVersionIds: [window.versionId],
               }
             : null,
+          ceiling,
         );
         if (!usable || !cacheId) {
-          throw new Error(
-            `study_extract: ${outcome.ok ? 'the provider returned no claims array' : outcome.error}`,
-          );
+          throw new Error(`study_extract: ${unusable(outcome, usable, 'no claims array')}`);
         }
         done.push({ ...window, cacheId });
         called = true;
@@ -355,7 +375,8 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
       };
       if (hit) return { output: { cacheId: hit.id, cached: true, ...counts } };
 
-      await db.reserveBudget(job.id, step, provider.worstCaseCentsFor('AssembleStudyCourse', args));
+      const ceiling = provider.worstCaseCentsFor('AssembleStudyCourse', args);
+      await db.reserveBudget(job.id, step, ceiling);
       const transport = createJournalledTransport(
         db.journal,
         { jobId: job.id, step },
@@ -377,14 +398,16 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
               providerSignature: provider.signature,
               model: outcome.model,
               providerCallId: lastCallId(outcome),
-              sourceVersionIds: [...new Set(shown.map((c) => c.sourceVersionId))],
+              // Every source of the course, not only those whose claims were shown: the
+              // entry is this course's output, and deleting any of its sources must
+              // take it too.
+              sourceVersionIds: generation.sources.map((s) => s.versionId),
             }
           : null,
+        ceiling,
       );
       if (!usable || !cacheId) {
-        throw new Error(
-          `study_assemble: ${outcome.ok ? 'the provider returned no course' : outcome.error}`,
-        );
+        throw new Error(`study_assemble: ${unusable(outcome, usable, 'no course')}`);
       }
       return { output: { cacheId, cached: false, ...counts }, model: outcome.model };
     }
