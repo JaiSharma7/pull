@@ -16,6 +16,7 @@ import {
   lessonStateLabel,
   newerPreparationComing,
   newerPreparationFailed,
+  lessonsLeft,
   nextLesson,
   passageWindow,
   planSession,
@@ -385,6 +386,18 @@ describe('draftUnsaved', () => {
     expect(
       draftUnsaved(lesson, 'Timing', { lessonId: 'l9', value: { ...same, recap: 'Changed.' } }),
     ).toBe(false);
+  });
+});
+
+describe('lessonsLeft', () => {
+  it('counts what later sittings bring up: revisits and unknown unfinished lessons', () => {
+    const units = shapeOutline([
+      { ...lessonRow('l1', 1, 1, 'Timing', 'read', 3), revisit: true },
+      { ...lessonRow('l2', 2, 1, 'Timing', 'not_seen', 4), known: true },
+      lessonRow('l3', 3, 2, 'Spacing', 'not_seen', 3),
+      lessonRow('l4', 4, 2, 'Spacing', 'skipped', 3),
+    ]);
+    expect(lessonsLeft(units).map((l) => l.lessonKey)).toEqual(['l1', 'l3']);
   });
 });
 
