@@ -189,7 +189,7 @@ begin
   select id into q_held from public.study_items where generation_id = gen and item_key = 'q7';
   if (select count(*) from public.study_items
       where generation_id = gen and status = 'validated') <> 6
-     or (select status from public.study_items where id = q_held) <> 'quarantined' then
+     or (select status from public.study_items where id = q_held) is distinct from 'quarantined' then
     raise exception 'the fixture did not validate as expected: %',
       (select jsonb_agg(jsonb_build_object(item_key, status, 'why', validation_failures))
        from public.study_items where generation_id = gen);
@@ -200,12 +200,12 @@ begin
   -- ---------------------------------------------------------------- choice
   r := pg_temp.answer(q_mc, '"the recall test group"');
   if (r -> 'results' -> 0 ->> 'correct')::boolean is not true
-     or r -> 'results' -> 0 ->> 'grading' <> 'deterministic'
+     or r -> 'results' -> 0 ->> 'grading' is distinct from 'deterministic'
      or (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not true then
     raise exception 'the right option, however cased, was not proof: %', r;
   end if;
   if (select state from public.study_course_questions(course) where item_id = q_mc)
-     <> 'recall_demonstrated' then
+     is distinct from 'recall_demonstrated' then
     raise exception 'a proving answer did not demonstrate the question';
   end if;
   r := pg_temp.answer(q_comp, '"Restudy won at both delays."');
@@ -213,7 +213,7 @@ begin
     raise exception 'a wrong comparison option was graded right: %', r;
   end if;
   r := pg_temp.answer(q_mc, '"Paris"');
-  if r -> 'refused' -> 0 ->> 'reason' <> 'malformed' or (r ->> 'recorded')::int <> 0 then
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'malformed' or (r ->> 'recorded')::int <> 0 then
     raise exception 'an option that was never offered was recorded: %', r;
   end if;
 
@@ -224,7 +224,7 @@ begin
   end if;
   r := pg_temp.answer(q_cloze, '"memory"', 'correct');
   if (r -> 'results' -> 0 ->> 'correct')::boolean is not false
-     or r -> 'results' -> 0 ->> 'grading' <> 'deterministic' then
+     or r -> 'results' -> 0 ->> 'grading' is distinct from 'deterministic' then
     raise exception 'a wrong cloze answer took a self-grade: %', r;
   end if;
   r := pg_temp.answer(q_recall, '"Restudying."');
@@ -233,12 +233,12 @@ begin
   end if;
   r := pg_temp.answer(q_recall, '"reading it again"', 'correct');
   if (r -> 'results' -> 0 ->> 'correct')::boolean is not true
-     or r -> 'results' -> 0 ->> 'grading' <> 'self'
+     or r -> 'results' -> 0 ->> 'grading' is distinct from 'self'
      or (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not false then
     raise exception 'a self-graded answer was proof, or not recorded as self: %', r;
   end if;
   r := pg_temp.answer(q_recall, '"reading it again"');
-  if r -> 'refused' -> 0 ->> 'reason' <> 'malformed' then
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'malformed' then
     raise exception 'an unmatched typed answer with no self-grade was recorded: %', r;
   end if;
 
@@ -250,14 +250,14 @@ begin
   r := pg_temp.answer(q_order, '[1, 0, 2]');
   if (r -> 'results' -> 0 ->> 'correct')::boolean is not false
      or (select response from public.study_answer_events
-         where client_event_id = (r -> 'results' -> 0 ->> 'clientEventId')::uuid) <> '1,0,2' then
+         where client_event_id = (r -> 'results' -> 0 ->> 'clientEventId')::uuid) is distinct from '1,0,2' then
     raise exception 'a wrong order was graded right, or not kept as positions: %', r;
   end if;
   foreach r in array array[pg_temp.answer(q_order, '[0, 0, 1]'),
                            pg_temp.answer(q_order, '[0, 1]'),
                            pg_temp.answer(q_order, '[0, 1, 3]'),
                            pg_temp.answer(q_order, '["0", 1, 2]')] loop
-    if r -> 'refused' -> 0 ->> 'reason' <> 'malformed' then
+    if r -> 'refused' -> 0 ->> 'reason' is distinct from 'malformed' then
       raise exception 'an order that is not a permutation of the steps was recorded: %', r;
     end if;
   end loop;
@@ -303,11 +303,11 @@ begin
 
   -- ---------------------------------------------------------------- refusals
   r := pg_temp.answer(q_held, '"yes"');
-  if r -> 'refused' -> 0 ->> 'reason' <> 'not_shown' then
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'not_shown' then
     raise exception 'a question validation held back was answerable: %', r;
   end if;
   r := pg_temp.answer(extensions.gen_random_uuid(), '"x"');
-  if r -> 'refused' -> 0 ->> 'reason' <> 'not_found' then
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'not_found' then
     raise exception 'an unknown question was not refused as not_found: %', r;
   end if;
   r := public.record_study_answers(jsonb_build_array(
@@ -334,7 +334,7 @@ begin
   -- Someone else's question is not theirs to answer, and looks like no question at all.
   perform pg_temp.become_reader(other);
   r := pg_temp.answer(q_mc, '"The recall test group"');
-  if r -> 'refused' -> 0 ->> 'reason' <> 'not_found' then
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'not_found' then
     raise exception 'a reader answered someone else''s question: %', r;
   end if;
   perform pg_temp.become_reader(reader);
@@ -370,7 +370,7 @@ begin
                        'response', jsonb_build_array(0, 1, 2)),
     jsonb_build_object('clientEventId', client, 'itemId', q_order,
                        'response', jsonb_build_array(0, 1, 2))));
-  if (r ->> 'recorded')::int <> 1 or r -> 'refused' -> 0 ->> 'reason' <> 'limit'
+  if (r ->> 'recorded')::int <> 1 or r -> 'refused' -> 0 ->> 'reason' is distinct from 'limit'
      or (r ->> 'duplicates')::int <> 1 then
     raise exception 'the daily limit did not stop at 1,000, or refused a duplicate: %', r;
   end if;
