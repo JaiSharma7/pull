@@ -18,6 +18,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Rows the fake serves, by table. Set per test. */
 const TABLES = new Map<string, Record<string, unknown>[]>();
+/** The page size each table was last asked for, so a test can pin one. */
+const LIMITS = new Map<string, number>();
 
 vi.mock('./supabase.js', () => {
   /** Enough of PostgREST's builder to run the walk: chainable, and awaitable. */
@@ -34,6 +36,7 @@ vi.mock('./supabase.js', () => {
       },
       limit: (n: number) => {
         limit = n;
+        LIMITS.set(table, n);
         return self;
       },
       gt: (_column: string, value: string) => {
@@ -209,6 +212,10 @@ describe('buildAccountExport', () => {
 
     expect(out.data['study_stage_cache']).toHaveLength(25);
     expect(out.incomplete).toEqual([]);
+    // Pinned: without `page: 10` the walk still takes every row, just in pages of a
+    // hundred rows of up to 400 KB each, so the row count alone cannot tell.
+    expect(LIMITS.get('study_stage_cache')).toBe(10);
+    expect(LIMITS.get('study_claims')).toBe(100);
   });
   it('names every table it walked, so a missing one is visible in the file', async () => {
     const out = await buildAccountExport('u1', null);

@@ -18,8 +18,9 @@ nothing you were told).
 
 The previous revision, effective 23 September, described private study import. When you
 save material in Studio's Prepare study material mode, we store the extracted text you
-approved and each corrected version in your private account. We do not upload the original file, and saving alone does not send the text to a
-model provider. You can delete a study source and all its versions from Studio. See
+approved and each corrected version in your private account. We do not upload the
+original file, and saving alone does not send the text to a model provider. You can delete
+a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
 The revision before that, effective 15 September, added Anthropic as an optional Studio
@@ -320,13 +321,13 @@ policy changes first and the change is a commit you can read.
 
 The app uses these services:
 
-| Processor                             | What it handles                                                   | Where                                  |
-| ------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
-| **Supabase** (and AWS beneath)        | Database, authentication, server functions                        | `ca-central-1`, Canada                 |
-| **Vercel**                            | Serving the web app and its static assets                         | Global edge network                    |
-| **Google** (Gemini API)               | Generating summaries and study courses — including your own text  | Google's infrastructure                |
-| **Anthropic** (Claude API)            | The same, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
-| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider | The selected provider's infrastructure |
+| Processor                             | What it handles                                                           | Where                                  |
+| ------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------- |
+| **Supabase** (and AWS beneath)        | Database, authentication, server functions                                | `ca-central-1`, Canada                 |
+| **Vercel**                            | Serving the web app and its static assets                                 | Global edge network                    |
+| **Google** (Gemini API)               | Generating summaries and study courses — including your own text          | Google's infrastructure                |
+| **Anthropic** (Claude API)            | Studio summaries, when Gemini is unavailable and a fallback is configured | Anthropic's infrastructure             |
+| **Google or Microsoft** (your choice) | Authenticating your account when you choose that sign-in provider         | The selected provider's infrastructure |
 
 Sign-in uses Google or Microsoft through Supabase Auth. The selected provider shares your
 account identifier, email address and basic profile information needed to sign you in.
@@ -419,7 +420,8 @@ While your account exists, your data exists — unlimited history is one of the 
 this product refuses to charge for, so we are not going to quietly trim it.
 
 You can delete an individual private study source and all its versions from Studio.
-This removes the extracted text for that source without deleting your account.
+This removes the extracted text for that source, and any study course or cached model
+output built from it, without deleting your account.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,

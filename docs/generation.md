@@ -205,10 +205,10 @@ now writes it, narrowed to two values, and `enqueue_study_generation` writes the
 | `study_course`      | A draft course built from a reader's own study sources. See `study-generation.md`. |
 
 **The column is descriptive, and it is worth being exact about that**, because the table
-above reads like an enforcement mechanism and is not one yet. The only branch on `kind` in
-`supabase/functions` separates study courses, which walk their own graph
-(`study-graph.ts`), from summaries; nothing distinguishes the two summary kinds. What
-actually keeps a private summary private is
+above reads like an enforcement mechanism and is not one yet. A study course walks its own
+graph (`study-graph.ts`), chosen by the step name each queue message carries, and `kind` is
+only the guard that refuses a step from the other graph; nothing in `supabase/functions`
+distinguishes the two summary kinds. What actually keeps a private summary private is
 `generation_jobs.visibility` — which defaults to `private`, which `enqueue_generation_job`
 refuses to take from the client, and which `template` passes to `summaries.visibility` —
 plus the `moderate` step, which re-checks rights immediately before publication and
