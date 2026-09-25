@@ -7,8 +7,8 @@ itself, the sources it follows, how it is prepared again when a source changes, 
 record of what the reader has been shown.
 
 The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, with
-`20260925130000_study_course_review_fixes.sql` and `20260925140000_study_course_locks.sql`
-superseding parts of it after review. The
+`20260925130000_study_course_review_fixes.sql`, `20260925140000_study_course_locks.sql` and
+`20260925150000_study_course_review_round_two.sql` superseding parts of it after review. The
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
@@ -34,12 +34,12 @@ study_courses ─── study_course_sources      the course, and the sources it
 - **A generation** (`study_generations`) is one preparation of the course, from the exact
   versions it pinned in `study_generation_sources`. Every generation belongs to a course;
   `enqueue_study_generation` creates the course and its bundle with the first one.
-- **The current generation** is the course's newest generation whose validation has
-  finished (persisted, with its own text decided in the transaction that moved its drafts)
-  and that has something a learner may be shown: a validated or suspended lesson or
-  question. Only when no finished generation has, it is the newest finished one. So a
-  generation still being prepared, one that failed before it was persisted, and one that
-  validation held back entirely all leave the one before it current.
+- **The current generation** is chosen among the course's finished generations (persisted,
+  with their own text decided in the transaction that moved their drafts): the newest with
+  a lesson that can be shown -- validated, or suspended and able to return once its report
+  is resolved -- else the newest with such a question, else the newest finished one. So a
+  generation still being prepared, one that failed before it was persisted, and one whose
+  lessons validation held back all leave the one before it current.
 
 ## Preparing a course again
 
@@ -62,8 +62,12 @@ again from the newest version of each source in its bundle, for the course's own
 
 `study_course_overview.update_available` says when a bundle source has a newer version than
 the newest finished generation used -- the newest, not the current, so it never offers a
-regeneration that would be refused as unchanged. `newer_generation_held_back` says when that
-newest finished generation is not the current one.
+regeneration that would be refused as unchanged. It does not know whether one is already
+being prepared: offer preparation only when `preparing` is false. It is also false when no
+generation has finished -- the first failed before it was persisted, or a source deletion
+took them all -- and a regeneration is then accepted, so offer preparation whenever
+`generation_id` is null and nothing is preparing. `newer_generation_held_back` says when
+the newest finished generation is not the current one.
 
 **Responses.** `enqueue_study_generation` and `regenerate_study_course` return
 `{ jobId, generationId, courseId, status, queue, delaySeconds, remainingToday, replayed }`.
@@ -79,7 +83,8 @@ reader, and written only through `record_study_progress`:
 ```
 record_study_progress([{ clientEventId, kind, lessonId | itemId, occurredAt? }, ...])
   kind: lesson_shown | lesson_read | lesson_skipped | item_shown
-  occurredAt: an ISO-8601 string or epoch milliseconds; the server's time when absent
+  occurredAt: an ISO-8601 string, or epoch milliseconds as a JSON number; the server's time
+              when absent or null; any other type is malformed
   -> { recorded, duplicates, refused: [{ index, clientEventId?, reason }] }
 ```
 
@@ -89,8 +94,9 @@ record_study_progress([{ clientEventId, kind, lessonId | itemId, occurredAt? }, 
   Within a batch each event is judged on its own; `index` is its 0-based position, and
   `clientEventId` is named whenever it parsed.
 - **2,000 a day**, counted by the UTC day the server records them. Once a batch reaches the
-  limit, it and every later event in it is refused with `limit`; the earlier ones are
-  recorded. `limit` is the one refusal that clears: the same event is accepted after 00:00
+  limit, every later event in it that would otherwise have been recorded is refused with
+  `limit` (a duplicate is still a duplicate, and a bad event keeps its own reason); the
+  earlier ones are recorded. `limit` is the one refusal that clears: the same event is accepted after 00:00
   UTC, so a client should keep it queued.
 - **Only the reader's own, and only what could have been shown.** An event on a lesson or
   question that is not the reader's, or does not exist, is refused as `not_found` -- the
@@ -166,11 +172,17 @@ difficulty, authorship and state, with `first_shown_at`, `last_answered_at` and
 It is orthogonal to these states -- a question can be demonstrated and due -- so it will be a
 column, not a fifth state.
 
+A question's `lesson_id` names only a lesson the outline shows. A question whose lesson is
+held back -- reported, or quarantined -- reads as course-level until the lesson returns.
+
 **Nullable columns.** The generated types mark every column a function returns as non-null;
 these can be null, and a client must treat them so: `study_course_generation` (no current
 generation); the outline's `first_shown_at` and `read_at`; the question list's `lesson_id`
-(a course-level question, or one whose lesson was retired), `first_shown_at`,
-`last_answered_at` and `demonstrated_at`.
+(a course-level question, or one whose lesson is retired or held back), `first_shown_at`,
+`last_answered_at` and `demonstrated_at`. The overview is a view, so its generated types
+mark every column nullable; these never are: `course_id`, `goal`, `created_at`, every
+count, `preparing`, `newer_generation_held_back`, `update_available`, and `objectives`,
+`disagreements` and `withheld` (empty rather than null while the text is not validated).
 
 ## Deletion
 
@@ -210,12 +222,18 @@ were reproduced as deadlocks with real sessions before they were in place.
 
 ## Errors
 
-- **28000:** not signed in (or a guest session, for preparation).
+Branch on the SQLSTATE (`error.code` in supabase-js) and the DETAIL (`error.details`), not the
+HTTP status: PostgREST answers P0002 and 55000 with a 500.
+
+- **42501:** a signed-out caller, refused by the functions' grants before they run (HTTP
+  401); preparation refused with DETAIL `beta` for a reader outside the beta, or DETAIL
+  `unavailable` for a chosen source version that is not, or is no longer, theirs.
+- **28000:** a guest session, refused by preparation.
 - **P0002:** no such course, including someone else's -- from a regeneration or
   `delete_study_course`.
 - **22023:** a malformed request, a batch of the wrong size, preparation without consent, or
   a mutation id already used for another request.
 - **55000:** a regeneration refused, with DETAIL `preparing` or `unchanged`; or an update to
   recorded progress.
-- **42501, 53400, 23514:** preparation's own refusals -- the beta allowlist, the budget, and
-  the daily job ceiling -- as in [`study-generation.md`](./study-generation.md).
+- **53400, 23514:** preparation's budget and daily job ceiling, as in
+  [`study-generation.md`](./study-generation.md).

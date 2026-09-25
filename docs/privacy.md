@@ -168,7 +168,8 @@ your version is stored alongside the one it replaces, which is kept rather than 
 Answers to a course's questions will be kept in `study_answer_events`; nothing records them
 yet. Which lessons and questions of a course you were shown, finished or skipped are
 recorded in `study_progress_events` so the course can remember your place, with the time
-your device reported (kept within the last thirty days) and the time it reached us; being
+your device reported (a time more than thirty days back, or in the future, is stored as the
+nearest time that is not) and the time it reached us; being
 shown something is never counted as remembering it. All of this is readable only by you, is
 never reviewed by us, and is in your export. It is deleted with the version of the course it
 belongs to — which deleting any source of that version deletes — with the course, and with

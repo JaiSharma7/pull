@@ -137,12 +137,15 @@ journal and ledger keep no content and are kept. See
 **A course is a container, and a generation is one version of it.** `study_courses` holds
 the reader's goal and, in `study_course_sources`, the sources the course follows; each
 `study_generations` row is one preparation of it from the versions it pinned. Regenerating
-after a source changes adds a generation to the same course rather than a new course, and
-the course's current generation is its newest one whose validation has finished. Nothing
-carries between generations: lessons and questions are new rows, and progress
-(`study_progress_events`) and proof attach to the rows they were recorded against. A course
-goes with its last source, or when the reader deletes it; its sources stay. It shares no key
-with the public `paths`, which are curated and keyed to public pulls. See
+after a source changes adds a generation to the same course rather than a new course. The
+current generation is the newest finished one with a lesson that can be shown, else with a
+question, else the newest finished -- so a regeneration whose lessons were all held back
+does not replace one the reader is studying. A regeneration carries nothing over: its
+lessons and questions are new rows. Within a generation, what the reader was shown, read or
+skipped (`study_progress_events`) follows a lesson or question across the reader's own
+corrections; answers and proof stay with the version answered. A course goes with its last
+source, or through `delete_study_course`; its sources stay. It shares no key with the public
+`paths`, which are curated and keyed to public pulls. See
 [`study-courses.md`](./study-courses.md).
 
 **A reader's own question lives in its own table.** `user_questions` rather than a row in

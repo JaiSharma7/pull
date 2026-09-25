@@ -10,7 +10,7 @@
 --       in course order, with the reader's progress -- and nothing of anyone else's
 --     * progress is recorded once per client event id, only against the reader's own
 --       lessons and questions that were ever shown, within the batch and daily limits,
---       and never changed afterwards; a corrected lesson starts again
+--       and never changed afterwards; a reader's correction keeps their place
 --     * a question's state follows the proof rule: an answer that proves recall is
 --       `recall_demonstrated`, any other is `answered`
 --     * regeneration is refused while one is being prepared and when nothing changed;
@@ -179,6 +179,8 @@ declare
   job_3     uuid;
   gen_3     uuid;
   d         text;
+  report_l  uuid;
+  other_v   uuid;
   batch     jsonb;
   rows      text;
   n         bigint;
@@ -366,10 +368,13 @@ begin
                        'occurredAt', 'not a time'),
     jsonb_build_object('clientEventId', e7, 'kind', 'lesson_shown', 'lessonId', l2,
                        'occurredAt',
-                       (extract(epoch from now() - interval '1 hour') * 1000)::bigint)));
+                       (extract(epoch from now() - interval '1 hour') * 1000)::bigint),
+    jsonb_build_object('clientEventId', extensions.gen_random_uuid(), 'kind', 'lesson_shown',
+                       'lessonId', l2, 'occurredAt', true)));
   if (out ->> 'recorded')::int <> 1
      or out #>> '{refused,0,clientEventId}' <> e6::text
      or out #>> '{refused,0,reason}' <> 'malformed'
+     or out #>> '{refused,1,reason}' <> 'malformed'
      or (select occurred_at from public.study_progress_events where client_event_id = e7)
         not between now() - interval '61 minutes' and now() - interval '59 minutes' then
     raise exception 'a malformed time lost its client id, or epoch milliseconds were refused: %',
@@ -474,6 +479,19 @@ begin
       where a.item_id = q.item_id and public.study_answer_proves_recall(a.id))
   ) then
     raise exception 'study_course_questions disagrees with study_answer_proves_recall';
+  end if;
+  -- A question never points at a lesson the outline hides: while its lesson is reported,
+  -- it reads as course-level; once the report is dismissed, it is the lesson's again.
+  report_l := public.report_study_content('lesson', l2, 'incorrect', null);
+  if exists (select 1 from public.study_course_outline(course_a) where lesson_id = l2)
+     or (select lesson_id from public.study_course_questions(course_a) where item_id = q2)
+        is not null then
+    raise exception 'a question pointed at a lesson the outline hides';
+  end if;
+  perform public.dismiss_study_report(report_l);
+  if (select lesson_id from public.study_course_questions(course_a) where item_id = q2)
+     is distinct from l2 then
+    raise exception 'a question did not return to its lesson once the report was dismissed';
   end if;
   if (select claims_demonstrated_count from public.study_course_overview where course_id = course_a) <> 1
      or (select demonstrated_at from public.study_course_questions(course_a) where item_id = q2)
@@ -588,6 +606,36 @@ begin
       raise exception 'a regeneration refused while preparing said %', d;
     end if;
   end;
+  -- The two 42501 refusals say which: a version that is not the reader's, and the beta.
+  perform pg_temp.as_owner();
+  select id into other_v from public.study_source_versions where owner_id = reader_b limit 1;
+  perform pg_temp.become_reader(reader_a);
+  begin
+    perform public.enqueue_study_generation(array[other_v], 'Explain it',
+                                            extensions.gen_random_uuid(), true);
+    raise exception 'another reader''s version was accepted';
+  exception when insufficient_privilege then
+    get stacked diagnostics d = pg_exception_detail;
+    if d is distinct from 'unavailable' then
+      raise exception 'an unavailable version was refused with DETAIL %', d;
+    end if;
+  end;
+  perform pg_temp.as_owner();
+  delete from public.study_generation_access where user_id = reader_b;
+  perform pg_temp.become_reader(reader_b);
+  begin
+    perform public.enqueue_study_generation(array[other_v], 'Explain it',
+                                            extensions.gen_random_uuid(), true);
+    raise exception 'a reader outside the beta enqueued a course';
+  exception when insufficient_privilege then
+    get stacked diagnostics d = pg_exception_detail;
+    if d is distinct from 'beta' then
+      raise exception 'a reader outside the beta was refused with DETAIL %', d;
+    end if;
+  end;
+  perform pg_temp.as_owner();
+  insert into public.study_generation_access (user_id) values (reader_b);
+  perform pg_temp.become_reader(reader_a);
   -- A mutation id made for one course does not replay for another.
   begin
     perform public.regenerate_study_course(course_c, mut, true);
@@ -642,7 +690,11 @@ begin
                      array['s1c1'])),
     'items', jsonb_build_array(
       pg_temp.item('q1', 'l1', 'short_recall', 'Did restudying win? restudying', 'restudying',
-                   array['s1c1'])),
+                   array['s1c1']),
+      -- One course-level question passes: a generation with no lesson to walk still does
+      -- not replace one that has lessons.
+      pg_temp.item('q2', null, 'short_recall', 'Which strategy won at five minutes?',
+                   'restudying', array['s1c1'])),
     'provenance', jsonb_build_object('promptHash', repeat('a', 64),
                                      'schemaHash', repeat('b', 64), 'model', 'm')));
   perform public.validate_study_course(job_3);
@@ -653,7 +705,7 @@ begin
                  where course_id = course_a and generation_id = gen_2
                    and newer_generation_held_back and not update_available
                    and lesson_count = 3) then
-    raise exception 'a regeneration held back entirely replaced the course: %',
+    raise exception 'a regeneration with no lesson to show replaced the course: %',
       (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
   end if;
   begin
