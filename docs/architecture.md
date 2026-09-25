@@ -172,15 +172,18 @@ every migration from zero, and a migration that calls `cron.schedule` makes that
 depend on `pg_cron` running as a background worker inside a test container. The cost is
 that they have to be listed somewhere, which is here.
 
-| Call, once, as `postgres`                   | What stops without it                                             |
-| ------------------------------------------- | ----------------------------------------------------------------- |
-| `enable_generation_dispatcher_with_token()` | The queue never ticks; generation jobs sit in `pgmq` for ever     |
-| `enable_knowledge_vector_refresh()`         | Knowledge centroids go stale, so the Delta slowly stops filtering |
-| `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out      |
-| `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                    |
-| `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever              |
+| Call, once, as `postgres`                   | What stops without it                                                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `enable_generation_dispatcher_with_token()` | The queue never ticks; generation jobs sit in `pgmq` for ever                                                           |
+| `enable_knowledge_vector_refresh()`         | Knowledge centroids go stale, so the Delta slowly stops filtering                                                       |
+| `enable_log_retention()`                    | Operational logs grow until the free tier's storage runs out                                                            |
+| `enable_guest_sweep()`                      | Guest accounts accumulate for ever — see below                                                                          |
+| `enable_generation_sweeper()`               | A job with nothing queued sits at `running` for ever, and a study course whose validation failed stays a draft for ever |
 
-`enable_generation_sweeper()` carries a second job since `20260914010000`, and it is worth
+`enable_generation_sweeper()` also schedules `validate_stranded_study_courses` since
+`20260925070000`: a study course whose `study_validate` step failed, or whose job closed
+under a worker older than that step, is validated on the next run. It also carries a
+second job since `20260914010000`, and it is worth
 naming because nothing else does it in the common case: `sweep_stranded_generation_jobs`
 settles the **budget reservations** of every job it fails. A step that dies between
 reserving and recording is holding part of the daily spend cap against a charge that will

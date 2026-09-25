@@ -8,14 +8,17 @@
 - how a corrected version replaces it;
 - why no answer to a retired, suspended or unvalidated question can count as recall.
 
-The schema lives in two migrations:
+The schema lives in three migrations, each later one superseding parts of the ones before
+after a review round:
 
 - `supabase/migrations/20260925050000_study_validation_and_correction.sql`
-- `20260925060000_study_validation_review_fixes.sql`, which supersedes parts of the first
-  after its review.
+- `20260925060000_study_validation_review_fixes.sql`
+- `20260925070000_study_validation_parity.sql`
 
 The behaviour, including a course at the size limits under the worker's 8-second statement
 timeout, is asserted under real RLS in `supabase/tests/study_validation.sql`.
+`scripts/test-study-fold-parity.mjs` holds the SQL text functions to their TypeScript
+counterparts; both run in `pnpm db:test`.
 
 Nothing here adds a screen. The report and correction controls belong beside each question
 and lesson in the guided course, which is a later change. So does the server-side recorder
@@ -70,6 +73,12 @@ about the one before. Only drafts move, so a retried step changes nothing.
 A reader's revision runs the same functions, as the reader's (see below). So no path to a
 visible question skips them.
 
+**A validation that fails is retried later.** If `study_validate` fails three times, or a job
+finished under a worker older than that step, every row would stay a draft forever.
+`validate_stranded_study_courses` validates any finished course that still holds drafts.
+`enable_generation_sweeper()` schedules it beside the stranded-job sweep, every five minutes
+by default.
+
 | Check                                                                                 | Applies to                                          | Reason                                                                                           |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | A resolved evidence span.                                                             | Claim                                               | `evidence_missing`                                                                               |
@@ -87,18 +96,27 @@ visible question skips them.
 | Three to six distinct steps; two to six pairs, with no side repeated.                 | Ordering, matching                                  | `ordering_malformed`, `matching_malformed`                                                       |
 | Nothing addressed to a model (a heuristic; see below).                                | All text, including a claim's quoted passage        | `instruction_like`                                                                               |
 | No link that is absent from every one of the course's sources (a heuristic).          | All generated text except quoted passages           | `unsourced_link`                                                                                 |
-| No invisible or bidirectional-control characters.                                     | A reader's version                                  | `hidden_characters`                                                                              |
+| No invisible format characters (zero-width, joiners, bidi controls).                  | A reader's version                                  | `hidden_characters`                                                                              |
 
 **How answers are compared.**
 
 - **Folding.** Answers are folded the way `answerKey` in `supabase/functions/_shared/study.ts`
-  folds them: NFKC, lower case, the same explicit punctuation removed, and an apostrophe
-  treated as a word break. SQL's copy, `study_fold`, is stricter. It also removes invisible
-  characters and folds Cyrillic and Greek letters that look like Latin ones. So
-  "rеstudying" with a Cyrillic е matches "restudying", and SQL never accepts something
-  TypeScript would refuse.
+  folds them: NFKC, lower case, the same explicit punctuation removed, an apostrophe treated
+  as a word break, and JavaScript's whitespace collapsed. An answer that is only punctuation
+  (`;` in a course on C) is kept as it is rather than folded to nothing. SQL's copy,
+  `study_fold`, is an exact mirror, and the parity test compares the two over every code
+  point Postgres considers assigned. Every equality and distinctness check uses it, so ν
+  and v, or ρ and p, stay different options.
 - **Matching.** A phrase must match as whole words. The exception is a phrase containing any
-  character of a script written without spaces, which matches as a substring.
+  character of a script written without spaces, which matches as a substring. What counts as
+  a word character (`\p{L}`, `\p{N}`, `\p{M}`) and which scripts are written without spaces
+  are generated from the same Unicode properties study.ts uses
+  (`scripts/study-unicode-classes.mjs`). So Hindi's danda ends a word in SQL as it does in
+  TypeScript.
+- **Stricter only where it is safe.** Finding one text inside another (a give-away, or a
+  reader's answer in the claims) reads more strictly in SQL. Invisible format characters are
+  removed and Cyrillic and Greek look-alikes are folded to Latin, so "rеstudying" with a
+  Cyrillic е is still found in a prompt that says "restudying".
 - **Give-aways.** An answer counts as given away only once it is at least two characters in
   such a script, or at least three otherwise. That catches "DNA", but a two-letter answer in
   a spaced script ("pH") is never flagged.

@@ -4468,6 +4468,7 @@ export type Database = {
         Args: { p_event_id: string }
         Returns: boolean
       }
+      study_blank: { Args: { p_text: string }; Returns: boolean }
       study_check_revision_quota: {
         Args: { p_version: number }
         Returns: undefined
@@ -4488,11 +4489,13 @@ export type Database = {
         Args: { p_phrase: string; p_text: string }
         Returns: boolean
       }
+      study_continues_word: { Args: { p_char: string }; Returns: boolean }
       study_course_texts: {
         Args: { p_generation_id: string }
         Returns: string[]
       }
       study_fold: { Args: { p_text: string }; Returns: string }
+      study_fold_strict: { Args: { p_text: string }; Returns: string }
       study_generation_available: { Args: never; Returns: boolean }
       study_gives_away: { Args: { p_answer: string }; Returns: boolean }
       study_hidden_class: { Args: never; Returns: string }
@@ -4602,6 +4605,7 @@ export type Database = {
         Args: { p_generation_id: string }
         Returns: Json
       }
+      study_space_class: { Args: never; Returns: string }
       study_text_problems: {
         Args: { p_links: Json; p_texts: string[] }
         Returns: string[]
@@ -4611,6 +4615,7 @@ export type Database = {
         Returns: boolean
       }
       study_unspaced_class: { Args: never; Returns: string }
+      study_word_class: { Args: never; Returns: string }
       summary_is_readable: {
         Args: { s: Database["public"]["Tables"]["summaries"]["Row"] }
         Returns: boolean
@@ -4627,6 +4632,10 @@ export type Database = {
         Returns: number
       }
       undo_import: { Args: { p_import_id: string }; Returns: Json }
+      validate_stranded_study_courses: {
+        Args: { p_limit?: number; p_older_than?: string }
+        Returns: number
+      }
       validate_study_course: { Args: { p_job_id: string }; Returns: Json }
       work_is_authorable: { Args: { p_work_id: string }; Returns: boolean }
     }

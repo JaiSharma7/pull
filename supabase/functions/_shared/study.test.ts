@@ -5,6 +5,7 @@ import { geminiConfigFrom } from './config.ts';
 import { createGeminiStructuredProvider } from './structured.ts';
 import {
   answerKey,
+  givesAwayIfPrinted,
   truncate,
   buildClaimIndex,
   CLAIM_KINDS,
@@ -832,6 +833,21 @@ describe('truncate', () => {
 describe('answerKey', () => {
   it('folds case, punctuation and spacing', () => {
     expect(answerKey('  The "Restudy"   group. ')).toBe('the restudy group');
+  });
+
+  it('keeps an answer that is punctuation, and keeps look-alike letters apart', () => {
+    // `;` in a course on C is an answer, not nothing; and ν is not v, nor ρ p.
+    expect(answerKey(';')).toBe(';');
+    expect(answerKey(' ... ')).toBe('...');
+    expect(new Set([';', '.', '!', ''].map(answerKey)).size).toBe(4);
+    expect(answerKey('ν')).not.toBe(answerKey('v'));
+    expect(answerKey('ρ')).not.toBe(answerKey('p'));
+  });
+
+  it('counts a give-away in code points, as Postgres does', () => {
+    expect(givesAwayIfPrinted('🧬🧪')).toBe(false);
+    expect(givesAwayIfPrinted('DNA')).toBe(true);
+    expect(givesAwayIfPrinted('々々')).toBe(true);
   });
 });
 

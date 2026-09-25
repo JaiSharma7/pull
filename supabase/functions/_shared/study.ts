@@ -734,19 +734,19 @@ export interface NormalizedCourse {
 
 /** Compare answers the way a reader would see them: case, spacing and punctuation folded. */
 export function answerKey(text: string): string {
-  return (
-    text
-      .normalize('NFKC')
-      .toLowerCase()
-      // An apostrophe separates, so "rest" is found in "the rest's role"; both sides of
-      // any comparison fold alike, so "don't" still matches "don't".
-      .replace(/[‘’'`]/g, ' ')
-      // Double quotes and punctuation, and the CJK full stops, commas, brackets and
-      // marks NFKC leaves in place.
-      .replace(/[“”".,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-  );
+  const base = text.normalize('NFKC').toLowerCase();
+  const key = base
+    // An apostrophe separates, so "rest" is found in "the rest's role"; both sides of
+    // any comparison fold alike, so "don't" still matches "don't".
+    .replace(/[‘’'`]/g, ' ')
+    // Double quotes and punctuation, and the CJK full stops, commas, brackets and
+    // marks NFKC leaves in place.
+    .replace(/[“”".,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // An answer that IS punctuation -- `;` in a course on C -- keeps it: folded to nothing
+  // it would be missing, and would match every other answer that folds to nothing.
+  return key === '' ? base.replace(/\s+/g, ' ').trim() : key;
 }
 
 /**
@@ -783,8 +783,9 @@ function codePointAt(text: string, at: number): string | undefined {
  */
 export function givesAwayIfPrinted(answer: string): boolean {
   const key = answerKey(answer);
+  // Counted in code points, as Postgres counts: two emoji are two, not four.
   if (UNSPACED_SCRIPT.test(key)) return [...key].length >= 2;
-  return key.length >= 3;
+  return [...key].length >= 3;
 }
 
 /**
@@ -794,7 +795,7 @@ export function givesAwayIfPrinted(answer: string): boolean {
  * script without word spaces is matched as a plain substring, where a whole-word test
  * could never match at all.
  */
-function containsPhrase(text: string, phrase: string): boolean {
+export function containsPhrase(text: string, phrase: string): boolean {
   const p = answerKey(phrase);
   const t = answerKey(text);
   if (p.length === 0) return false;

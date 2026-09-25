@@ -45,7 +45,8 @@ export const STUDY_NODES: Record<StudyStep, StudyNode> = {
     needs: ['study_prepare', 'study_extract', 'study_assemble'],
     after: ['study_assemble'],
   },
-  study_validate: { needs: ['study_ground'], after: ['study_ground'] },
+  // Runs after grounding but reads nothing from it: the rows are in the database.
+  study_validate: { needs: [], after: ['study_ground'] },
 };
 
 export const STUDY_ROOT: StudyStep = 'study_prepare';
