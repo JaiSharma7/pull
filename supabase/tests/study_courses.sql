@@ -249,7 +249,7 @@ begin
   if not exists (select 1 from public.study_course_overview
                  where course_id = course_a and generation_id is null and preparing
                    and latest_generation_id = gen_1 and source_count = 2 and lesson_count = 0
-                   and not held_back)
+                   and not held_back and not awaiting_validation)
      or exists (select 1 from public.study_course_outline(course_a)) then
     raise exception 'a course being prepared showed something: %',
       (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
@@ -258,6 +258,21 @@ begin
   -- ---------------------------------------------------------------- the worker prepares it
   perform pg_temp.become_worker();
   perform public.persist_study_course(job_1, pg_temp.course(v1, v2, note1, note2));
+
+  -- A job that ends after the course is saved and before it is validated -- the validation
+  -- step out of retries -- leaves a course the sweep will validate. That is coming, not
+  -- failed, whatever the job's status says.
+  perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'failed' where id = job_1;
+  perform pg_temp.become_reader(reader_a);
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and generation_id is null and not preparing
+                   and latest_job_status = 'failed' and awaiting_validation) then
+    raise exception 'a saved course awaiting its validation did not say so: %',
+      (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
+  end if;
+
+  perform pg_temp.become_worker();
   perform public.validate_study_course(job_1);
   perform pg_temp.as_owner();
   update public.generation_jobs set status = 'succeeded' where id = job_1;
@@ -282,7 +297,7 @@ begin
                    and not update_available
                    and lesson_count = 3 and lessons_read_count = 0 and question_count = 3
                    and claim_count = 3 and claims_demonstrated_count = 0
-                   and not newer_generation_held_back) then
+                   and not newer_generation_held_back and not awaiting_validation) then
     raise exception 'the overview of a prepared course is wrong: %',
       (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
   end if;

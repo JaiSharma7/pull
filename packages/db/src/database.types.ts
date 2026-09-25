@@ -3745,6 +3745,7 @@ export type Database = {
     Views: {
       study_course_overview: {
         Row: {
+          awaiting_validation: boolean | null
           claim_count: number | null
           claims_demonstrated_count: number | null
           course_id: string | null

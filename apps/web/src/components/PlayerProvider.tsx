@@ -339,6 +339,8 @@ function PlayerEngine({ userId, durable, children }: ProviderProps) {
       speak(track.text, {
         rate: state.rate,
         voiceURI: state.voiceURI,
+        // A reader's own material stays on the device: a local voice or none.
+        localOnly: track.localOnly,
         // `now` so the sleep timer is read at the boundary it fires on. The
         // reducer never reads a clock; the caller that has one passes it.
         onEnd: () => dispatch({ type: 'ended', token: epoch, now: Date.now() }),

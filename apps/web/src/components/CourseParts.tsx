@@ -48,9 +48,9 @@ export function CourseOutline({
     <ol className="course__units" aria-label="Course outline">
       {units.map((unit) => (
         <li key={unit.unitNo} className="course__unit">
-          <h3 className="course__unit-title">
+          <h2 className="course__unit-title">
             <span className="meta">Unit {unit.unitNo}</span> {unit.title}
-          </h3>
+          </h2>
           <ol className="course__lessons">
             {unit.lessons.map((lesson) => {
               const label = lessonStateLabel(lesson.state);
@@ -70,6 +70,7 @@ export function CourseOutline({
                       lesson.state === 'read' ? ' course__lesson-state--read' : ''
                     }`}
                   >
+                    {current ? 'Next · ' : ''}
                     {label} · {minutesLabel(lesson.minutes)}
                   </span>
                 </li>
@@ -144,11 +145,11 @@ export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitT
         {minutesLabel(lesson.minutes)}
       </p>
       {/* Focused when the lesson opens, so a keyboard or screen-reader reader starts here. */}
-      <h2 id="course-lesson-title" className="course__lesson-heading" tabIndex={-1}>
+      <h1 id="course-lesson-title" className="course__lesson-heading" tabIndex={-1}>
         {lesson.title}
-      </h2>
+      </h1>
       <p className="course__objective">
-        <span className="meta">By the end</span> {lesson.objective}
+        <span className="meta">By the end you should be able to</span> {lesson.objective}
       </p>
       <div className="course__explanation">
         <Paragraphs text={lesson.explanation} />
@@ -174,20 +175,23 @@ export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitT
 export function StoppingPoint({
   covered,
   remaining,
+  skipped = 0,
   onDone,
   onContinue,
 }: {
   covered: readonly { title: string; recap: string | null }[];
   remaining: number;
+  /** Lessons of the course the reader skipped, which the course page offers again. */
+  skipped?: number;
   onDone: () => void;
   onContinue: (() => void) | null;
 }) {
   return (
     <section className="stack course__stop" aria-labelledby="course-stop-title">
-      <p className="meta">End of this session</p>
-      <h2 id="course-stop-title" className="display" tabIndex={-1}>
+      <p className="meta">End of this sitting</p>
+      <h1 id="course-stop-title" className="display" tabIndex={-1}>
         That is a good place to stop.
-      </h2>
+      </h1>
       {covered.length > 0 && (
         <>
           <p>
@@ -204,10 +208,14 @@ export function StoppingPoint({
           </ul>
         </>
       )}
-      <p className="meta">
-        {remaining === 0
-          ? 'That was the last lesson of the course.'
-          : `${remaining === 1 ? 'One lesson is' : `${remaining} lessons are`} left for another session.`}
+      <p>
+        {remaining > 0
+          ? `${remaining === 1 ? 'One lesson is' : `${remaining} lessons are`} left for another sitting.`
+          : skipped > 0
+            ? `You have been through every lesson. ${
+                skipped === 1 ? 'The one you skipped is' : `The ${skipped} you skipped are`
+              } on the course page when you want ${skipped === 1 ? 'it' : 'them'}.`
+            : 'That was the last lesson of the course.'}
       </p>
       <div className="course__actions">
         <button type="button" className="btn btn--primary" onClick={onDone}>
@@ -223,11 +231,14 @@ export function StoppingPoint({
   );
 }
 
-/** The whole course read: its closing summary, and what the sources cannot settle. */
-export function CourseRecap({ course }: { course: CourseSummary }) {
+/**
+ * The end of the course: its closing summary, and what the sources cannot settle. Shown once
+ * every lesson is read or skipped; it says "every lesson read" only when that is true.
+ */
+export function CourseRecap({ course, allRead }: { course: CourseSummary; allRead: boolean }) {
   return (
     <section className="stack course__recap" aria-labelledby="course-recap-title">
-      <p className="meta">Every lesson read</p>
+      <p className="meta">{allRead ? 'Every lesson read' : 'The end of the course'}</p>
       <h2 id="course-recap-title">What to remember</h2>
       {course.recap ? <Paragraphs text={course.recap} /> : null}
       {course.disagreements.length > 0 && (
@@ -243,7 +254,7 @@ export function CourseRecap({ course }: { course: CourseSummary }) {
       {course.withheld.length > 0 && (
         <>
           <h3 className="course__subheading">What your sources cannot answer</h3>
-          <p className="meta">
+          <p>
             Questions your goal suggests that the material does not settle, so the course does not
             pretend to.
           </p>

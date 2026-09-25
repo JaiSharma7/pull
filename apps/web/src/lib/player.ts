@@ -51,6 +51,12 @@ export interface Track {
   title: string;
   /** What is read aloud. */
   text: string;
+  /**
+   * A reader's own material -- a study lesson -- rather than a published Pull. Spoken
+   * only in a voice on this device (`SpeakOptions.localOnly`), and never written to
+   * storage: `serialize` leaves it out, so it lasts as long as the page and no longer.
+   */
+  localOnly?: true;
 }
 
 export type PlayerStatus = 'idle' | 'playing' | 'paused';
@@ -424,11 +430,16 @@ interface Stored {
  * gesture, so a queue comes back paused with its place kept, never playing.
  */
 export function serialize(state: PlayerState, userId: string | null): string {
+  // A local-only track is private material, and `hydrate` would bring it back without the
+  // flag that keeps it on the device. So it is never stored, and the cursor is moved to
+  // name the same place among the tracks that are.
+  const queue = state.queue.filter((t) => !t.localOnly);
+  const before = state.queue.slice(0, state.index).filter((t) => !t.localOnly).length;
   const stored: Stored = {
     v: 1,
     owner: userId,
-    queue: state.queue,
-    index: state.index,
+    queue,
+    index: Math.min(before, Math.max(queue.length - 1, 0)),
     rate: state.rate,
     voiceURI: state.voiceURI,
     sleepUntil: state.sleepUntil,

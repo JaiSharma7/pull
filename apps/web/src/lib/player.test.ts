@@ -618,6 +618,28 @@ describe('serialize and hydrate', () => {
     expect(back).toEqual({ ...full, status: 'paused', epoch: 0 });
   });
 
+  it('never stores a local-only track, and keeps the cursor on the same place', () => {
+    // A study lesson is the reader's own material. `hydrate` would bring it back as an
+    // ordinary track, spoken in whatever voice the player has, so it is never written.
+    const lesson: Track = { id: 'lesson', title: 'Lesson', text: 'PRIVATE', localOnly: true };
+    const state: PlayerState = {
+      ...INITIAL_PLAYER,
+      queue: [track('a'), lesson, track('b')],
+      index: 2,
+      status: 'playing',
+    };
+    const raw = serialize(state, 'u1');
+    expect(raw).not.toContain('PRIVATE');
+    const back = hydrate(raw, 'u1', 0);
+    expect(back.queue.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(currentTrack(back)?.id).toBe('b');
+    // On the lesson itself, the cursor names what comes after it.
+    expect(currentTrack(hydrate(serialize({ ...state, index: 1 }, 'u1'), 'u1', 0))?.id).toBe('b');
+    // A queue of nothing but lessons stores nothing.
+    const only = { ...INITIAL_PLAYER, queue: [lesson], status: 'playing' as const };
+    expect(hydrate(serialize(only, 'u1'), 'u1', 0)).toEqual(INITIAL_PLAYER);
+  });
+
   it('comes back idle when there was nothing queued', () => {
     expect(hydrate(serialize(INITIAL_PLAYER, null), null)).toEqual(INITIAL_PLAYER);
   });

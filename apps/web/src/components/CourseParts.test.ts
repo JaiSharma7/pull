@@ -146,7 +146,7 @@ describe('the end of a session', () => {
     expect(html).toContain('That is a good place to stop.');
     expect(html).toContain('You read one lesson');
     expect(html).toContain('Restudying won early.');
-    expect(html).toContain('3 lessons are left for another session.');
+    expect(html).toContain('3 lessons are left for another sitting.');
     expect(html.indexOf('Done for now')).toBeLessThan(html.indexOf('Keep going'));
     expect(html).toMatch(/id="course-stop-title"[^>]*tabindex="-1"/);
   });
@@ -157,6 +157,20 @@ describe('the end of a session', () => {
     );
     expect(html).toContain('That was the last lesson of the course.');
     expect(html).not.toContain('Keep going');
+  });
+
+  it('does not call the course finished when lessons were skipped', () => {
+    const html = renderToStaticMarkup(
+      createElement(StoppingPoint, {
+        covered: [],
+        remaining: 0,
+        skipped: 2,
+        onDone: noop,
+        onContinue: null,
+      }),
+    );
+    expect(html).not.toContain('last lesson of the course');
+    expect(html).toContain('The 2 you skipped are on the course page');
   });
 });
 
@@ -171,11 +185,16 @@ describe('CourseRecap', () => {
         { prompt: 'Does retrieval work better for everyone?', reason: 'The note does not say.' },
       ],
     }) as CourseSummary;
-    const html = renderToStaticMarkup(createElement(CourseRecap, { course }));
+    const html = renderToStaticMarkup(createElement(CourseRecap, { course, allRead: true }));
+    expect(html).toContain('Every lesson read');
     expect(html).toContain('Timing matters.');
     expect(html).toContain('Where your sources disagree');
     expect(html).toContain('The notes differ on timing.');
     expect(html).toContain('What your sources cannot answer');
     expect(html).toContain('Does retrieval work better for everyone?');
+    // Skipped lessons are not read ones.
+    expect(
+      renderToStaticMarkup(createElement(CourseRecap, { course, allRead: false })),
+    ).not.toContain('Every lesson read');
   });
 });

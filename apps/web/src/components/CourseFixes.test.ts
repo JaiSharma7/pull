@@ -40,19 +40,23 @@ describe('ReportForm', () => {
 });
 
 describe('LessonCorrectionForm', () => {
+  const lesson = {
+    unitTitle: 'Timing',
+    title: 'Five minutes later',
+    objective: 'Explain it.',
+    explanation: 'Restudying won.',
+    example: '',
+    recap: 'Restudying won early.',
+  };
+
   it('opens on the lesson as it reads, each field labelled and limited', () => {
     const html = renderToStaticMarkup(
       createElement(LessonCorrectionForm, {
-        initial: {
-          unitTitle: 'Timing',
-          title: 'Five minutes later',
-          objective: 'Explain it.',
-          explanation: 'Restudying won.',
-          example: '',
-          recap: 'Restudying won early.',
-        },
+        initial: lesson,
+        draft: lesson,
         working: false,
         error: null,
+        onDraft: noop,
         onSave: noop,
         onCancel: noop,
       }),
@@ -62,6 +66,22 @@ describe('LessonCorrectionForm', () => {
     expect(html).toContain('maxLength="6000"');
     expect(html).toContain('never proof of what you remember');
     expect(html.match(/<label/g)).toHaveLength(6);
+  });
+
+  it('shows the draft the screen holds, and says when it renames the unit', () => {
+    const html = renderToStaticMarkup(
+      createElement(LessonCorrectionForm, {
+        initial: lesson,
+        draft: { ...lesson, title: 'Ten minutes later', unitTitle: 'When to test' },
+        working: false,
+        error: null,
+        onDraft: noop,
+        onSave: noop,
+        onCancel: noop,
+      }),
+    );
+    expect(html).toContain('value="Ten minutes later"');
+    expect(html).toContain('renames the whole unit');
   });
 });
 
@@ -75,8 +95,8 @@ describe('HeldBackList', () => {
     const html = renderToStaticMarkup(
       createElement(HeldBackList, {
         items: [
-          { reportId: 'r1', kind: 'lesson', label: 'Five minutes later' },
-          { reportId: 'r2', kind: 'claim', label: 'Restudying won at five minutes.' },
+          { kind: 'lesson', id: 'l1', label: 'Five minutes later' },
+          { kind: 'claim', id: 'c1', label: 'Restudying won at five minutes.' },
         ],
         working: false,
         onRestore: noop,

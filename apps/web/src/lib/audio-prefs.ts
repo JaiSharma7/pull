@@ -206,7 +206,8 @@ export function storePlayer(
   // signing in with an address does without changing their id: Supabase keeps the
   // uuid, so the key is identical and only the flag flips. The queue then looked
   // cleared and came back on the next read.
-  if (state.queue.length === 0) {
+  // Only local-only tracks, which are never stored, is nothing to store as well.
+  if (state.queue.every((t) => t.localOnly)) {
     clearStoredPlayer(userId);
     return;
   }

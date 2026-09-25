@@ -5,7 +5,7 @@
  * learner may be shown ever reaches the browser. Writes go through the functions the
  * database offers a reader and nothing else. See `docs/study-courses.md`.
  */
-import { rpcError } from './rpc-error.js';
+import { rpcError, sqlState } from './rpc-error.js';
 import {
   shapeCourseSummaries,
   shapeCourseSummary,
@@ -34,11 +34,19 @@ export async function fetchCourses(signal?: AbortSignal): Promise<CourseSummary[
   return shapeCourseSummaries(data);
 }
 
-/** One course, or null when it is not the reader's or no longer exists. */
+/** A course id's shape. Anything else is no course, not a request Postgres refuses. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One course, or null when it is not the reader's, no longer exists, or the address names
+ * none: `/course/<not-a-uuid>` was a 22P02 shown as a raw error, with a Try again that
+ * could never work.
+ */
 export async function fetchCourse(
   courseId: string,
   signal?: AbortSignal,
 ): Promise<CourseSummary | null> {
+  if (!UUID.test(courseId)) return null;
   const request = supabase.from('study_course_overview').select('*').eq('course_id', courseId);
   const { data, error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw rpcError(error);
@@ -54,8 +62,9 @@ export async function fetchOutline(courseId: string, signal?: AbortSignal): Prom
 
 /**
  * A lesson's text and the claims it teaches, each with the exact passages of the reader's
- * own material it rests on. Five small reads rather than one embed: the views carry no
- * foreign keys PostgREST could embed through.
+ * own material it rests on. Small reads rather than one embed -- the views carry no foreign
+ * keys PostgREST could embed through -- in three round trips: what does not depend on an
+ * answer goes in parallel, since a phone pays for each trip before every next lesson.
  */
 export async function fetchLesson(
   lessonId: string,
@@ -64,19 +73,18 @@ export async function fetchLesson(
   const abortable = <T extends { abortSignal: (s: AbortSignal) => T }>(q: T): T =>
     signal ? q.abortSignal(signal) : q;
 
-  const lessonRead = await abortable(
-    supabase
-      .from('study_visible_lessons')
-      .select('id, title, objective, explanation, example, recap, minutes')
-      .eq('id', lessonId),
-  );
+  const [lessonRead, links] = await Promise.all([
+    abortable(
+      supabase
+        .from('study_visible_lessons')
+        .select('id, title, objective, explanation, example, recap, minutes')
+        .eq('id', lessonId),
+    ),
+    abortable(supabase.from('study_lesson_claims').select('claim_id').eq('lesson_id', lessonId)),
+  ]);
   if (lessonRead.error) throw rpcError(lessonRead.error);
   const lesson = lessonRead.data?.[0];
   if (!lesson) return null;
-
-  const links = await abortable(
-    supabase.from('study_lesson_claims').select('claim_id').eq('lesson_id', lessonId),
-  );
   if (links.error) throw rpcError(links.error);
   const claimIds = (links.data ?? []).map((l) => l.claim_id);
 
@@ -92,25 +100,24 @@ export async function fetchLesson(
     : { data: [], error: null };
   if (claims.error) throw rpcError(claims.error);
   const shownIds = (claims.data ?? []).map((c) => c.id).filter(Boolean) as string[];
-
-  const evidence = shownIds.length
-    ? await abortable(
-        supabase
-          .from('study_claim_evidence')
-          .select('claim_id, ordinal, span_text, start_offset, end_offset, page, match')
-          .in('claim_id', shownIds),
-      )
-    : { data: [], error: null };
-  if (evidence.error) throw rpcError(evidence.error);
-
   const versionIds = [
     ...new Set((claims.data ?? []).map((c) => c.source_version_id).filter(Boolean)),
   ] as string[];
-  const versions = versionIds.length
-    ? await abortable(
-        supabase.from('study_source_versions').select('id, title').in('id', versionIds),
-      )
-    : { data: [], error: null };
+
+  const [evidence, versions] = await Promise.all([
+    shownIds.length
+      ? abortable(
+          supabase
+            .from('study_claim_evidence')
+            .select('claim_id, ordinal, span_text, start_offset, end_offset, page, match')
+            .in('claim_id', shownIds),
+        )
+      : Promise.resolve({ data: [], error: null }),
+    versionIds.length
+      ? abortable(supabase.from('study_source_versions').select('id, title').in('id', versionIds))
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (evidence.error) throw rpcError(evidence.error);
   if (versions.error) throw rpcError(versions.error);
 
   return shapeLessonContent({
@@ -224,6 +231,42 @@ export async function dismissReport(reportId: string): Promise<void> {
   if (error) throw rpcError(error);
 }
 
+/** Something the reader can report: a lesson or a claim. */
+export interface ReportTarget {
+  kind: ReportKind;
+  id: string;
+}
+
+const REPORT_COLUMN = { lesson: 'lesson_id', claim: 'claim_id' } as const satisfies Record<
+  ReportKind,
+  string
+>;
+
+/**
+ * Restore something the reader reported, by dismissing every open report on it.
+ *
+ * There can be more than one: a report sent again because its answer was lost, or one from
+ * another tab. Dismissing only the one the screen knew of left the lesson held back by the
+ * other while the screen said it was back. A report settled in the meantime -- 55000, or
+ * gone with its course (P0002) -- is already what this asks for.
+ */
+export async function restoreReported(target: ReportTarget): Promise<void> {
+  const { data, error } = await supabase
+    .from('study_reports')
+    .select('id')
+    .eq(REPORT_COLUMN[target.kind], target.id)
+    .eq('status', 'open');
+  if (error) throw rpcError(error);
+  for (const report of data ?? []) {
+    try {
+      await dismissReport(report.id);
+    } catch (e: unknown) {
+      const state = sqlState(e);
+      if (state !== '55000' && state !== 'P0002') throw e;
+    }
+  }
+}
+
 /** Withdraw a lesson or claim from the course for good. */
 export async function retireContent(kind: ReportKind, id: string): Promise<void> {
   const { error } = await supabase.rpc('retire_study_content', { p_kind: kind, p_id: id });
@@ -243,9 +286,7 @@ export async function reviseLesson(
   return String(data);
 }
 
-export interface HeldBack {
-  reportId: string;
-  kind: ReportKind;
+export interface HeldBack extends ReportTarget {
   /** The lesson's title, or the claim's statement. */
   label: string;
 }
@@ -301,6 +342,7 @@ export async function fetchHeldBack(
     ...(lessons.data ?? []).map((l) => [l.id, l.title] as [string, string]),
     ...(claims.data ?? []).map((c) => [c.id, c.statement] as [string, string]),
   ]);
+  // One entry per lesson or claim however many reports it has; restoring it settles all.
   const seen = new Set<string>();
   const held: HeldBack[] = [];
   for (const r of rows) {
@@ -308,7 +350,7 @@ export async function fetchHeldBack(
     const label = target ? labels.get(target) : undefined;
     if (!target || label === undefined || seen.has(target)) continue;
     seen.add(target);
-    held.push({ reportId: r.id, kind: r.lesson_id ? 'lesson' : 'claim', label });
+    held.push({ kind: r.lesson_id ? 'lesson' : 'claim', id: target, label });
   }
   return held;
 }

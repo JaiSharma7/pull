@@ -15,7 +15,7 @@ function statusLine(course: CourseSummary): string {
     case 'failed':
       return 'Could not be prepared';
     case 'empty':
-      return 'Its sources were deleted';
+      return 'A source was deleted';
     case 'ready':
       return courseProgressLabel(course);
   }
@@ -98,7 +98,7 @@ export function Courses({
             <button
               type="button"
               className="btn btn--primary"
-              onClick={() => onNavigate('/studio')}
+              onClick={() => onNavigate('/studio?view=study')}
             >
               Prepare study material in Studio
             </button>

@@ -8,7 +8,7 @@
  * the reader's own words, and a withdrawal is for good. None of them is ever proof of
  * anything.
  */
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   LESSON_FIELD_LIMITS,
   REPORT_NOTE_LIMIT,
@@ -46,6 +46,10 @@ export function ReportForm({
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [note, setNote] = useState('');
   const [local, setLocal] = useState<string | null>(null);
+  // The form replaces the control that opened it, so focus moves into it rather than to the
+  // top of the page.
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => first.current?.focus(), []);
 
   const submit = () => {
     if (working) return;
@@ -63,9 +67,10 @@ export function ReportForm({
         <legend className="meta">
           {kind === 'lesson' ? 'What is wrong with this lesson?' : 'What is wrong with this claim?'}
         </legend>
-        {reasons.map((r) => (
+        {reasons.map((r, i) => (
           <label key={r.reason}>
             <input
+              ref={i === 0 ? first : undefined}
               type="radio"
               name={`${id}-reason`}
               value={r.reason}
@@ -89,7 +94,7 @@ export function ReportForm({
           onChange={(e) => setNote(e.target.value)}
         />
       </div>
-      <p className="meta">
+      <p>
         {kind === 'lesson'
           ? 'Reporting holds the lesson back from this course at once. You can restore it later.'
           : 'Reporting holds the claim back, and every lesson that rests on it. You can restore them later.'}
@@ -122,20 +127,31 @@ const FIELDS: { key: keyof LessonDraft; label: string; rows: number }[] = [
  */
 export function LessonCorrectionForm({
   initial,
+  draft,
   working,
   error,
+  onDraft,
   onSave,
   onCancel,
 }: {
+  /** The lesson as it reads now. */
   initial: LessonDraft;
+  /**
+   * The reader's edit, held by the screen rather than here, so closing the form -- to
+   * report a claim, or by folding the section -- does not throw the typing away.
+   */
+  draft: LessonDraft;
   working: boolean;
   error: string | null;
+  onDraft: (draft: LessonDraft) => void;
   onSave: (draft: LessonDraft) => void;
+  /** Cancel is the one control that discards the draft. */
   onCancel: () => void;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState<LessonDraft>(initial);
   const [local, setLocal] = useState<string | null>(null);
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => first.current?.focus(), []);
 
   const save = () => {
     if (working) return;
@@ -146,7 +162,7 @@ export function LessonCorrectionForm({
 
   return (
     <div className="stack course__fix-form">
-      <p className="meta">
+      <p>
         Your correction becomes this lesson's text in your course. It is checked as a model's would
         be, but a lesson in your own words is practice, never proof of what you remember.
       </p>
@@ -157,11 +173,12 @@ export function LessonCorrectionForm({
           </label>
           {f.rows === 1 ? (
             <input
+              ref={f.key === FIELDS[0]!.key ? first : undefined}
               id={`${id}-${f.key}`}
               className="field__input"
               maxLength={LESSON_FIELD_LIMITS[f.key]}
               value={draft[f.key]}
-              onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+              onChange={(e) => onDraft({ ...draft, [f.key]: e.target.value })}
             />
           ) : (
             <textarea
@@ -170,13 +187,13 @@ export function LessonCorrectionForm({
               rows={f.rows}
               maxLength={LESSON_FIELD_LIMITS[f.key]}
               value={draft[f.key]}
-              onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+              onChange={(e) => onDraft({ ...draft, [f.key]: e.target.value })}
             />
           )}
         </div>
       ))}
       {draft.unitTitle.trim() !== initial.unitTitle.trim() && (
-        <p className="meta">A new unit title renames the whole unit.</p>
+        <p>A new unit title renames the whole unit.</p>
       )}
       <Problem text={local ?? error} />
       <div className="course__actions">
@@ -197,23 +214,23 @@ export function HeldBackList({
   working,
   onRestore,
 }: {
-  items: readonly { reportId: string; kind: ReportKind; label: string }[];
+  items: readonly { kind: ReportKind; id: string; label: string }[];
   working: boolean;
-  onRestore: (reportId: string) => void;
+  onRestore: (item: { kind: ReportKind; id: string }) => void;
 }) {
   if (items.length === 0) return null;
   return (
     <section className="stack" aria-labelledby="course-held-title">
-      <h2 id="course-held-title" className="course__subheading">
+      <h2 id="course-held-title" className="course__subheading" tabIndex={-1}>
         Held back by your reports
       </h2>
-      <p className="meta">
+      <p>
         Restoring one says the report was mistaken. A lesson that rests on a claim you reported
         returns when the claim does.
       </p>
       <ul className="course__held">
         {items.map((item) => (
-          <li key={item.reportId} className="course__held-item">
+          <li key={`${item.kind}:${item.id}`} className="course__held-item">
             <span>
               <span className="meta">{item.kind === 'lesson' ? 'Lesson' : 'Claim'}</span>{' '}
               {item.label}
@@ -222,7 +239,7 @@ export function HeldBackList({
               type="button"
               className="btn btn--plain"
               aria-disabled={working}
-              onClick={() => onRestore(item.reportId)}
+              onClick={() => onRestore({ kind: item.kind, id: item.id })}
             >
               Restore
             </button>

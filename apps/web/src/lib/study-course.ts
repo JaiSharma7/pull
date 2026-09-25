@@ -45,6 +45,12 @@ export interface CourseSummary {
   newerGenerationHeldBack: boolean;
   /** Validation passed nothing in the current generation. */
   heldBack: boolean;
+  /**
+   * The newest preparation is saved and waits for its validation, which a sweep finishes
+   * within minutes -- whatever its job's status, which can read `failed` when the job's own
+   * validation step gave up.
+   */
+  awaitingValidation: boolean;
   updateAvailable: boolean;
   lessonCount: number;
   lessonsReadCount: number;
@@ -144,6 +150,7 @@ export function shapeCourseSummary(row: unknown): CourseSummary | null {
     preparing: bool(row.preparing),
     newerGenerationHeldBack: bool(row.newer_generation_held_back),
     heldBack: bool(row.held_back),
+    awaitingValidation: bool(row.awaiting_validation),
     updateAvailable: bool(row.update_available),
     lessonCount: int(row.lesson_count),
     lessonsReadCount: int(row.lessons_read_count),
@@ -268,7 +275,7 @@ export type CourseStatus =
 
 export function courseStatus(course: CourseSummary): CourseStatus {
   if (course.generationId) return 'ready';
-  if (course.preparing) return 'preparing';
+  if (course.preparing || course.awaitingValidation) return 'preparing';
   if (course.latestJobStatus === 'failed' || course.latestJobStatus === 'cancelled') {
     return 'failed';
   }
@@ -279,7 +286,16 @@ export function courseStatus(course: CourseSummary): CourseStatus {
 
 /** Whether a screen should look at the course again soon: something is on its way. */
 export function awaitingPreparation(course: CourseSummary): boolean {
-  return course.preparing || courseStatus(course) === 'preparing';
+  return course.preparing || course.awaitingValidation || courseStatus(course) === 'preparing';
+}
+
+/** A newer preparation of a course the reader can already read is on its way. */
+export function newerPreparationComing(course: CourseSummary): boolean {
+  return (
+    course.generationId !== null &&
+    course.latestGenerationId !== course.generationId &&
+    (course.preparing || course.awaitingValidation)
+  );
 }
 
 /**
@@ -292,6 +308,7 @@ export function newerPreparationFailed(course: CourseSummary): boolean {
     course.latestGenerationId !== null &&
     course.latestGenerationId !== course.generationId &&
     !course.preparing &&
+    !course.awaitingValidation &&
     (course.latestJobStatus === 'failed' || course.latestJobStatus === 'cancelled')
   );
 }
@@ -305,6 +322,8 @@ export function newerPreparationFailed(course: CourseSummary): boolean {
 export function preparationRefusal(
   code: string | undefined,
   detail: string | undefined,
+  /** Preparing an existing course again, whose sources the reader does not choose. */
+  again = false,
 ): string | null {
   switch (code) {
     case '55000':
@@ -323,7 +342,9 @@ export function preparationRefusal(
       return null;
     case '22023':
       if (detail === 'too_large') {
-        return 'Together, these sources are longer than the 200,000-character limit. Save a shorter version of one, or choose fewer.';
+        return again
+          ? 'Together, this course’s sources are now longer than the 200,000-character limit. Save a shorter version of one in Studio.'
+          : 'Together, these sources are longer than the 200,000-character limit. Save a shorter version of one, or choose fewer.';
       }
       return null;
     case '28000':
@@ -406,7 +427,11 @@ export function planSession(
   const candidates = (from >= 0 ? lessons.slice(from) : lessons).filter(
     (l, i) => (from >= 0 && i === 0) || !finished(l),
   );
+  return fillSession(candidates, budget);
+}
 
+/** Lessons in order until their minutes reach the budget, ending at a unit break. */
+function fillSession(candidates: readonly OutlineLesson[], budget: number): OutlineLesson[] {
   const plan: OutlineLesson[] = [];
   let minutes = 0;
   for (const lesson of candidates) {
@@ -421,6 +446,22 @@ export function planSession(
   return plan;
 }
 
+/** The lessons the reader skipped, in course order. */
+export function skippedLessons(units: readonly OutlineUnit[]): OutlineLesson[] {
+  return allLessons(units).filter((l) => l.state === 'skipped');
+}
+
+/**
+ * A session of the lessons the reader skipped, once nothing else is left: skipping is not
+ * finishing, and the course offers them again rather than calling itself done.
+ */
+export function planSkipped(
+  units: readonly OutlineUnit[],
+  budget: number = SESSION_MINUTES,
+): OutlineLesson[] {
+  return fillSession(skippedLessons(units), budget);
+}
+
 // ------------------------------------------------------------------ the source passage
 
 export interface PassageWindow {
@@ -432,29 +473,63 @@ export interface PassageWindow {
   clippedEnd: boolean;
 }
 
+/** How far a context window may widen to reach a word boundary. */
+const WORD_REACH = 24;
+
+/** The nearest word start at or before `at`, within reach; `at` itself when there is none. */
+function wordStart(points: readonly string[], at: number): number {
+  for (let i = at; i >= Math.max(0, at - WORD_REACH); i -= 1) {
+    if (i === 0 || /\s/u.test(points[i - 1] ?? '')) return i;
+  }
+  return at;
+}
+
+/** The nearest word end at or after `at`, within reach; `at` itself when there is none. */
+function wordEnd(points: readonly string[], at: number): number {
+  for (let i = at; i <= Math.min(points.length, at + WORD_REACH); i += 1) {
+    if (i === points.length || /\s/u.test(points[i] ?? '')) return i;
+  }
+  return at;
+}
+
+/**
+ * A text's code points, kept for the few texts a lesson shows: a source runs to 200,000
+ * characters, and splitting it again for every passage on every render cost tens of
+ * milliseconds a frame.
+ */
+const pointsCache = new Map<string, readonly string[]>();
+function codePoints(text: string): readonly string[] {
+  const cached = pointsCache.get(text);
+  if (cached) return cached;
+  const points = Array.from(text);
+  if (pointsCache.size >= 4) pointsCache.delete(pointsCache.keys().next().value!);
+  pointsCache.set(text, points);
+  return points;
+}
+
 /**
  * The evidence span in its context: up to `radius` characters either side, cut at a
- * word boundary. Offsets are code points, as the database stores them, so the text is
- * split with `Array.from` rather than indexed as UTF-16. Null when the offsets do not fit
- * the text or the span there is not the one recorded -- a stale version, say -- so a
- * screen shows the recorded span alone rather than the wrong passage.
+ * word boundary when there is one nearby. Offsets are code points, as the database stores
+ * them, so the text is split into code points rather than indexed as UTF-16. Null when the
+ * offsets do not fit the text or the span there is not the one recorded -- a stale
+ * version, say -- so a screen shows the recorded span alone rather than the wrong passage.
+ *
+ * The boundary is looked for only a short way. Japanese, Chinese and Thai put no spaces
+ * between words, and widening until one appeared took in the whole document.
  */
 export function passageWindow(
   text: string,
   evidence: Pick<Evidence, 'start' | 'end' | 'spanText'>,
   radius = 280,
 ): PassageWindow | null {
-  const points = Array.from(text);
+  const points = codePoints(text);
   const { start, end } = evidence;
   if (start < 0 || end <= start || end > points.length) return null;
   const span = points.slice(start, end).join('');
   if (span !== evidence.spanText) return null;
 
-  let from = Math.max(0, start - radius);
-  let to = Math.min(points.length, end + radius);
-  // Widen to the nearest whitespace so the context never starts or ends mid-word.
-  while (from > 0 && !/\s/u.test(points[from - 1] ?? '')) from -= 1;
-  while (to < points.length && !/\s/u.test(points[to] ?? '')) to += 1;
+  const from = wordStart(points, Math.max(0, start - radius));
+  const to = wordEnd(points, Math.min(points.length, end + radius));
 
   return {
     before: points.slice(from, start).join(''),
@@ -656,7 +731,9 @@ const CHECK_WORDS: Record<string, string> = {
   unsourced_link: 'It links to a page none of your sources mention.',
   hidden_characters:
     'It contains hidden characters that would make it read differently from how it is stored.',
-  evidence_missing: 'It no longer rests on a claim from your sources.',
+  cites_unvalidated_claim:
+    'A claim it rests on has been reported or withdrawn since you opened it. Go back to the course and open the lesson again.',
+  no_known_claims: 'It no longer rests on a claim from your sources.',
 };
 
 /**
@@ -680,7 +757,8 @@ export function correctionRefusal(
     case '55000':
       return 'This lesson has changed since you opened it. Go back to the course and open it again.';
     case '54000':
-      return 'That is as many corrections as can be saved today. The limit resets at 00:00 UTC.';
+      // Two limits share the code, and the refusal names neither in its DETAIL.
+      return 'No more corrections can be saved to this lesson: either today’s limit is reached, and it resets at 00:00 UTC, or it has been corrected fifty times, and can now only be withdrawn.';
     case '55P03':
       return 'Another change to this course is being saved. Try again in a moment.';
     case 'P0002':

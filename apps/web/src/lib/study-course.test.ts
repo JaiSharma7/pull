@@ -13,16 +13,19 @@ import {
   courseStatus,
   courseTitle,
   lessonStateLabel,
+  newerPreparationComing,
   newerPreparationFailed,
   nextLesson,
   passageWindow,
   planSession,
+  planSkipped,
   preparationRefusal,
   shapeCourseSummaries,
   shapeCourseSummary,
   shapeLessonContent,
   shapeOutline,
   shapeProgressResult,
+  skippedLessons,
   type CourseSummary,
   type OutlineUnit,
 } from './study-course.js';
@@ -44,6 +47,7 @@ const overviewRow = {
   preparing: false,
   newer_generation_held_back: false,
   held_back: false,
+  awaiting_validation: false,
   update_available: true,
   lesson_count: 3,
   lessons_read_count: 1,
@@ -137,6 +141,33 @@ describe('courseStatus and courseTitle', () => {
       'failed',
     );
     expect(courseStatus(course({ generationId: null, latestJobStatus: null }))).toBe('empty');
+  });
+  it('is preparing, not failed, when a failed job left a course the sweep will validate', () => {
+    // The job's validation step gave up after the course was saved; the sweep finishes it.
+    const saved = course({
+      generationId: null,
+      latestJobStatus: 'failed',
+      awaitingValidation: true,
+    });
+    expect(courseStatus(saved)).toBe('preparing');
+    expect(awaitingPreparation(saved)).toBe(true);
+  });
+  it('knows a newer preparation is coming, and did not fail, while it awaits validation', () => {
+    const newer = course({
+      latestGenerationId: 'g2',
+      latestJobStatus: 'failed',
+      awaitingValidation: true,
+    });
+    expect(newerPreparationComing(newer)).toBe(true);
+    expect(newerPreparationFailed(newer)).toBe(false);
+    expect(awaitingPreparation(newer)).toBe(true);
+    const failed = { ...newer, awaitingValidation: false };
+    expect(newerPreparationComing(failed)).toBe(false);
+    expect(newerPreparationFailed(failed)).toBe(true);
+    expect(newerPreparationComing(course({ preparing: true, latestGenerationId: 'g2' }))).toBe(
+      true,
+    );
+    expect(newerPreparationComing(course({ preparing: true }))).toBe(false);
   });
   it('is called by its validated title, else by the goal', () => {
     expect(courseTitle(course())).toBe('Immediate versus delayed');
@@ -278,6 +309,20 @@ describe('applyProgress', () => {
   });
 });
 
+describe('planSkipped', () => {
+  it('offers the skipped lessons again, in order, within a session', () => {
+    const units = shapeOutline([
+      lessonRow('l1', 1, 1, 'Timing', 'skipped', 3),
+      lessonRow('l2', 2, 1, 'Timing', 'read', 4),
+      lessonRow('l3', 3, 2, 'Spacing', 'skipped', 3),
+    ]);
+    expect(nextLesson(units)).toBeNull();
+    expect(skippedLessons(units).map((l) => l.lessonKey)).toEqual(['l1', 'l3']);
+    expect(planSkipped(units).map((l) => l.lessonKey)).toEqual(['l1', 'l3']);
+    expect(planSkipped(outline())).toEqual([]);
+  });
+});
+
 describe('passageWindow', () => {
   const text =
     'Before the passage. On a final test five minutes later, the group that restudied remembered more. After it.';
@@ -291,10 +336,27 @@ describe('passageWindow', () => {
       20,
     );
     expect(w?.span).toBe(spanText);
-    expect(w?.before.endsWith('later, ')).toBe(true);
-    expect(w?.before.startsWith(' ') || /^\S/.test(w?.before ?? '')).toBe(true);
+    // Twenty back lands on the start of "five", which is a word boundary already.
+    expect(w?.before).toBe('five minutes later, ');
+    // Twenty-two back lands inside "test", and the window opens at the start of it.
+    expect(
+      passageWindow(text, { start, end: start + Array.from(spanText).length, spanText }, 22)
+        ?.before,
+    ).toBe('test five minutes later, ');
+    expect(w?.after).toBe('. After it.');
     expect(w?.clippedStart).toBe(true);
     expect(w?.clippedEnd).toBe(false);
+  });
+
+  it('does not take in the whole text when it has no spaces to cut at', () => {
+    // Japanese puts no spaces between words. Widening to the nearest one read the document.
+    const long = 'あ'.repeat(30_000) + '記憶' + 'い'.repeat(30_000);
+    const w = passageWindow(long, { start: 30_000, end: 30_002, spanText: '記憶' }, 50);
+    expect(w?.span).toBe('記憶');
+    expect(Array.from(w?.before ?? '').length).toBe(50);
+    expect(Array.from(w?.after ?? '').length).toBe(50);
+    expect(w?.clippedStart).toBe(true);
+    expect(w?.clippedEnd).toBe(true);
   });
 
   it('counts code points, as the database does', () => {

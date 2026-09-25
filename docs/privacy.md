@@ -450,7 +450,9 @@ quieter choice on your behalf.
 A lesson of your own study course is read more strictly still, because it is made from your
 material rather than from a published Pull: only a local voice in a language you read ever
 speaks it, and when your device has none the app says so and does not offer to read it.
-The lesson is not added to your listening queue.
+A lesson you listen to joins your listening queue while the page is open, so the player's
+controls reach it, but it is never stored with the queue on your device: closing the page,
+leaving the lesson or signing out forgets it.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's

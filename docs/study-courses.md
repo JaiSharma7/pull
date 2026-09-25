@@ -153,6 +153,7 @@ give structure and state; the lessons' and questions' own text is read from the
 | `preparing`                                       | A generation of the course is queued or running                                           |
 | `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
 | `held_back`                                       | There is a current generation, and validation passed no lesson in it                      |
+| `awaiting_validation`                             | The newest generation is saved and waits for the validation sweep, whatever its job says  |
 | `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
@@ -162,6 +163,13 @@ A current generation with no lesson to show is one of two things, and `held_back
 which: validation passed no lesson in it (it may still have course-level questions), or the
 reader's own reports and withdrawals took every lesson it passed. With no current
 generation `held_back` is false; `preparing` and `latest_job_status` say what is happening.
+
+`awaiting_validation` is the one thing `latest_job_status` cannot say. A job whose
+validation step runs out of retries ends `failed` with its course already saved, and
+`validate_stranded_study_courses` validates that course within minutes. The column is the
+sweep's own predicate -- the job has ended, the text is still pending, there are claims --
+so a screen shows such a course as on its way rather than failed
+(`20260925190000_study_course_awaiting_validation.sql`).
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
 order -- unit, then position -- with the unit's number and title, the lesson's key, title,
@@ -220,23 +228,35 @@ other signed-in destinations give, and a visitor with sign-in.
   mutation id across retries of the same request, dropping it only once the server has
   answered with a refusal -- so a lost response is answered by the course already queued.
 - **`/courses`** lists the reader's courses from `study_course_overview`, each with where it
-  stands: being prepared, could not be prepared, its sources deleted, or lessons read.
+  stands: being prepared, could not be prepared, a source deleted, or lessons read. With no
+  course yet, it sends the reader to Studio's study material (`/studio?view=study`), where
+  the builder says to save a source first when there is none.
 - **`/course/:id`** is one course: its overview and objectives, the outline by unit, and a
-  way in. While a generation is on its way -- a job queued or running, or a finished one
-  whose validation has not settled -- it looks again every fifteen seconds.
+  way in. While a generation is on its way -- a job queued or running, or one saved and
+  `awaiting_validation`, including a newer version of a course being read -- the course
+  page looks again every fifteen seconds. A session does not: it walks the lessons it
+  planned, with their titles and unit titles, so a newer version that arrives meanwhile
+  changes nothing under it. An address that is not a course id reads as no such course.
 - **A session** is about ten minutes: unfinished lessons in course order until their
   minutes reach ten, and it does not start a new unit once half the time is spent. Opening
-  a lesson records `lesson_shown`; Done records `lesson_read`, Skip `lesson_skipped`. It
-  ends on a screen of its own that lists what was covered, each with its recap to say from
-  memory, and offers to stop before it offers to go on.
+  a lesson records `lesson_shown`; Done records `lesson_read`, Skip `lesson_skipped`. A
+  lesson that would not open -- held back by a report on a claim it shares, withdrawn in
+  another tab, unreachable offline -- was never shown, so going past it ("Go on") records
+  nothing. It ends on a screen of its own that lists what was covered, each with its recap
+  to say from memory, and offers to stop before it offers to go on. Skipping is not
+  finishing: once every lesson is read or skipped, the course offers the skipped ones again,
+  and says "every lesson read" only when that is so.
 - **A lesson** shows where it comes from: each claim it teaches, read from
   `study_visible_claims`, with the passages of the reader's text it rests on
   (`study_claim_evidence`, for those claims only), and on request the passage in its
   surrounding text from `study_source_versions.extracted_text`. Offsets are code points,
   and a span that no longer matches the text is shown alone rather than in the wrong place.
-- **Listening** reads a lesson with a voice installed on the device, and only then: the
-  reader's material is not sent to a speech service, and without a local voice the screen
-  says so rather than offering to read it.
+- **Listening** hands the lesson to the app's player as a `localOnly` track, so one voice
+  speaks at a time and the player's controls reach it. Such a track is spoken only by a
+  voice installed on the device -- the reader's chosen voice when it is local, else the
+  local one in their language -- and never stored with the queue; without a local voice the
+  screen says so rather than offering to read it. Leaving the lesson takes it out of the
+  queue.
 - **Progress is sent at once** and kept in memory until the server accepts it; an event
   refused with `limit` stays and is sent with the next one. A durable offline queue, and
   questions, are the practice change's.
@@ -246,12 +266,16 @@ other signed-in destinations give, and a visitor with sign-in.
   `revise_study_lesson` as a new version that keeps the reader's place, and its failed
   checks are said in words; a withdrawal asks first. Each claim in "where this comes from"
   can be reported too, which holds back the lessons resting on it. The course page lists
-  what the reader has reported and not settled, each with a Restore
-  (`dismiss_study_report`); it reads the open reports and each one's title or statement
-  from the tables, since reported content is what the visible views hide.
+  what the reader has reported and not settled, one entry per lesson or claim, each with a
+  Restore that dismisses every open report on it (`dismiss_study_report`) -- a report sent
+  twice, or from two tabs, would otherwise keep it held back. It reads the open reports and
+  each one's title or statement from the tables, since reported content is what the visible
+  views hide, and says after a Restore whether the lesson is back or still held by a claim.
+  A correction being typed is kept while its form is closed, and Done or Skip over one not
+  saved asks once before leaving it.
 - **Preparing again** is offered when `update_available`, or when there is no current
   generation and nothing is on its way; it asks for consent each time. **Deleting** calls
-  `delete_study_course` and returns to the list, including when the course had already
+  `delete_study_course` and says the course is deleted, including when it had already
   gone.
 - **Refusals** are read by SQLSTATE and DETAIL, as below: `unchanged`, `preparing`, `beta`
   and `unavailable` each have their own sentence, and anything else shows the server's

@@ -34,23 +34,70 @@ export function StudyCourseBuilder({
   const [notice, setNotice] = useState<string | null>(null);
   const submission = useRef<string | null>(null);
 
+  // Whether this account may make courses. A check that could not be made is said as that,
+  // with a way to ask again -- not as the beta's refusal, which it is not.
+  const [checkFailed, setCheckFailed] = useState<string | null>(null);
+  const [check, setCheck] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     courseBuildingAvailable(controller.signal)
       .then((ok) => {
-        if (!controller.signal.aborted) setAvailable(ok);
+        if (controller.signal.aborted) return;
+        setCheckFailed(null);
+        setAvailable(ok);
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setAvailable(false);
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setCheckFailed(
+          isOfflineFailure(e)
+            ? 'Whether courses are open to this account needs a connection to check.'
+            : 'Whether courses are open to this account could not be checked just now.',
+        );
       });
     return () => controller.abort();
-  }, []);
+  }, [check]);
 
   // A version no longer saved cannot stay chosen.
   const present = new Set(sources.map((s) => s.id));
   const selected = chosen.filter((id) => present.has(id));
 
-  if (available === null || sources.length === 0) return null;
+  if (checkFailed) {
+    return (
+      <section className="stack" aria-labelledby="course-builder-heading">
+        <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
+          Make a course from your sources
+        </h2>
+        <p>{checkFailed}</p>
+        <p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setCheckFailed(null);
+              setCheck((n) => n + 1);
+            }}
+          >
+            Check again
+          </button>
+        </p>
+      </section>
+    );
+  }
+
+  if (available === null) return null;
+
+  // Said even with nothing saved, so a reader sent here to make a course learns how.
+  if (available && sources.length === 0) {
+    return (
+      <section className="stack" aria-labelledby="course-builder-heading">
+        <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
+          Make a course from your sources
+        </h2>
+        <p>Save a source above, then make a course from it here.</p>
+      </section>
+    );
+  }
+  if (sources.length === 0) return null;
 
   if (!available) {
     return (
@@ -58,7 +105,7 @@ export function StudyCourseBuilder({
         <h2 id="course-builder-heading" style={{ fontSize: 'var(--step-1)' }}>
           Make a course from your sources
         </h2>
-        <p className="meta">
+        <p>
           Courses are in a limited beta and are not open to this account yet. Your saved sources
           stay private either way.
         </p>
