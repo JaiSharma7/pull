@@ -9,9 +9,10 @@ text of the sources you choose are sent to Google's Gemini API to extract claims
 lessons and questions, which are stored privately in your account. It happens only when
 you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
 
-This revision also corrects three statements that contradicted the rest of this page: the
+This revision also corrects statements that contradicted the rest of this page: the
 summary said a document you submitted for generation outlived your account (it does not),
-this page said you sign in with an emailed code (you sign in with Google or Microsoft), and
+this page said you sign in with an emailed code (you sign in with Google or Microsoft) and
+that we do not keep your real name (the name your sign-in account supplies is kept), and
 it said the Anthropic fallback was "not enabled" while listing it as a processor (it is a
 setting the hosted service does not use, and is listed so that turning it on changes
 nothing you were told).
@@ -39,9 +40,9 @@ the operator of your own service, and this document says nothing about what you 
 
 ## The short version
 
-- We keep **an email address**, from the Google or Microsoft account you sign in with. Not
-  a password, not a phone number, not your real name — and you can look around as a guest
-  without giving us even that.
+- We keep **an email address** from the Google or Microsoft account you sign in with, and
+  the name on that account if it has one. Not a password, not a phone number — and you can
+  look around as a guest without giving us even that.
 - The product keeps a model of **what you have read and what you appear to know**, because
   refusing to re-teach you things is the entire point of it.
 - **No advertising trackers, no third-party analytics, no data sold or shared for anyone
@@ -61,7 +62,7 @@ the operator of your own service, and this document says nothing about what you 
 | Data                              | Where it lives        | Why                                                                                                                     |
 | --------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Email address                     | Supabase Auth         | Identifies your account when you sign in, and the only way to reach you                                                 |
-| Handle, display name, bio, avatar | `profiles`            | Optional; needed only if you choose to be visible to others                                                             |
+| Handle, display name, bio, avatar | `profiles`            | Optional, except that the display name starts as the name your sign-in account supplies. Readable only by you           |
 | Topic and reading preferences     | `preference_profiles` | Weights, excluded topics, media kinds, daily minutes, technical level, spoiler tolerance, how often questions interrupt |
 
 Sign-in is through Google or Microsoft; see [Who else processes your data](#who-else-processes-your-data).
@@ -86,7 +87,8 @@ because the session lives in the tab rather than in the browser:
   or public computer "stay signed in" would mean handing the next person one reader's
   stashes, notes and history with no sign-in wall in the way.
 - **It cannot be recovered.** Clear the browser's storage, or open the product on another
-  device, and the session is gone with no way back in. There is nothing to send a code to.
+  device, and the session is gone with no way back in. There is no account to sign back in
+  with.
 - **You cannot request a generation, publish a summary, or file a moderation report.** Those
   need an account we can attribute the request to. (The first two are not yet exposed in
   the app for anyone; the limit is in the database, so it holds whenever they are.)
@@ -264,9 +266,9 @@ the app to generate a summary or a study course — a `generation_jobs` row with
 the steps it ran (`job_steps`), and what the provider call cost (`cost_ledger`). A study
 course also records each request made to the model provider (`provider_calls`: when, which
 model, and whether it answered), with no text from your sources in it; these records and
-the costs are kept after the course is deleted, because the charge happened. Rate-limit
-counters (`rate_limits`) and per-account quotas limit how much of a shared budget one
-account can use.
+the costs are kept after the course is deleted, because the charge happened. Per-account
+quotas, counted from your `generation_jobs` and your study spend today, limit how much of a
+shared budget one account can use.
 
 We do not collect precise location, contacts, calendar, photos, or device identifiers for
 advertising.
@@ -491,7 +493,7 @@ Four of these you do yourself, without asking and without waiting, from
 | **Download everything**     | Every row stored against your account, as one JSON file — including each recall attempt as it happened, the reports you have filed, the seeds that decided your reading order, and the vector described above. Paged in a fixed order, so a large library is neither truncated nor double-counted. Two things are held back on purpose: your unspent recovery codes, which exist to be shown once and not written into a file you might email yourself, and the operational rate counters, which are not yours in any meaningful sense. If any table cannot be read, the file names it rather than quietly leaving it out. |
 | **Where you are signed in** | Every session, with the device and when it started. End any of them, or all but this one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Second factor**           | An authenticator app, with single-use recovery codes for when you lose it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing your address.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Delete this account**     | Immediate and irreversible, after a recent sign-in and typing CONFIRM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 A note on ending a session, because the honest version is less impressive than the
 usual claim: it stops that device getting a _new_ token. A token it already holds keeps
@@ -540,7 +542,8 @@ to our decision.
 - The browser bundle carries exactly one credential: the Supabase **publishable** key, which
   is designed to be public and which RLS — not secrecy — is what protects. Service keys and
   provider keys exist only server-side.
-- Sign-in codes expire. There is no password to breach because there is no password.
+- Sign-in goes through Google or Microsoft. There is no password with us to breach because
+  we never hold one.
 
 No system is perfectly secure, and we will not pretend otherwise. If a breach affects your
 personal data we will notify you and the relevant regulator as the law requires — within 72
