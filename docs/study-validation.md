@@ -187,6 +187,12 @@ written, so `раураl.com` in Cyrillic is a different link from the `paypal.c
   lesson or question is corrected by revising it (a lesson's unit title included); one on a
   claim, by retiring the claim. The evaluation contract
   ([`eval/study-quality.md`](./eval/study-quality.md)) reviews quarantined items too.
+- **A quarantined lesson holds back its questions, for good.** Its questions are quarantined
+  with it (`lesson_unavailable`), and revising or retiring the lesson does not bring them
+  back: validation moves only drafts. Each must be revised -- which makes it the reader's,
+  and practice only -- or retired. A unit title is copied onto every lesson in its unit, so
+  one flagged unit title does this to the whole unit. Re-checking those questions when their
+  lesson is corrected is left to the guided-course change that adds the correction screens.
 
 **What the checks cannot decide.** Groundedness beyond the evidence span. Answerability,
 except that a cloze's blank and a reader's typed answers must occur in the claims. Ambiguity,
@@ -291,8 +297,8 @@ A correction never edits a question or lesson in place.
   text can stop an author knowing their own answer, so a correction can make a question
   better to practise with but cannot make the reader's mastery easier to claim. The cost: a
   claim whose model-written questions have all been revised or retired -- a quarantined false
-  positive the reader corrected included -- has no path to proof until a later generation
-  gives it one.
+  positive the reader corrected included, and every question of a quarantined lesson -- has
+  no path to proof until a later generation gives it one.
 
 ## The status log
 

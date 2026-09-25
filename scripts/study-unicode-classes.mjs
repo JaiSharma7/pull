@@ -14,7 +14,9 @@
  * Postgres's own `[:alnum:]` and hand-written block ranges disagreed with JavaScript on
  * nearly a thousand code points -- whole Indic blocks, danda included, counted as letters.
  * Run `node scripts/study-unicode-classes.mjs` and paste the output into a migration when
- * either definition changes; `scripts/test-study-fold-parity.mjs` fails until it matches.
+ * a definition changes. `scripts/test-study-fold-parity.mjs` fails until the classes answer
+ * matching reads match; nothing compares `ignorable` with its SQL copy, which only the
+ * heuristic cases in `supabase/tests/study_validation.sql` exercise.
  */
 
 const UNSPACED =

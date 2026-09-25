@@ -136,6 +136,7 @@ declare
   e_hinted  uuid;
   e_self    uuid;
   e_wrong   uuid;
+  which     text;
   e_draft   uuid;
   e_quar    uuid;
   q_quar    uuid;
@@ -576,6 +577,18 @@ begin
   if not public.study_answer_proves_recall(e_new) then
     raise exception 'an answer from before the dismissed report no longer counts';
   end if;
+  -- The claim clause is a second guard behind the suspension the correction functions
+  -- cascade: a claim leaving `validated` by any other path still withdraws the proof.
+  perform pg_temp.as_owner();
+  update public.study_claims set status = 'suspended' where id = c2;
+  perform pg_temp.become_reader(reader_a);
+  if public.study_answer_proves_recall(e_new)
+     or exists (select 1 from public.study_proven_claims() where claim_id = c2) then
+    raise exception 'an answer resting on a claim that is not validated counts as recall';
+  end if;
+  perform pg_temp.as_owner();
+  update public.study_claims set status = 'validated' where id = c2;
+  perform pg_temp.become_reader(reader_a);
   if public.study_answer_proves_recall(e_during) then
     raise exception 'an answer given while the question was suspended counts as recall';
   end if;
@@ -797,20 +810,29 @@ begin
   job_3 := (public.enqueue_study_generation(array[v_a], 'Revise for a test',
                                             extensions.gen_random_uuid(), true) ->> 'jobId')::uuid;
   perform pg_temp.become_worker();
-  -- Generated material starts as a draft, whoever persists it: a `validated` claim in the
-  -- payload would skip every check.
-  begin
-    perform public.persist_study_course(job_3, jsonb_build_object(
-      'course', jsonb_build_object('title', 'Timing'),
-      'claims', jsonb_build_array(
-        pg_temp.claim('s1c1', v_a, 'At five minutes, restudying beat the recall test.',
-                      'the group that restudied remembered more', note)
-        || '{"status": "validated"}'),
-      'provenance', jsonb_build_object('promptHash', repeat('a', 64),
-                                       'schemaHash', repeat('b', 64), 'model', 'm')));
-    raise exception 'a generated claim was persisted already validated';
-  exception when invalid_parameter_value then null;
-  end;
+  -- Generated material starts as a draft, whoever persists it: a `validated` claim, lesson
+  -- or question in the payload would skip every check.
+  foreach which in array array['claim', 'lesson', 'question'] loop
+    begin
+      perform public.persist_study_course(job_3, jsonb_build_object(
+        'course', jsonb_build_object('title', 'Timing'),
+        'claims', jsonb_build_array(
+          pg_temp.claim('s1c1', v_a, 'At five minutes, restudying beat the recall test.',
+                        'the group that restudied remembered more', note)
+          || case when which = 'claim' then '{"status": "validated"}' else '{}' end::jsonb),
+        'lessons', jsonb_build_array(
+          pg_temp.lesson('l1', 1, 'Restudying won at five minutes.', array['s1c1'])
+          || case when which = 'lesson' then '{"status": "validated"}' else '{}' end::jsonb),
+        'items', jsonb_build_array(
+          pg_temp.item('q1', 'l1', 'short_recall', 'Which strategy won at five minutes?',
+                       'restudying', array['s1c1'])
+          || case when which = 'question' then '{"status": "validated"}' else '{}' end::jsonb),
+        'provenance', jsonb_build_object('promptHash', repeat('a', 64),
+                                         'schemaHash', repeat('b', 64), 'model', 'm')));
+      raise exception 'a generated % was persisted already validated', which;
+    exception when invalid_parameter_value then null;
+    end;
+  end loop;
   -- Validated before it was persisted, the course's empty text passed. Persisting it --
   -- even with text as empty as before -- puts it back to pending, so the drafts that
   -- follow are validated rather than left for good.
