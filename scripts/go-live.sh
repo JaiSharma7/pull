@@ -170,6 +170,9 @@ cat <<'SQL'
   The generation sweeper fails more quietly still. Without it a job whose queue message
   is gone sits at `running` for ever, invisible to the dispatcher, and once the pipeline
   is a graph a join whose predecessor failed is stranded by design. Nothing else notices.
+  Since 20260925070000 it also validates study courses left as drafts -- by a failed
+  validation step, or by a worker older than that step -- so re-run it after that
+  migration even where it was enabled before.
 
   Guest sessions also need Authentication → Sign In / Providers → "Allow anonymous
   sign-ins" turned on in the dashboard. supabase/config.toml configures the local stack

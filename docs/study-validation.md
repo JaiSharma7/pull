@@ -14,9 +14,12 @@ after a review round:
 - `supabase/migrations/20260925050000_study_validation_and_correction.sql`
 - `20260925060000_study_validation_review_fixes.sql`
 - `20260925070000_study_validation_parity.sql`
+- `20260925080000_study_validation_review_round_two.sql`
 
-The behaviour, including a course at the size limits under the worker's 8-second statement
-timeout, is asserted under real RLS in `supabase/tests/study_validation.sql`.
+The behaviour is asserted in `supabase/tests/study_validation.sql`: the reader's paths as
+the `authenticated` role under RLS, and the worker's as the service role. That includes a
+course at the count limits (300 claims, 24 lessons, 48 questions over a 200,000-character
+source full of links) validated under the worker's 8-second statement timeout.
 `scripts/test-study-fold-parity.mjs` holds the SQL text functions to their TypeScript
 counterparts; both run in `pnpm db:test`.
 
@@ -60,8 +63,10 @@ or retired.
 **Course-level text is validated as one unit.** The course's own text is its title,
 overview, objectives, recap, disagreements and withheld list. It has a status of its own,
 `study_generations.text_status` (`pending`, `validated` or `quarantined`), and is shown
-only when `validated`. The reader cannot revise it. A quarantined overview simply leaves the
-course without one.
+only when `validated`. The reader cannot revise it. When it is held back,
+`study_visible_courses` still returns the course -- its goal, and through the other views its
+lessons and questions -- with the title, overview, objectives, recap, disagreements and
+withheld list reading as empty.
 
 ## The checks
 
@@ -75,9 +80,12 @@ visible question skips them.
 
 **A validation that fails is retried later.** If `study_validate` fails three times, or a job
 finished under a worker older than that step, every row would stay a draft forever.
-`validate_stranded_study_courses` validates any finished course that still holds drafts.
-`enable_generation_sweeper()` schedules it beside the stranded-job sweep, every five minutes
-by default.
+`validate_stranded_study_courses` validates any course whose job has finished, that has
+claims, and that still holds drafts or unvalidated course text, once it is ten minutes old.
+It takes at most twenty a run, oldest first. `enable_generation_sweeper()` schedules it
+beside the stranded-job sweep, every five minutes by default. **Deploying this change
+therefore requires re-running `select public.enable_generation_sweeper();`** after the
+migrations, as `scripts/go-live.sh` lists.
 
 | Check                                                                                 | Applies to                                          | Reason                                                                                           |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -96,37 +104,47 @@ by default.
 | Three to six distinct steps; two to six pairs, with no side repeated.                 | Ordering, matching                                  | `ordering_malformed`, `matching_malformed`                                                       |
 | Nothing addressed to a model (a heuristic; see below).                                | All text, including a claim's quoted passage        | `instruction_like`                                                                               |
 | No link that is absent from every one of the course's sources (a heuristic).          | All generated text except quoted passages           | `unsourced_link`                                                                                 |
-| No invisible format characters (zero-width, joiners, bidi controls).                  | A reader's version                                  | `hidden_characters`                                                                              |
+| No bidi controls, byte-order mark, invisible operators, tag or annotation characters. | A reader's version                                  | `hidden_characters`                                                                              |
 
 **How answers are compared.**
 
 - **Folding.** Answers are folded the way `answerKey` in `supabase/functions/_shared/study.ts`
   folds them: NFKC, lower case, the same explicit punctuation removed, an apostrophe treated
-  as a word break, and JavaScript's whitespace collapsed. An answer that is only punctuation
-  (`;` in a course on C) is kept as it is rather than folded to nothing. SQL's copy,
-  `study_fold`, is an exact mirror, and the parity test compares the two over every code
-  point Postgres considers assigned. Every equality and distinctness check uses it, so ν
-  and v, or ρ and p, stay different options.
-- **Matching.** A phrase must match as whole words. The exception is a phrase containing any
-  character of a script written without spaces, which matches as a substring. What counts as
+  as a word break, and JavaScript's whitespace collapsed. A full stop between two digits is
+  kept (1.5 is not 15), and a comma is not (1,000 is 1000). An answer that is only
+  punctuation (`;` in a course on C) is kept as it is rather than folded to nothing. SQL's
+  copy, `study_fold`, is an exact mirror. It lower-cases under the ICU root collation, so it
+  folds final sigma and İ as JavaScript does whatever collation the database or the text
+  carries. The parity test compares the two over every code point of the Basic Multilingual
+  Plane that Postgres considers assigned, a sample of the astral planes, and curated cases.
+  Every equality and distinctness check uses this fold, so ν and v, or ρ and p, stay
+  different options.
+- **Matching.** A phrase must match as whole words. A phrase containing any character of a
+  script written without spaces (Han, kana, Hangul, Thai and its neighbours) matches as a
+  substring instead, and a phrase that is only punctuation is looked for in the text with its
+  punctuation kept. What counts as
   a word character (`\p{L}`, `\p{N}`, `\p{M}`) and which scripts are written without spaces
   are generated from the same Unicode properties study.ts uses
   (`scripts/study-unicode-classes.mjs`). So Hindi's danda ends a word in SQL as it does in
   TypeScript.
-- **Stricter only where it is safe.** Finding one text inside another (a give-away, or a
-  reader's answer in the claims) reads more strictly in SQL. Invisible format characters are
-  removed and Cyrillic and Greek look-alikes are folded to Latin, so "rеstudying" with a
-  Cyrillic е is still found in a prompt that says "restudying".
-- **Give-aways.** An answer counts as given away only once it is at least two characters in
-  such a script, or at least three otherwise. That catches "DNA", but a two-letter answer in
-  a spaced script ("pH") is never flagged.
+- **Containment reads more loosely in SQL, on purpose.** Finding one text inside another
+  removes invisible format characters and folds Cyrillic and Greek look-alikes to Latin, so
+  "rеstudying" with a Cyrillic е is still found in a prompt that says "restudying". For a
+  give-away that makes the check stricter. For a reader's answer in the claims it makes the
+  check more lenient -- "раris" in Cyrillic is found in "Paris" -- which is harmless: such
+  an answer is still the claim's word, and a learner typing "paris" is not graded right
+  against it.
+- **Give-aways.** An answer counts as given away only once it is at least two characters in a
+  script written without spaces, or at least three otherwise. That catches "DNA", but a
+  two-letter answer in a spaced script ("pH") is never flagged.
 
 **The two heuristics.** `instruction_like` and `unsourced_link` read text after NFKC, with
-invisible and bidi characters removed and look-alike letters folded.
+every format character (`\p{Cf}`, tag characters included) removed, the ideographic full
+stop read as a full stop, and look-alike letters folded.
 
 - **What `instruction_like` looks for.** Phrases an injected passage uses:
-  - "ignore" or "disregard" followed, within a few words, by "previous" or "above"
-    "instructions" or "prompts";
+  - "ignore" or "disregard", then within a few words "previous", "prior", "above",
+    "earlier" or "preceding", then within two more "instructions" or "prompts";
   - "forget everything above";
   - "new instructions:";
   - `### Instruction`;
@@ -139,9 +157,11 @@ invisible and bidi characters removed and look-alike letters folded.
   Ordinary prose about systems, assistants or HTML is not flagged.
 
 - **What `unsourced_link` finds.** Schemes, including `hxxps`, `https:host`, `mailto:` and
-  `javascript:`; `data:` URIs; `//host`; `www.`; and bare domains under common and abused
-  top-level domains. A link counts as sourced if it, or its host, appears among the
-  course's sources.
+  `javascript:`; `data:` URIs; `//host`; `www.`; bare IP addresses with a path; and bare
+  domains under common and abused top-level domains (`.zip`, `.shop`, `xn--` and others). A
+  link counts as sourced if the same link appears in one of the course's sources, or if it
+  is the bare host of a link that does. A different page on the same site is not sourced:
+  a source citing one page does not vouch for the rest of the site.
 - **What they miss.** A passage that brings its own link passes, because that link is in
   the source. So does text phrased in a way the patterns do not expect.
 - **How cautious they are.** Deliberately. A source genuinely about prompt injection will
@@ -169,8 +189,9 @@ content it touches.
 
 **What can be reported.** A report's reason is one of `incorrect`, `unsupported`,
 `ambiguous`, `unanswerable` or `other`, matching the questions the review rubric asks. A
-report may carry a note of up to 1,000 characters. Only what a learner can see can be
-reported: a `validated` target, or one already `suspended` by another report.
+report may carry a note of up to 1,000 characters. A report can be filed on a `validated`
+target, or on one already `suspended` -- by an earlier report, or through a claim under it --
+so a reader can add their own reason to one already held back.
 
 **How reports are kept.** Reports stay after they are resolved, and the reader can never
 edit or withdraw one. They are the audit trail for a suspension.
@@ -239,9 +260,13 @@ A correction never edits a question or lesson in place.
   check constraint ties those fields to `authored_by = 'model'`, so a model's name is never
   put on the reader's words.
 - **Refused whole.** A revision that fails a check is refused, and nothing changes.
-- **Checked as the reader's.** A reader's version may contain no invisible characters, and
-  its typed answers must occur in the claims it rests on. A correction can therefore not
-  make a question anyone passes by typing "x".
+- **Checked as the reader's.** A reader's version may not contain characters that make text
+  read differently from how it is stored: bidi controls, the byte-order mark, invisible
+  operators, tag and interlinear-annotation characters. Its typed answers must occur in the
+  claims it rests on.
+- **Practice, not proof.** A reader's version is never proof of recall (below). No check on
+  text can stop an author knowing their own answer, so a correction can make a question
+  better to practise with but cannot make the reader's mastery easier to claim.
 
 ## The status log
 
@@ -282,6 +307,8 @@ claims its question rests on only when all of these hold:
 
 - **It was a real retrieval.** It is correct, unhinted, and graded deterministically. A
   self-graded answer is practice and a hinted one is recognition; neither is proof.
+- **The model wrote the question.** An answer to a reader's own corrected version is
+  practice. The claims it rests on are proven through the course's model-written questions.
 - **The question was `validated` when it was answered.** A draft, a quarantined question, or
   one suspended by a report does not count, even after the report is dismissed.
 - **The question is still `validated` now.** A retired version proves nothing, of itself or
@@ -298,6 +325,7 @@ claims its question rests on only when all of these hold:
 - an answer given while a draft;
 - an answer to a quarantined question;
 - a hinted, a self-graded and a wrong answer;
+- a correct answer to a reader's own version;
 - a claim suspended under a question.
 
 The practice, scheduling and Delta changes must build on this function rather than on their

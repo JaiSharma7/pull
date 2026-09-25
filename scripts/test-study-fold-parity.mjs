@@ -26,7 +26,7 @@ const { answerKey, containsPhrase, givesAwayIfPrinted } =
 
 const DB_URL =
   process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-if (!/@(127\.0\.0\.1|localhost):/.test(DB_URL)) {
+if (!/@(127\.0\.0\.1|localhost):/.test(DB_URL) || /[?&]host=/.test(DB_URL)) {
   throw new Error(`refusing to run against ${DB_URL}: this test belongs on the local stack`);
 }
 
@@ -47,7 +47,12 @@ const rows = psql(`
          public.study_contains_phrase('xyz' || chr(cp), 'xyz'),
          public.study_contains_phrase(chr(cp) || 'xyz', 'xyz'),
          public.study_gives_away(chr(cp) || chr(cp))
-  from generate_series(1, 65535) as cp
+  from (select generate_series(1, 65535) as cp
+        union all
+        -- A sample of the astral planes: every seventh code point of planes 1 and 2
+        -- (emoji, mathematical letters, Han extensions), and the Han Extension B start.
+        select generate_series(65536, 196607, 7)
+        union all select 134071) as points
   where cp not between 55296 and 57343 and unicode_assigned(chr(cp))`).split('\n');
 
 for (const row of rows) {
@@ -75,12 +80,17 @@ const phrases = [
   ["the rest's role", 'rest', true],
   ['interesting', 'rest', false],
   ['what is C++ here', 'c++', true],
+  ['In C every statement ends with a semicolon (;).', ';', true],
+  ['Use ... to spread an array.', '...', true],
+  ['No punctuation here', ';', false],
+  ['The value is 1.5 exactly.', '1.5', true],
+  ['The value is 15 exactly.', '1.5', false],
   ['Did rеstudying win?', 'restudying', 'strict'],
   ['Did re​studying win?', 'restudying', 'strict'],
 ];
 const sqlPhrases = psql(
   `select public.study_contains_phrase(t, p) from (values ${phrases
-    .map(([t, p]) => `(${lit(t)}, ${lit(p)}, ${phrases.indexOf(phrases.find((x) => x[0] === t))})`)
+    .map(([t, p], i) => `(${lit(t)}, ${lit(p)}, ${i})`)
     .join(', ')}) as v(t, p, i) order by i`,
 ).split('\n');
 phrases.forEach(([text, phrase, expected], i) => {
@@ -94,7 +104,29 @@ phrases.forEach(([text, phrase, expected], i) => {
 });
 
 /** Answers that are punctuation, or look alike, must stay distinct and non-empty. */
-const keys = [';', '!', '...', '()', '~', '#', 'ν', 'v', 'ρ', 'p', 'α', 'a', '🧬🧪', '々々'];
+const keys = [
+  ';',
+  '!',
+  '...',
+  '()',
+  '~',
+  '#',
+  'ν',
+  'v',
+  'ρ',
+  'p',
+  'α',
+  'a',
+  '🧬🧪',
+  '々々',
+  '1.5',
+  '15',
+  '3.14',
+  '31.4',
+  'ΟΔΟΣ',
+  'aΣ',
+  'İ',
+];
 const sqlKeys = psql(
   `select encode(convert_to(public.study_fold(k), 'UTF8'), 'hex'), public.study_gives_away(k)
    from (values ${keys.map((k, i) => `(${lit(k)}, ${i})`).join(', ')}) as v(k, i) order by i`,
@@ -105,6 +137,12 @@ keys.forEach((k, i) => {
   if (answerKey(k) === '') failures.push(`"${k}" folds to nothing`);
   if (givesAwayIfPrinted(k) !== (givesAway === 't')) failures.push(`give-away of "${k}"`);
 });
+// Folding must not depend on the collation the text arrives in: "C" does not lower-case.
+const inC = psql(
+  `select encode(convert_to(public.study_fold('ΟΔΟΣ İ' collate "C"), 'UTF8'), 'hex')`,
+);
+if (inC !== hex(answerKey('ΟΔΟΣ İ'))) failures.push('fold of text in collation "C"');
+
 if (new Set(keys.map(answerKey)).size !== keys.length) {
   failures.push('two distinct answers fold to the same key');
 }

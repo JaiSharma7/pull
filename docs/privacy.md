@@ -142,7 +142,7 @@ text in that counter. Those counts are visible in your account export and delete
 your account. A learning goal searches the public catalogue without calling a model.
 
 **Study courses** are what the beta generates from sources you choose: the goal you
-typed, the claims found in your text with the exact passage each rests on, and draft
+typed, the claims found in your text with the exact passage each rests on, and the
 lessons and questions (`study_generations`, `study_claims`, `study_claim_evidence`,
 `study_lessons`, `study_items`, and the tables linking them). The model output they came
 from is cached in `study_stage_cache` so the same text is not sent twice. All of it is

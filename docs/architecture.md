@@ -182,10 +182,12 @@ that they have to be listed somewhere, which is here.
 
 `enable_generation_sweeper()` also schedules `validate_stranded_study_courses` since
 `20260925070000`: a study course whose `study_validate` step failed, or whose job closed
-under a worker older than that step, is validated on the next run. It also carries a
-second job since `20260914010000`, and it is worth
-naming because nothing else does it in the common case: `sweep_stranded_generation_jobs`
-settles the **budget reservations** of every job it fails. A step that dies between
+under a worker older than that step, is validated on a later run, once it is ten minutes
+old.
+
+The sweep itself, `sweep_stranded_generation_jobs`, has had a second duty since
+`20260914010000`, and it is worth naming because nothing else does it in the common case:
+it settles the **budget reservations** of every job it fails. A step that dies between
 reserving and recording is holding part of the daily spend cap against a charge that will
 never arrive, and without the sweep that hold stands until the one-hour TTL expires. The
 TTL is the backstop; the sweeper is what makes the usual case ten minutes rather than

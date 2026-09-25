@@ -5,6 +5,8 @@
  *
  *   word      \p{L}, \p{N} and \p{M} -- what continues a word in a spaced script
  *   unspaced  the scripts written without spaces (`UNSPACED_SCRIPT`)
+ *   boundary  word and not unspaced: `continuesWord`, as one class a lookaround can use
+ *   format    \p{Cf}: the invisible format characters the heuristics strip
  *
  * Postgres's own `[:alnum:]` and hand-written block ranges disagreed with JavaScript on
  * nearly a thousand code points -- whole Indic blocks, danda included, counted as letters.
@@ -45,6 +47,10 @@ function sqlClass(list) {
     .join('\n');
 }
 
+console.log('-- boundary');
+console.log(sqlClass(ranges((c) => WORD.test(c) && !UNSPACED.test(c))));
+console.log('-- format');
+console.log(sqlClass(ranges((c) => /\p{Cf}/u.test(c))));
 console.log('-- word');
 console.log(sqlClass(ranges((c) => WORD.test(c))));
 console.log('-- unspaced');

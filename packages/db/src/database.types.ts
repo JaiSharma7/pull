@@ -3709,37 +3709,37 @@ export type Database = {
           assembled_at?: string | null
           assembly_provenance?: Json | null
           created_at?: string | null
-          disagreements?: Json | null
+          disagreements?: never
           goal?: string | null
           id?: string | null
           job_id?: string | null
-          objectives?: string[] | null
-          overview?: string | null
+          objectives?: never
+          overview?: never
           owner_id?: string | null
           processing_consent_at?: string | null
-          recap?: string | null
+          recap?: never
           text_failures?: string[] | null
           text_status?: string | null
-          title?: string | null
-          withheld?: Json | null
+          title?: never
+          withheld?: never
         }
         Update: {
           assembled_at?: string | null
           assembly_provenance?: Json | null
           created_at?: string | null
-          disagreements?: Json | null
+          disagreements?: never
           goal?: string | null
           id?: string | null
           job_id?: string | null
-          objectives?: string[] | null
-          overview?: string | null
+          objectives?: never
+          overview?: never
           owner_id?: string | null
           processing_consent_at?: string | null
-          recap?: string | null
+          recap?: never
           text_failures?: string[] | null
           text_status?: string | null
-          title?: string | null
-          withheld?: Json | null
+          title?: never
+          withheld?: never
         }
         Relationships: [
           {
@@ -4469,6 +4469,7 @@ export type Database = {
         Returns: boolean
       }
       study_blank: { Args: { p_text: string }; Returns: boolean }
+      study_boundary_class: { Args: never; Returns: string }
       study_check_revision_quota: {
         Args: { p_version: number }
         Returns: undefined
@@ -4485,6 +4486,7 @@ export type Database = {
         Args: { p_claim_ids: string[] }
         Returns: string[]
       }
+      study_collapse_spaces: { Args: { p_text: string }; Returns: string }
       study_contains_phrase: {
         Args: { p_phrase: string; p_text: string }
         Returns: boolean
@@ -4541,6 +4543,7 @@ export type Database = {
         Args: { p_id: string; p_kind: string }
         Returns: string
       }
+      study_lower: { Args: { p_text: string }; Returns: string }
       study_min_job_cents: { Args: never; Returns: number }
       study_normalized: { Args: { p_text: string }; Returns: string }
       study_objects_fit: {
@@ -4575,6 +4578,7 @@ export type Database = {
         Args: { p_lesson_id: string }
         Returns: undefined
       }
+      study_refused_class: { Args: never; Returns: string }
       study_requester_daily_cap_cents: { Args: never; Returns: number }
       study_requester_spend_today: {
         Args: { p_requester: string }
@@ -4606,6 +4610,7 @@ export type Database = {
         Returns: Json
       }
       study_space_class: { Args: never; Returns: string }
+      study_strip_punctuation: { Args: { p_base: string }; Returns: string }
       study_text_problems: {
         Args: { p_links: Json; p_texts: string[] }
         Returns: string[]

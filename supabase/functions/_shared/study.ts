@@ -735,18 +735,32 @@ export interface NormalizedCourse {
 /** Compare answers the way a reader would see them: case, spacing and punctuation folded. */
 export function answerKey(text: string): string {
   const base = text.normalize('NFKC').toLowerCase();
-  const key = base
-    // An apostrophe separates, so "rest" is found in "the rest's role"; both sides of
-    // any comparison fold alike, so "don't" still matches "don't".
-    .replace(/[‘’'`]/g, ' ')
-    // Double quotes and punctuation, and the CJK full stops, commas, brackets and
-    // marks NFKC leaves in place.
-    .replace(/[“”".,;:!?()[\]{}。、「」『』【】〈〉《》・]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const key = stripPunctuation(base);
   // An answer that IS punctuation -- `;` in a course on C -- keeps it: folded to nothing
   // it would be missing, and would match every other answer that folds to nothing.
-  return key === '' ? base.replace(/\s+/g, ' ').trim() : key;
+  return key === '' ? collapseSpaces(base) : key;
+}
+
+/**
+ * The punctuation `answerKey` removes, from text already NFKC-lowercased. A full stop
+ * between two digits stays -- 1.5 is not 15 -- and a comma does not, so 1,000 is 1000.
+ * `study_strip_punctuation` in SQL is the same, and the parity test holds them to it.
+ */
+function stripPunctuation(base: string): string {
+  return collapseSpaces(
+    base
+      // An apostrophe separates, so "rest" is found in "the rest's role"; both sides of
+      // any comparison fold alike, so "don't" still matches "don't".
+      .replace(/[‘’'`]/g, ' ')
+      .replace(/(?<!\d)\.|\.(?!\d)/g, '')
+      // Double quotes and punctuation, and the CJK full stops, commas, brackets and
+      // marks NFKC leaves in place.
+      .replace(/[“”",;:!?()[\]{}。、「」『』【】〈〉《》・]/g, ''),
+  );
+}
+
+function collapseSpaces(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -796,6 +810,13 @@ export function givesAwayIfPrinted(answer: string): boolean {
  * could never match at all.
  */
 export function containsPhrase(text: string, phrase: string): boolean {
+  // A phrase that is punctuation (`;`, `...`) would never be found in a text folded
+  // without it, so it is looked for in the text with its punctuation kept.
+  const base = phrase.normalize('NFKC').toLowerCase();
+  if (stripPunctuation(base) === '') {
+    const mark = collapseSpaces(base);
+    return mark !== '' && collapseSpaces(text.normalize('NFKC').toLowerCase()).includes(mark);
+  }
   const p = answerKey(phrase);
   const t = answerKey(text);
   if (p.length === 0) return false;

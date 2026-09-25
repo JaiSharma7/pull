@@ -22,10 +22,11 @@ User
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
+ ├── study_source_mutations                      ← tombstones for idempotent saves; outlive
+ │                                                   the source they named
+ ├── study_url_preview_daily_usage                ← the URL-preview quota
+ ├── study_generation_access                      ← the course beta allowlist
  ├── study_sources ─── study_source_versions       ← private extracted readings
- │    ├── study_source_mutations                  ← tombstones for idempotent saves
- │    ├── study_url_preview_daily_usage           ← the URL-preview quota
- │    ├── study_generation_access                 ← the course beta allowlist
  │    ├── study_generations ─── study_generation_sources   ← a course from 1-5 versions
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
  │    │    ├── study_lessons · study_items            ← study_lesson_claims and
@@ -33,6 +34,8 @@ User
  │    │    │                                             they cite; versioned, one live
  │    │    │                                             per lineage
  │    │    ├── study_reports · study_status_log       ← a reader's reports; every status
+ │    │    │                                             each claim, lesson and question
+ │    │    │                                             has had
  │    │    └── study_answer_events                    ← answers; the proof rule reads these
  │    └── study_stage_cache ─── study_stage_cache_sources   ← per-reader model output,
  │                                                   reused across courses; gone with any

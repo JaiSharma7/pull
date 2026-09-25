@@ -5,6 +5,7 @@ import { geminiConfigFrom } from './config.ts';
 import { createGeminiStructuredProvider } from './structured.ts';
 import {
   answerKey,
+  containsPhrase,
   givesAwayIfPrinted,
   truncate,
   buildClaimIndex,
@@ -833,6 +834,16 @@ describe('truncate', () => {
 describe('answerKey', () => {
   it('folds case, punctuation and spacing', () => {
     expect(answerKey('  The "Restudy"   group. ')).toBe('the restudy group');
+  });
+
+  it('keeps a decimal point between digits, and finds an answer that is punctuation', () => {
+    expect(answerKey('1.5')).not.toBe(answerKey('15'));
+    expect(answerKey('3.14')).not.toBe(answerKey('31.4'));
+    expect(answerKey('1,000')).toBe(answerKey('1000'));
+    expect(answerKey('The value is 1.5.')).toBe('the value is 1.5');
+    expect(containsPhrase('In C every statement ends with a semicolon (;).', ';')).toBe(true);
+    expect(containsPhrase('Use ... to spread an array.', '...')).toBe(true);
+    expect(containsPhrase('No punctuation here', ';')).toBe(false);
   });
 
   it('keeps an answer that is punctuation, and keeps look-alike letters apart', () => {
