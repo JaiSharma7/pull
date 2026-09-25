@@ -1,10 +1,16 @@
 # Privacy Policy
 
-**Effective 23 September 2026.** Every revision of this document is a commit in this
+**Effective 25 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Private study import** is new. When you save material in Studio's Prepare study material
-mode, we store the extracted text you approved and each corrected version in your private
+**Study course generation** is new, in a limited beta. If you are in the beta and ask
+Studio to build a course from study sources you saved, the text of the sources you choose
+is sent to Google's Gemini API to extract claims and write lessons and questions, which
+are stored privately in your account. It happens only when you ask and confirm. See
+[What never reaches a model](#what-never-reaches-a-model).
+
+The previous revision, effective 23 September, described private study import. When you
+save material in Studio's Prepare study material mode, we store the extracted text you approved and each corrected version in your private
 account. We do not upload the original file, and saving alone does not send the text to a
 model provider. You can delete a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
@@ -120,6 +126,16 @@ UTC day are counted in `study_url_preview_daily_usage`, without storing the URL 
 text in that counter. Those counts are visible in your account export and deleted with
 your account. A learning goal searches the public catalogue without calling a model.
 
+**Study courses** are what the beta generates from sources you choose: the goal you
+typed, the claims found in your text with the exact passage each rests on, and draft
+lessons and questions (`study_generations`, `study_claims`, `study_claim_evidence`,
+`study_lessons`, `study_items`, and the tables linking them). The model output they came
+from is cached in `study_stage_cache` so the same text is not sent twice. All of it is
+readable only by you, is not published, and never enters the catalogue or another
+reader's experience. Deleting any source a course was built from deletes that course and
+its cached output. It is included in your account export and deleted with your account.
+Whether your account is in the beta is recorded in `study_generation_access`.
+
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
 path of the screen you were on before you opened Settings — `/explore`, say. The path is
@@ -232,8 +248,11 @@ writing a decay score onto every row of your memory.
 ### What the servers record
 
 Ordinary operational records: request logs held by our hosting providers, and — if you ask
-the app to generate a summary — a `generation_jobs` row with your user id, the steps it ran
-(`job_steps`), and what the provider call cost (`cost_ledger`). Rate-limit counters
+the app to generate a summary or a study course — a `generation_jobs` row with your user id,
+the steps it ran (`job_steps`), and what the provider call cost (`cost_ledger`). A study
+course also records each request made to the model provider (`provider_calls`: when, which
+model, and whether it answered), with no text from your sources in it; these records and
+the costs are kept after the course is deleted, because the charge happened. Rate-limit counters
 (`rate_limits`) exist to stop one account exhausting a shared budget.
 
 We do not collect precise location, contacts, calendar, photos, or device identifiers for
@@ -256,6 +275,12 @@ Google, or Anthropic where a deployment configures the fallback that answers whe
 is unavailable. You are doing that deliberately, but it is your content reaching a model
 provider, and it deserves stating plainly rather than leaving as an implication: what
 never reaches a model is your **reading** — not something you supplied to be summarised.
+
+**A study course is the same exception, asked for separately.** Building one sends the
+text of the sources you chose, in passages, to Google's Gemini API, and then sends the
+claims found in it, with their quoted passages and your goal, to write the lessons and
+questions. There is no fallback to another provider for courses. It needs an account in
+the beta and your confirmation, each time, that you are sending that text.
 
 The Studio says that sentence on the screen, above the box, before you have typed anything
 — not in this policy alone. The summary it writes is **private**: it is readable by you,

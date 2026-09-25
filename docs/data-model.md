@@ -23,6 +23,10 @@ User
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
  ├── study_sources ─── study_source_versions       ← private extracted readings
+ │    └── study_generations                       ← a draft course from 1-5 versions
+ │         ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
+ │         ├── study_lessons · study_items            ← linked to the claims they cite
+ │         └── study_stage_cache                  ← per-reader model output, reused
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
  ├── feed_recipes · feed_impressions
@@ -41,7 +45,7 @@ Work                                              ← the thing itself
 
 paths ─── path_steps                              ← curated sequences answering one question
 
-generation_jobs ─── job_steps ─── cost_ledger
+generation_jobs ─── job_steps ─── cost_ledger ─── provider_calls
                 └── budget_reservations           ← what a step is about to spend
 generation_dispatches · generation_hash_claims
 reports ─── moderation_decisions · rights_requests
@@ -100,6 +104,14 @@ id. The browser never uploads the original binary. A reader may delete a source 
 all versions; account deletion also cascades. Direct writes to version rows are
 denied, and another reader cannot read or delete them. See
 [`study-import.md`](./study-import.md).
+
+**What a course is derived from, it cannot outlive.** Every study-generation row names its
+version and owner through a composite foreign key on `(version, owner)`, so the database
+refuses a derived row whose owner is not the version's. Deleting any version a course or a
+cache entry came from deletes the whole course or entry (a trigger, because a foreign key
+cannot delete a parent when one child goes) and cancels a job still running. The provider
+journal and ledger keep no content and are kept. See
+[`study-generation.md`](./study-generation.md).
 
 **A reader's own question lives in its own table.** `user_questions` rather than a row in
 `quiz_questions`, because the pipeline upserts canonical questions with

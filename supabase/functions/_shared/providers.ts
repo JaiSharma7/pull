@@ -269,7 +269,22 @@ export function worstCaseCentsFor(
   input: SummaryInput,
   extraInput = '',
 ): number {
-  const inputTokens = maxInputTokens(buildSummaryPrompt(input)) + maxInputTokens(extraInput);
+  return worstCaseCentsForPrompt(config, buildSummaryPrompt(input), extraInput);
+}
+
+/**
+ * The same ceiling over a prompt that is already rendered.
+ *
+ * The study stages render their own prompts (`_shared/study.ts`) and send exactly that
+ * string, so the bound is taken over what goes rather than over a summary input they
+ * do not have.
+ */
+export function worstCaseCentsForPrompt(
+  config: ProviderPricing,
+  prompt: string,
+  extraInput = '',
+): number {
+  const inputTokens = maxInputTokens(prompt) + maxInputTokens(extraInput);
   const usd =
     (inputTokens / 1_000_000) * config.inputUsdPerMTok +
     (config.maxOutputTokens / 1_000_000) * config.outputUsdPerMTok;

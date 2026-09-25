@@ -232,6 +232,21 @@ const EXPORTED: { table: string; column: string; key: string }[] = [
   { table: 'study_source_versions', column: 'owner_id', key: 'id' },
   { table: 'study_source_mutations', column: 'owner_id', key: 'client_mutation_id' },
   { table: 'study_url_preview_daily_usage', column: 'owner_id', key: 'day_utc' },
+  // What study generation derived from that text (20260925010000): the courses, the
+  // claims with their evidence spans, the lessons and questions, the links between
+  // them, and the cached model output they came from. Derived from the reader's own
+  // material and stored against their account, so theirs to take.
+  { table: 'study_generation_access', column: 'user_id', key: 'user_id' },
+  { table: 'study_generations', column: 'owner_id', key: 'id' },
+  { table: 'study_generation_sources', column: 'owner_id', key: 'id' },
+  { table: 'study_stage_cache', column: 'owner_id', key: 'id' },
+  { table: 'study_stage_cache_sources', column: 'owner_id', key: 'id' },
+  { table: 'study_claims', column: 'owner_id', key: 'id' },
+  { table: 'study_claim_evidence', column: 'owner_id', key: 'id' },
+  { table: 'study_lessons', column: 'owner_id', key: 'id' },
+  { table: 'study_lesson_claims', column: 'owner_id', key: 'id' },
+  { table: 'study_items', column: 'owner_id', key: 'id' },
+  { table: 'study_item_claims', column: 'owner_id', key: 'id' },
 ];
 
 /*

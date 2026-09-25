@@ -29,11 +29,23 @@ import {
   DEFAULT_SUMMARY_MODELS,
   type GeminiConfig,
 } from './gemini.ts';
+import {
+  createGeminiStructuredProvider,
+  stubStructuredProvider,
+  type StructuredProvider,
+} from './structured.ts';
 
 export interface ProviderSet {
   summary: SummaryProvider;
   embedding: EmbeddingProvider;
   image: ImageProvider;
+  /**
+   * The study stages' provider. Gemini only, with no cross-vendor fallback: every
+   * attempt it makes is journalled and ledgered one by one, and the Anthropic adapter
+   * has not been taught that yet. A study step that finds every Gemini model
+   * unavailable fails and is retried like any other unbilled failure.
+   */
+  study: StructuredProvider;
 }
 
 /** Reading the environment is injected so this is testable off the Edge runtime. */
@@ -213,6 +225,10 @@ export async function resolveProviders(
     wantSummary === 'gemini' && gemini ? createGeminiSummaryProvider(gemini) : stubSummaryProvider;
 
   return {
+    study:
+      wantSummary === 'gemini' && gemini
+        ? createGeminiStructuredProvider(gemini)
+        : stubStructuredProvider,
     summary: anthropicKey
       ? createFallbackSummaryProvider(
           primarySummary,

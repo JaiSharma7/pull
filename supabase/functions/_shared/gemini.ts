@@ -27,7 +27,7 @@ import type {
   Usage,
 } from './providers.ts';
 
-const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta';
+export const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta';
 
 /**
  * Summary models in preference order.
@@ -87,7 +87,7 @@ export interface GeminiConfig {
 /** The dimensionality `pulls.embedding` is declared with, and its HNSW index built for. */
 export const EMBEDDING_DIMENSIONS = 1536;
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
  * The total a step may spend inside a provider, chain and retries included.
@@ -96,7 +96,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  * the outcome and advance the job before the platform's 150s cap. A step that
  * finishes is worth more than one that was allowed to keep trying.
  */
-const DEFAULT_BUDGET_MS = 100_000;
+export const DEFAULT_BUDGET_MS = 100_000;
 
 /**
  * Scale a vector to unit length.
@@ -242,7 +242,7 @@ function budgetFrom(config: GeminiConfig) {
  * try a model that might answer. Measured on 2026-08-31: 27 failed synthesize steps,
  * every one of them two 429s against the same model.
  */
-const isRetryable = (status: number) => status >= 500;
+export const isRetryable = (status: number) => status >= 500;
 
 async function callGemini(
   path: string,
@@ -329,7 +329,7 @@ function firstTextPart(payload: Record<string, unknown>): string {
  * If that is exhausted too the job fails as it would have anyway, so the downside is
  * bounded and the upside is the chain doing the job it was written for.
  */
-const isUnavailable = (status: number | undefined) =>
+export const isUnavailable = (status: number | undefined) =>
   status === 404 || status === 429 || status === 503;
 
 export function createGeminiSummaryProvider(config: GeminiConfig): SummaryProvider {

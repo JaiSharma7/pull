@@ -196,12 +196,13 @@ early waits sixteen hours and is perfectly healthy.
 
 `generation_jobs.kind` has existed since the table was created and was written by nothing,
 so every row said `canonical_summary` whatever it actually was. `enqueue_generation_job`
-now writes it, narrowed to two values:
+now writes it, narrowed to two values, and `enqueue_study_generation` writes the third:
 
 | `kind`              | What it describes                                                                  |
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `canonical_summary` | A work for the catalogue: published, public, generated once and read by thousands. |
 | `private_summary`   | A reader's own text, summarised for them and published nowhere.                    |
+| `study_course`      | A draft course built from a reader's own study sources. See `study-generation.md`. |
 
 **The column is descriptive, and it is worth being exact about that**, because the table
 above reads like an enforcement mechanism and is not one yet. Nothing in

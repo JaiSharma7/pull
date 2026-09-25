@@ -199,6 +199,32 @@ const BOUNDS = {
     'pulls[].questions[].distractors': { maxItems: 8 },
     'pulls[].questions[].rationale': { maxItems: 8 },
   },
+  // Documented on the classes in study_course.baml. Per-kind floors (two distractors
+  // for a choice question, three steps for ordering, two pairs for matching) are not
+  // here for the reason the MCQ floor above is not: one schema covers every kind, and
+  // a floor that applies to only some would fail the whole call rather than the one
+  // question. `normalizeStudyCourse` in `_shared/study.ts` rejects those per item.
+  ExtractStudyClaims: {
+    claims: { maxItems: 25 },
+    'claims[].qualifications': { maxItems: 6 },
+    'claims[].evidence': { minItems: 1, maxItems: 3 },
+    gaps: { maxItems: 8 },
+  },
+  AssembleStudyCourse: {
+    objectives: { minItems: 1, maxItems: 6 },
+    units: { minItems: 1, maxItems: 6 },
+    'units[].lessons': { minItems: 1, maxItems: 4 },
+    'units[].lessons[].claimKeys': { minItems: 1, maxItems: 8 },
+    questions: { minItems: 1, maxItems: 48 },
+    'questions[].claimKeys': { minItems: 1, maxItems: 6 },
+    'questions[].acceptedAnswers': { maxItems: 6 },
+    'questions[].distractors': { maxItems: 4 },
+    'questions[].sequence': { maxItems: 6 },
+    'questions[].pairs': { maxItems: 6 },
+    disagreements: { maxItems: 10 },
+    'disagreements[].claimKeys': { minItems: 2, maxItems: 6 },
+    withheld: { maxItems: 10 },
+  },
 };
 
 /** Follow a `T | null` union to `T`; leave anything else alone. */

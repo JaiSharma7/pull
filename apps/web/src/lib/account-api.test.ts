@@ -171,6 +171,31 @@ describe('buildAccountExport', () => {
       },
     ]);
   });
+  it('includes what study generation derived from the reader’s material', async () => {
+    TABLES.set('study_generations', [{ id: 'gen-1', owner_id: 'u1', goal: 'Explain it' }]);
+    TABLES.set('study_claims', [{ id: 'claim-1', owner_id: 'u1', statement: 'A claim.' }]);
+    TABLES.set('study_claim_evidence', [{ id: 'ev-1', owner_id: 'u1', span_text: 'A span.' }]);
+    TABLES.set('study_items', [{ id: 'item-1', owner_id: 'u1', prompt: 'A question?' }]);
+
+    const out = await buildAccountExport('u1', null);
+
+    expect(out.data['study_generations']).toHaveLength(1);
+    expect(out.data['study_claims']).toHaveLength(1);
+    expect(out.data['study_claim_evidence']).toHaveLength(1);
+    expect(out.data['study_items']).toHaveLength(1);
+    for (const table of [
+      'study_generation_access',
+      'study_generation_sources',
+      'study_stage_cache',
+      'study_stage_cache_sources',
+      'study_lessons',
+      'study_lesson_claims',
+      'study_item_claims',
+    ]) {
+      expect(Object.keys(out.data)).toContain(table);
+    }
+    expect(out.incomplete).toEqual([]);
+  });
   it('names every table it walked, so a missing one is visible in the file', async () => {
     const out = await buildAccountExport('u1', null);
     // Empty tables still appear as empty arrays. A table that vanished from `data`

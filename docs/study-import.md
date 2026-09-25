@@ -1,6 +1,6 @@
 # Private study import
 
-Studio's **Prepare study material** mode stores an extraction the reader has reviewed. It does not generate a course or call a model. That work belongs to later, separately requested generation jobs.
+Studio's **Prepare study material** mode stores an extraction the reader has reviewed. Saving does not generate a course or call a model. Generation is a separately requested, budgeted job over versions the reader chooses; see [`study-generation.md`](./study-generation.md).
 
 - Inputs: pasted text, TXT, Markdown, text PDF, DOCX, or existing imported highlights. A PNG, JPEG, WebP, or sparse PDF can use opt-in OCR. PDF and DOCX extraction and OCR run in the browser. The original file bytes are never uploaded.
 - Limits: 12 MB per file, 30 PDF pages, five OCR pages per attempt, image OCR under 16 megapixels and 8,192 pixels per side, 200,000 characters per version, 100 live saved versions per account, and 1,000 lifetime saves per account. PDF page numbers remain in the saved text for later provenance. The reader can correct extraction errors before saving and must confirm sparse pages against the original.

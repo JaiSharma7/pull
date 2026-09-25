@@ -474,3 +474,732 @@ export const WriteCanonicalSummary$stream = defineFunction("user.WriteCanonicalS
  * docs/content-policy.md.
  */
 export const WriteCanonicalSummary$stream_async = defineFunction("user.WriteCanonicalSummary$stream", "async", ["workTitle", "kind", "context"]) as (workTitle: string, kind: string, context: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<ai.stream.Stream<CanonicalSummary$stream | null, CanonicalSummary>>;
+
+/**
+ * Everything one bounded passage of one source supports.
+ *
+ * Attributes:
+ *   claims: At most 25 claims, in the order the passage makes them. Empty when the
+ *     passage makes none worth learning -- navigation, boilerplate, or unreadable
+ *     extraction.
+ *   gaps: Up to eight questions a reader might reasonably ask that this passage raises
+ *     but does NOT answer. Recorded so the course withholds them instead of answering
+ *     them from outside knowledge.
+ */
+export class SourceClaimMap$stream {
+  claims!: StudyClaim$stream[];
+  gaps!: string[];
+  constructor(init: {
+    claims: StudyClaim$stream[];
+    gaps: string[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * One atomic claim the passage itself makes.
+ *
+ * Attributes:
+ *   key: Short and unique within this passage: "c1", "c2", ...
+ *   statement: The claim in plain words, stating exactly what the passage supports and no
+ *     more. Never generalise beyond the conditions the passage gives.
+ *   kind
+ *   qualifications: Every condition, population, time point, or limit the passage attaches to
+ *     the claim, up to six. Empty only when the passage states none.
+ *   evidence: One to three passages copied EXACTLY, character for character, from the
+ *     source, each long enough to be unambiguous and at most about 300 characters.
+ *   attribution: Who the passage says holds this claim when it is not the passage's own
+ *     voice, such as a named study, memo, or speaker. Null otherwise.
+ */
+export class StudyClaim$stream {
+  key!: string | null;
+  statement!: string | null;
+  kind!: StudyClaimKind | null;
+  qualifications!: string[];
+  evidence!: string[];
+  attribution!: string | null;
+  constructor(init: {
+    key: string | null;
+    statement: string | null;
+    kind: StudyClaimKind | null;
+    qualifications: string[];
+    evidence: string[];
+    attribution: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   title
+ *   overview: Two or three sentences on what the material covers and what the course does.
+ *   objectives: One to six objectives, each a sentence starting with a verb.
+ *   units: One to six units.
+ *   questions: One to forty-eight questions across the whole course.
+ *   recap: The course's closing summary: what to remember, in a few sentences.
+ *   disagreements: Up to ten disagreements between claims.
+ *   withheld: Up to ten questions the claims cannot answer.
+ */
+export class StudyCourse$stream {
+  title!: string | null;
+  overview!: string | null;
+  objectives!: string[];
+  units!: StudyUnit$stream[];
+  questions!: StudyQuestion$stream[];
+  recap!: string | null;
+  disagreements!: StudySourceDisagreement$stream[];
+  withheld!: StudyWithheldQuestion$stream[];
+  constructor(init: {
+    title: string | null;
+    overview: string | null;
+    objectives: string[];
+    units: StudyUnit$stream[];
+    questions: StudyQuestion$stream[];
+    recap: string | null;
+    disagreements: StudySourceDisagreement$stream[];
+    withheld: StudyWithheldQuestion$stream[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * A short lesson: two to four minutes of reading around one objective.
+ *
+ * Attributes:
+ *   key: Short and unique within this course: "l1", "l2", ...
+ *   title
+ *   objective: What the reader should be able to do afterwards, as one sentence.
+ *   claimKeys: The claims this lesson teaches, one to eight.
+ *   explanation: The teaching text. Every sentence must follow from the listed claims and
+ *     their qualifications; it may explain and connect them but adds no facts.
+ *   example: A concrete illustration drawn from the claims, or null when the claims
+ *     give none. Never an invented statistic or case.
+ *   recap: One or two sentences a reader could say from memory after the lesson.
+ *   minutes: Estimated reading minutes, from 1 to 5.
+ */
+export class StudyLesson$stream {
+  key!: string | null;
+  title!: string | null;
+  objective!: string | null;
+  claimKeys!: string[];
+  explanation!: string | null;
+  example!: string | null;
+  recap!: string | null;
+  minutes!: number | null;
+  constructor(init: {
+    key: string | null;
+    title: string | null;
+    objective: string | null;
+    claimKeys: string[];
+    explanation: string | null;
+    example: string | null;
+    recap: string | null;
+    minutes: number | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * One left-to-right pairing for a matching question.
+ */
+export class StudyMatchPair$stream {
+  left!: string | null;
+  right!: string | null;
+  constructor(init: {
+    left: string | null;
+    right: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   key: Short and unique within this course: "q1", "q2", ...
+ *   lessonKey: The lesson this question practises. Null only for course-level review.
+ *   purpose
+ *   kind
+ *   claimKeys: The claims whose evidence fully answers this question, one to six.
+ *   prompt: The question as the reader sees it. It must not reveal the answer.
+ *   answer: The single correct answer: the correct option for choice kinds, the removed
+ *     text for cloze, a model answer for short recall, and for ordering and
+ *     matching one sentence naming the principle behind the correct arrangement.
+ *   acceptedAnswers: Other wordings that must also be accepted for cloze and short recall, such
+ *     as a synonym or a number written as a word, up to six. Empty for the other
+ *     kinds.
+ *   distractors: The WRONG options for multiple_choice, comparison and application, each with
+ *     why a reader might choose it and why it is wrong. Two to four, never
+ *     including the answer or anything the claims would also make true. Empty for
+ *     the other kinds.
+ *   cloze: For cloze only: one sentence with the answer replaced by "____".
+ *   sequence: For ordering only: three to six steps or events in their CORRECT order.
+ *   pairs: For matching only: two to six correct pairs.
+ *   explanation: Why the answer is right, in terms of the claims, shown after any attempt.
+ *   difficulty: 1 recognise, 2 recall, 3 apply or compare.
+ */
+export class StudyQuestion$stream {
+  key!: string | null;
+  lessonKey!: string | null;
+  purpose!: StudyQuestionPurpose | null;
+  kind!: StudyQuestionKind | null;
+  claimKeys!: string[];
+  prompt!: string | null;
+  answer!: string | null;
+  acceptedAnswers!: string[];
+  distractors!: DistractorRationale$stream[];
+  cloze!: string | null;
+  sequence!: string[];
+  pairs!: StudyMatchPair$stream[];
+  explanation!: string | null;
+  difficulty!: number | null;
+  constructor(init: {
+    key: string | null;
+    lessonKey: string | null;
+    purpose: StudyQuestionPurpose | null;
+    kind: StudyQuestionKind | null;
+    claimKeys: string[];
+    prompt: string | null;
+    answer: string | null;
+    acceptedAnswers: string[];
+    distractors: DistractorRationale$stream[];
+    cloze: string | null;
+    sequence: string[];
+    pairs: StudyMatchPair$stream[];
+    explanation: string | null;
+    difficulty: number | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Two or more claims that disagree, attributed rather than resolved.
+ *
+ * Attributes:
+ *   claimKeys: The two to six claims that disagree.
+ *   description: What differs and who says which, without choosing a side the sources do not.
+ */
+export class StudySourceDisagreement$stream {
+  claimKeys!: string[];
+  description!: string | null;
+  constructor(init: {
+    claimKeys: string[];
+    description: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   title
+ *   lessons: One to four lessons.
+ */
+export class StudyUnit$stream {
+  title!: string | null;
+  lessons!: StudyLesson$stream[];
+  constructor(init: {
+    title: string | null;
+    lessons: StudyLesson$stream[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * A question the reader's goal suggests but the claims cannot answer.
+ */
+export class StudyWithheldQuestion$stream {
+  prompt!: string | null;
+  reason!: string | null;
+  constructor(init: {
+    prompt: string | null;
+    reason: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * What sort of statement a claim is. Aliased to the stored values, which is what
+ * crosses the boundary; never use the generated identifier as a database value.
+ */
+export enum StudyClaimKind {
+  Finding = "Finding",
+  Definition = "Definition",
+  Argument = "Argument",
+  Method = "Method",
+  Example = "Example",
+  Caveat = "Caveat",
+}
+
+/**
+ * One atomic claim the passage itself makes.
+ *
+ * Attributes:
+ *   key: Short and unique within this passage: "c1", "c2", ...
+ *   statement: The claim in plain words, stating exactly what the passage supports and no
+ *     more. Never generalise beyond the conditions the passage gives.
+ *   kind
+ *   qualifications: Every condition, population, time point, or limit the passage attaches to
+ *     the claim, up to six. Empty only when the passage states none.
+ *   evidence: One to three passages copied EXACTLY, character for character, from the
+ *     source, each long enough to be unambiguous and at most about 300 characters.
+ *   attribution: Who the passage says holds this claim when it is not the passage's own
+ *     voice, such as a named study, memo, or speaker. Null otherwise.
+ */
+export class StudyClaim {
+  key!: string;
+  statement!: string;
+  kind!: StudyClaimKind;
+  qualifications!: string[];
+  evidence!: string[];
+  attribution!: string | null;
+  constructor(init: {
+    key: string;
+    statement: string;
+    kind: StudyClaimKind;
+    qualifications: string[];
+    evidence: string[];
+    attribution: string | null;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Everything one bounded passage of one source supports.
+ *
+ * Attributes:
+ *   claims: At most 25 claims, in the order the passage makes them. Empty when the
+ *     passage makes none worth learning -- navigation, boilerplate, or unreadable
+ *     extraction.
+ *   gaps: Up to eight questions a reader might reasonably ask that this passage raises
+ *     but does NOT answer. Recorded so the course withholds them instead of answering
+ *     them from outside knowledge.
+ */
+export class SourceClaimMap {
+  claims!: StudyClaim[];
+  gaps!: string[];
+  constructor(init: {
+    claims: StudyClaim[];
+    gaps: string[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * The kinds of practice a course may ask. The first four and the choice-based
+ * comparison and application items are graded deterministically; short recall is
+ * graded against accepted answers or by the reader. Grading never calls a model.
+ */
+export enum StudyQuestionKind {
+  MultipleChoice = "MultipleChoice",
+  Cloze = "Cloze",
+  Ordering = "Ordering",
+  Matching = "Matching",
+  ShortRecall = "ShortRecall",
+  Comparison = "Comparison",
+  Application = "Application",
+}
+
+/**
+ * Where in the course a question is used.
+ *
+ * Members:
+ *   Placement: Asked unhinted before a lesson, to decide whether its explanation can be
+ *     skipped. A correct placement answer never removes the delayed review.
+ *   Practice: Asked inside or right after the lesson it belongs to.
+ *   Review: Asked later, without the lesson on screen, to check retention.
+ */
+export enum StudyQuestionPurpose {
+  Placement = "Placement",
+  Practice = "Practice",
+  Review = "Review",
+}
+
+/**
+ * One left-to-right pairing for a matching question.
+ */
+export class StudyMatchPair {
+  left!: string;
+  right!: string;
+  constructor(init: {
+    left: string;
+    right: string;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   key: Short and unique within this course: "q1", "q2", ...
+ *   lessonKey: The lesson this question practises. Null only for course-level review.
+ *   purpose
+ *   kind
+ *   claimKeys: The claims whose evidence fully answers this question, one to six.
+ *   prompt: The question as the reader sees it. It must not reveal the answer.
+ *   answer: The single correct answer: the correct option for choice kinds, the removed
+ *     text for cloze, a model answer for short recall, and for ordering and
+ *     matching one sentence naming the principle behind the correct arrangement.
+ *   acceptedAnswers: Other wordings that must also be accepted for cloze and short recall, such
+ *     as a synonym or a number written as a word, up to six. Empty for the other
+ *     kinds.
+ *   distractors: The WRONG options for multiple_choice, comparison and application, each with
+ *     why a reader might choose it and why it is wrong. Two to four, never
+ *     including the answer or anything the claims would also make true. Empty for
+ *     the other kinds.
+ *   cloze: For cloze only: one sentence with the answer replaced by "____".
+ *   sequence: For ordering only: three to six steps or events in their CORRECT order.
+ *   pairs: For matching only: two to six correct pairs.
+ *   explanation: Why the answer is right, in terms of the claims, shown after any attempt.
+ *   difficulty: 1 recognise, 2 recall, 3 apply or compare.
+ */
+export class StudyQuestion {
+  key!: string;
+  lessonKey!: string | null;
+  purpose!: StudyQuestionPurpose;
+  kind!: StudyQuestionKind;
+  claimKeys!: string[];
+  prompt!: string;
+  answer!: string;
+  acceptedAnswers!: string[];
+  distractors!: DistractorRationale[];
+  cloze!: string | null;
+  sequence!: string[];
+  pairs!: StudyMatchPair[];
+  explanation!: string;
+  difficulty!: number;
+  constructor(init: {
+    key: string;
+    lessonKey: string | null;
+    purpose: StudyQuestionPurpose;
+    kind: StudyQuestionKind;
+    claimKeys: string[];
+    prompt: string;
+    answer: string;
+    acceptedAnswers: string[];
+    distractors: DistractorRationale[];
+    cloze: string | null;
+    sequence: string[];
+    pairs: StudyMatchPair[];
+    explanation: string;
+    difficulty: number;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * A short lesson: two to four minutes of reading around one objective.
+ *
+ * Attributes:
+ *   key: Short and unique within this course: "l1", "l2", ...
+ *   title
+ *   objective: What the reader should be able to do afterwards, as one sentence.
+ *   claimKeys: The claims this lesson teaches, one to eight.
+ *   explanation: The teaching text. Every sentence must follow from the listed claims and
+ *     their qualifications; it may explain and connect them but adds no facts.
+ *   example: A concrete illustration drawn from the claims, or null when the claims
+ *     give none. Never an invented statistic or case.
+ *   recap: One or two sentences a reader could say from memory after the lesson.
+ *   minutes: Estimated reading minutes, from 1 to 5.
+ */
+export class StudyLesson {
+  key!: string;
+  title!: string;
+  objective!: string;
+  claimKeys!: string[];
+  explanation!: string;
+  example!: string | null;
+  recap!: string;
+  minutes!: number;
+  constructor(init: {
+    key: string;
+    title: string;
+    objective: string;
+    claimKeys: string[];
+    explanation: string;
+    example: string | null;
+    recap: string;
+    minutes: number;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   title
+ *   lessons: One to four lessons.
+ */
+export class StudyUnit {
+  title!: string;
+  lessons!: StudyLesson[];
+  constructor(init: {
+    title: string;
+    lessons: StudyLesson[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Two or more claims that disagree, attributed rather than resolved.
+ *
+ * Attributes:
+ *   claimKeys: The two to six claims that disagree.
+ *   description: What differs and who says which, without choosing a side the sources do not.
+ */
+export class StudySourceDisagreement {
+  claimKeys!: string[];
+  description!: string;
+  constructor(init: {
+    claimKeys: string[];
+    description: string;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * A question the reader's goal suggests but the claims cannot answer.
+ */
+export class StudyWithheldQuestion {
+  prompt!: string;
+  reason!: string;
+  constructor(init: {
+    prompt: string;
+    reason: string;
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Attributes:
+ *   title
+ *   overview: Two or three sentences on what the material covers and what the course does.
+ *   objectives: One to six objectives, each a sentence starting with a verb.
+ *   units: One to six units.
+ *   questions: One to forty-eight questions across the whole course.
+ *   recap: The course's closing summary: what to remember, in a few sentences.
+ *   disagreements: Up to ten disagreements between claims.
+ *   withheld: Up to ten questions the claims cannot answer.
+ */
+export class StudyCourse {
+  title!: string;
+  overview!: string;
+  objectives!: string[];
+  units!: StudyUnit[];
+  questions!: StudyQuestion[];
+  recap!: string;
+  disagreements!: StudySourceDisagreement[];
+  withheld!: StudyWithheldQuestion[];
+  constructor(init: {
+    title: string;
+    overview: string;
+    objectives: string[];
+    units: StudyUnit[];
+    questions: StudyQuestion[];
+    recap: string;
+    disagreements: StudySourceDisagreement[];
+    withheld: StudyWithheldQuestion[];
+  }) {
+    Object.assign(this, init);
+  }
+}
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws UnknownError
+ * @throws CompilationError
+ */
+export const ExtractStudyClaims = defineFunction("user.ExtractStudyClaims", "sync", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => SourceClaimMap;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws UnknownError
+ * @throws CompilationError
+ */
+export const ExtractStudyClaims_async = defineFunction("user.ExtractStudyClaims", "async", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<SourceClaimMap>;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws LlmClient
+ */
+export const ExtractStudyClaims$parse = defineFunction("user.ExtractStudyClaims$parse", "sync", ["json"]) as (json: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => SourceClaimMap;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws LlmClient
+ */
+export const ExtractStudyClaims$parse_async = defineFunction("user.ExtractStudyClaims$parse", "async", ["json"]) as (json: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<SourceClaimMap>;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws InvalidRequest
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws CompilationError
+ */
+export const ExtractStudyClaims$render_prompt = defineFunction("user.ExtractStudyClaims$render_prompt", "sync", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => ai.Prompt;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ * @throws InvalidRequest
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws CompilationError
+ */
+export const ExtractStudyClaims$render_prompt_async = defineFunction("user.ExtractStudyClaims$render_prompt", "async", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<ai.Prompt>;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ */
+export const ExtractStudyClaims$stream = defineFunction("user.ExtractStudyClaims$stream", "sync", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => ai.stream.Stream<SourceClaimMap$stream | null, SourceClaimMap>;
+
+/**
+ * Claims and exact evidence from one passage of a reader's own material.
+ * 
+ * Private: the output is stored for its owner and never published (law 4 is not
+ * engaged because nothing leaves the reader's account, but the prompt still asks
+ * for claims rather than a retelling).
+ */
+export const ExtractStudyClaims$stream_async = defineFunction("user.ExtractStudyClaims$stream", "async", ["sourceTitle", "passage"]) as (sourceTitle: string, passage: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<ai.stream.Stream<SourceClaimMap$stream | null, SourceClaimMap>>;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws UnknownError
+ * @throws CompilationError
+ */
+export const AssembleStudyCourse = defineFunction("user.AssembleStudyCourse", "sync", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => StudyCourse;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws UnknownError
+ * @throws CompilationError
+ */
+export const AssembleStudyCourse_async = defineFunction("user.AssembleStudyCourse", "async", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<StudyCourse>;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws LlmClient
+ */
+export const AssembleStudyCourse$parse = defineFunction("user.AssembleStudyCourse$parse", "sync", ["json"]) as (json: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => StudyCourse;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws LlmClient
+ */
+export const AssembleStudyCourse$parse_async = defineFunction("user.AssembleStudyCourse$parse", "async", ["json"]) as (json: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<StudyCourse>;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws InvalidRequest
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws CompilationError
+ */
+export const AssembleStudyCourse$render_prompt = defineFunction("user.AssembleStudyCourse$render_prompt", "sync", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => ai.Prompt;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ * @throws InvalidRequest
+ * @throws InvalidArgument
+ * @throws Io
+ * @throws ParseError
+ * @throws CompilationError
+ */
+export const AssembleStudyCourse$render_prompt_async = defineFunction("user.AssembleStudyCourse$render_prompt", "async", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<ai.Prompt>;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ */
+export const AssembleStudyCourse$stream = defineFunction("user.AssembleStudyCourse$stream", "sync", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => ai.stream.Stream<StudyCourse$stream | null, StudyCourse>;
+
+/**
+ * A short, guided course from a claim map, for one reader's stated goal.
+ * 
+ * Sees only the claims and their quoted evidence. Every lesson and question names
+ * the claims it rests on, so the worker can link each to exact source spans and
+ * refuse anything that cites a claim it was never given.
+ */
+export const AssembleStudyCourse$stream_async = defineFunction("user.AssembleStudyCourse$stream", "async", ["goal", "claims"]) as (goal: string, claims: string, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<ai.stream.Stream<StudyCourse$stream | null, StudyCourse>>;

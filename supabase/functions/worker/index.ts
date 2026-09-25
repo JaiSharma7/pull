@@ -2,6 +2,15 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { MAX_ATTEMPTS, NEEDS, nextStep, NODES, successorsOf, type Step } from '../_shared/graph.ts';
 import { resolveProviders, type ProviderSet } from '../_shared/config.ts';
 import { createPipelineDb } from '../_shared/db.ts';
+import { createStudyDb } from '../_shared/study-db.ts';
+import {
+  isStudyStep,
+  STUDY_NODES,
+  STUDY_PROVIDER_STEPS,
+  studySuccessorsOf,
+  type StudyStep,
+} from '../_shared/study-graph.ts';
+import { runStudyStep } from '../_shared/study-steps.ts';
 import {
   BilledStepError,
   BudgetExhaustedError,
@@ -44,6 +53,29 @@ import {
 const MESSAGES_PER_INVOCATION = 1;
 /** Steps that invoke a provider, and so must produce a ledger row. */
 const PROVIDER_STEPS = new Set<Step>(['synthesize', 'embed', 'artwork']);
+
+/**
+ * A step of either graph. The two share this machine and nothing else: a message
+ * names its step, and a `study_*` step belongs to `study-graph.ts`.
+ */
+type AnyStep = Step | StudyStep;
+
+function needsOf(step: AnyStep): readonly string[] {
+  return isStudyStep(step) ? STUDY_NODES[step].needs : NEEDS[step];
+}
+
+function afterOf(step: AnyStep): readonly string[] {
+  return isStudyStep(step) ? STUDY_NODES[step].after : NODES[step].after;
+}
+
+/**
+ * Whether a FAILED attempt of this step may have been billed, and so must reach the
+ * ledger when it carries usage. The study provider steps ledger each attempt
+ * themselves; this is only their fallback for when that recording itself failed.
+ */
+function billableOnFailure(step: AnyStep): boolean {
+  return isStudyStep(step) ? STUDY_PROVIDER_STEPS.has(step) : PROVIDER_STEPS.has(step);
+}
 /**
  * Must exceed the platform's maximum request lifetime (150s wall clock), or the
  * next dispatcher tick can claim a message while the original invocation is
@@ -114,7 +146,7 @@ const supabase = createClient(
  */
 async function failUnbilled(
   jobId: string,
-  step: Step,
+  step: AnyStep,
   attempt: number,
   message: string,
   durationMs: number,
@@ -196,7 +228,7 @@ async function failUnbilled(
 
 interface QueueMessage {
   msg_id: number;
-  message: { jobId: string; step: Step; waits?: number; budgetWaits?: number };
+  message: { jobId: string; step: AnyStep; waits?: number; budgetWaits?: number };
   /** pgmq's delivery count, incremented on every read of this message. */
   read_ct: number;
 }
@@ -265,7 +297,7 @@ async function providersNow(): Promise<ProviderSet> {
  * because resolving them can fail and that failure must happen before a message is
  * claimed — see the ordering argument in `Deno.serve` below.
  */
-async function runStep(jobId: string, step: Step, providers: ProviderSet): Promise<StepResult> {
+async function runStep(jobId: string, step: AnyStep, providers: ProviderSet): Promise<StepResult> {
   const job = must(
     await supabase
       .from('generation_jobs')
@@ -289,9 +321,24 @@ async function runStep(jobId: string, step: Step, providers: ProviderSet): Promi
   // invocation; see NEEDS for the arithmetic. PostgREST resolves the overload by
   // the named arguments, so passing `p_steps` selects the two-argument function.
   const priorOutputs = (must(
-    await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [...NEEDS[step]] }),
+    await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [...needsOf(step)] }),
     'read prior step outputs',
   ) ?? {}) as Record<string, unknown>;
+
+  // A study course walks its own graph and calls its own provider through a journalled
+  // transport. A canonical step on a study job, or the reverse, is a corrupted message:
+  // refuse it before anything is spent.
+  if (isStudyStep(step)) {
+    return await runStudyStep(step, {
+      job,
+      priorOutputs,
+      provider: providers.study,
+      db: createStudyDb(supabase),
+    });
+  }
+  if (job.kind === 'study_course') {
+    throw new Error(`step ${step} does not belong to a study course`);
+  }
 
   return await runPipelineStep(step, {
     summary: providers.summary,
@@ -383,7 +430,11 @@ async function authorised(req: Request): Promise<{ ok: true } | { ok: false; why
  * through `advance_generation_job(…, null)` and its compare-and-set on
  * `current_step`, which the dispatch has just set to `publish`.
  */
-async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record<string, string>> {
+async function advance(
+  jobId: string,
+  step: AnyStep,
+  jumpTo?: Step,
+): Promise<Record<string, string>> {
   // The line's successor is asked for as well as the graph's. A job queued before
   // the graph existed was advanced along `STEPS` by the old worker, which never
   // wrote a dispatch row -- so at `extract_evidence` nothing has sent `synthesize`,
@@ -391,10 +442,12 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
   // waiting on a sibling that never runs. Asking for `nextStep` too is free for a
   // job that started on the graph: its successor already has a dispatch row and
   // answers `already`. This is what lets the graph deploy under a live queue.
-  const next = nextStep(step);
-  const targets = jumpTo
+  const next = isStudyStep(step) ? null : nextStep(step);
+  const targets: AnyStep[] = jumpTo
     ? [jumpTo]
-    : [...new Set([...successorsOf(step), ...(next ? [next] : [])])];
+    : isStudyStep(step)
+      ? studySuccessorsOf(step)
+      : [...new Set([...successorsOf(step), ...(next ? [next] : [])])];
 
   if (targets.length === 0) {
     const closed = must(
@@ -428,7 +481,7 @@ async function advance(jobId: string, step: Step, jumpTo?: Step): Promise<Record
       await supabase.rpc('dispatch_generation_step', {
         p_job_id: jobId,
         p_to_step: to,
-        p_after: jumpTo ? [] : [...NODES[to].after],
+        p_after: jumpTo ? [] : [...afterOf(to)],
       }),
       `dispatch ${to}`,
     ) as string;
@@ -549,7 +602,11 @@ Deno.serve(async (req) => {
           await supabase.rpc('job_step_outputs', { p_job_id: jobId, p_steps: [step] }),
           'read resumed step output',
         ) ?? {}) as Record<string, unknown>;
-        const dispatched = await advance(jobId, step, jumpFor(step, own[step]));
+        const dispatched = await advance(
+          jobId,
+          step,
+          isStudyStep(step) ? undefined : jumpFor(step, own[step]),
+        );
         must(await archive(msg.msg_id), 'archive resumed message');
         processed.push({ jobId, step, resumed: true, dispatched });
       } catch (e) {
@@ -639,6 +696,36 @@ Deno.serve(async (req) => {
 
     try {
       const result = await runStep(jobId, step, providers);
+
+      /*
+       * The same step again, now, with no row written. The step has already recorded
+       * what it spent and cached what it made, so there is nothing for `record_job_step`
+       * to add -- and a `succeeded` row here would make the next delivery resume past a
+       * step that has windows left. The wait counts ride along unchanged.
+       */
+      if (result.continue) {
+        const requeued = must(
+          await supabase.rpc('requeue_generation_message', {
+            p_msg_id: msg.msg_id,
+            p_job_id: jobId,
+            p_step: step,
+            p_delay_seconds: 0,
+            p_waits: msg.message.waits ?? 0,
+            p_budget_waits: msg.message.budgetWaits ?? 0,
+          }),
+          'requeue continuing step',
+        ) as number | null;
+        processed.push({
+          jobId,
+          step,
+          attempt,
+          ok: true,
+          continuing: true,
+          ...(requeued === null ? { alreadyQueued: true } : {}),
+        });
+        continue;
+      }
+
       const usage = result.usage ?? { inputTokens: 0, outputTokens: 0, costCents: 0 };
 
       // One transaction for the step, its output and its cost. As separate
@@ -661,7 +748,8 @@ Deno.serve(async (req) => {
           // step is one that *can* call one. A reuse skips `synthesize`'s call
           // entirely, and charging a ledger row for it would misreport the
           // reuse ratio — the number the whole cost argument is measured by.
-          p_billable: result.provider !== undefined && PROVIDER_STEPS.has(step),
+          p_billable:
+            result.provider !== undefined && !isStudyStep(step) && PROVIDER_STEPS.has(step),
           // What this step produced, for the next one to read. The worker keeps
           // nothing in memory between invocations.
           p_output: (result.output ?? null) as never,
@@ -773,7 +861,7 @@ Deno.serve(async (req) => {
             p_input_tokens: billed.usage.inputTokens,
             p_output_tokens: billed.usage.outputTokens,
             p_cost_cents: billed.usage.costCents,
-            p_billable: PROVIDER_STEPS.has(step),
+            p_billable: billableOnFailure(step),
           })
         : await failUnbilled(jobId, step, attempt, message, Date.now() - started);
       // A duplicate key means `record_job_step` already wrote a *succeeded* row
