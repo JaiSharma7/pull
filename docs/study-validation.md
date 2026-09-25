@@ -134,8 +134,10 @@ migrations, as `scripts/go-live.sh` lists.
 - **Matching.** A phrase must match as whole words. A phrase containing any character of a
   script written without spaces (Han, kana, Hangul, Thai and its neighbours) matches as a
   substring instead, and a phrase that is only punctuation is looked for in the text with its
-  punctuation kept. A decimal is one word: 125 is not found in 0.125, nor 14 in 3.14. What
-  counts as
+  punctuation kept. A decimal is one word: 125 is not found in 0.125, nor 14 in 3.14. So is
+  any number written with full stops, which is a trade-off: 1989 is not found in 09.11.1989,
+  so a dotted date does not give its year away, and a year whose evidence gives only the
+  dotted date is not found in it. What counts as
   a word character (`\p{L}`, `\p{N}`, `\p{M}`) and which scripts are written without spaces
   are generated from the same Unicode properties study.ts uses
   (`scripts/study-unicode-classes.mjs`). So Hindi's danda ends a word in SQL as it does in

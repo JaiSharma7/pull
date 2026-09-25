@@ -15,7 +15,9 @@
  * assigned (so a newer Unicode in Node or Deno is not a difference), a sample of the astral
  * planes, and a curated set of cases the reviews found. `study_contains_phrase` reads more
  * loosely on purpose -- invisible format characters removed, look-alike letters folded --
- * and the curated cases that rely on that are marked.
+ * and the curated cases that rely on that are marked. (A format character inside a number
+ * is the one place it reads more strictly: "1.\u00ad5" is one number to SQL, which has
+ * removed the soft hyphen, and two to TypeScript.)
  *
  * Read-only: every call is an IMMUTABLE function. Runs as part of `pnpm db:test`.
  */
@@ -26,8 +28,10 @@ const { answerKey, containsPhrase, givesAwayIfPrinted } =
 
 const DB_URL =
   process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-// Loopback only, and nothing libpq would connect through instead: a second host, `host`,
-// `hostaddr` or `service` in the query. The password is never printed.
+// Loopback only. psql is handed the parsed parts, never the URL, and no PG* variable but the
+// password, so nothing libpq would read on its own -- a query parameter, a fragment, a
+// second host, PGHOSTADDR or PGSERVICE -- can point it elsewhere; and no command line or
+// error it prints carries the password.
 const target = (() => {
   try {
     return new URL(DB_URL);
@@ -35,22 +39,29 @@ const target = (() => {
     return null;
   }
 })();
+const simple = /^[A-Za-z0-9_]+$/;
+const database = target ? decodeURIComponent(target.pathname.slice(1)) : '';
+const user = target ? decodeURIComponent(target.username) : '';
 if (
   !target ||
   !/^postgres(ql)?:$/.test(target.protocol) ||
   !['127.0.0.1', 'localhost'].includes(target.hostname) ||
-  DB_URL.slice(0, DB_URL.indexOf('/', DB_URL.indexOf('@'))).includes(',') ||
-  [...target.searchParams.keys()].some((k) => ['host', 'hostaddr', 'service'].includes(k))
+  !simple.test(database) ||
+  !simple.test(user)
 ) {
   const shown = target ? `${target.protocol}//${target.host}${target.pathname}` : 'that URL';
   throw new Error(`refusing to run against ${shown}: this test belongs on the local stack`);
 }
+const connection = ['-h', target.hostname, '-p', target.port || '5432', '-U', user, '-d', database];
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('PG')));
+env.PGPASSWORD = decodeURIComponent(target.password);
 
 function psql(sql) {
-  return execFileSync('psql', [DB_URL, '-v', 'ON_ERROR_STOP=1', '-Atq', '-F', '|', '-c', sql], {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  }).trim();
+  return execFileSync(
+    'psql',
+    [...connection, '-v', 'ON_ERROR_STOP=1', '-Atq', '-F', '|', '-c', sql],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env },
+  ).trim();
 }
 
 const hex = (s) => Buffer.from(s, 'utf8').toString('hex');
