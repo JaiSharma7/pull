@@ -45,7 +45,7 @@ import {
   type OutlineUnit,
   type PlannedLesson,
   type ProgressEvent,
-  type ProgressKind,
+  type LessonProgressKind,
   type ReportReason,
 } from '../lib/study-course.js';
 import {
@@ -110,7 +110,7 @@ export function Course({
   const [view, setView] = useState<View>({ kind: 'overview' });
   const [lesson, setLesson] = useState<LessonContent | null>(null);
   const [lessonError, setLessonError] = useState<string | null>(null);
-  const [recorded, setRecorded] = useState<Pick<ProgressEvent, 'kind' | 'lessonId'>[]>([]);
+  const [recorded, setRecorded] = useState<{ kind: LessonProgressKind; lessonId: string }[]>([]);
   const [progressNote, setProgressNote] = useState<string | null>(null);
   const [texts, setTexts] = useState<Record<string, string>>({});
   // A source text that would not load, said as such rather than cached as empty for good.
@@ -319,7 +319,7 @@ export function Course({
   }, []);
 
   const send = useCallback(
-    (kind: ProgressKind, lessonId: string) => {
+    (kind: LessonProgressKind, lessonId: string) => {
       setRecorded((r) => [...r, { kind, lessonId }]);
       pending.current = [
         ...pending.current,

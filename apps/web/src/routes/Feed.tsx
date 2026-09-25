@@ -29,6 +29,7 @@ import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speechSupported } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
+import * as studyApi from '../lib/study-course-api.js';
 import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
@@ -66,6 +67,8 @@ const REPLAY_PORT: ReplayPort = {
   updateSavedItem: stashApi.updateSavedItem,
   createStash: stashApi.createStash,
   deleteStash: stashApi.deleteStash,
+  recordProgress: studyApi.recordProgress,
+  recordAnswers: studyApi.recordAnswers,
 };
 
 /**

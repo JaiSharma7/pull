@@ -11,6 +11,8 @@ import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
 import { mutationId as newMutationId } from './submission.js';
 import type { SavePatch } from './stash-api.js';
 import type { DueReview, FeedRow } from './types.js';
+import type { ProgressEvent as StudyProgressEvent } from './study-course.js';
+import type { AnswerEvent as StudyAnswerEvent } from './study-practice.js';
 
 /**
  * Offline reading, free forever (CLAUDE.md law 3).
@@ -186,7 +188,21 @@ export type PendingWrite =
    * create would then land, and a collection the reader deleted would come back.
    * Ordering per stash is what forbids that, and it is `writeScope`'s job.
    */
-  | { kind: 'stash-delete'; stashId: string };
+  | { kind: 'stash-delete'; stashId: string }
+  /**
+   * One event of a study course's progress -- a lesson shown, read or skipped, a question
+   * shown -- that did not reach the server. Replay-safe: `record_study_progress` records each
+   * client event id once and answers a replay as a duplicate. Its device time travels with
+   * it, clamped by the server.
+   */
+  | { kind: 'study-progress'; event: StudyProgressEvent }
+  /**
+   * One answer to a study question. Replay-safe for the same reason, and graded again on the
+   * server from the response, so nothing the device concluded is trusted. An answer the
+   * server refuses for good (the question was deleted, say) is dropped; one refused because
+   * the day's limit is reached stays queued for the next day.
+   */
+  | { kind: 'study-answer'; event: StudyAnswerEvent };
 
 /**
  * Which queued writes must keep their order relative to each other.
@@ -224,6 +240,14 @@ export function writeScope(write: PendingWrite): string {
     case 'stash-create':
     case 'stash-delete':
       return `stash:${write.stashId}`;
+    // Per question: a retry is recorded as hinted only when it follows the wrong answer
+    // it retried, so a question's answers keep their order. A lesson's events likewise.
+    case 'study-progress':
+      return write.event.itemId
+        ? `study-item:${write.event.itemId}`
+        : `study-lesson:${write.event.lessonId ?? ''}`;
+    case 'study-answer':
+      return `study-item:${write.event.itemId}`;
   }
   /*
    * Unreachable for any `PendingWrite`, and the `never` is what proves it: a

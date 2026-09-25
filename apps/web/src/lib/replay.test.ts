@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PendingWrite } from './offline.js';
-import { type ReplayPort, replayWrite } from './replay.js';
+import { type PendingWrite, writeScope } from './offline.js';
+import { type ReplayPort, replayWrite, StudyLimitReached } from './replay.js';
 
 /**
  * Which call a queued write becomes.
@@ -51,6 +51,14 @@ function recorder(): { calls: Call[]; port: ReplayPort } {
     },
     deleteStash: async (id) => {
       calls.push(['deleteStash', id]);
+    },
+    recordProgress: async (events) => {
+      calls.push(['recordProgress', events]);
+      return { recorded: 1, duplicates: 0, refused: [] };
+    },
+    recordAnswers: async (events) => {
+      calls.push(['recordAnswers', events]);
+      return { recorded: 1, duplicates: 0, refused: [], results: [] };
     },
   };
   return { calls, port };
@@ -195,5 +203,64 @@ describe('replayWrite', () => {
     const { calls, port } = recorder();
     await replayWrite(USER, { kind: 'stash-delete', stashId: 'st3' }, port);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('a queued study event', () => {
+  const progress = {
+    clientEventId: 'e1',
+    kind: 'lesson_read' as const,
+    lessonId: 'l1',
+    occurredAt: '2026-09-25T10:00:00.000Z',
+  };
+  const answer = { clientEventId: 'a1', itemId: 'q1', response: [1, 0, 2] };
+
+  it('replays as a batch of one, with everything it carried', async () => {
+    const { calls, port } = recorder();
+    await replayWrite(USER, { kind: 'study-progress', event: progress }, port);
+    await replayWrite(USER, { kind: 'study-answer', event: answer }, port);
+    expect(calls).toEqual([
+      ['recordProgress', [progress]],
+      ['recordAnswers', [answer]],
+    ]);
+  });
+
+  it('stays queued when refused for today, and is dropped when refused for good', async () => {
+    const { port } = recorder();
+    const limited: ReplayPort = {
+      ...port,
+      recordAnswers: async () => ({
+        recorded: 0,
+        duplicates: 0,
+        refused: [{ index: 0, clientEventId: 'a1', reason: 'limit' }],
+        results: [],
+      }),
+    };
+    await expect(
+      replayWrite(USER, { kind: 'study-answer', event: answer }, limited),
+    ).rejects.toBeInstanceOf(StudyLimitReached);
+
+    const gone: ReplayPort = {
+      ...port,
+      recordProgress: async () => ({
+        recorded: 0,
+        duplicates: 0,
+        refused: [{ index: 0, clientEventId: 'e1', reason: 'not_found' }],
+      }),
+    };
+    await expect(
+      replayWrite(USER, { kind: 'study-progress', event: progress }, gone),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps a question’s answers in order, apart from other questions', () => {
+    expect(writeScope({ kind: 'study-answer', event: answer })).toBe('study-item:q1');
+    expect(writeScope({ kind: 'study-progress', event: progress })).toBe('study-lesson:l1');
+    expect(
+      writeScope({
+        kind: 'study-progress',
+        event: { clientEventId: 'e2', kind: 'item_shown', itemId: 'q1', occurredAt: 'x' },
+      }),
+    ).toBe('study-item:q1');
   });
 });

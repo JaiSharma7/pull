@@ -21,6 +21,15 @@ import {
   type ReportKind,
   type ReportReason,
 } from './study-course.js';
+import {
+  shapeAnswersRecorded,
+  shapeQuestion,
+  shapeQuestionEntries,
+  type AnswerEvent,
+  type AnswersRecorded,
+  type QuestionEntry,
+  type StudyQuestion,
+} from './study-practice.js';
 import { supabase } from './supabase.js';
 
 /**
@@ -374,4 +383,55 @@ export async function fetchHeldBack(
     held.push({ kind: r.lesson_id ? 'lesson' : 'claim', id: target, label });
   }
   return held;
+}
+
+// ------------------------------------------------------------------ practice
+
+/** Where each of a course's questions sits and how the reader stands with it. */
+export async function fetchCourseQuestions(
+  courseId: string,
+  signal?: AbortSignal,
+): Promise<QuestionEntry[]> {
+  const request = supabase.rpc('study_course_questions', { p_course_id: courseId });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw rpcError(error);
+  return shapeQuestionEntries(data);
+}
+
+/**
+ * The questions' own text, in the order asked for. Read from the visible view, so a
+ * question a learner may not be shown never reaches the browser.
+ */
+export async function fetchQuestions(
+  itemIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<StudyQuestion[]> {
+  if (itemIds.length === 0) return [];
+  const request = supabase
+    .from('study_visible_items')
+    .select(
+      'id, lesson_id, purpose, kind, prompt, answer, accepted_answers, distractors, cloze, sequence, pairs, explanation, authored_by',
+    )
+    .in('id', [...itemIds]);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw rpcError(error);
+  const byId = new Map(
+    (data ?? [])
+      .map(shapeQuestion)
+      .filter((q): q is StudyQuestion => q !== null)
+      .map((q) => [q.itemId, q]),
+  );
+  return itemIds.map((id) => byId.get(id)).filter((q): q is StudyQuestion => q !== undefined);
+}
+
+/** Record answers; the server grades each from its response and keeps its own grade. */
+export async function recordAnswers(events: readonly AnswerEvent[]): Promise<AnswersRecorded> {
+  const { data, error } = await supabase.rpc('record_study_answers', {
+    p_answers: events.map((e) => ({
+      ...e,
+      response: typeof e.response === 'string' ? e.response : [...e.response],
+    })),
+  });
+  if (error) throw rpcError(error);
+  return shapeAnswersRecorded(data);
 }

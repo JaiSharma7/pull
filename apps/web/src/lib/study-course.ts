@@ -601,12 +601,15 @@ export function passageWindow(
 
 // ------------------------------------------------------------------ progress events
 
-export type ProgressKind = 'lesson_shown' | 'lesson_read' | 'lesson_skipped';
+export type LessonProgressKind = 'lesson_shown' | 'lesson_read' | 'lesson_skipped';
+export type ProgressKind = LessonProgressKind | 'item_shown';
 
+/** One event for `record_study_progress`: a lesson's, or a question's (`item_shown`). */
 export interface ProgressEvent {
   clientEventId: string;
   kind: ProgressKind;
-  lessonId: string;
+  lessonId?: string;
+  itemId?: string;
   occurredAt: string;
 }
 
@@ -636,10 +639,10 @@ export function shapeProgressResult(data: unknown): ProgressResult {
  */
 export function applyProgress(
   units: readonly OutlineUnit[],
-  events: readonly Pick<ProgressEvent, 'kind' | 'lessonId'>[],
+  events: readonly { kind: LessonProgressKind; lessonId: string }[],
 ): OutlineUnit[] {
   const rank: Record<LessonState, number> = { not_seen: 0, shown: 1, skipped: 2, read: 3 };
-  const reached: Record<ProgressKind, LessonState> = {
+  const reached: Record<LessonProgressKind, LessonState> = {
     lesson_shown: 'shown',
     lesson_skipped: 'skipped',
     lesson_read: 'read',

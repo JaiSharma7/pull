@@ -1,6 +1,7 @@
 import type * as api from './api.js';
 import type { PendingWrite } from './offline.js';
 import type * as stashApi from './stash-api.js';
+import type * as studyApi from './study-course-api.js';
 
 /**
  * How a queued write turns back into the call that makes it real.
@@ -30,7 +31,20 @@ export type ReplayPort = Pick<
   typeof api,
   'savePull' | 'unsavePull' | 'recordRead' | 'gradeRecall' | 'saveExplanation' | 'setConviction'
 > &
-  Pick<typeof stashApi, 'updateSavedItem' | 'createStash' | 'deleteStash'>;
+  Pick<typeof stashApi, 'updateSavedItem' | 'createStash' | 'deleteStash'> &
+  Pick<typeof studyApi, 'recordProgress' | 'recordAnswers'>;
+
+/**
+ * A study event the server refused only for today: kept queued, so the drain tries it again.
+ * Every other refusal of a study event is final -- the lesson or question is gone, or was
+ * never shown -- and the entry is dropped, which is what resolving does.
+ */
+export class StudyLimitReached extends Error {
+  constructor() {
+    super('The daily study record is full; this is kept for tomorrow.');
+    this.name = 'StudyLimitReached';
+  }
+}
 
 export async function replayWrite(
   userId: string,
@@ -93,6 +107,16 @@ export async function replayWrite(
     case 'stash-delete':
       await port.deleteStash(write.stashId);
       return;
+    case 'study-progress': {
+      const result = await port.recordProgress([write.event]);
+      if (result.refused.some((r) => r.reason === 'limit')) throw new StudyLimitReached();
+      return;
+    }
+    case 'study-answer': {
+      const result = await port.recordAnswers([write.event]);
+      if (result.refused.some((r) => r.reason === 'limit')) throw new StudyLimitReached();
+      return;
+    }
   }
   /*
    * Same guard, and here it is doing more than documenting itself: the drain
