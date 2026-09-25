@@ -7,7 +7,7 @@ import {
   type ProviderCallRecord,
   type StructuredProvider,
 } from './structured.ts';
-import { STUDY_STEPS, type StudyStep } from './study-graph.ts';
+import { STUDY_ROOT, STUDY_STEPS, studySuccessorsOf, type StudyStep } from './study-graph.ts';
 import {
   runStudyStep,
   type CachedStage,
@@ -42,6 +42,7 @@ function memoryDb(
   const reserved: { step: string; cents: number }[] = [];
   const journalled: JournalOpen[] = [];
   let persisted: unknown = null;
+  const validatedJobs: string[] = [];
   let recordFailures = opts.failRecord ?? 0;
   const journal: ProviderJournal = {
     async open(call) {
@@ -97,9 +98,21 @@ function memoryDb(
       persisted = payload;
       return { replayed: false };
     },
+    async validateCourse(jobId) {
+      validatedJobs.push(jobId);
+      return { claims: { validated: 1 } };
+    },
     journal,
   };
-  return { db, cache, recorded, reserved, journalled, persisted: () => persisted };
+  return {
+    db,
+    cache,
+    recorded,
+    reserved,
+    journalled,
+    validatedJobs,
+    persisted: () => persisted,
+  };
 }
 
 const job = (over: Partial<JobRow> = {}): JobRow => ({
@@ -190,6 +203,9 @@ describe('the study pipeline with the stub provider', () => {
     expect(payload.lessons.length).toBeGreaterThan(0);
     expect(payload.items.every((i) => i.claimKeys.length > 0)).toBe(true);
     expect(outputs.study_ground).toMatchObject({ withheld: 1 });
+    // And the course is validated last, by the database's checks, with no model.
+    expect(mem.validatedJobs).toEqual([job().id]);
+    expect(outputs.study_validate).toEqual({ claims: { validated: 1 } });
   });
 
   it("writes ids and counts to step outputs, never the reader's text", async () => {
@@ -254,6 +270,35 @@ describe('the study pipeline with the stub provider', () => {
       generation(NOTE, { ownerId: '00000000-0000-4000-8000-00000000000b' });
     await walk(mem.db, other.provider, undefined, job({ id: 'job-4' }));
     expect(other.calls).toBe(2);
+  });
+});
+
+describe('the study graph, walked as the worker walks it', () => {
+  it('reaches every step once from the root, and ends at study_validate', () => {
+    const seen: string[] = [];
+    let frontier: StudyStep[] = [STUDY_ROOT];
+    while (frontier.length > 0) {
+      const step = frontier.shift() as StudyStep;
+      seen.push(step);
+      frontier = [...frontier, ...studySuccessorsOf(step)];
+    }
+    expect(seen).toEqual([...STUDY_STEPS]);
+    expect(studySuccessorsOf('study_validate')).toEqual([]);
+  });
+
+  it("fails the step, with the database's reason, when validation is refused", async () => {
+    const mem = memoryDb(generation());
+    mem.db.validateCourse = async () => {
+      throw new Error('validate study course: the study material was deleted');
+    };
+    await expect(
+      runStudyStep('study_validate', {
+        job: job(),
+        priorOutputs: {},
+        provider: stubStructuredProvider,
+        db: mem.db,
+      }),
+    ).rejects.toThrow(/study material was deleted/);
   });
 });
 

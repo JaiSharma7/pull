@@ -1,6 +1,6 @@
 # Data model
 
-55 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+74 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -22,15 +22,28 @@ User
  ├── convictions · explanations                   ← Conviction Ledger & Say It Back
  ├── session_seeds · interrupt_events             ← Interleaved Recall
  ├── imports ─── import_items                     ← highlights you kept
+ ├── study_source_mutations                      ← tombstones for idempotent saves; outlive
+ │                                                   the source they named
+ ├── study_url_preview_daily_usage                ← the URL-preview quota
+ ├── study_generation_access                      ← the course beta allowlist
  ├── study_sources ─── study_source_versions       ← private extracted readings
- │    ├── study_generations                       ← a draft course from 1-5 versions
+ │    ├── study_generations ─── study_generation_sources   ← a course from 1-5 versions
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
- │    │    └── study_lessons · study_items            ← linked to the claims they cite
- │    └── study_stage_cache                       ← per-reader model output, reused across
- │                                                   courses; gone with any version it read
+ │    │    ├── study_lessons · study_items            ← study_lesson_claims and
+ │    │    │                                             study_item_claims link the claims
+ │    │    │                                             they cite; versioned, one live
+ │    │    │                                             per lineage
+ │    │    ├── study_reports · study_status_log       ← a reader's reports; every status
+ │    │    │                                             each claim, lesson and question
+ │    │    │                                             has had
+ │    │    └── study_answer_events                    ← answers; the proof rule reads these
+ │    └── study_stage_cache ─── study_stage_cache_sources   ← per-reader model output,
+ │                                                   reused across courses; gone with any
+ │                                                   version it read
  ├── user_questions                               ← questions you wrote yourself
  ├── path_progress ─── path_step_done             ← learning path progress & test-outs
  ├── feed_recipes · feed_impressions
+ ├── feedback                                     ← what a reader sent us from Settings
  └── muted_works                                  ← sources the reader asked to see less of
 
 Work                                              ← the thing itself
@@ -41,6 +54,7 @@ Work                                              ← the thing itself
        ├── pulls                                  ← one idea; what the feed serves
        │    ├── citation_anchors                  ← claim-level provenance
        │    ├── pull_relations                    ← lineage + counterpoints
+       │    ├── delta_relations                   ← reviewed pairs the Delta may use
        │    └── quiz_questions
        └── artworks
 

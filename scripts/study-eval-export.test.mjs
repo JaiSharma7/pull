@@ -14,9 +14,17 @@ const generations = [
   { generationId: 'g2', jobId: 'j2', versionIds: ['v3', 'v2'] },
 ];
 const items = [
-  { id: 'i1', generationId: 'g1', status: 'draft' },
+  { id: 'i1', generationId: 'g1', status: 'validated', decided: 'validated' },
   { id: 'i2', generationId: 'g1', status: 'rejected' },
-  { id: 'i3', generationId: 'g2', status: 'draft' },
+  { id: 'i3', generationId: 'g2', status: 'validated', decided: 'validated' },
+  { id: 'i4', generationId: 'g2', status: 'quarantined', decided: 'quarantined' },
+  // Shown to learners, then reported: the validator let it through, so it counts.
+  { id: 'i5', generationId: 'g2', status: 'suspended', decided: 'validated' },
+  // Shown, then withdrawn with no replacement: still what the validator passed.
+  { id: 'i6', generationId: 'g2', status: 'retired', decided: 'validated' },
+  { id: 'i7', generationId: 'g2', status: 'draft' },
+  // A reader's own correction is not the model's output.
+  { id: 'i8', generationId: 'g2', status: 'validated', decided: undefined, authoredBy: 'reader' },
 ];
 const calls = [
   { id: 'c1', jobId: 'j1' },
@@ -37,6 +45,9 @@ test('maps courses to fixture sources by their exact version set, in any order',
       ['i1', 'note', 'visible'],
       ['i2', 'note', 'quarantined'],
       ['i3', 'memos', 'visible'],
+      ['i4', 'memos', 'quarantined'],
+      ['i5', 'memos', 'visible'],
+      ['i6', 'memos', 'visible'],
     ],
   );
   assert.deepEqual(

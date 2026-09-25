@@ -7,7 +7,10 @@ repository, so what changed and when is public history rather than a claim.
 When it does, and you ask for a course built from study sources you saved, the title and
 text of the sources you choose are sent to Google's Gemini API to extract claims and write
 lessons and questions, which are stored privately in your account. It happens only when
-you ask and confirm. See [What never reaches a model](#what-never-reaches-a-model).
+you ask and confirm. Every course also keeps the history of each claim, lesson and
+question's status (checked, held back, reported, corrected); a report you file, with any
+note, and a version you correct are kept with it, privately. See
+[What you create](#what-you-create) and [What never reaches a model](#what-never-reaches-a-model).
 
 This revision also corrects statements that contradicted the rest of this page: the
 summary said a document you submitted for generation outlived your account (it does not),
@@ -139,7 +142,7 @@ text in that counter. Those counts are visible in your account export and delete
 your account. A learning goal searches the public catalogue without calling a model.
 
 **Study courses** are what the beta generates from sources you choose: the goal you
-typed, the claims found in your text with the exact passage each rests on, and draft
+typed, the claims found in your text with the exact passage each rests on, and the
 lessons and questions (`study_generations`, `study_claims`, `study_claim_evidence`,
 `study_lessons`, `study_items`, and the tables linking them). The model output they came
 from is cached in `study_stage_cache` so the same text is not sent twice. All of it is
@@ -149,6 +152,17 @@ every cached output made from it. It is included in your account export and dele
 your account. Whether your account is in the beta is recorded in
 `study_generation_access`, with any note we wrote when adding you — which you can read,
 and which is in your export.
+
+A course also keeps its own history (`study_status_log`): each status every claim, lesson
+and question has had — checked, held back, reported, corrected, withdrawn — and when. If
+you report part of a course (`study_reports`), the report and any note you add (up to
+1,000 characters) are kept with it; you can resolve a report but not edit or withdraw it,
+because it is the record of why something was hidden. If you correct a lesson or question,
+your version is stored alongside the one it replaces, which is kept rather than deleted.
+Answers to a course's questions will be kept in `study_answer_events`; nothing records them
+yet. All of this is readable only by you, is never reviewed by us, is in your export, and
+is deleted with the course — which deleting any of its sources deletes — and with your
+account.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
@@ -305,6 +319,10 @@ goal, to write the lessons and questions. There is no fallback to another provid
 courses. It needs an account in the beta and your confirmation, each time, that you are
 sending that text.
 
+Checking a course, reporting part of it and correcting it involve no model. Answers you give
+to a course's questions are not recorded yet; before practice ships, this page will say
+what is recorded, including anything you type.
+
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
 explanation you have written has ever been sent to a provider.** If that feature ships, this
@@ -425,7 +443,8 @@ this product refuses to charge for, so we are not going to quietly trim it.
 
 You can delete an individual private study source and all its versions from Studio.
 This removes the extracted text for that source, and any study course or cached model
-output built from it, without deleting your account.
+output built from it, with the course's reports, history and answers, without deleting your
+account.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,
@@ -446,8 +465,10 @@ before the account goes.
 
 Four things survive, none of them attached to you:
 
-- **Reports you filed.** `reports.reporter_id` is set to null; the report itself stays,
-  so deleting an account cannot erase a moderation trail.
+- **Reports you filed about catalogue content.** `reports.reporter_id` is set to null; the
+  report itself stays, so deleting an account cannot erase a moderation trail. Reports about
+  your own study courses are different: they were never ours to review, and they are
+  deleted with the course and with your account.
 - **Spending records.** `cost_ledger` keeps a row with no user attached — a model name, a
   token count and a cost — and `provider_calls` keeps one per request made to a model
   provider: when, which model, and whether it answered. Neither ever held a user id or

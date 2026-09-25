@@ -351,6 +351,28 @@ try {
   );
   assert(withheld === 1, 'the unanswerable question was not withheld');
 
+  // `study_validate` decided what a learner may be shown: the two grounded claims, the
+  // lesson built on them and both questions resting on them, and nothing else. Every
+  // decision is on the status log.
+  const [validClaims, validLessons, validItems, logged] = psql(`
+    select count(*) from public.study_claims c join public.study_generations g on g.id = c.generation_id
+      where g.job_id = '${first}' and c.status = 'validated';
+    select count(*) from public.study_lessons l join public.study_generations g on g.id = l.generation_id
+      where g.job_id = '${first}' and l.status = 'validated';
+    select count(*) from public.study_items i join public.study_generations g on g.id = i.generation_id
+      where g.job_id = '${first}' and i.status = 'validated';
+    select count(*) from public.study_status_log s
+      join public.study_items i on i.id = s.item_id
+      join public.study_generations g on g.id = i.generation_id
+      where g.job_id = '${first}' and s.to_status = 'validated' and s.reason = 'validation';`)
+    .split('\n')
+    .map(Number);
+  assert(
+    validClaims === 2 && validLessons === 1 && validItems === 2 && logged === 2,
+    `expected 2 claims, 1 lesson and 2 questions validated (and logged), got ` +
+      `${validClaims}/${validLessons}/${validItems} (${logged} logged)`,
+  );
+
   const [journalled, ledgered, unledgered, open] = psql(`
     select count(*) from public.provider_calls where job_id = '${first}';
     select count(*) from public.cost_ledger where job_id = '${first}' and provider_call_id is not null;

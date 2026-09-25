@@ -195,6 +195,9 @@ describe('buildAccountExport', () => {
       'study_lessons',
       'study_lesson_claims',
       'study_item_claims',
+      'study_reports',
+      'study_status_log',
+      'study_answer_events',
     ]) {
       expect(Object.keys(out.data)).toContain(table);
     }

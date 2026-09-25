@@ -5,6 +5,8 @@ import { geminiConfigFrom } from './config.ts';
 import { createGeminiStructuredProvider } from './structured.ts';
 import {
   answerKey,
+  containsPhrase,
+  givesAwayIfPrinted,
   truncate,
   buildClaimIndex,
   CLAIM_KINDS,
@@ -832,6 +834,40 @@ describe('truncate', () => {
 describe('answerKey', () => {
   it('folds case, punctuation and spacing', () => {
     expect(answerKey('  The "Restudy"   group. ')).toBe('the restudy group');
+  });
+
+  it('keeps a decimal point between digits, and finds an answer that is punctuation', () => {
+    expect(answerKey('1.5')).not.toBe(answerKey('15'));
+    expect(answerKey('3.14')).not.toBe(answerKey('31.4'));
+    expect(answerKey('1,000')).toBe(answerKey('1000'));
+    expect(answerKey('The value is 1.5.')).toBe('the value is 1.5');
+    expect(containsPhrase('In C every statement ends with a semicolon (;).', ';')).toBe(true);
+    expect(containsPhrase('Use ... to spread an array.', '...')).toBe(true);
+    expect(containsPhrase('No punctuation here', ';')).toBe(false);
+  });
+
+  it('reads a decimal as one number when finding one text in another', () => {
+    // 1000 × 0.125 does not print its answer, and "about 3.14" is no evidence for 14.
+    expect(containsPhrase('What is 1000 × 0.125?', '125')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '14')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '3')).toBe(false);
+    expect(containsPhrase('Pi is about 3.14.', '3.14')).toBe(true);
+    expect(containsPhrase('Section 3. Then 14 more.', '14')).toBe(true);
+  });
+
+  it('keeps an answer that is punctuation, and keeps look-alike letters apart', () => {
+    // `;` in a course on C is an answer, not nothing; and ν is not v, nor ρ p.
+    expect(answerKey(';')).toBe(';');
+    expect(answerKey(' ... ')).toBe('...');
+    expect(new Set([';', '.', '!', ''].map(answerKey)).size).toBe(4);
+    expect(answerKey('ν')).not.toBe(answerKey('v'));
+    expect(answerKey('ρ')).not.toBe(answerKey('p'));
+  });
+
+  it('counts a give-away in code points, as Postgres does', () => {
+    expect(givesAwayIfPrinted('🧬🧪')).toBe(false);
+    expect(givesAwayIfPrinted('DNA')).toBe(true);
+    expect(givesAwayIfPrinted('々々')).toBe(true);
   });
 });
 

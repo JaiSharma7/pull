@@ -94,6 +94,12 @@ export interface StudyDb {
     cache: StudyStagePayload | null,
   ): Promise<string | null>;
   persistCourse(jobId: string, payload: unknown): Promise<Record<string, unknown>>;
+  /**
+   * Move every draft claim, lesson and question of the course to `validated` or
+   * `quarantined` by the deterministic checks in SQL; returns the counts by status.
+   * Idempotent: only drafts move.
+   */
+  validateCourse(jobId: string): Promise<Record<string, unknown>>;
   journal: ProviderJournal;
 }
 
@@ -490,6 +496,16 @@ export async function runStudyStep(step: StudyStep, deps: StudyDeps): Promise<St
           withheld: normalized.course.withheld.length,
         },
       };
+    }
+
+    /**
+     * Decide what a learner may be shown. No model: `validate_study_course` runs the
+     * deterministic checks in the same transaction as the statuses they set, the same
+     * checks a reader's revision must pass.
+     */
+    case 'study_validate': {
+      const validated = await db.validateCourse(job.id);
+      return { output: validated };
     }
   }
 }

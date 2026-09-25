@@ -69,15 +69,28 @@ export function buildStudyEvalRun({ manifest, generations, items, calls, ledger,
 
   const providerAttemptIds = calls.filter((c) => sourceOfJob.has(c.jobId)).map((c) => c.id);
 
+  /*
+   * What the validator decided, which is what the gate measures. A question validation
+   * passed reached learners -- even if it was reported and suspended since, or retired --
+   * so it is visible; one it quarantined, or one malformed at generation (`rejected`), is
+   * reviewed as quarantined. A reader's own version is not the model's output and is left
+   * out, as is a draft that never finished validation. `decided` is the status the
+   * `validation` row of `study_status_log` recorded; without one, the current status.
+   */
+  const decision = (item) => {
+    if (item.authoredBy === 'reader') return null;
+    if (item.status === 'rejected') return 'quarantined';
+    const decided = item.decided ?? item.status;
+    return decided === 'validated' ? 'visible' : decided === 'quarantined' ? 'quarantined' : null;
+  };
   const exportedItems = items
-    .filter((item) => sourceOfGeneration.has(item.generationId))
+    .filter((item) => sourceOfGeneration.has(item.generationId) && decision(item))
     .map((item) => {
       const review = reviews[item.id] ?? {};
       return {
         id: item.id,
         sourceId: sourceOfGeneration.get(item.generationId),
-        // `draft` is what validation will decide whether to show; `rejected` never is.
-        status: item.status === 'draft' ? 'visible' : 'quarantined',
+        status: decision(item),
         adversarial: review.adversarial === true,
         reviewers: Array.isArray(review.reviewers) ? review.reviewers : [],
         ...(review.adjudicated ? { adjudicated: review.adjudicated } : {}),
@@ -135,7 +148,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       from public.study_generations g where g.job_id in (${inList});`),
     items: psqlJson(`
       select coalesce(json_agg(json_build_object(
-        'id', i.id, 'generationId', i.generation_id, 'status', i.status)), '[]')
+        'id', i.id, 'generationId', i.generation_id, 'status', i.status,
+        'authoredBy', i.authored_by,
+        'decided', (select l.to_status from public.study_status_log l
+                    where l.item_id = i.id and l.reason = 'validation'
+                    order by l.at desc, l.id desc limit 1))), '[]')
       from public.study_items i join public.study_generations g on g.id = i.generation_id
       where g.job_id in (${inList});`),
     calls: psqlJson(`

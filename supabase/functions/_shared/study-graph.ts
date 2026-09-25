@@ -15,6 +15,9 @@
  *     study_assemble     one AssembleStudyCourse call over the grounded claims, cached
  *           │
  *     study_ground       resolve evidence, check the course, write the rows (no model)
+ *           │
+ *     study_validate     decide what a learner may be shown: validated or quarantined,
+ *                        by the deterministic checks in SQL (no model)
  *
  * A line, so `after` and `needs` coincide except that the later steps read the plan.
  */
@@ -24,6 +27,7 @@ export const STUDY_STEPS = [
   'study_extract',
   'study_assemble',
   'study_ground',
+  'study_validate',
 ] as const;
 
 export type StudyStep = (typeof STUDY_STEPS)[number];
@@ -41,6 +45,8 @@ export const STUDY_NODES: Record<StudyStep, StudyNode> = {
     needs: ['study_prepare', 'study_extract', 'study_assemble'],
     after: ['study_assemble'],
   },
+  // Runs after grounding but reads nothing from it: the rows are in the database.
+  study_validate: { needs: [], after: ['study_ground'] },
 };
 
 export const STUDY_ROOT: StudyStep = 'study_prepare';
