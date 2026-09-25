@@ -266,6 +266,11 @@ const EXPORTED: { table: string; column: string; key: string; page?: number }[] 
   { table: 'study_reports', column: 'owner_id', key: 'id' },
   { table: 'study_status_log', column: 'owner_id', key: 'id' },
   { table: 'study_answer_events', column: 'owner_id', key: 'id' },
+  // The courses the reader keeps (20260925120000): each course, the sources it follows,
+  // and what they were shown, read or skipped in it.
+  { table: 'study_courses', column: 'owner_id', key: 'id' },
+  { table: 'study_course_sources', column: 'owner_id', key: 'id' },
+  { table: 'study_progress_events', column: 'owner_id', key: 'id' },
 ];
 
 /*

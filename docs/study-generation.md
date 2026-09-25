@@ -226,8 +226,8 @@ two independently written records.
 - Every derived row is owner-scoped under RLS and joined to its version by a composite
   foreign key on `(version, owner)`, so the database refuses a row whose owner is not the
   version's. Readers can read their own rows and write none directly.
-- Deleting any source of a course deletes the whole course and every cache entry derived
-  from it, and cancels a job still running. Account deletion cascades. The account export
+- Deleting any source of a course deletes every generation built on it and every cache
+  entry derived from it, and cancels a job still running. Account deletion cascades. The account export
   includes every table.
 - The journal and ledger keep no content. They outlive the material, because the charge
   happened.
@@ -237,7 +237,8 @@ two independently written records.
 
 ## Not yet
 
-- Course containers, progress events, and the learner-facing screens.
+- The learner-facing screens. The course container, its source bundle, regeneration and
+  progress events are in [`study-courses.md`](./study-courses.md).
 - An Anthropic fallback for the study stages: the adapter journals and ledgers per attempt,
   and the Anthropic provider has not been taught that yet. When every Gemini model is
   unavailable, a study step fails and is retried like any other unbilled failure.

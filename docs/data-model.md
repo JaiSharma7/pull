@@ -1,6 +1,6 @@
 # Data model
 
-74 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
+77 tables in `public`, created by the timestamped migrations in `supabase/migrations/`
 (`YYYYMMDDHHMMSS_name.sql`, applied in filename order). Every one has RLS enabled with
 at least one policy, every foreign key has a supporting index, and every
 `SECURITY DEFINER` function pins its `search_path`. CI check 4 replays the whole thing
@@ -26,8 +26,12 @@ User
  │                                                   the source they named
  ├── study_url_preview_daily_usage                ← the URL-preview quota
  ├── study_generation_access                      ← the course beta allowlist
+ ├── study_courses ─── study_course_sources        ← a private course and the sources it
+ │    │                                              follows; separate from paths
+ │    └── study_progress_events                   ← shown, read, skipped; never proof
  ├── study_sources ─── study_source_versions       ← private extracted readings
- │    ├── study_generations ─── study_generation_sources   ← a course from 1-5 versions
+ │    ├── study_generations ─── study_generation_sources   ← one generation of a course,
+ │    │                                              from 1-5 versions
  │    │    ├── study_claims ─── study_claim_evidence   ← exact spans, checked in SQL
  │    │    ├── study_lessons · study_items            ← study_lesson_claims and
  │    │    │                                             study_item_claims link the claims
@@ -120,13 +124,25 @@ all versions; account deletion also cascades. Direct writes to version rows are
 denied, and another reader cannot read or delete them. See
 [`study-import.md`](./study-import.md).
 
-**What a course is derived from, it cannot outlive.** Every study-generation row names its
-version and owner through a composite foreign key on `(version, owner)`, so the database
-refuses a derived row whose owner is not the version's. Deleting any version a course or a
-cache entry came from deletes the whole course or entry (a trigger, because a foreign key
-cannot delete a parent when one child goes) and cancels a job still running. The provider
+**What a generation is derived from, it cannot outlive.** Every study-generation row names
+its version and owner through a composite foreign key on `(version, owner)`, so the
+database refuses a derived row whose owner is not the version's. Deleting any version a
+generation or a cache entry came from deletes the whole generation or entry (a trigger,
+because a foreign key cannot delete a parent when one child goes) and cancels a job still
+running; the course it belonged to goes with its last source. The provider
 journal and ledger keep no content and are kept. See
 [`study-generation.md`](./study-generation.md).
+
+**A course is a container, and a generation is one version of it.** `study_courses` holds
+the reader's goal and, in `study_course_sources`, the sources the course follows; each
+`study_generations` row is one preparation of it from the versions it pinned. Regenerating
+after a source changes adds a generation to the same course rather than a new course, and
+the course's current generation is its newest one whose validation has finished. Nothing
+carries between generations: lessons and questions are new rows, and progress
+(`study_progress_events`) and proof attach to the rows they were recorded against. A course
+goes with its last source, or when the reader deletes it; its sources stay. It shares no key
+with the public `paths`, which are curated and keyed to public pulls. See
+[`study-courses.md`](./study-courses.md).
 
 **A reader's own question lives in its own table.** `user_questions` rather than a row in
 `quiz_questions`, because the pipeline upserts canonical questions with
