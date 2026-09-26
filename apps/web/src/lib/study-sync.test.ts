@@ -53,9 +53,21 @@ const locks = {
 };
 const nav: { locks?: typeof locks } = {};
 vi.stubGlobal('navigator', nav);
+// The page's own events, as far as the hold listens to them.
+const pageEvents = new Map<string, (e: Event) => void>();
+vi.stubGlobal('addEventListener', (type: string, fn: (e: Event) => void) =>
+  pageEvents.set(type, fn),
+);
 
-const { flushJudging, holdJudging, releaseAllJudging, releaseJudging, sendAnswer, sendProgress } =
-  await import('./study-sync.js');
+const {
+  flushJudging,
+  holdJudging,
+  refreshJudging,
+  releaseAllJudging,
+  releaseJudging,
+  sendAnswer,
+  sendProgress,
+} = await import('./study-sync.js');
 
 const event = (id = 'e1') => ({ clientEventId: id, itemId: 'q1', response: 'restudying' });
 const pgError = (code: string) => {
@@ -259,16 +271,51 @@ describe('an answer left unjudged', () => {
     holdJudging('u1', { ...held, clientEventId: 'next', itemId: 'q2' });
     await vi.waitFor(() => expect(sentIds()).toEqual(['held']));
     expect(api.recordAnswers.mock.calls[0]![0][0]).toMatchObject({ selfGrade: 'correct' });
-    // Not under someone else's session.
+    // Not under someone else's session, where it would be refused: queued for its reader.
     session.current = 'u2';
     holdJudging('u1', { ...held, clientEventId: 'third' });
     await Promise.resolve();
     expect(sentIds()).toEqual(['held']);
+    expect(api.queueMutation).toHaveBeenCalledWith('u1', {
+      kind: 'study-answer',
+      event: expect.objectContaining({ clientEventId: 'next' }),
+    });
+  });
+
+  it('lets go of a hold another page took, rather than writing it back', async () => {
+    holdJudging('u1', held);
+    // Taken by another page -- or removed with the account in another tab.
+    store.delete(ownKey()!);
+    refreshJudging(Date.now());
+    expect(ownKey()).toBeUndefined();
+    await flushJudging('u1', { own: true });
+    expect(api.recordAnswers).not.toHaveBeenCalled();
+  });
+
+  it('says when the page goes, so another page can take its holds at once', () => {
+    holdJudging('u1', held);
+    // Kept in the back-forward cache, it has not gone.
+    pageEvents.get('pagehide')!({ persisted: true } as unknown as Event);
+    expect(JSON.parse(store.get(ownKey()!)!).heldAt).toBeGreaterThan(0);
+    pageEvents.get('pagehide')!({ persisted: false } as unknown as Event);
+    expect(JSON.parse(store.get(ownKey()!)!)).toMatchObject({ clientEventId: 'held', heldAt: 0 });
+  });
+
+  it('never leaves an older copy in storage to hide a newer one', async () => {
+    holdJudging('u1', held);
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('full');
+    });
+    holdJudging('u1', { ...held, clientEventId: 'next', itemId: 'q2' });
+    setItem.mockRestore();
+    expect(ownKey()).toBeUndefined();
+    await flushJudging('u1', { own: true });
+    await vi.waitFor(() => expect(sentIds().sort()).toEqual(['held', 'next']));
   });
 
   it('is taken from a page without Web Locks only once that page has gone quiet', async () => {
     holdElsewhere('u1', 'live', { ...held, heldAt: Date.now() });
-    holdElsewhere('u1', 'quiet', { ...held, clientEventId: 'quiet', heldAt: Date.now() - 120_000 });
+    holdElsewhere('u1', 'quiet', { ...held, clientEventId: 'quiet', heldAt: Date.now() - 240_000 });
     await flushJudging('u1');
     expect(sentIds()).toEqual(['quiet']);
     expect(store.has('wap:study-judging:u1:live')).toBe(true);

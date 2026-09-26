@@ -101,12 +101,19 @@ const PAGE =
 const JUDGING = 'wap:study-judging:';
 const judgingKey = (userId: string, page = PAGE) => `${JUDGING}${userId}:${page}`;
 const pageLock = (page: string) => `wap.judging.${page}`;
-/** How often a page without Web Locks says its holds are live, and when one is not. */
+/**
+ * How often a page without Web Locks says its holds are live, and when one is not: minutes,
+ * as a hidden tab's timers run once a minute at best. A page that goes says so at once
+ * (`pagehide`), so its holds are not left waiting that long.
+ */
 const HEARTBEAT_MS = 15_000;
-const STALE_MS = 60_000;
+const STALE_MS = 180_000;
 
-/** This page's holds, as written: the copy a page without storage keeps. */
-const mine = new Map<string, string>();
+/**
+ * This page's holds, as written: the copy a page without storage keeps, and whether storage
+ * took it -- a hold gone from storage since was taken, or deleted, by another page.
+ */
+const mine = new Map<string, { raw: string; stored: boolean }>();
 
 let pageLocked = false;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -124,21 +131,46 @@ function keepPageAlive(): void {
     return;
   }
   if (heartbeat) return;
-  heartbeat = setInterval(() => {
-    for (const [key, raw] of mine)
-      write(key, { ...(JSON.parse(raw) as object), heldAt: Date.now() });
-  }, HEARTBEAT_MS);
+  heartbeat = setInterval(() => refreshJudging(Date.now()), HEARTBEAT_MS);
   // Never what keeps a process alive where timers can (a test runner).
   (heartbeat as { unref?: () => void }).unref?.();
+  globalThis.addEventListener?.('pagehide', (e: Event) => {
+    if (!(e as PageTransitionEvent).persisted) refreshJudging(0);
+  });
+}
+
+/**
+ * Say this page's holds are live as of `at` -- or, at 0, that the page is going and another
+ * may take them now. A hold another page has taken, or an account deletion removed, is let
+ * go here too, never written back.
+ */
+export function refreshJudging(at: number): void {
+  for (const [key, { raw, stored }] of [...mine]) {
+    let gone = false;
+    try {
+      gone = stored && localStorage.getItem(key) === null;
+    } catch {
+      /* no storage: nothing else could have taken it */
+    }
+    if (gone) mine.delete(key);
+    else write(key, { ...(JSON.parse(raw) as object), heldAt: at });
+  }
 }
 
 function write(key: string, value: object): void {
   const raw = JSON.stringify(value);
-  mine.set(key, raw);
   try {
     localStorage.setItem(key, raw);
+    mine.set(key, { raw, stored: true });
   } catch {
-    /* no storage: the copy in memory is all there is, and it goes with the page */
+    // No storage, or none left: the copy in memory is all there is, and it goes with the
+    // page. An older copy left in storage would be read before it, so it goes.
+    mine.set(key, { raw, stored: false });
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* as above */
+    }
   }
 }
 
@@ -149,7 +181,7 @@ function read(key: string): string | null {
   } catch {
     /* as above */
   }
-  return mine.get(key) ?? null;
+  return mine.get(key)?.raw ?? null;
 }
 
 function remove(key: string): void {
@@ -171,12 +203,11 @@ export function holdJudging(userId: string, event: AnswerEvent): void {
   keepPageAlive();
   const key = judgingKey(userId);
   const displaced = parseHold(read(key));
-  if (
-    displaced &&
-    displaced.clientEventId !== event.clientEventId &&
-    getCurrentUserId() === userId
-  ) {
-    void sendAnswer(userId, displaced);
+  if (displaced && displaced.clientEventId !== event.clientEventId) {
+    // Under someone else's session it would be refused and lost: queued, it waits for its
+    // reader, as their other answers do.
+    if (getCurrentUserId() === userId) void sendAnswer(userId, displaced);
+    else void queueMutation(userId, { kind: 'study-answer', event: displaced });
   }
   write(key, { ...event, heldAt: Date.now() });
 }
