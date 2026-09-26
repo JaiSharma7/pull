@@ -601,6 +601,72 @@ describe('listening settings', () => {
   });
 });
 
+describe('a local-only track is an interlude', () => {
+  const lesson: Track = { id: 'lesson', title: 'Lesson', text: 'PRIVATE', localOnly: true };
+  const ids = (state: PlayerState) => state.queue.map((t) => t.id);
+
+  it('plays ahead of the Pull it interrupts, and ends on it, stopped', () => {
+    // Treated as a track, the lesson ending started the next Pull by itself.
+    const playingA = run([{ type: 'enqueue', tracks: [track('a'), track('b')] }]);
+    const during = playerReducer(playingA, { type: 'playNow', track: lesson });
+    expect(ids(during)).toEqual(['lesson', 'a', 'b']);
+    expect(currentTrack(during)?.id).toBe('lesson');
+    expect(during.status).toBe('playing');
+    // Under a new epoch, or the provider takes the lesson for the utterance already
+    // playing and never speaks it -- and the Pull's own ending would end the lesson.
+    expect(during.epoch).toBe(playingA.epoch + 1);
+    expect(playerReducer(during, { type: 'ended', token: playingA.epoch })).toBe(during);
+    const after = playerReducer(during, { type: 'ended', token: during.epoch });
+    expect(ids(after)).toEqual(['a', 'b']);
+    expect(currentTrack(after)?.id).toBe('a');
+    expect(after.status).toBe('idle');
+    // Next from the lesson is the same end, and so is previous -- a lock screen's, say.
+    expect(playerReducer(during, { type: 'next' })).toEqual(after);
+    expect(playerReducer(during, { type: 'prev' })).toEqual(after);
+  });
+
+  it('keeps a paused or stopped Pull next rather than skipping it', () => {
+    const pausedOnB = run([
+      { type: 'enqueue', tracks: [track('a'), track('b')] },
+      { type: 'next' },
+      { type: 'pause' },
+    ]);
+    const during = playerReducer(pausedOnB, { type: 'playNow', track: lesson });
+    expect(ids(during)).toEqual(['a', 'lesson', 'b']);
+    const dismissed = playerReducer(during, { type: 'dismiss', id: 'lesson' });
+    expect(ids(dismissed)).toEqual(['a', 'b']);
+    expect(currentTrack(dismissed)?.id).toBe('b');
+    expect(dismissed.status).toBe('idle');
+  });
+
+  it('dismissing a paused lesson ends it as dismissing a playing one does', () => {
+    const playingA = run([{ type: 'enqueue', tracks: [track('a'), track('b')] }]);
+    const paused = run([{ type: 'playNow', track: lesson }, { type: 'pause' }], playingA);
+    const dismissed = playerReducer(paused, { type: 'dismiss', id: 'lesson' });
+    expect(ids(dismissed)).toEqual(['a', 'b']);
+    expect(currentTrack(dismissed)?.id).toBe('a');
+    expect(dismissed.status).toBe('idle');
+  });
+
+  it('dismissing what is not on takes it out and leaves the rest alone', () => {
+    const playingA = run([{ type: 'enqueue', tracks: [track('a'), track('b')] }]);
+    const dismissed = playerReducer(playingA, { type: 'dismiss', id: 'b' });
+    expect(ids(dismissed)).toEqual(['a']);
+    expect(dismissed.status).toBe('playing');
+    expect(playerReducer(playingA, { type: 'dismiss', id: 'nothing' })).toBe(playingA);
+  });
+
+  it('is never brought back from storage, even when stored by hand', () => {
+    const raw = JSON.stringify({
+      v: 1,
+      owner: 'u1',
+      queue: [{ id: 'a', title: 'A', text: 'A' }, { ...lesson }],
+      index: 1,
+    });
+    expect(hydrate(raw, 'u1', 0).queue.map((t) => t.id)).toEqual(['a']);
+  });
+});
+
 describe('serialize and hydrate', () => {
   const full = run([
     { type: 'enqueue', tracks: three },
@@ -616,6 +682,30 @@ describe('serialize and hydrate', () => {
     const back = hydrate(serialize(full, 'u1'), 'u1', 0);
     // And under a fresh epoch: a restored queue has not started anything.
     expect(back).toEqual({ ...full, status: 'paused', epoch: 0 });
+  });
+
+  it('never stores a local-only track, and keeps the cursor on the same place', () => {
+    // A study lesson is the reader's own material. `hydrate` would bring it back as an
+    // ordinary track, spoken in whatever voice the player has, so it is never written.
+    const lesson: Track = { id: 'lesson', title: 'Lesson', text: 'PRIVATE', localOnly: true };
+    // A track after the one playing, so a cursor left uncounted lands on it rather than
+    // being clamped back onto the right one by accident.
+    const state: PlayerState = {
+      ...INITIAL_PLAYER,
+      queue: [track('a'), lesson, track('b'), track('c')],
+      index: 2,
+      status: 'playing',
+    };
+    const raw = serialize(state, 'u1');
+    expect(raw).not.toContain('PRIVATE');
+    const back = hydrate(raw, 'u1', 0);
+    expect(back.queue.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+    expect(currentTrack(back)?.id).toBe('b');
+    // On the lesson itself, the cursor names what comes after it.
+    expect(currentTrack(hydrate(serialize({ ...state, index: 1 }, 'u1'), 'u1', 0))?.id).toBe('b');
+    // A queue of nothing but lessons stores nothing.
+    const only = { ...INITIAL_PLAYER, queue: [lesson], status: 'playing' as const };
+    expect(hydrate(serialize(only, 'u1'), 'u1', 0)).toEqual(INITIAL_PLAYER);
   });
 
   it('comes back idle when there was nothing queued', () => {

@@ -2487,6 +2487,7 @@ export type Database = {
           text_failures: string[]
           text_status: string
           title: string | null
+          validation_tried_at: string | null
           withheld: Json
         }
         Insert: {
@@ -2506,6 +2507,7 @@ export type Database = {
           text_failures?: string[]
           text_status?: string
           title?: string | null
+          validation_tried_at?: string | null
           withheld?: Json
         }
         Update: {
@@ -2525,6 +2527,7 @@ export type Database = {
           text_failures?: string[]
           text_status?: string
           title?: string | null
+          validation_tried_at?: string | null
           withheld?: Json
         }
         Relationships: [
@@ -3745,6 +3748,7 @@ export type Database = {
     Views: {
       study_course_overview: {
         Row: {
+          awaiting_validation: boolean | null
           claim_count: number | null
           claims_demonstrated_count: number | null
           course_id: string | null
@@ -3755,6 +3759,7 @@ export type Database = {
           held_back: boolean | null
           latest_generation_id: string | null
           latest_job_status: Database["public"]["Enums"]["job_status"] | null
+          latest_settled: boolean | null
           lesson_count: number | null
           lessons_read_count: number | null
           newer_generation_held_back: boolean | null
@@ -4734,6 +4739,10 @@ export type Database = {
       study_fold: { Args: { p_text: string }; Returns: string }
       study_fold_strict: { Args: { p_text: string }; Returns: string }
       study_generation_available: { Args: never; Returns: boolean }
+      study_generation_awaiting_validation: {
+        Args: { p_generation_id: string }
+        Returns: boolean
+      }
       study_generation_rank: {
         Args: { p_generation_id: string }
         Returns: number

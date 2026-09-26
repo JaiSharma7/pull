@@ -71,7 +71,9 @@ a:hover {
  * A focus ring is the one place a shadow is permitted: here it is an
  * accessibility affordance rather than decoration. Never remove it.
  */
-:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+/* `summary` too: a disclosure's handle is a control, and the browser's own outline for it
+   was near-invisible on the dark ground. */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);

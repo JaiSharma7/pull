@@ -328,6 +328,37 @@ describe('speak', () => {
     expect(spoken[1]!.voice?.voiceURI).toBe('urn:local');
   });
 
+  it('says nothing, rather than use a remote voice, when told to speak only locally', () => {
+    // A reader's own study material must not reach a speech service. A local voice that
+    // disappears between choosing and speaking -- or a device with none in the reader's
+    // language -- used to leave the utterance to the browser's default, a remote voice.
+    const { spoken } = fakeSynthesis([voice({ voiceURI: 'urn:remote', localService: false })]);
+    const ended: number[] = [];
+    speak('PRIVATE LESSON TEXT', {
+      voiceURI: 'urn:gone',
+      localOnly: true,
+      onEnd: (token) => ended.push(token),
+    });
+    expect(spoken).toHaveLength(0);
+    expect(ended).toHaveLength(1);
+    speak('PRIVATE LESSON TEXT', { voiceURI: 'urn:remote', localOnly: true });
+    expect(spoken).toHaveLength(0);
+  });
+
+  it('speaks local-only text in a local voice when the chosen voice is remote', () => {
+    // The player's voice is chosen for Pulls. A lesson queued behind that choice keeps its
+    // text on the device by taking the local voice instead -- and so does a change of
+    // voice mid-lesson, which is the same `begin`.
+    const { spoken } = fakeSynthesis([
+      voice({ voiceURI: 'urn:remote', localService: false }),
+      voice({ voiceURI: 'urn:local' }),
+    ]);
+    speak('PRIVATE LESSON TEXT', { voiceURI: 'urn:remote', localOnly: true });
+    expect(spoken[0]!.voice?.voiceURI).toBe('urn:local');
+    adjustSpeaking({ voiceURI: 'urn:remote' });
+    expect(spoken.at(-1)!.voice?.voiceURI).toBe('urn:local');
+  });
+
   it('picks a local voice in the reader’s own language, not the first one listed', () => {
     // `listVoices` sorts local first, then the device default, then by language
     // code — and on Chrome Android no LOCAL voice carries `default`, because the

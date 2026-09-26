@@ -15,8 +15,7 @@ The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, w
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
-Nothing here adds a screen: the guided course is a later change, and it reads what this
-page describes.
+The screens that read it are described under [The screens](#the-screens).
 
 ## The shape
 
@@ -58,7 +57,7 @@ again from the newest version of each source in its bundle, for the course's own
   then refused with 22023 and DETAIL `too_large`, however often it is asked, until the
   reader saves a shorter version or deletes a source.
 - It is refused with 55000 and DETAIL `preparing` while a generation of the course is still
-  queued or running.
+  queued or running, or saved and awaiting its validation (`awaiting_validation`, below).
 - It is refused with 55000 and DETAIL `unchanged` when a finished generation already used
   exactly these versions: while the prompt, schema and model are unchanged, the stage cache
   would return the same course and the reader would pay a job for it. That includes a
@@ -71,10 +70,11 @@ again from the newest version of each source in its bundle, for the course's own
   nothing about the new one.
 
 `study_course_overview.update_available` says when a bundle source has a newer version than
-the newest finished generation used -- the newest, not the current, so it never offers a
-regeneration that would be refused as unchanged. It does not know whether one is already
-being prepared, or whether the newest versions pass the size limit: offer preparation only
-when `preparing` is false, and say `too_large` in words. It is also false when no
+the newest generation finished or awaiting its validation used -- the newest, not the
+current, so it never offers a regeneration that would be refused as unchanged. It does not
+know whether one is queued or running, or whether the newest versions pass the size limit:
+offer preparation only when `preparing` and `awaiting_validation` are both false, and say
+`too_large` in words. It is also false when no
 generation has finished -- the first failed before it was persisted, or a source deletion
 took them all -- and a regeneration is then accepted, so offer preparation whenever
 `generation_id` is null and nothing is preparing. `newer_generation_held_back` says when
@@ -154,7 +154,9 @@ give structure and state; the lessons' and questions' own text is read from the
 | `preparing`                                       | A generation of the course is queued or running                                           |
 | `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
 | `held_back`                                       | There is a current generation, and validation passed no lesson in it                      |
-| `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
+| `awaiting_validation`                             | The newest generation is saved and waits for the validation sweep, for up to a day        |
+| `latest_settled`                                  | The newest generation is saved and validation settled it, whatever its job's status       |
+| `update_available`                                | A bundle source has a newer version than the newest generation finished or awaiting used  |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
 | `claim_count`, `claims_demonstrated_count`        | Validated claims, and those whose recall the reader has demonstrated                      |
@@ -163,6 +165,25 @@ A current generation with no lesson to show is one of two things, and `held_back
 which: validation passed no lesson in it (it may still have course-level questions), or the
 reader's own reports and withdrawals took every lesson it passed. With no current
 generation `held_back` is false; `preparing` and `latest_job_status` say what is happening.
+
+`awaiting_validation` is the one thing `latest_job_status` cannot say. A job whose
+validation step runs out of retries ends `failed` with its course already saved, and
+`validate_stranded_study_courses` takes that course up once it is ten minutes old, five a
+run. `study_generation_awaiting_validation` says which generations are coming that way --
+the job has ended, the course is saved (`assembled_at`, as the sweep keys on), its text is
+pending -- for a day from when it was saved, after which one validation keeps refusing stops
+standing in the reader's way. The day is counted from saving rather than from queueing
+because the worker lets a step wait on the budget a day at a time: a course can be saved more
+than a day after it was asked for. A screen shows such a course as on its way rather than
+failed; `update_available` is judged against it, so it is not offered again; and preparing
+the course again is refused with `preparing` while it awaits, as while a job is queued or
+running. The sweep takes courses within their day first and, among those, the least recently
+tried (`validation_tried_at`, stamped where a refusal does not undo it), so courses
+validation keeps refusing take turns with the rest rather than every run. `latest_settled`
+says when a newest generation whose job failed was saved and settled after all, so a screen
+says it was held back rather than that it failed
+(`20260925190000_study_course_awaiting_validation.sql`,
+`20260925195000_study_course_awaiting_from_saving.sql`).
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
 order -- unit, then position -- with the unit's number and title, the lesson's key, title,
@@ -209,6 +230,74 @@ generation); the outline's `first_shown_at` and `read_at`; the question list's `
 mark every column nullable; these never are: `course_id`, `goal`, `created_at`, every
 count, `preparing`, `newer_generation_held_back`, `held_back`, `update_available`, and `objectives`,
 `disagreements` and `withheld` (empty rather than null while the text is not validated).
+
+## The screens
+
+Signed in and not a guest, as Studio is; the two addresses answer a guest with the note the
+other signed-in destinations give, and a visitor with sign-in.
+
+- **Making a course** is in Studio, under the saved sources: choose one to five, say what
+  the course is for, and confirm that the text goes to the model provider. It is offered
+  only when `study_generation_available()` says the reader is in the beta, and it keeps one
+  mutation id across retries of the same request, dropping it only once the server has
+  answered with a refusal -- so a lost response is answered by the course already queued.
+- **`/courses`** lists the reader's 200 newest courses from `study_course_overview`, saying so
+  when there are more, each with where it
+  stands: being prepared, could not be prepared, a source deleted, or lessons read. With no
+  course yet, it sends the reader to Studio's study material (`/studio?view=study`), where
+  the builder says to save a source first when there is none.
+- **`/course/:id`** is one course: its overview and objectives, the outline by unit, and a
+  way in. While a generation is on its way -- a job queued or running, or one saved and
+  `awaiting_validation`, including a newer version of a course being read -- the course
+  page looks again every fifteen seconds for five minutes, then every minute. A session does
+  not: it walks the lessons it
+  planned, with their titles and unit titles, so a newer version that arrives meanwhile
+  changes nothing under it. An address that is not a course id reads as no such course.
+- **A session** is about ten minutes: unfinished lessons in course order until their
+  minutes reach ten, and it does not start a new unit once half the time is spent. Opening
+  a lesson records `lesson_shown`; Done records `lesson_read`, Skip `lesson_skipped`. A
+  lesson that would not open -- held back by a report on a claim it shares, withdrawn in
+  another tab, unreachable offline -- was never shown, so going past it ("Go on") records
+  nothing. It ends on a screen of its own that lists what was covered, each with its recap
+  to say from memory, and offers to stop before it offers to go on. Skipping is not
+  finishing: once every lesson is read or skipped, the course offers the skipped ones again,
+  and says "every lesson read" only when that is so.
+- **A lesson** shows where it comes from: each claim it teaches, read from
+  `study_visible_claims`, with the passages of the reader's text it rests on
+  (`study_claim_evidence`, for those claims only), and on request the passage in its
+  surrounding text from `study_source_versions.extracted_text`. Offsets are code points,
+  and a span that no longer matches the text is shown alone rather than in the wrong place.
+- **Listening** hands the lesson to the app's player as a `localOnly` track, so one voice
+  speaks at a time and the player's controls reach it. Such a track is spoken only by a
+  voice installed on the device -- the reader's chosen voice when it is local, else the
+  local one in their language -- and never stored with the queue; without a local voice the
+  screen says so rather than offering to read it. It is an interlude, not a place in the
+  queue: it plays ahead of the Pull it interrupts, and when it ends, or the reader leaves the
+  lesson, it leaves the queue and the player stops on that Pull.
+- **Progress is sent at once** and kept in memory until the server accepts it; an event
+  refused with `limit` stays and is sent with the next one. A durable offline queue, and
+  questions, are the practice change's.
+- **Something wrong with a lesson** is answered beside it: report it (a reason, and a
+  note if the reader wants), correct it, or withdraw it. A report holds the lesson back at
+  once and the session moves on, with an undo; a correction is saved through
+  `revise_study_lesson` as a new version that keeps the reader's place, and its failed
+  checks are said in words; a withdrawal asks first. Each claim in "where this comes from"
+  can be reported too, which holds back the lessons resting on it. The course page lists
+  what the reader has reported and not settled, one entry per lesson or claim, each with a
+  Restore that dismisses every open report on it (`dismiss_study_report`) -- a report sent
+  twice, or from two tabs, would otherwise keep it held back. It reads the open reports and
+  each one's title or statement from the tables, since reported content is what the visible
+  views hide, and says after a Restore whether the lesson is back or still held by a claim.
+  A correction being typed is kept while its form is closed, and leaving the lesson over one
+  not saved -- Done, Skip or back to the course -- asks once. An answer that arrives after
+  the reader moved on acts on its own lesson, not on the one shown.
+- **Preparing again** is offered when `update_available`, or when there is no current
+  generation and nothing is on its way; it asks for consent each time. **Deleting** calls
+  `delete_study_course` and says the course is deleted, including when it had already
+  gone.
+- **Refusals** are read by SQLSTATE and DETAIL, as below: `unchanged`, `preparing`, `beta`
+  and `unavailable` each have their own sentence, and anything else shows the server's
+  message.
 
 ## Deletion
 

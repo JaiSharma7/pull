@@ -1,0 +1,275 @@
+/*
+ * Study courses: the reader's private courses, a course's outline, a lesson, the passage
+ * it rests on, and the end of a session.
+ *
+ * Index rows like Paths; a lesson reads like a Source page. Every colour, rule and radius
+ * is a token. No gradient, no shadow. A state is always said in words beside any colour.
+ */
+
+.courses__list,
+.course__units,
+.course__lessons,
+.course__claims {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.courses__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.courses__item .meta {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.courses__title,
+.course__lesson-title {
+  padding-left: 0;
+  padding-right: 0;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+.courses__title {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  text-transform: none;
+  letter-spacing: -0.015em;
+}
+
+.courses__status,
+.course__lesson-state {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.course__lesson-state--read {
+  color: var(--accent);
+}
+
+.course__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.course__objectives,
+.course__covered,
+.course__notes {
+  margin: var(--space-2) 0 0;
+  padding-inline-start: var(--space-5);
+  line-height: var(--line-normal);
+}
+
+.course__objectives li + li,
+.course__covered li + li,
+.course__notes li + li {
+  margin-top: var(--space-2);
+}
+
+.course__unit {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.course__unit-title {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: 0 0 var(--space-3);
+}
+
+.course__lesson {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+/* A lesson is read, not operated: the body face, not the button's. */
+.course__lesson-title {
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+}
+
+.course__lesson-title[aria-current='step'] {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+.course__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* A course's controls wait while a change is on its way, and look it. `aria-disabled` rather
+   than `disabled`, so the pressed button keeps focus -- and a control that keeps focus keeps
+   the contrast floors, so this recolours with tokens that meet them rather than fading, as
+   `.btn:disabled` does to controls that leave the tab order. The focus ring is untouched.
+   Scoped to the course, because Review and the interrupt use `aria-disabled` on answers
+   styled their own way. */
+.course .btn[aria-disabled='true'] {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.course .btn--primary[aria-disabled='true'] {
+  background: transparent;
+  color: var(--accent);
+}
+
+.course__lesson-heading {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  line-height: var(--line-tight);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.course__objective {
+  color: var(--text-soft);
+  line-height: var(--line-snug);
+}
+
+.course__explanation p {
+  line-height: var(--line-normal);
+}
+
+.course__example,
+.course__recap-line {
+  border-inline-start: 2px solid var(--rule-strong);
+  padding-inline-start: var(--space-4);
+  margin: var(--space-5) 0;
+}
+
+.course__recap-line {
+  border-inline-start-color: var(--accent);
+}
+
+.course__sources {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-3);
+}
+
+.course__sources > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.course__claim {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.course__claim:first-child {
+  border-top: none;
+}
+
+.course__claim-statement {
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+}
+
+.course__evidence {
+  margin: var(--space-3) 0 0;
+}
+
+.course__passage {
+  margin: var(--space-3) 0 0;
+  padding-inline-start: var(--space-4);
+  border-inline-start: 1px solid var(--rule);
+  color: var(--text-soft);
+  line-height: var(--line-normal);
+  white-space: pre-wrap;
+}
+
+/* The span itself: underlined and set in the text colour, so it reads without colour. */
+.course__span {
+  background: var(--surface-raised);
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+.course__stop {
+  padding: var(--space-6) 0;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.course__subheading {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.course-builder__sources {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* Fixing a lesson or a claim: the forms sit in the flow, under a hairline. */
+.course__fix-form {
+  padding-top: var(--space-3);
+}
+
+.course__reasons {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.course__notice {
+  border-inline-start: 2px solid var(--accent);
+  padding-inline-start: var(--space-3);
+}
+
+.course__held {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.course__held-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--rule);
+}
+
+/* The course's progress, said in words above its bar. */
+.course__progress > .meta {
+  margin: 0 0 var(--space-2);
+}

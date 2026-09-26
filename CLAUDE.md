@@ -127,17 +127,17 @@ path helpers in `apps/web/src/lib/routes.ts` that are pure and unit-tested. Read
 state on purpose — a Pull is not a page — so a real address belongs only to what someone
 could send, or to a screen a reader would bookmark: `/explore`, `/search`, `/appearance`,
 `/source/:id`, `/pull/:id`, `/topic/:slug`, `/privacy` and `/terms`, plus `/graph`,
-`/import`, `/studio` and `/metacognition`, and `/demo`, which is reachable by address but
-is not a destination. `DESTINATIONS` in `App.tsx` is the authority for which of these appear in the
+`/import`, `/studio`, `/courses` and `/metacognition`, a reader's own `/course/:id`, and
+`/demo`, which is reachable by address but is not a destination. `DESTINATIONS` in `App.tsx` is the authority for which of these appear in the
 navigation; the sections beside them stay tab state because each is keyed to a reader,
 which is also why a signed-out visitor is shown destinations and not sections.
 
-The four signed-in destinations — `/graph`, `/import`, `/studio` and `/metacognition` —
-are a rule with two halves rather than one flag. A destination withheld from a visitor or
+The five signed-in destinations — `/graph`, `/import`, `/studio`, `/courses` and
+`/metacognition` — are a rule with two halves rather than one flag. A destination withheld from a visitor or
 a guest must also be withheld by the route, because a URL is still a URL: adding the flag
 alone left a guest arriving by bookmark on a titled, empty page, since `routeOpen` hides
 the feed and `isKnownPath` matches, so the 404 branch never fires. `/account` had solved
-this already and every one of the four now shares its answer — which is why they are named
+this already and every one of the five now shares its answer, as does `/course/:id` — which is why they are named
 here rather than counted: "the four added last" was written when there were three, and a
 list that has to be re-counted every time the app grows is one that goes stale silently. Data is fetched by `supabase-js`
 in the component that needs it; the offline copy lives in IndexedDB via `lib/offline.ts`, not

@@ -66,8 +66,12 @@ export function Studio({
   userId: string;
   onNavigate: (to: string) => void;
 }) {
-  const [view, setView] = useState<'summary' | 'study'>('summary');
-  const [studyOpened, setStudyOpened] = useState(false);
+  // `/studio?view=study` opens on study material: where the Courses page sends a reader
+  // who has none, since that is where a course is made.
+  const [view, setView] = useState<'summary' | 'study'>(() =>
+    new URLSearchParams(window.location.search).get('view') === 'study' ? 'study' : 'summary',
+  );
+  const [studyOpened, setStudyOpened] = useState(view === 'study');
   return (
     <>
       <div className="stack measure">
@@ -98,7 +102,7 @@ export function Studio({
       </div>
       {studyOpened && (
         <div hidden={view !== 'study'}>
-          <StudyImport key={userId} userId={userId} />
+          <StudyImport key={userId} userId={userId} onNavigate={onNavigate} />
         </div>
       )}
     </>

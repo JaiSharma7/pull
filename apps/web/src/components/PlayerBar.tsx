@@ -44,7 +44,12 @@ export function listeningLabel(state: PlayerState): string {
    */
   const verb =
     state.status === 'playing' ? 'Listening' : state.status === 'paused' ? 'Paused' : 'Stopped';
-  return `${verb} · ${state.index + 1} of ${state.queue.length} · ${track.title}`;
+  // A study lesson read aloud is an interlude, not a place in the queue: it leaves when it
+  // ends. So it has no position, and the Pulls are counted without it.
+  if (track.localOnly) return `${verb} · ${track.title}`;
+  const pulls = state.queue.filter((t) => !t.localOnly).length;
+  const position = state.queue.slice(0, state.index).filter((t) => !t.localOnly).length + 1;
+  return `${verb} · ${position} of ${pulls} · ${track.title}`;
 }
 
 export function PlayerBar() {
@@ -56,6 +61,8 @@ export function PlayerBar() {
   if (!supported || track === null) return null;
 
   const playing = state.status === 'playing';
+  const pullAfter =
+    !track.localOnly && state.queue.slice(state.index + 1).some((t) => !t.localOnly);
 
   return (
     <section className="player" aria-label="Listening">
@@ -84,9 +91,11 @@ export function PlayerBar() {
             Withheld on the last track rather than disabled, because there is
             nothing it could do there: `next` at the end of the queue ends the
             session, which is what Stop is for and would be a surprising thing for
-            a button called Next to do.
+            a button called Next to do. Withheld during a study lesson too: `next`
+            there ends the lesson and stops on the Pull it interrupted, which is
+            Stop again under another name.
           */}
-          {state.index + 1 < state.queue.length && (
+          {pullAfter && (
             <button type="button" className="btn" onClick={next} aria-label="Next in the queue">
               Next
             </button>

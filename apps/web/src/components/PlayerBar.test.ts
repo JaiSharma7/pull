@@ -20,6 +20,12 @@ vi.mock('./PlayerProvider.js', () => ({
 const { PlayerBar, listeningLabel } = await import('./PlayerBar.js');
 
 const track = (id: string, title: string): Track => ({ id, title, text: `${title} spoken` });
+const lesson: Track = {
+  id: 'lesson',
+  title: 'Why the tide turns',
+  text: 'The reader’s own lesson',
+  localOnly: true,
+};
 
 function playing(overrides: Partial<PlayerState> = {}): PlayerState {
   return {
@@ -44,6 +50,7 @@ function render(state: PlayerState, extra: Partial<PlayerApi> = {}): string {
     resume: vi.fn(),
     stop: vi.fn(),
     remove: vi.fn(),
+    dismiss: vi.fn(),
     clear: vi.fn(),
     setRate: vi.fn(),
     setVoice: vi.fn(),
@@ -71,6 +78,17 @@ describe('listeningLabel', () => {
   // something the next press would not do.
   it('says stopped when the queue is kept but nothing is playing', () => {
     expect(listeningLabel(playing({ status: 'idle' }))).toBe('Stopped · 2 of 3 · The Enchiridion');
+  });
+
+  it('gives a study lesson no place in the queue, and counts the Pulls without it', () => {
+    expect(
+      listeningLabel(playing({ queue: [track('a', 'Meditations'), lesson, track('b', 'Walden')] })),
+    ).toBe('Listening · Why the tide turns');
+    expect(
+      listeningLabel(
+        playing({ queue: [lesson, track('a', 'Meditations'), track('b', 'Walden')], index: 2 }),
+      ),
+    ).toBe('Listening · 2 of 2 · Walden');
   });
 
   it('is empty when there is nothing to play', () => {
@@ -102,6 +120,16 @@ describe('PlayerBar', () => {
   it('withholds Next on the last track, where it would end the session', () => {
     expect(render(playing())).toContain('>Next<');
     expect(render(playing({ index: 2 }))).not.toContain('>Next<');
+  });
+
+  it('withholds Next during a study lesson, where it would only stop on the Pull', () => {
+    const during = playing({ queue: [track('a', 'Meditations'), lesson, track('b', 'Walden')] });
+    expect(render(during)).not.toContain('>Next<');
+    expect(render(during)).toContain('aria-label="Stop listening"');
+    // Nor on a Pull followed only by a lesson: there is no Pull to go to.
+    expect(render(playing({ queue: [track('a', 'Meditations'), lesson], index: 0 }))).not.toContain(
+      '>Next<',
+    );
   });
 
   it('always offers a way to stop', () => {

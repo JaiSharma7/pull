@@ -1,34 +1,40 @@
 # Privacy Policy
 
-**Effective 25 September 2026.** Every revision of this document is a commit in this
+**Effective 26 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Study course generation** is new, in a limited beta, and the app does not offer it yet.
-When it does, and you ask for a course built from study sources you saved, the title and
-text of the sources you choose are sent to Google's Gemini API to extract claims and write
-lessons and questions, which are stored privately in your account. It happens only when
-you ask and confirm. Every course also keeps the history of each claim, lesson and
-question's status (checked, held back, reported, corrected); a report you file, with any
-note, and a version you correct are kept with it, privately, and so is a record of which
-lessons and questions you were shown. See
-[What you create](#what-you-create) and [What never reaches a model](#what-never-reaches-a-model).
+**Study courses are now offered in the app**, to accounts in the limited beta. In Studio
+you choose up to five study sources you saved and say what the course is for; once you
+confirm, the title and text of those sources, and that goal, are sent to Google's Gemini
+API, and the course it prepares is stored privately in your account. Preparing a course
+again after you correct a source sends the newest version of each of its sources, and the
+goal, the same way, after the same confirmation. Reading a course records which lessons you were shown, finished or
+skipped, so it can remember your place; that record is never counted as remembering
+anything. Listening to a lesson uses only a voice installed on your device, so your
+material is not sent to a speech service; without one, the app does not offer to read it
+aloud. See [What you create](#what-you-create) and
+[What never reaches a model](#what-never-reaches-a-model).
 
-This revision also corrects statements that contradicted the rest of this page: the
-summary said a document you submitted for generation outlived your account (it does not),
-this page said you sign in with an emailed code (you sign in with Google or Microsoft) and
-that we do not keep your real name (the name your sign-in account supplies is kept), and
-it said the Anthropic fallback was "not enabled" while listing it as a processor (it is a
-setting the hosted service does not use, and is listed so that turning it on changes
-nothing you were told).
+The previous revision, effective 25 September, described study course generation before
+the app offered it: what is sent to Google's Gemini API and when, that each course keeps
+the history of each claim, lesson and question's status (checked, held back, reported,
+corrected), that a report you file and a version you correct are kept with it privately,
+and that the lessons and questions you were shown are recorded. It also corrected
+statements that contradicted the rest of this page: the summary said a document you
+submitted for generation outlived your account (it does not), this page said you sign in
+with an emailed code (you sign in with Google or Microsoft) and that we do not keep your
+real name (the name your sign-in account supplies is kept), and it said the Anthropic
+fallback was "not enabled" while listing it as a processor (it is a setting the hosted
+service does not use, and is listed so that turning it on changes nothing you were told).
 
-The previous revision, effective 23 September, described private study import. When you
+The revision before that, effective 23 September, described private study import. When you
 save material in Studio's Prepare study material mode, we store the extracted text you
 approved and each corrected version in your private account. We do not upload the
 original file, and saving alone does not send the text to a model provider. You can delete
 a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
-The revision before that, effective 15 September, added Anthropic as an optional Studio
+The one before that, effective 15 September, added Anthropic as an optional Studio
 summary fallback and described feedback sent through Settings. Those disclosures remain below.
 
 ## Scope
@@ -323,13 +329,14 @@ it is not published, it never enters the catalogue or anybody else's feed, and i
 deleted with your account like everything else keyed to you. Asking for one needs an
 account, because generation costs real money and a guest session costs nothing to create.
 
-**A study course is the same exception, asked for separately** — and not offered in the
-app yet; the database accepts it only from accounts in the beta. Building one sends the
+**A study course is the same exception, asked for separately** — offered in Studio to
+accounts in the beta, and accepted by the database from no one else. Building one sends the
 title and text of the sources you chose, in passages, to Google's Gemini API, and then
 sends the claims found in them, with their quoted passages, their source titles and your
 goal, to write the lessons and questions. There is no fallback to another provider for
 courses. It needs an account in the beta and your confirmation, each time, that you are
-sending that text.
+sending that text — including each time you prepare a course again, which sends the newest
+version of each of its sources.
 
 Checking a course, reporting part of it and correcting it involve no model. Answers you give
 to a course's questions are not recorded yet; before practice ships, this page will say
@@ -439,6 +446,15 @@ choice back, your browser may well reach for a remote voice, so the paragraph ab
 — the Listening settings are being built and will list local voices first — and when they
 land, picking a remote voice will be a trade you make knowingly. Today the app makes the
 quieter choice on your behalf.
+
+A lesson of your own study course is read more strictly still, because it is made from your
+material rather than from a published Pull: only a voice on your device ever speaks it --
+the voice you chose, when it is one, and otherwise a local voice in a language you read --
+and when your device has none the app says so and does not offer to read it. A lesson you
+listen to joins your listening queue while the page is open, so the player's controls reach
+it, and its title shows where the player's does: on the player bar, and in your device's
+media controls and lock screen. It is never stored with the queue on your device: when it
+ends, when you leave the lesson or close the page, or when you sign out, it is gone.
 
 Dictation — the **Dictate** button on "say it back" — is different, and the difference is
 worth stating plainly rather than leaving inside the same sentence. It uses your browser's
