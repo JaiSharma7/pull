@@ -26,10 +26,16 @@
 --                     model answer and says whether they had it: `self` grading, which the
 --                     proof rule never counts.
 --
--- Hinted: the reader says so when they looked before answering, and the server adds its own
--- rule -- an answer within thirty minutes of a wrong answer to the same question (any of its
--- versions) is hinted, because the feedback on the wrong one showed the right one. A retry
--- is practice, not proof.
+-- Hinted: the reader says so when they looked before answering or are trying again, and the
+-- server adds its own rule -- an answer within thirty minutes of a wrong or a self-graded
+-- answer to the same question (any of its versions) is hinted, because the feedback on the
+-- one, and the course's answer the other is judged against, showed the right one. A retry is
+-- practice, not proof.
+--
+-- The recorder share-locks a batch's questions in id order, and `revise_study_lesson`
+-- (20260925100000) and `retire_study_content` (20260925060000), which are pushed, are
+-- superseded here to lock a lesson's questions in the same order, so none of them deadlocks
+-- with another or with a claim report (law 6).
 
 -- ------------------------------------------------------------------ 1. the rule
 
@@ -178,6 +184,8 @@ declare
   v_shown    boolean;
   v_event    public.study_answer_events%rowtype;
   it         public.study_items%rowtype;
+  v_now      timestamptz;
+  v_since    timestamptz;
   used       int;
   recorded   int := 0;
   duplicates int := 0;
@@ -197,11 +205,29 @@ begin
   -- courses and account, which take it before any row (20260925160000).
   perform pg_advisory_xact_lock(
     pg_catalog.hashtextextended('study_progress:' || uid::text, 0));
+  -- The time once the lock is held, not when the call began: a call that waited across
+  -- midnight counts today's answers, not yesterday's.
+  v_now := clock_timestamp();
+  v_since := v_now - retry_window;
+
+  -- The batch's questions, share-locked in id order before any is read, as a claim report
+  -- and a correction lock them (see below). The stamp share-locks each as it is recorded, and
+  -- in the batch's own order that deadlocked with either.
+  perform 1
+  from public.study_items i
+  where i.owner_id = uid
+    and i.id in (select (a.value ->> 'itemId')::uuid
+                 from jsonb_array_elements(p_answers) as a
+                 where jsonb_typeof(a.value) = 'object'
+                   and a.value ->> 'itemId'
+                       ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+  order by i.id
+  for share;
 
   select count(*) into used
   from public.study_answer_events e
   where e.owner_id = uid
-    and e.answered_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc';
+    and e.answered_at >= date_trunc('day', v_now, 'UTC');
 
   for ev, ord in select value, ordinality from jsonb_array_elements(p_answers) with ordinality loop
     v_client := null;
@@ -269,13 +295,15 @@ begin
       continue;
     end if;
 
-    -- Hinted when the reader says so, or when a wrong answer to this question -- any version
-    -- of it -- was recorded in the last half hour: its feedback showed the right one.
+    -- Hinted when the reader says so, or when an answer to this question -- any version of
+    -- it -- recorded in the last half hour showed the right one: a wrong answer's feedback
+    -- does, and so does judging your own, which is done against the course's answer.
     v_hinted := coalesce((ev ->> 'hinted')::boolean, false)
       or exists (select 1 from public.study_answer_events e
                  join public.study_items v on v.id = e.item_id
                  where e.owner_id = uid and v.lineage_id = it.lineage_id
-                   and not e.correct and e.answered_at > clock_timestamp() - retry_window);
+                   and (not e.correct or e.grading = 'self')
+                   and e.answered_at > v_since);
 
     begin
       insert into public.study_answer_events
@@ -303,5 +331,155 @@ begin
 end
 $fn$;
 
-revoke all on function public.record_study_answers(jsonb) from public, anon, authenticated;
+revoke all on function public.record_study_answers(jsonb)
+  from public, anon, authenticated, service_role;
 grant execute on function public.record_study_answers(jsonb) to authenticated;
+
+-- The day's count, read on every call: without it, every answer the reader ever gave.
+create index study_answer_events_owner_day on public.study_answer_events (owner_id, answered_at);
+
+-- ------------------------------------------------------------------ a lesson's questions, in order
+
+/* A correction and a withdrawal move every question of a lesson in one statement, which locks
+   them in whatever order the table holds them. The recorder share-locks a batch's questions
+   in id order, as a claim report locks them (`study_refresh_claim_dependents`), so these lock
+   the same rows in id order first, and the three cannot wait on each other in a circle. */
+create or replace function public.revise_study_lesson(p_lesson_id uuid, p_revision jsonb)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  v_gen       uuid;
+  v_prev      public.study_lessons%rowtype;
+  v_claims    uuid[];
+  v_unit      text;
+  v_title     text;
+  v_objective text;
+  v_explain   text;
+  v_example   text;
+  v_recap     text;
+  v_problems  text[];
+  v_new       uuid;
+  v_unknown   text;
+begin
+  if auth.uid() is null then
+    raise exception 'correcting a course requires a signed-in reader' using errcode = '28000';
+  end if;
+  perform public.study_check_revision_size(p_revision, jsonb_build_object(
+    'unitTitle', jsonb_build_object('chars', 200),
+    'title', jsonb_build_object('chars', 200),
+    'objective', jsonb_build_object('chars', 500),
+    'explanation', jsonb_build_object('chars', 6000),
+    'example', jsonb_build_object('chars', 2000),
+    'recap', jsonb_build_object('chars', 1000),
+    'claimIds', jsonb_build_object('chars', 36, 'items', 6)));
+  select k into v_unknown from jsonb_object_keys(p_revision) k
+  where k not in ('unitTitle', 'title', 'objective', 'explanation', 'example', 'recap',
+                  'claimIds')
+  limit 1;
+  if v_unknown is not null then
+    raise exception 'a lesson revision has no field %', v_unknown using errcode = '22023';
+  end if;
+
+  v_gen := public.study_lock_for_correction('lesson', p_lesson_id);
+  perform public.study_lock_target('lesson', p_lesson_id);
+  select * into v_prev from public.study_lessons where id = p_lesson_id;
+  if v_prev.status not in ('validated', 'suspended', 'quarantined') then
+    raise exception 'only a live lesson can be revised' using errcode = '55000';
+  end if;
+  perform public.study_check_revision_quota(v_prev.version);
+
+  v_claims := coalesce(public.study_revision_claims(p_revision, v_gen),
+                       array(select lc.claim_id from public.study_lesson_claims lc
+                             where lc.lesson_id = v_prev.id));
+  v_unit := public.study_revision_text(p_revision, 'unitTitle', v_prev.unit_title);
+  v_title := public.study_revision_text(p_revision, 'title', v_prev.title);
+  v_objective := public.study_revision_text(p_revision, 'objective', v_prev.objective);
+  v_explain := public.study_revision_text(p_revision, 'explanation', v_prev.explanation);
+  v_example := public.study_revision_text(p_revision, 'example', v_prev.example);
+  v_recap := public.study_revision_text(p_revision, 'recap', v_prev.recap);
+
+  v_problems := public.study_lesson_problems(
+    array[v_title, v_objective, v_explain, v_example, v_recap, v_unit], v_claims,
+    public.study_source_link_set(v_gen), true);
+  if public.study_blank(v_unit) and not 'text_missing' = any(v_problems) then
+    v_problems := v_problems || 'text_missing'::text;
+  end if;
+  if cardinality(v_problems) > 0 then
+    raise exception 'this revision does not pass validation: %',
+      array_to_string(v_problems, ', ')
+      using errcode = '22023', detail = array_to_string(v_problems, ',');
+  end if;
+
+  perform set_config('study.status_reason', 'revised', true);
+  update public.study_lessons set status = 'retired', retired_at = now() where id = v_prev.id;
+
+  insert into public.study_lessons
+    (owner_id, generation_id, lesson_key, position, unit_no, unit_title, title, objective,
+     explanation, example, recap, minutes, status, lineage_id, version, supersedes_id,
+     authored_by)
+  values
+    (v_prev.owner_id, v_prev.generation_id, v_prev.lesson_key, v_prev.position, v_prev.unit_no,
+     v_unit, v_title, v_objective, v_explain, v_example, v_recap, v_prev.minutes,
+     'validated', v_prev.lineage_id, v_prev.version + 1, v_prev.id, 'reader')
+  returning id into v_new;
+
+  insert into public.study_lesson_claims (lesson_id, claim_id, owner_id)
+  select v_new, cited, v_prev.owner_id from unnest(v_claims) as cited;
+
+  perform 1 from public.study_items
+   where lesson_id = v_prev.id and status <> 'retired'
+   order by id
+   for no key update;
+  update public.study_items set lesson_id = v_new
+   where lesson_id = v_prev.id and status <> 'retired';
+
+  update public.study_reports
+     set status = 'revised', resolved_at = now(), replacement_lesson_id = v_new
+   where lesson_id = v_prev.id and status = 'open';
+  return v_new;
+end
+$fn$;
+
+create or replace function public.retire_study_content(p_kind text, p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  st text;
+begin
+  perform public.study_lock_for_correction(p_kind, p_id);
+  st := public.study_lock_target(p_kind, p_id);
+  if st not in ('validated', 'suspended', 'quarantined') then
+    raise exception 'only a live claim, lesson or question can be retired'
+      using errcode = '55000';
+  end if;
+
+  perform set_config('study.status_reason', 'retired', true);
+  if p_kind = 'claim' then
+    update public.study_claims set status = 'retired', retired_at = now() where id = p_id;
+    update public.study_reports set status = 'retired', resolved_at = now()
+     where claim_id = p_id and status = 'open';
+    perform set_config('study.status_reason', 'claim_retired', true);
+    perform public.study_refresh_claim_dependents(p_id);
+  elsif p_kind = 'lesson' then
+    update public.study_lessons set status = 'retired', retired_at = now() where id = p_id;
+    update public.study_reports set status = 'retired', resolved_at = now()
+     where lesson_id = p_id and status = 'open';
+    perform 1 from public.study_items
+     where lesson_id = p_id and status <> 'retired'
+     order by id
+     for no key update;
+    update public.study_items set lesson_id = null
+     where lesson_id = p_id and status <> 'retired';
+  else
+    update public.study_items set status = 'retired', retired_at = now() where id = p_id;
+    update public.study_reports set status = 'retired', resolved_at = now()
+     where item_id = p_id and status = 'open';
+  end if;
+end
+$fn$;

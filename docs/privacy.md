@@ -10,7 +10,8 @@ seeing the answer, and — for a short answer the course cannot check itself —
 judgement of it. The course uses these to show what you have practised and which ideas you
 have shown you remember. Your answers are checked by the database, not by a model, and no
 answer is sent to any model provider. An answer given without a connection waits on your
-device until it can be sent. See [What you create](#what-you-create).
+device until it can be sent — through a sign-out, for when you sign in again — and is removed
+from the device when you delete your account. See [What you create](#what-you-create).
 
 The previous revision, effective 26 September, **offered study courses in the app** to
 accounts in the limited beta. In Studio you choose up to five study sources you saved and
@@ -431,7 +432,9 @@ What the app does put on your device, all of it first-party and all of it necess
   practice are free rather than a paid tier. All three are keyed to the account that
   fetched them, and the queued writes carry their owner and are only ever sent for them.
   Two mechanisms, one promise: a shared browser never shows one reader another's copy.
-  The downloaded practice is deleted when you sign out, rather than only being hidden.
+  The downloaded practice is deleted when you sign out, rather than only being hidden. The
+  queued writes wait through a sign-out, to be sent when the same account signs in again,
+  and are deleted from the device when you delete the account.
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all of it, and signs you out.

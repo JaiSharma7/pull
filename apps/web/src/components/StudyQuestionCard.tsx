@@ -97,6 +97,36 @@ export function StudyQuestionCard({
     element?.focus();
   }, [phase, attempt]);
 
+  /*
+   * Judging a short answer shows the course's answer first. A reader who leaves there without
+   * judging has still seen it, and nothing recorded says so: the next answer, typed from what
+   * they just read, would count as proof. So leaving records it as not had -- never proof,
+   * and what makes the next answer to it practice.
+   */
+  const judging = useRef<{
+    question: StudyQuestion;
+    typed: string;
+    answer: typeof onAnswer;
+    hinted: boolean;
+  } | null>(null);
+  useEffect(() => {
+    judging.current =
+      phase.kind === 'judging' ? { question, typed: phase.typed, answer: onAnswer, hinted } : null;
+  }, [phase, question, onAnswer, hinted]);
+  // On leaving only: everything it needs is read from the ref, so nothing else re-runs it.
+  useEffect(
+    () => () => {
+      const left = judging.current;
+      if (left === null) return;
+      judging.current = null;
+      const graded = gradeStudyResponse(left.question, left.typed, 'incorrect');
+      if (graded) {
+        left.answer({ response: left.typed, hinted: left.hinted, graded, selfGrade: 'incorrect' });
+      }
+    },
+    [],
+  );
+
   const finish = (response: string | number[], graded: Graded, selfGrade?: SelfGrade) => {
     const answer: SubmittedAnswer = {
       response,
@@ -162,6 +192,9 @@ export function StudyQuestionCard({
 
   const retry = () => {
     focusNext.current = 'prompt';
+    // The feedback before it showed the answer: another try is practice, whatever order the
+    // answers reach the server in -- a wrong one queued offline can arrive after its retry.
+    setHinted(true);
     setAttempt((n) => n + 1);
     setPhase({ kind: 'answering' });
     setChoice(null);

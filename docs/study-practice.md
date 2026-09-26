@@ -25,7 +25,13 @@ record_study_answers([{ clientEventId, itemId, response, selfGrade?, hinted? }, 
 
 - **The server grades.** The browser grades too, so feedback is immediate and works offline,
   but it sends the reader's _response_, never its verdict. The server grades the response
-  again, and its grade is the one kept and returned in `results`.
+  again, and its grade is the one kept and returned in `results`. This guards the record
+  against a stale or faulty client, not against the reader: the answer key reaches the
+  browser so feedback can be shown, so a reader can always give their own questions right
+  answers. Proof is a reader's record of their own recall and nothing else; nothing shared
+  with anyone else may be built on it.
+- **`hinted` and `selfGrade` are omitted, never null.** Either, when sent, is a boolean or a
+  string; `null` is `malformed`.
 - **Idempotent.** A client event id already recorded is a duplicate: never a second row, and
   answered in `results` with what was recorded, so a replayed queue learns the grade.
 - **One to fifty answers a call**, each judged on its own; a batch outside that size is
@@ -35,11 +41,14 @@ record_study_answers([{ clientEventId, itemId, response, selfGrade?, hinted? }, 
 - **Refusals.** `malformed`: not an object, a bad id, a response the kind cannot take (an
   option never offered, positions that are not a permutation, a self-grade missing where
   one is needed). `not_found`: not the reader's question, or gone -- the same answer either
-  way. `not_shown`: a question validation never passed. These three are final.
+  way. `not_shown`: a question validation never passed, so no screen could have shown it --
+  not whether this reader's screen did. These three are final.
 - **The time is the database's.** `answered_at` is stamped when the answer reaches the
   server, so an answer given offline carries the time it was sent.
-- **Serialised with deletion.** The recorder takes the reader's study lock first, as a
-  progress batch does (see [Lock order](./study-courses.md#lock-order)).
+- **Serialised with deletion and corrections.** The recorder takes the reader's study lock
+  first, as a progress batch does, then share-locks the batch's questions in id order, as a
+  claim report and a lesson's correction or withdrawal lock them (see
+  [Lock order](./study-courses.md#lock-order)).
 
 ## Grading
 
@@ -60,14 +69,19 @@ which the proof rule never counts: a reader's judgement of their own answer is n
 that the course can check.
 
 **Hinted.** An answer is hinted when the reader says so -- the screen marks it when they
-opened the passage behind the question before answering -- or when a wrong answer to the same
-question, in any of its versions, was recorded in the half hour before: its feedback showed
-the right one. A hinted answer is recorded and never proof. So a retry is practice.
+opened the passage behind the question before answering, and on every try after the first,
+whose feedback showed the answer -- or when a wrong or a self-graded answer to the same
+question, in any of its versions, was recorded in the half hour before: the feedback on the
+one, and the course's answer the other was judged against, showed the right one. A hinted
+answer is recorded and never proof. So a retry is practice, whatever order its answers reach
+the server in. A reader who leaves while judging their own answer has seen the course's; it
+is recorded as not had, so the next answer to it is practice too.
 
 **Proof** is `study_answer_proves_recall`, unchanged: right, unhinted, graded
 deterministically, to a model-written question that was validated when it was answered and
 still is, resting on claims that are all validated. `provesRecall` in the result is that
-rule, read as the recorder wrote the row.
+rule, read as the recorder wrote the row -- or, for a duplicate, as it stands when the
+duplicate arrives.
 
 ## The screens
 
@@ -91,9 +105,13 @@ rule, read as the recorder wrote the row.
 Answers and progress are sent at once. When a request cannot reach the server, the event goes
 into the app's offline queue (`apps/web/src/lib/offline.ts`), and the shell sends it when the
 connection returns (`replay.ts`), one event per call, in order per question and per lesson,
-so a retry still follows the wrong answer it retried. The feedback the reader saw came from
-the browser's grade; the server's is recorded. An event refused with `limit` stays queued;
-one refused for good is dropped.
+so a retry still follows the wrong answer it retried -- and is marked hinted when it is sent,
+so it is practice even if it arrives first. The feedback the reader saw came from the
+browser's grade; the server's is recorded. An event refused with `limit` stays queued, and the
+rest of that kind wait for the next drain rather than each being refused in turn; one refused
+for good is dropped. An event that lost a deadlock or a serialization race (40P01, 40001) is
+queued, not dropped. Queued answers hold what the reader typed; they wait through a sign-out
+for the same reader, and are cleared from the device when the account is deleted.
 
 ## Limits and errors
 

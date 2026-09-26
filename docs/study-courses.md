@@ -318,7 +318,7 @@ other signed-in destinations give, and a visitor with sign-in.
 
 ## Lock order
 
-Three rules keep the writers here from deadlocking with each other and with deletion; every
+Four rules keep the writers here from deadlocking with each other and with deletion; every
 order below was reproduced as a deadlock with real sessions before it was in place. In
 short: the account row, then the reader's study lock, then their sources, then a course.
 
@@ -357,6 +357,13 @@ short: the account row, then the reader's study lock, then their sources, then a
   before the course, and `enqueue_study_generation` links a new course's sources before
   its versions. The last-source trigger takes the course row before it looks for the
   bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
+
+- **Questions in id order.** The answer recorder share-locks a batch's questions, in id
+  order, before it records any; a claim report (`study_refresh_claim_dependents`) locks the
+  questions resting on the claim in id order; and a lesson's correction or withdrawal
+  (`revise_study_lesson`, `retire_study_content`) locks the lesson's questions in id order
+  before it moves them. Locked in a batch's order or the table's, a batch of two answers
+  deadlocked with either (20260925200000).
 
 **Deleting many accounts in one statement** takes one study lock for each account with study
 sources, and every one of them is held in Postgres's shared lock table until the statement

@@ -18,6 +18,7 @@ import { downloadText } from '../lib/download.js';
 import { fetchAnkiDeck } from '../lib/export-api.js';
 import { toAnkiTsv } from '../lib/export-formats.js';
 import { exportFilename } from '../lib/export-rows.js';
+import { clearPending } from '../lib/offline.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -60,7 +61,7 @@ export function Account({ userId, email }: { userId: string; email: string | nul
       <ExportData userId={userId} email={email} />
 
       <hr className="rule" />
-      <DeleteAccount email={email} />
+      <DeleteAccount userId={userId} email={email} />
     </section>
   );
 }
@@ -649,7 +650,7 @@ function ExportData({ userId, email }: { userId: string; email: string | null })
  * "can I do this" arrives at the start rather than after the effort. The server remains
  * the authority; this is only politeness.
  */
-function DeleteAccount({ email }: { email: string | null }) {
+function DeleteAccount({ userId, email }: { userId: string; email: string | null }) {
   const [open, setOpen] = useState(false);
   return (
     <section className="stack">
@@ -660,15 +661,17 @@ function DeleteAccount({ email }: { email: string | null }) {
       <button type="button" className="btn" onClick={() => setOpen(true)}>
         Delete account
       </button>
-      {open && <DeleteAccountDialog email={email} onClose={() => setOpen(false)} />}
+      {open && <DeleteAccountDialog userId={userId} email={email} onClose={() => setOpen(false)} />}
     </section>
   );
 }
 
 export function DeleteAccountDialog({
+  userId,
   email,
   onClose,
 }: {
+  userId: string;
   email: string | null;
   onClose: () => void;
 }) {
@@ -709,6 +712,9 @@ export function DeleteAccountDialog({
         return;
       }
       await deleteAccount();
+      // Writes queued for an account that is gone can never be sent, and a queued answer
+      // holds what the reader typed. Before the page is left, which would cut it short.
+      await clearPending(userId);
       await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
       window.location.assign('/');
     } catch (error) {

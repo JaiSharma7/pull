@@ -778,6 +778,29 @@ export async function clearCachedPulls(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Everything this account left queued, for an account being deleted: its writes can never be
+ * sent. A queued study answer holds what the reader typed about their own material, and it
+ * must not outlive the account on this device. Signing out keeps the queue, for the same
+ * reader's return; this is only for the end.
+ */
+export async function clearPending(userId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    const tx = database.transaction('pending', 'readwrite');
+    const items = await tx.store.getAll();
+    await Promise.all(
+      items.flatMap((item) =>
+        item.userId === userId && item.id !== undefined ? [tx.store.delete(item.id)] : [],
+      ),
+    );
+    await tx.done;
+  } catch {
+    /* best effort, as above */
+  }
+}
+
 /** Everything this account downloaded — and nothing another account did. */
 export async function clearReviewPack(userId: string): Promise<void> {
   try {
@@ -969,6 +992,18 @@ async function withCrossTabLock<T>(userId: string, run: () => Promise<T>): Promi
   return locks.request(`wap.drain.${userId}`, run);
 }
 
+/**
+ * A study event the server refused only for today: kept queued, so the drain tries it again.
+ * Every other refusal of a study event is final -- the lesson or question is gone, or was
+ * never shown -- and the entry is dropped, which is what resolving does.
+ */
+export class StudyLimitReached extends Error {
+  constructor() {
+    super('The daily study record is full; this is kept for tomorrow.');
+    this.name = 'StudyLimitReached';
+  }
+}
+
 async function runDrain(
   userId: string,
   apply: (m: PendingWrite) => Promise<void>,
@@ -976,6 +1011,10 @@ async function runDrain(
 ): Promise<number> {
   let drained = 0;
   const blocked = new Set<string>();
+  // Kinds of study event the day's record is full for. The limit is the reader's, not one
+  // question's or lesson's, so every later event of that kind would be refused the same way:
+  // they wait for the next drain rather than each asking.
+  const full = new Set<PendingWrite['kind']>();
   try {
     const database = await db();
     if (!database) return drained;
@@ -997,10 +1036,14 @@ async function runDrain(
       // bookkeeping for this queue, not part of the write being replayed.
       const { id: _id, userId: _userId, at: _at, ...write } = item;
       const scope = writeScope(write);
-      if (blocked.has(scope)) continue;
+      if (blocked.has(scope) || full.has(write.kind)) continue;
       try {
         await apply(write);
       } catch (error) {
+        if (error instanceof StudyLimitReached) {
+          full.add(write.kind);
+          continue;
+        }
         // A refusal that will not change on a retry -- the row is gone -- is
         // dropped rather than kept: kept, it holds `hasPending` true and the retry
         // timer alive for the life of the tab. The subject is not blocked, so a

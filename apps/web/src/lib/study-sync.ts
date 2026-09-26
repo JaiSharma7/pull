@@ -19,13 +19,18 @@ import type { AnswerEvent, AnswerResult } from './study-practice.js';
 /** What became of an event: recorded (or already), kept for later, refused, or lost. */
 export type Sent = 'recorded' | 'queued' | 'refused' | 'failed';
 
+/** Postgres gave up on the transaction, not on the event: a deadlock, or a serialization failure. */
+const TRANSIENT = new Set(['40P01', '40001']);
+
 /**
- * A failure worth queueing: the request never reached Postgres, or reached a server that
- * could not answer. A refusal from Postgres itself -- it has a SQLSTATE -- will not change
- * on a retry, and queueing it would only replay it forever.
+ * A failure worth queueing: the request never reached Postgres, reached a server that could
+ * not answer, or lost a race another transaction won -- sent again, it is recorded. Any other
+ * refusal from Postgres itself -- it has a SQLSTATE -- will not change on a retry, and
+ * queueing it would only replay it forever.
  */
 function worthQueueing(error: unknown): boolean {
-  return isOfflineFailure(error) || sqlState(error) === undefined;
+  const state = sqlState(error);
+  return isOfflineFailure(error) || state === undefined || TRANSIENT.has(state);
 }
 
 export async function sendProgress(userId: string, event: ProgressEvent): Promise<Sent> {

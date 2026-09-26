@@ -1,5 +1,5 @@
 import type * as api from './api.js';
-import type { PendingWrite } from './offline.js';
+import { StudyLimitReached, type PendingWrite } from './offline.js';
 import type * as stashApi from './stash-api.js';
 import type * as studyApi from './study-course-api.js';
 
@@ -34,17 +34,8 @@ export type ReplayPort = Pick<
   Pick<typeof stashApi, 'updateSavedItem' | 'createStash' | 'deleteStash'> &
   Pick<typeof studyApi, 'recordProgress' | 'recordAnswers'>;
 
-/**
- * A study event the server refused only for today: kept queued, so the drain tries it again.
- * Every other refusal of a study event is final -- the lesson or question is gone, or was
- * never shown -- and the entry is dropped, which is what resolving does.
- */
-export class StudyLimitReached extends Error {
-  constructor() {
-    super('The daily study record is full; this is kept for tomorrow.');
-    this.name = 'StudyLimitReached';
-  }
-}
+// Defined beside the drain, which stops asking once it is thrown; thrown from here.
+export { StudyLimitReached };
 
 export async function replayWrite(
   userId: string,
