@@ -64,10 +64,13 @@ export function StudyCourseBuilder({
     return () => controller.abort();
   }, [check]);
   const asked = useRef(false);
+  const again = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!asked.current || checking) return;
     asked.current = false;
-    heading.current?.focus();
+    // Only when the reader is still waiting on it: one who has moved on keeps their place.
+    const at = document.activeElement;
+    if (at === null || at === document.body || at === again.current) heading.current?.focus();
   }, [checking]);
 
   // A version no longer saved cannot stay chosen.
@@ -90,21 +93,23 @@ export function StudyCourseBuilder({
       <section className="stack" aria-labelledby="course-builder-heading">
         {title}
         <p role="status">{checking ? 'Checking…' : checkFailed}</p>
-        {!checking && (
-          <p>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                asked.current = true;
-                setChecking(true);
-                setCheck((n) => n + 1);
-              }}
-            >
-              Check again
-            </button>
-          </p>
-        )}
+        {/* Kept while it checks, so focus stays on the control the reader pressed. */}
+        <p>
+          <button
+            ref={again}
+            type="button"
+            className="btn"
+            aria-disabled={checking}
+            onClick={() => {
+              if (checking) return;
+              asked.current = true;
+              setChecking(true);
+              setCheck((n) => n + 1);
+            }}
+          >
+            {checking ? 'Checking…' : 'Check again'}
+          </button>
+        </p>
       </section>
     );
   }

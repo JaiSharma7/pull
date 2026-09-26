@@ -340,7 +340,7 @@ export function Course({
           setRecaps((r) => ({ ...r, [currentId]: content.recap }));
           // Once the lesson is drawn, not in a frame that can come before it -- unless the
           // reader is on the notice that says why this lesson replaced the last one.
-          if (document.activeElement?.id !== 'course-notice') {
+          if (!document.getElementById('course-notice')?.contains(document.activeElement)) {
             focusNext.current = { id: 'course-lesson-title', draws: 0 };
           }
         }
@@ -874,10 +874,13 @@ export function Course({
   if (view.kind === 'session' && current) {
     // One primary control on the screen: while a fix form is open, its own button is it.
     const fixing = fix !== null || claimReport !== null;
-    const unsavedLine = (
-      <p role="status">
-        Your correction to this lesson is not saved. Press again to leave it unsaved, or save it
-        under “Something wrong with this lesson?”.
+    // Always drawn, above the lesson and below it, and filled only beside the control that
+    // was pressed: a live region added together with its text is not reliably announced, and
+    // the press that shows this does nothing else.
+    const unsavedLine = (where: 'top' | 'bottom') => (
+      <p role="status" className={leaving === where ? undefined : 'sr-only'}>
+        {leaving === where &&
+          'Your correction to this lesson is not saved. Press again to leave it unsaved, or save it under “Something wrong with this lesson?”.'}
       </p>
     );
     const cancelFix = (focus: string) => {
@@ -895,7 +898,7 @@ export function Course({
           </span>
         </div>
         {noticeLine}
-        {leaving === 'top' && unsavedLine}
+        {unsavedLine('top')}
         {lessonError && (
           <p className="remember__error" role="alert">
             {lessonError}
@@ -1085,8 +1088,10 @@ export function Course({
             </details>
           </>
         )}
-        {progressNote && <p role="status">{progressNote}</p>}
-        {leaving === 'bottom' && unsavedLine}
+        <p role="status" className={progressNote ? undefined : 'sr-only'}>
+          {progressNote}
+        </p>
+        {unsavedLine('bottom')}
         <div className="course__actions">
           <button
             type="button"
