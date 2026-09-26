@@ -171,14 +171,19 @@ validation step runs out of retries ends `failed` with its course already saved,
 `validate_stranded_study_courses` takes that course up once it is ten minutes old, five a
 run. `study_generation_awaiting_validation` says which generations are coming that way --
 the job has ended, the course is saved (`assembled_at`, as the sweep keys on), its text is
-pending -- for a day, after which one validation keeps refusing stops standing in the
-reader's way. A screen shows such a course as on its way rather than failed;
-`update_available` is judged against it, so it is not offered again; and preparing the
-course again is refused with `preparing` while it awaits, as while a job is queued or running.
-The sweep takes courses within their day first, so ones validation keeps refusing do not hold
-up the rest; and `latest_settled` says when a newest generation whose job failed was saved and
-settled after all, so a screen says it was held back rather than that it failed
-(`20260925190000_study_course_awaiting_validation.sql`).
+pending -- for a day from when it was saved, after which one validation keeps refusing stops
+standing in the reader's way. The day is counted from saving rather than from queueing
+because the worker lets a step wait on the budget a day at a time: a course can be saved more
+than a day after it was asked for. A screen shows such a course as on its way rather than
+failed; `update_available` is judged against it, so it is not offered again; and preparing
+the course again is refused with `preparing` while it awaits, as while a job is queued or
+running. The sweep takes courses within their day first and, among those, the least recently
+tried (`validation_tried_at`, stamped where a refusal does not undo it), so courses
+validation keeps refusing take turns with the rest rather than every run. `latest_settled`
+says when a newest generation whose job failed was saved and settled after all, so a screen
+says it was held back rather than that it failed
+(`20260925190000_study_course_awaiting_validation.sql`,
+`20260925195000_study_course_awaiting_from_saving.sql`).
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course
 order -- unit, then position -- with the unit's number and title, the lesson's key, title,

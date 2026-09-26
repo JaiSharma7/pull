@@ -261,6 +261,12 @@ export function Course({
   useEffect(() => {
     onScreen.current = lesson?.lessonId ?? null;
   }, [lesson]);
+  // And which of its fix forms is open, for the same reason: a failure is said on the form
+  // that sent it only while that form is still there to say it.
+  const openForm = useRef<string | null>(null);
+  useEffect(() => {
+    openForm.current = claimReport !== null ? `claim:${claimReport}` : fix;
+  }, [claimReport, fix]);
 
   // A lesson is the reader's own material, so it is read only by a voice on this device;
   // voices arrive after the page does, so the answer is read again when they change.
@@ -409,16 +415,23 @@ export function Course({
     lesson !== null && current !== null && draftUnsaved(lesson, current.unitTitle, draft);
 
   /**
-   * A change that failed is said beside the form it came from while its lesson is on screen.
-   * Once the reader has moved on, the form on screen is another lesson's, and an error there
-   * would be about a change it never asked for while nothing said this one failed -- so it
+   * A change that failed is said beside the form that sent it, while that form is open on
+   * its lesson. Otherwise the form on screen is another's -- another lesson's, or another
+   * form of this one -- or none, when the reader folded the section: an error there would be
+   * about a change it never asked for, or nowhere, while nothing said this one failed. So it
    * is said in the notice instead, naming the lesson.
    */
-  const fixFailed = (lessonId: string, what: string, e: unknown, refusal: string | null) => {
+  const fixFailed = (
+    lessonId: string,
+    form: string,
+    what: string,
+    e: unknown,
+    refusal: string | null,
+  ) => {
     const why = isOfflineFailure(e)
       ? 'That has not reached your account — you look offline. Try again when you reconnect.'
       : (refusal ?? asSentence(e instanceof Error ? e.message : String(e)));
-    if (onScreen.current === lessonId) {
+    if (onScreen.current === lessonId && openForm.current === form) {
       setFixError(why);
       return;
     }
@@ -450,6 +463,7 @@ export function Course({
     } catch (e: unknown) {
       fixFailed(
         from.lessonId,
+        kind === 'lesson' ? 'report' : `claim:${id}`,
         kind === 'lesson'
           ? `Could not report “${from.title}”.`
           : `Could not report the claim in “${from.title}”.`,
@@ -477,6 +491,7 @@ export function Course({
     } catch (e: unknown) {
       fixFailed(
         from.lessonId,
+        'withdraw',
         `Could not withdraw “${from.title}”.`,
         e,
         reportRefusal(sqlState(e)),
@@ -525,6 +540,7 @@ export function Course({
     } catch (e: unknown) {
       fixFailed(
         oldId,
+        'correct',
         `Your correction to “${oldTitle}” was not saved.`,
         e,
         correctionRefusal(sqlState(e), sqlDetail(e)),
@@ -605,9 +621,11 @@ export function Course({
   };
 
   const toOverview = () => {
-    // A change on its way is waited for, as Done and Skip wait for it: leaving under a
-    // correction being saved asked whether to leave it unsaved, and took its draft with it.
-    if (working) return;
+    // A lesson's change on its way is waited for, as Done and Skip wait for it: leaving under
+    // a correction being saved asked whether to leave it unsaved, and took its draft with it.
+    // The end of a sitting has no form to wait for; a restore there says its result wherever
+    // the reader has gone.
+    if (working && view.kind === 'session') return;
     if (!mayLeave('top')) return;
     leaveLesson();
     setView({ kind: 'overview' });
@@ -1030,6 +1048,7 @@ export function Course({
                       className="btn"
                       onClick={() => {
                         setClaimReport(null);
+                        setFixError(null);
                         setFix('report');
                       }}
                     >
@@ -1040,6 +1059,7 @@ export function Course({
                       className="btn"
                       onClick={() => {
                         setClaimReport(null);
+                        setFixError(null);
                         setFix('correct');
                         // Back at the form, the reader is deciding again.
                         setLeaving(null);
@@ -1052,6 +1072,7 @@ export function Course({
                       className="btn btn--plain"
                       onClick={() => {
                         setClaimReport(null);
+                        setFixError(null);
                         setFix('withdraw');
                         focusAfter('course-withdraw-warning');
                       }}
@@ -1167,12 +1188,7 @@ export function Course({
     return (
       <section className="stack measure course">
         <div className="course__bar">
-          <button
-            type="button"
-            className="btn btn--plain meta"
-            aria-disabled={working}
-            onClick={toOverview}
-          >
+          <button type="button" className="btn btn--plain meta" onClick={toOverview}>
             ← {title}
           </button>
         </div>

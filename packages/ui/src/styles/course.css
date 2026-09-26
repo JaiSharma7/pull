@@ -123,6 +123,15 @@
   margin-top: var(--space-4);
 }
 
+/* A course's controls wait while a change is on its way, and look it, as `.btn:disabled`
+   does. `aria-disabled` rather than `disabled`, so the pressed button keeps focus; scoped to
+   the course, because Review and the interrupt use it on answers whose verdict must keep its
+   contrast. */
+.course .btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .course__lesson-heading {
   font-family: var(--font-display);
   font-size: var(--step-3);

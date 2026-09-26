@@ -93,7 +93,9 @@ export function StudyCourseBuilder({
       <section className="stack" aria-labelledby="course-builder-heading">
         {title}
         <p role="status">{checking ? 'Checking…' : checkFailed}</p>
-        {/* Kept while it checks, so focus stays on the control the reader pressed. */}
+        {/* Kept while it checks, so focus stays on the control the reader pressed, and under
+            the same name: the line above says it is checking, and a focused button renamed
+            to the same words was heard twice. */}
         <p>
           <button
             ref={again}
@@ -107,7 +109,7 @@ export function StudyCourseBuilder({
               setCheck((n) => n + 1);
             }}
           >
-            {checking ? 'Checking…' : 'Check again'}
+            Check again
           </button>
         </p>
       </section>

@@ -364,7 +364,11 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
     }
 
     case 'prev': {
-      if (state.status === 'idle' || state.index === 0) return state;
+      if (state.status === 'idle') return state;
+      // From a study lesson, as `next` from one: it ends, and the player stops on the Pull it
+      // interrupted. Stepping back left it in the queue, where the bar's Next played it again.
+      if (currentTrack(state)?.localOnly) return endInterlude(state);
+      if (state.index === 0) return state;
       return { ...state, index: state.index - 1, status: 'playing', epoch: state.epoch + 1 };
     }
 

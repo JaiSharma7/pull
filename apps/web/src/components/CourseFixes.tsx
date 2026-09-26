@@ -104,7 +104,16 @@ export function ReportForm({
         <button type="button" className="btn btn--primary" aria-disabled={working} onClick={submit}>
           {working ? 'Sending…' : 'Send the report'}
         </button>
-        <button type="button" className="btn btn--plain" onClick={onCancel}>
+        {/* Waits for a change on its way, as the screen's other ways out do: a form closed
+            under its own request had nowhere to say that it failed. */}
+        <button
+          type="button"
+          className="btn btn--plain"
+          aria-disabled={working}
+          onClick={() => {
+            if (!working) onCancel();
+          }}
+        >
           Cancel
         </button>
       </div>
@@ -200,7 +209,16 @@ export function LessonCorrectionForm({
         <button type="button" className="btn btn--primary" aria-disabled={working} onClick={save}>
           {working ? 'Saving…' : 'Save the correction'}
         </button>
-        <button type="button" className="btn btn--plain" onClick={onCancel}>
+        {/* Waits for a change on its way, as the screen's other ways out do: a form closed
+            under its own request had nowhere to say that it failed. */}
+        <button
+          type="button"
+          className="btn btn--plain"
+          aria-disabled={working}
+          onClick={() => {
+            if (!working) onCancel();
+          }}
+        >
           Cancel
         </button>
       </div>

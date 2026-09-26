@@ -179,6 +179,9 @@ declare
   job_3     uuid;
   gen_3     uuid;
   d         text;
+  probe_a   uuid;
+  probe_b   uuid;
+  probe_s   uuid;
   report_l  uuid;
   other_v   uuid;
   batch     jsonb;
@@ -709,6 +712,109 @@ begin
       raise exception 'a regeneration refused while one awaits said %', d;
     end if;
   end;
+  -- Counted from saving, not from queueing: the worker lets a step wait on the budget a day
+  -- at a time, so a course can be saved more than a day after its preparation was queued.
+  -- It still awaits its validation, and is still not prepared again.
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() - interval '31 hours' where id = gen_1;
+  update public.study_generations set created_at = now() - interval '30 hours' where id = gen_2;
+  perform pg_temp.become_reader(reader_a);
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and latest_generation_id = gen_2
+                   and awaiting_validation and not update_available) then
+    raise exception 'a course saved today but queued yesterday did not await validation: %',
+      (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
+  end if;
+  begin
+    perform public.regenerate_study_course(course_a, extensions.gen_random_uuid(), true);
+    raise exception 'a regeneration was accepted while a course queued yesterday awaits';
+  exception when object_not_in_prerequisite_state then null;
+  end;
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() - interval '1 hour' where id = gen_1;
+  update public.study_generations set created_at = now() where id = gen_2;
+
+  -- The sweep takes turns. A refused attempt is stamped where the refusal does not undo it,
+  -- and the least recently tried go first, so courses validation keeps refusing cannot take
+  -- every run; those within their day still go before those past it. Probed with a validator
+  -- that refuses everything, and undone by the probe's own exception.
+  perform pg_temp.as_owner();
+  begin
+    create or replace function public.validate_study_course(p_job_id uuid)
+    returns jsonb
+    language plpgsql
+    set search_path = ''
+    as $refuse$
+    begin
+      raise exception 'refused by the test';
+    end
+    $refuse$;
+    with j as (
+      insert into public.generation_jobs (requester_id, kind, target, status, current_step)
+      values (reader_a, 'study_course', '{}', 'failed', 'study_prepare')
+      returning id
+    )
+    insert into public.study_generations
+      (owner_id, job_id, goal, processing_consent_at, course_id, created_at, assembled_at)
+    select reader_a, j.id, 'Stranded first', now(), course_a,
+           now() - interval '3 hours', now() - interval '2 hours'
+    from j
+    returning id into probe_a;
+    with j as (
+      insert into public.generation_jobs (requester_id, kind, target, status, current_step)
+      values (reader_a, 'study_course', '{}', 'failed', 'study_prepare')
+      returning id
+    )
+    insert into public.study_generations
+      (owner_id, job_id, goal, processing_consent_at, course_id, created_at, assembled_at)
+    select reader_a, j.id, 'Stranded second', now(), course_a,
+           now() - interval '2 hours', now() - interval '1 hour'
+    from j
+    returning id into probe_b;
+    with j as (
+      insert into public.generation_jobs (requester_id, kind, target, status, current_step)
+      values (reader_a, 'study_course', '{}', 'failed', 'study_prepare')
+      returning id
+    )
+    insert into public.study_generations
+      (owner_id, job_id, goal, processing_consent_at, course_id, created_at, assembled_at)
+    select reader_a, j.id, 'Stranded past its day', now(), course_a,
+           now() - interval '31 hours', now() - interval '30 hours'
+    from j
+    returning id into probe_s;
+
+    if public.validate_stranded_study_courses(p_limit => 1) <> 0 then
+      raise exception 'the refusing validator validated something';
+    end if;
+    if (select string_agg(g.goal, ',' order by g.goal) from public.study_generations g
+        where g.id in (probe_a, probe_b, probe_s) and g.validation_tried_at is not null)
+       is distinct from 'Stranded first' then
+      raise exception 'the first run did not take the oldest untried course within its day';
+    end if;
+    perform public.validate_stranded_study_courses(p_limit => 1);
+    if (select string_agg(g.goal, ',' order by g.goal) from public.study_generations g
+        where g.id in (probe_a, probe_b, probe_s) and g.validation_tried_at is not null)
+       is distinct from 'Stranded first,Stranded second' then
+      raise exception 'a refused course was taken again before one never tried';
+    end if;
+    -- Past its day, a course waits while any within theirs remain, and is taken after.
+    perform public.validate_stranded_study_courses(p_limit => 1);
+    if (select validation_tried_at from public.study_generations where id = probe_s)
+       is not null then
+      raise exception 'a course past its day went before those within theirs';
+    end if;
+    update public.generation_jobs set status = 'running'
+    where id in (select job_id from public.study_generations where id in (probe_a, probe_b));
+    perform public.validate_stranded_study_courses(p_limit => 1);
+    if (select validation_tried_at from public.study_generations where id = probe_s) is null then
+      raise exception 'a course past its day was not taken once none within theirs remained';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  perform pg_temp.become_reader(reader_a);
+
   -- A job cancelled after saving is ended too: the course still awaits its validation.
   perform pg_temp.as_owner();
   update public.generation_jobs set status = 'cancelled' where id = job_2;
@@ -723,7 +829,9 @@ begin
   -- For a day: one validation keeps refusing stops standing in the reader's way.
   perform pg_temp.as_owner();
   update public.study_generations set created_at = now() - interval '2 days' where id = gen_1;
-  update public.study_generations set created_at = now() - interval '25 hours' where id = gen_2;
+  update public.study_generations set created_at = now() - interval '25 hours',
+                                        assembled_at = now() - interval '25 hours'
+  where id = gen_2;
   perform pg_temp.become_reader(reader_a);
   if not exists (select 1 from public.study_course_overview
                  where course_id = course_a and latest_generation_id = gen_2
@@ -740,7 +848,7 @@ begin
   end;
   perform pg_temp.as_owner();
   update public.study_generations set created_at = now() - interval '1 hour' where id = gen_1;
-  update public.study_generations set created_at = now() where id = gen_2;
+  update public.study_generations set created_at = now(), assembled_at = now() where id = gen_2;
 
   perform pg_temp.become_worker();
   perform public.validate_study_course(job_2);

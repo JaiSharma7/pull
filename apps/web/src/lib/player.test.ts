@@ -620,8 +620,9 @@ describe('a local-only track is an interlude', () => {
     expect(ids(after)).toEqual(['a', 'b']);
     expect(currentTrack(after)?.id).toBe('a');
     expect(after.status).toBe('idle');
-    // Next from the lesson is the same end.
+    // Next from the lesson is the same end, and so is previous -- a lock screen's, say.
     expect(playerReducer(during, { type: 'next' })).toEqual(after);
+    expect(playerReducer(during, { type: 'prev' })).toEqual(after);
   });
 
   it('keeps a paused or stopped Pull next rather than skipping it', () => {

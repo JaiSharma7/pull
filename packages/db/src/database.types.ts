@@ -2487,6 +2487,7 @@ export type Database = {
           text_failures: string[]
           text_status: string
           title: string | null
+          validation_tried_at: string | null
           withheld: Json
         }
         Insert: {
@@ -2506,6 +2507,7 @@ export type Database = {
           text_failures?: string[]
           text_status?: string
           title?: string | null
+          validation_tried_at?: string | null
           withheld?: Json
         }
         Update: {
@@ -2525,6 +2527,7 @@ export type Database = {
           text_failures?: string[]
           text_status?: string
           title?: string | null
+          validation_tried_at?: string | null
           withheld?: Json
         }
         Relationships: [
