@@ -373,6 +373,25 @@ try {
       `${validClaims}/${validLessons}/${validItems} (${logged} logged)`,
   );
 
+  // The job's course now shows it: the current generation, its one lesson in the outline
+  // and its two questions, and a bundle of the one source.
+  const [current, outlined, listed, bundled] = psql(`
+    select count(*) from public.study_course_overview o
+      join public.study_generations g on g.course_id = o.course_id
+      where g.job_id = '${first}' and o.generation_id = g.id and o.lesson_count = 1 and o.question_count = 2;
+    select count(*) from public.study_generations g
+      cross join lateral public.study_course_outline(g.course_id) o where g.job_id = '${first}';
+    select count(*) from public.study_generations g
+      cross join lateral public.study_course_questions(g.course_id) q where g.job_id = '${first}';
+    select count(*) from public.study_course_sources s
+      join public.study_generations g on g.course_id = s.course_id where g.job_id = '${first}';`)
+    .split('\n')
+    .map(Number);
+  assert(
+    current === 1 && outlined === 1 && listed === 2 && bundled === 1,
+    `the course read path shows ${current}/${outlined}/${listed}/${bundled}`,
+  );
+
   const [journalled, ledgered, unledgered, open] = psql(`
     select count(*) from public.provider_calls where job_id = '${first}';
     select count(*) from public.cost_ledger where job_id = '${first}' and provider_call_id is not null;

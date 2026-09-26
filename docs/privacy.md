@@ -9,7 +9,8 @@ text of the sources you choose are sent to Google's Gemini API to extract claims
 lessons and questions, which are stored privately in your account. It happens only when
 you ask and confirm. Every course also keeps the history of each claim, lesson and
 question's status (checked, held back, reported, corrected); a report you file, with any
-note, and a version you correct are kept with it, privately. See
+note, and a version you correct are kept with it, privately, and so is a record of which
+lessons and questions you were shown. See
 [What you create](#what-you-create) and [What never reaches a model](#what-never-reaches-a-model).
 
 This revision also corrects statements that contradicted the rest of this page: the
@@ -147,9 +148,14 @@ lessons and questions (`study_generations`, `study_claims`, `study_claim_evidenc
 `study_lessons`, `study_items`, and the tables linking them). The model output they came
 from is cached in `study_stage_cache` so the same text is not sent twice. All of it is
 readable only by you, is not published, and never enters the catalogue or another
-reader's experience. Deleting any source a course was built from deletes that course and
-every cached output made from it. It is included in your account export and deleted with
-your account. Whether your account is in the beta is recorded in
+reader's experience. A course (`study_courses`) keeps its goal and the sources it follows
+(`study_course_sources`); preparing it again after you correct a source adds a new version
+of the course rather than a new course. Deleting any source a course was built from deletes
+every version of the course made from it and every cached output made from it, and the
+course itself once it has no sources left. You can also delete a course and keep its
+sources; the cached model output made from those sources stays with them until you delete
+the sources. It is included in your account export and deleted with your account. Whether
+your account is in the beta is recorded in
 `study_generation_access`, with any note we wrote when adding you — which you can read,
 and which is in your export.
 
@@ -160,9 +166,14 @@ you report part of a course (`study_reports`), the report and any note you add (
 because it is the record of why something was hidden. If you correct a lesson or question,
 your version is stored alongside the one it replaces, which is kept rather than deleted.
 Answers to a course's questions will be kept in `study_answer_events`; nothing records them
-yet. All of this is readable only by you, is never reviewed by us, is in your export, and
-is deleted with the course — which deleting any of its sources deletes — and with your
-account.
+yet. Which lessons and questions of a course you were shown, finished or skipped are
+recorded in `study_progress_events` so the course can remember your place, with the time
+your device reported (a time more than thirty days back, or in the future, is stored as the
+nearest time that is not) and the time it reached us; being
+shown something is never counted as remembering it. All of this is readable only by you, is
+never reviewed by us, and is in your export. It is deleted with the version of the course it
+belongs to — which deleting any source of that version deletes — with the course, and with
+your account.
 
 **Feedback** is worth its own sentence, because it is the one thing here you write _to us_
 rather than for yourself. Sending it stores what you wrote, the subject you chose, and the
@@ -196,6 +207,7 @@ This is the category most services describe vaguely, so here it is precisely:
 | Questions you wrote for yourself                                | `user_questions`                                             | Asked in Review before ours, because yours is the one you wanted                    |
 | Learning path progress and completed steps                      | `path_progress`, `path_step_done`                            | Remembers your place, reflections and tested-out steps on curated learning paths    |
 | Sources you asked to see less of                                | `muted_works`                                                | Keeps them out of your feed and your Daily Pull until you unmute them               |
+| Lessons and questions of a study course you were shown          | `study_progress_events`                                      | Remembers your place in the course; never counted as recall                         |
 
 **Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
 export, the text of each highlight is stored verbatim — that is the point of keeping it —
@@ -442,9 +454,10 @@ While your account exists, your data exists — unlimited history is one of the 
 this product refuses to charge for, so we are not going to quietly trim it.
 
 You can delete an individual private study source and all its versions from Studio.
-This removes the extracted text for that source, and any study course or cached model
-output built from it, with the course's reports, history and answers, without deleting your
-account.
+This removes the extracted text for that source, and every version of a study course and
+every cached model output built from it, with their reports, history, answers and
+progress, without deleting your account; a course left with no sources goes too. You can
+also delete a study course and keep the sources it was built from.
 
 When you delete your account, deletion cascades from your user record through every table
 keyed to it: profile, preferences, stashes, saves, notes, highlights, history, impressions,
