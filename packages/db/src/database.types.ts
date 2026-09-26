@@ -2157,6 +2157,7 @@ export type Database = {
           hinted: boolean
           id: string
           item_id: string
+          looked: boolean
           owner_id: string
           response: string | null
         }
@@ -2168,6 +2169,7 @@ export type Database = {
           hinted: boolean
           id?: string
           item_id: string
+          looked?: boolean
           owner_id: string
           response?: string | null
         }
@@ -2179,6 +2181,7 @@ export type Database = {
           hinted?: boolean
           id?: string
           item_id?: string
+          looked?: boolean
           owner_id?: string
           response?: string | null
         }
@@ -4497,6 +4500,7 @@ export type Database = {
         Args: { p_dwell_ms?: number; p_position?: number; p_pull_id: string }
         Returns: undefined
       }
+      record_study_answers: { Args: { p_answers: Json }; Returns: Json }
       record_study_progress: { Args: { p_events: Json }; Returns: Json }
       record_study_stage: {
         Args: {
@@ -4748,6 +4752,19 @@ export type Database = {
         Returns: number
       }
       study_gives_away: { Args: { p_answer: string }; Returns: boolean }
+      study_grade_response: {
+        Args: {
+          p_accepted: string[]
+          p_answer: string
+          p_distractors: Json
+          p_kind: string
+          p_pairs: Json
+          p_response: Json
+          p_self: string
+          p_sequence: string[]
+        }
+        Returns: Json
+      }
       study_heuristic_spaced: { Args: { p_text: string }; Returns: string }
       study_heuristic_text: { Args: { p_text: string }; Returns: string }
       study_hidden_class: { Args: never; Returns: string }

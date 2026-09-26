@@ -273,3 +273,91 @@
 .course__progress > .meta {
   margin: 0 0 var(--space-2);
 }
+
+/* A practice question: the prompt reads like a heading, the verdict is said in words. */
+.study-q__prompt {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  line-height: var(--line-tight);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.study-q__options {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.study-q__option {
+  line-height: var(--line-snug);
+}
+
+/* The blank sits in the sentence, as wide as a word or two, not as a block. */
+.study-q__cloze {
+  line-height: 2.2;
+}
+
+.study-q__cloze .study-q__blank {
+  display: inline-block;
+  width: 14ch;
+  max-width: 100%;
+  margin: 0 var(--space-1);
+  padding-block: var(--space-1);
+  vertical-align: baseline;
+}
+
+.study-q__steps {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+/* The list item keeps its number; the row inside it lays out the step and its moves. */
+.study-q__step {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.study-q__step-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+}
+
+/* A matching pair's left side is content to read, not a field's name. */
+.study-q__match-left {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+.study-q__moves {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.study-q__pairs {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.study-q__hint,
+.study-q__judge,
+.study-q__feedback {
+  border-inline-start: 2px solid var(--rule-strong);
+  padding-inline-start: var(--space-4);
+}
+
+.study-q__verdict {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  margin: 0;
+}
+
+.study-q__model {
+  font-weight: 600;
+  white-space: pre-wrap;
+}

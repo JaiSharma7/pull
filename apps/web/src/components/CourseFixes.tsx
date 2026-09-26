@@ -19,6 +19,25 @@ import {
   type ReportReason,
 } from '../lib/study-course.js';
 
+const REPORT_QUESTION: Record<ReportKind, string> = {
+  lesson: 'What is wrong with this lesson?',
+  claim: 'What is wrong with this claim?',
+  item: 'What is wrong with this question?',
+};
+
+const HELD_KIND: Record<ReportKind, string> = {
+  lesson: 'Lesson',
+  claim: 'Claim',
+  item: 'Question',
+};
+
+const REPORT_EFFECT: Record<ReportKind, string> = {
+  lesson: 'Reporting holds the lesson back from this course at once. You can restore it later.',
+  claim:
+    'Reporting holds the claim back, and every lesson and question that rests on it. You can restore them later.',
+  item: 'Reporting holds the question back at once, and nothing you answer to it counts while it is held. You can restore it later.',
+};
+
 function Problem({ text }: { text: string | null }) {
   if (!text) return null;
   return (
@@ -68,9 +87,7 @@ export function ReportForm({
   return (
     <div className="stack course__fix-form">
       <fieldset className="course__reasons">
-        <legend className="meta">
-          {kind === 'lesson' ? 'What is wrong with this lesson?' : 'What is wrong with this claim?'}
-        </legend>
+        <legend className="meta">{REPORT_QUESTION[kind]}</legend>
         {reasons.map((r, i) => (
           <label key={r.reason}>
             <input
@@ -98,11 +115,7 @@ export function ReportForm({
           onChange={(e) => setNote(e.target.value)}
         />
       </div>
-      <p>
-        {kind === 'lesson'
-          ? 'Reporting holds the lesson back from this course at once. You can restore it later.'
-          : 'Reporting holds the claim back, and every lesson that rests on it. You can restore them later.'}
-      </p>
+      <p>{REPORT_EFFECT[kind]}</p>
       <Problem text={local ?? error} />
       <div className="course__actions">
         <button type="button" className="btn btn--primary" aria-disabled={working} onClick={submit}>
@@ -258,8 +271,7 @@ export function HeldBackList({
         {items.map((item) => (
           <li key={`${item.kind}:${item.id}`} className="course__held-item">
             <span>
-              <span className="meta">{item.kind === 'lesson' ? 'Lesson' : 'Claim'}</span>{' '}
-              {item.label}
+              <span className="meta">{HELD_KIND[item.kind]}</span> {item.label}
             </span>
             <button
               type="button"

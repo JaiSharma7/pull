@@ -11,6 +11,8 @@ import { isPermanentFailure, sqlState, TRANSPORT_ERROR } from './rpc-error.js';
 import { mutationId as newMutationId } from './submission.js';
 import type { SavePatch } from './stash-api.js';
 import type { DueReview, FeedRow } from './types.js';
+import type { ProgressEvent as StudyProgressEvent } from './study-course.js';
+import type { AnswerEvent as StudyAnswerEvent } from './study-practice.js';
 
 /**
  * Offline reading, free forever (CLAUDE.md law 3).
@@ -186,7 +188,21 @@ export type PendingWrite =
    * create would then land, and a collection the reader deleted would come back.
    * Ordering per stash is what forbids that, and it is `writeScope`'s job.
    */
-  | { kind: 'stash-delete'; stashId: string };
+  | { kind: 'stash-delete'; stashId: string }
+  /**
+   * One event of a study course's progress -- a lesson shown, read or skipped, a question
+   * shown -- that did not reach the server. Replay-safe: `record_study_progress` records each
+   * client event id once and answers a replay as a duplicate. Its device time travels with
+   * it, clamped by the server.
+   */
+  | { kind: 'study-progress'; event: StudyProgressEvent }
+  /**
+   * One answer to a study question. Replay-safe for the same reason, and graded again on the
+   * server from the response, so nothing the device concluded is trusted. An answer the
+   * server refuses for good (the question was deleted, say) is dropped; one refused because
+   * the day's limit is reached stays queued for the next day.
+   */
+  | { kind: 'study-answer'; event: StudyAnswerEvent };
 
 /**
  * Which queued writes must keep their order relative to each other.
@@ -224,6 +240,14 @@ export function writeScope(write: PendingWrite): string {
     case 'stash-create':
     case 'stash-delete':
       return `stash:${write.stashId}`;
+    // Per question: a retry is recorded as hinted only when it follows the wrong answer
+    // it retried, so a question's answers keep their order. A lesson's events likewise.
+    case 'study-progress':
+      return write.event.kind === 'item_shown'
+        ? `study-item:${write.event.itemId}`
+        : `study-lesson:${write.event.lessonId}`;
+    case 'study-answer':
+      return `study-item:${write.event.itemId}`;
   }
   /*
    * Unreachable for any `PendingWrite`, and the `never` is what proves it: a
@@ -754,6 +778,29 @@ export async function clearCachedPulls(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Everything this account left queued, for an account being deleted: its writes can never be
+ * sent. A queued study answer holds what the reader typed about their own material, and it
+ * must not outlive the account on this device. Signing out keeps the queue, for the same
+ * reader's return; this is only for the end.
+ */
+export async function clearPending(userId: string): Promise<void> {
+  try {
+    const database = await db();
+    if (!database) return;
+    const tx = database.transaction('pending', 'readwrite');
+    const items = await tx.store.getAll();
+    await Promise.all(
+      items.flatMap((item) =>
+        item.userId === userId && item.id !== undefined ? [tx.store.delete(item.id)] : [],
+      ),
+    );
+    await tx.done;
+  } catch {
+    /* best effort, as above */
+  }
+}
+
 /** Everything this account downloaded — and nothing another account did. */
 export async function clearReviewPack(userId: string): Promise<void> {
   try {
@@ -945,6 +992,18 @@ async function withCrossTabLock<T>(userId: string, run: () => Promise<T>): Promi
   return locks.request(`wap.drain.${userId}`, run);
 }
 
+/**
+ * A study event the server refused only for today: kept queued, so the drain tries it again.
+ * Every other refusal of a study event is final -- the lesson or question is gone, or was
+ * never shown -- and the entry is dropped, which is what resolving does.
+ */
+export class StudyLimitReached extends Error {
+  constructor() {
+    super('The daily study record is full; this is kept for tomorrow.');
+    this.name = 'StudyLimitReached';
+  }
+}
+
 async function runDrain(
   userId: string,
   apply: (m: PendingWrite) => Promise<void>,
@@ -952,6 +1011,10 @@ async function runDrain(
 ): Promise<number> {
   let drained = 0;
   const blocked = new Set<string>();
+  // Kinds of study event the day's record is full for. The limit is the reader's, not one
+  // question's or lesson's, so every later event of that kind would be refused the same way:
+  // they wait for the next drain rather than each asking.
+  const full = new Set<PendingWrite['kind']>();
   try {
     const database = await db();
     if (!database) return drained;
@@ -973,10 +1036,14 @@ async function runDrain(
       // bookkeeping for this queue, not part of the write being replayed.
       const { id: _id, userId: _userId, at: _at, ...write } = item;
       const scope = writeScope(write);
-      if (blocked.has(scope)) continue;
+      if (blocked.has(scope) || full.has(write.kind)) continue;
       try {
         await apply(write);
       } catch (error) {
+        if (error instanceof StudyLimitReached) {
+          full.add(write.kind);
+          continue;
+        }
         // A refusal that will not change on a retry -- the row is gone -- is
         // dropped rather than kept: kept, it holds `hasPending` true and the retry
         // timer alive for the life of the tab. The subject is not blocked, so a

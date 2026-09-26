@@ -132,9 +132,8 @@ about another.
 **Exposure is not recall.** Being shown a lesson, reading it or seeing a question never
 counts as remembering it. Whether a reader has demonstrated recall is decided only by
 `study_answer_proves_recall` over `study_answer_events` (see
-[`study-validation.md`](./study-validation.md#what-counts-as-recall)). Nothing records an
-answer yet -- the recorder that grades one on the server is a later change -- so `answered`
-and `recall_demonstrated` below appear only once it exists.
+[`study-validation.md`](./study-validation.md#what-counts-as-recall)). Answers are recorded
+and graded on the server by `record_study_answers` ([`study-practice.md`](./study-practice.md)).
 
 ## The read path
 
@@ -274,16 +273,18 @@ other signed-in destinations give, and a visitor with sign-in.
   screen says so rather than offering to read it. It is an interlude, not a place in the
   queue: it plays ahead of the Pull it interrupts, and when it ends, or the reader leaves the
   lesson, it leaves the queue and the player stops on that Pull.
-- **Progress is sent at once** and kept in memory until the server accepts it; an event
-  refused with `limit` stays and is sent with the next one. A durable offline queue, and
-  questions, are the practice change's.
+- **Progress is sent at once.** An event that cannot reach the server goes into the app's
+  offline queue and is sent when the connection returns; one refused with `limit` is queued
+  for the next day. Questions, placement and review are in
+  [`study-practice.md`](./study-practice.md#the-screens).
 - **Something wrong with a lesson** is answered beside it: report it (a reason, and a
   note if the reader wants), correct it, or withdraw it. A report holds the lesson back at
   once and the session moves on, with an undo; a correction is saved through
   `revise_study_lesson` as a new version that keeps the reader's place, and its failed
   checks are said in words; a withdrawal asks first. Each claim in "where this comes from"
   can be reported too, which holds back the lessons resting on it. The course page lists
-  what the reader has reported and not settled, one entry per lesson or claim, each with a
+  what the reader has reported and not settled, one entry per lesson, claim or question
+  ([`study-practice.md`](./study-practice.md#the-screens)), each with a
   Restore that dismisses every open report on it (`dismiss_study_report`) -- a report sent
   twice, or from two tabs, would otherwise keep it held back. It reads the open reports and
   each one's title or statement from the tables, since reported content is what the visible
@@ -317,7 +318,7 @@ other signed-in destinations give, and a visitor with sign-in.
 
 ## Lock order
 
-Three rules keep the writers here from deadlocking with each other and with deletion; every
+Four rules keep the writers here from deadlocking with each other and with deletion; every
 order below was reproduced as a deadlock with real sessions before it was in place. In
 short: the account row, then the reader's study lock, then their sources, then a course.
 
@@ -356,6 +357,15 @@ short: the account row, then the reader's study lock, then their sources, then a
   before the course, and `enqueue_study_generation` links a new course's sources before
   its versions. The last-source trigger takes the course row before it looks for the
   bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
+
+- **Questions in id order.** The answer recorder share-locks a batch's questions, in id
+  order, before it records any -- every id in any form a uuid is written in, and never a
+  draft, which validation takes in its own order; an id it did not lock, such as a draft
+  validated since, it refuses unshown rather than locking late; a claim report
+  (`study_refresh_claim_dependents`) locks the questions resting on the claim in id order;
+  and a lesson's correction or withdrawal (`revise_study_lesson`, `retire_study_content`)
+  locks the lesson's questions in id order before it moves them. Locked in a batch's order or
+  the table's, a batch of two answers deadlocked with either (20260925200000).
 
 **Deleting many accounts in one statement** takes one study lock for each account with study
 sources, and every one of them is held in Postgres's shared lock table until the statement

@@ -1,6 +1,7 @@
 import type * as api from './api.js';
-import type { PendingWrite } from './offline.js';
+import { StudyLimitReached, type PendingWrite } from './offline.js';
 import type * as stashApi from './stash-api.js';
+import type * as studyApi from './study-course-api.js';
 
 /**
  * How a queued write turns back into the call that makes it real.
@@ -30,7 +31,11 @@ export type ReplayPort = Pick<
   typeof api,
   'savePull' | 'unsavePull' | 'recordRead' | 'gradeRecall' | 'saveExplanation' | 'setConviction'
 > &
-  Pick<typeof stashApi, 'updateSavedItem' | 'createStash' | 'deleteStash'>;
+  Pick<typeof stashApi, 'updateSavedItem' | 'createStash' | 'deleteStash'> &
+  Pick<typeof studyApi, 'recordProgress' | 'recordAnswers'>;
+
+// Defined beside the drain, which stops asking once it is thrown; thrown from here.
+export { StudyLimitReached };
 
 export async function replayWrite(
   userId: string,
@@ -93,6 +98,16 @@ export async function replayWrite(
     case 'stash-delete':
       await port.deleteStash(write.stashId);
       return;
+    case 'study-progress': {
+      const result = await port.recordProgress([write.event]);
+      if (result.refused.some((r) => r.reason === 'limit')) throw new StudyLimitReached();
+      return;
+    }
+    case 'study-answer': {
+      const result = await port.recordAnswers([write.event]);
+      if (result.refused.some((r) => r.reason === 'limit')) throw new StudyLimitReached();
+      return;
+    }
   }
   /*
    * Same guard, and here it is doing more than documenting itself: the drain

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { openDB } from 'idb';
 import {
   cachePulls,
+  clearPending,
   clearReviewPack,
   drainPending,
   hasPending,
@@ -15,6 +16,7 @@ import {
   readReviewPack,
   removeFromPack,
   storeReviewPack,
+  StudyLimitReached,
   writeScope,
   type PendingWrite,
 } from './offline.js';
@@ -521,6 +523,61 @@ describe('pending mutation queue', () => {
       retried.push(`${m.kind}:${pullOf(m)}`);
     });
     expect(retried).toEqual(['save:stuck', 'unsave:stuck']);
+  });
+});
+
+describe('clearing an account’s queue', () => {
+  it('takes every write this account queued, and none of another’s', async () => {
+    await queueMutation(USER_A, {
+      kind: 'study-answer',
+      event: { clientEventId: 'c1', itemId: 'i1', response: 'typed about my notes' },
+    });
+    await queueMutation(USER_B, { kind: 'save', pullId: 'kept' });
+    await clearPending(USER_A);
+    expect(await hasPending(USER_A)).toBe(false);
+    expect(await hasPending(USER_B)).toBe(true);
+    await clearPending(USER_B);
+  });
+});
+
+describe('a study record full for the day', () => {
+  it('stops sending that kind of event for the rest of the drain, and keeps them all', async () => {
+    const answer = (id: string) => ({
+      kind: 'study-answer' as const,
+      event: { clientEventId: id, itemId: `item-${id}`, response: 'x', hinted: false },
+    });
+    const progress = {
+      kind: 'study-progress' as const,
+      event: {
+        clientEventId: 'p1',
+        kind: 'lesson_read' as const,
+        lessonId: 'l1',
+        occurredAt: '2026-09-26T00:00:00Z',
+      },
+    };
+    await queueMutation(USER_A, answer('a1'));
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, answer('a2'));
+    await new Promise((r) => setTimeout(r, 2));
+    await queueMutation(USER_A, progress);
+
+    const applied: string[] = [];
+    const drained = await drainPending(USER_A, async (m) => {
+      applied.push(
+        m.kind === 'study-answer' || m.kind === 'study-progress' ? m.event.clientEventId : m.kind,
+      );
+      if (m.kind === 'study-answer') throw new StudyLimitReached();
+    });
+    // The second answer, another question's, is not sent to be refused the same way; the
+    // progress event, whose own limit is not reached, goes.
+    expect(applied).toEqual(['a1', 'p1']);
+    expect(drained).toBe(1);
+
+    const retried: string[] = [];
+    await drainPending(USER_A, async (m) => {
+      if (m.kind === 'study-answer') retried.push(m.event.clientEventId);
+    });
+    expect(retried).toEqual(['a1', 'a2']);
   });
 });
 

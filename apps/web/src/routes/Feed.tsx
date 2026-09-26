@@ -29,6 +29,8 @@ import { loadSession, persist, resetSession } from '../lib/session.js';
 import { shareCapability, shareLabel, shareNote, shareOrCopy, shareTarget } from '../lib/share.js';
 import { speechSupported } from '../lib/speech.js';
 import * as stashApi from '../lib/stash-api.js';
+import * as studyApi from '../lib/study-course-api.js';
+import { flushJudging } from '../lib/study-sync.js';
 import { mutationId, nextSubmissionStamp } from '../lib/submission.js';
 import { getCurrentUserId } from '../lib/supabase.js';
 import type { FeedRow } from '../lib/types.js';
@@ -66,6 +68,8 @@ const REPLAY_PORT: ReplayPort = {
   updateSavedItem: stashApi.updateSavedItem,
   createStash: stashApi.createStash,
   deleteStash: stashApi.deleteStash,
+  recordProgress: studyApi.recordProgress,
+  recordAnswers: studyApi.recordAnswers,
 };
 
 /**
@@ -365,6 +369,9 @@ export function Feed({
 
     const drain = () => {
       setOffline(false);
+      // An answer left unjudged when a page closed is recorded as soon as the app is back,
+      // not only when practice next opens (`study-sync.ts`).
+      void flushJudging(userId);
       return drainPending(
         userId,
         // Every kind is mapped in `replayWrite`, including the ones the Review

@@ -7,12 +7,14 @@
  */
 import { rpcError, sqlState } from './rpc-error.js';
 import {
+  shapeClaims,
   shapeCourseSummaries,
   shapeCourseSummary,
   shapeLessonContent,
   shapeOutline,
   shapeProgressResult,
   type CourseSummary,
+  type LessonClaim,
   type LessonContent,
   type LessonDraft,
   type OutlineUnit,
@@ -21,6 +23,15 @@ import {
   type ReportKind,
   type ReportReason,
 } from './study-course.js';
+import {
+  shapeAnswersRecorded,
+  shapeQuestion,
+  shapeQuestionEntries,
+  type AnswerEvent,
+  type AnswersRecorded,
+  type QuestionEntry,
+  type StudyQuestion,
+} from './study-practice.js';
 import { supabase } from './supabase.js';
 
 /**
@@ -99,18 +110,31 @@ export async function fetchLesson(
   const lesson = lessonRead.data?.[0];
   if (!lesson) return null;
   if (links.error) throw rpcError(links.error);
-  const claimIds = (links.data ?? []).map((l) => l.claim_id);
+  const gathered = await fetchClaimRows(
+    (links.data ?? []).map((l) => l.claim_id),
+    signal,
+  );
+  return shapeLessonContent({ lesson, ...gathered });
+}
 
-  // The claims a learner may be shown, and then only their evidence: a claim validation
-  // held back keeps its passages off the screen with it.
-  const claims = claimIds.length
-    ? await abortable(
-        supabase
-          .from('study_visible_claims')
-          .select('id, statement, qualifications, attribution, source_version_id')
-          .in('id', claimIds),
-      )
-    : { data: [], error: null };
+/**
+ * The claims named, as a learner may see them, with their passages and their sources'
+ * titles. Only the visible claims, and then only their evidence: a claim validation held
+ * back keeps its passages off the screen with it.
+ */
+async function fetchClaimRows(
+  claimIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ claims: unknown; evidence: unknown; versions: unknown }> {
+  const abortable = <T extends { abortSignal: (s: AbortSignal) => T }>(q: T): T =>
+    signal ? q.abortSignal(signal) : q;
+  if (claimIds.length === 0) return { claims: [], evidence: [], versions: [] };
+  const claims = await abortable(
+    supabase
+      .from('study_visible_claims')
+      .select('id, statement, qualifications, attribution, source_version_id')
+      .in('id', [...claimIds]),
+  );
   if (claims.error) throw rpcError(claims.error);
   const shownIds = (claims.data ?? []).map((c) => c.id).filter(Boolean) as string[];
   const versionIds = [
@@ -132,13 +156,23 @@ export async function fetchLesson(
   ]);
   if (evidence.error) throw rpcError(evidence.error);
   if (versions.error) throw rpcError(versions.error);
+  return { claims: claims.data, evidence: evidence.data, versions: versions.data };
+}
 
-  return shapeLessonContent({
-    lesson,
-    claims: claims.data,
-    evidence: evidence.data,
-    versions: versions.data,
-  });
+/** The claims a question rests on, with their passages: what a hint shows. */
+export async function fetchItemClaims(
+  itemId: string,
+  signal?: AbortSignal,
+): Promise<LessonClaim[]> {
+  const request = supabase.from('study_item_claims').select('claim_id').eq('item_id', itemId);
+  const links = await (signal ? request.abortSignal(signal) : request);
+  if (links.error) throw rpcError(links.error);
+  return shapeClaims(
+    await fetchClaimRows(
+      (links.data ?? []).map((l) => l.claim_id),
+      signal,
+    ),
+  );
 }
 
 /** Whether a lesson is shown to the reader now: one read of the visible lessons. */
@@ -252,16 +286,17 @@ export async function dismissReport(reportId: string): Promise<void> {
   if (error) throw rpcError(error);
 }
 
-/** Something the reader can report: a lesson or a claim. */
+/** Something the reader can report: a lesson, a claim or a question. */
 export interface ReportTarget {
   kind: ReportKind;
   id: string;
 }
 
-const REPORT_COLUMN = { lesson: 'lesson_id', claim: 'claim_id' } as const satisfies Record<
-  ReportKind,
-  string
->;
+const REPORT_COLUMN = {
+  lesson: 'lesson_id',
+  claim: 'claim_id',
+  item: 'item_id',
+} as const satisfies Record<ReportKind, string>;
 
 /**
  * Restore something the reader reported, by dismissing every open report on it.
@@ -314,8 +349,8 @@ export interface HeldBack extends ReportTarget {
 
 /**
  * What the reader has reported in a generation and not yet settled: their open reports on
- * lessons and on claims -- a reported claim holds back every lesson resting on it -- each
- * with what it names. Read from the tables, not the visible views, because reported content
+ * lessons, claims and questions -- a reported claim holds back every lesson and question
+ * resting on it -- each with what it names. Read from the tables, not the visible views, because reported content
  * is exactly what the views hide; only a title or a statement is read.
  */
 export async function fetchHeldBack(
@@ -327,17 +362,17 @@ export async function fetchHeldBack(
   const reports = await abortable(
     supabase
       .from('study_reports')
-      .select('id, lesson_id, claim_id, created_at')
+      .select('id, lesson_id, claim_id, item_id, created_at')
       .eq('generation_id', generationId)
       .eq('status', 'open')
-      .is('item_id', null)
       .order('created_at', { ascending: true }),
   );
   if (reports.error) throw rpcError(reports.error);
   const rows = reports.data ?? [];
   const lessonIds = [...new Set(rows.map((r) => r.lesson_id).filter(Boolean))] as string[];
   const claimIds = [...new Set(rows.map((r) => r.claim_id).filter(Boolean))] as string[];
-  const [lessons, claims] = await Promise.all([
+  const itemIds = [...new Set(rows.map((r) => r.item_id).filter(Boolean))] as string[];
+  const [lessons, claims, items] = await Promise.all([
     lessonIds.length
       ? abortable(
           supabase
@@ -356,22 +391,84 @@ export async function fetchHeldBack(
             .in('id', claimIds),
         )
       : Promise.resolve({ data: [], error: null }),
+    itemIds.length
+      ? abortable(
+          supabase
+            .from('study_items')
+            .select('id, prompt')
+            .eq('status', 'suspended')
+            .in('id', itemIds),
+        )
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (lessons.error) throw rpcError(lessons.error);
   if (claims.error) throw rpcError(claims.error);
+  if (items.error) throw rpcError(items.error);
   const labels = new Map<string, string>([
     ...(lessons.data ?? []).map((l) => [l.id, l.title] as [string, string]),
     ...(claims.data ?? []).map((c) => [c.id, c.statement] as [string, string]),
+    ...(items.data ?? []).map((i) => [i.id, i.prompt] as [string, string]),
   ]);
   // One entry per lesson or claim however many reports it has; restoring it settles all.
   const seen = new Set<string>();
   const held: HeldBack[] = [];
   for (const r of rows) {
-    const target = r.lesson_id ?? r.claim_id;
+    const target = r.lesson_id ?? r.claim_id ?? r.item_id;
     const label = target ? labels.get(target) : undefined;
     if (!target || label === undefined || seen.has(target)) continue;
     seen.add(target);
-    held.push({ kind: r.lesson_id ? 'lesson' : 'claim', id: target, label });
+    held.push({ kind: r.lesson_id ? 'lesson' : r.claim_id ? 'claim' : 'item', id: target, label });
   }
   return held;
+}
+
+// ------------------------------------------------------------------ practice
+
+/** Where each of a course's questions sits and how the reader stands with it. */
+export async function fetchCourseQuestions(
+  courseId: string,
+  signal?: AbortSignal,
+): Promise<QuestionEntry[]> {
+  const request = supabase.rpc('study_course_questions', { p_course_id: courseId });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw rpcError(error);
+  return shapeQuestionEntries(data);
+}
+
+/**
+ * The questions' own text, in the order asked for. Read from the visible view, so a
+ * question a learner may not be shown never reaches the browser.
+ */
+export async function fetchQuestions(
+  itemIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<StudyQuestion[]> {
+  if (itemIds.length === 0) return [];
+  const request = supabase
+    .from('study_visible_items')
+    .select(
+      'id, lesson_id, purpose, kind, prompt, answer, accepted_answers, distractors, cloze, sequence, pairs, explanation, authored_by',
+    )
+    .in('id', [...itemIds]);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw rpcError(error);
+  const byId = new Map(
+    (data ?? [])
+      .map(shapeQuestion)
+      .filter((q): q is StudyQuestion => q !== null)
+      .map((q) => [q.itemId, q]),
+  );
+  return itemIds.map((id) => byId.get(id)).filter((q): q is StudyQuestion => q !== undefined);
+}
+
+/** Record answers; the server grades each from its response and keeps its own grade. */
+export async function recordAnswers(events: readonly AnswerEvent[]): Promise<AnswersRecorded> {
+  const { data, error } = await supabase.rpc('record_study_answers', {
+    p_answers: events.map((e) => ({
+      ...e,
+      response: typeof e.response === 'string' ? e.response : [...e.response],
+    })),
+  });
+  if (error) throw rpcError(error);
+  return shapeAnswersRecorded(data);
 }

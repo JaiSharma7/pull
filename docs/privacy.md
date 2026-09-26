@@ -1,21 +1,30 @@
 # Privacy Policy
 
-**Effective 26 September 2026.** Every revision of this document is a commit in this
+**Effective 27 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Study courses are now offered in the app**, to accounts in the limited beta. In Studio
-you choose up to five study sources you saved and say what the course is for; once you
-confirm, the title and text of those sources, and that goal, are sent to Google's Gemini
-API, and the course it prepares is stored privately in your account. Preparing a course
-again after you correct a source sends the newest version of each of its sources, and the
-goal, the same way, after the same confirmation. Reading a course records which lessons you were shown, finished or
-skipped, so it can remember your place; that record is never counted as remembering
-anything. Listening to a lesson uses only a voice installed on your device, so your
-material is not sent to a speech service; without one, the app does not offer to read it
-aloud. See [What you create](#what-you-create) and
-[What never reaches a model](#what-never-reaches-a-model).
+**Answers to your study courses' questions are now recorded.** When you answer a question in
+one of your courses, we keep what you chose, typed or arranged (up to 1,000 characters),
+whether it was right, whether you looked at the passage first or were trying again after
+seeing the answer, and — for a short answer the course cannot check itself — your own
+judgement of it. The course uses these to show what you have practised and which ideas you
+have shown you remember. Your answers are checked by the database, not by a model, and no
+answer is sent to any model provider. An answer given without a connection waits on your
+device until it can be sent — through a sign-out, for when you sign in again — and is removed
+from the device when you delete your account. See [What you create](#what-you-create).
 
-The previous revision, effective 25 September, described study course generation before
+The previous revision, effective 26 September, **offered study courses in the app** to
+accounts in the limited beta. In Studio you choose up to five study sources you saved and
+say what the course is for; once you confirm, the title and text of those sources, and that
+goal, are sent to Google's Gemini API, and the course it prepares is stored privately in
+your account. Preparing a course again after you correct a source sends the newest version
+of each of its sources, and the goal, the same way, after the same confirmation. Reading a course records which lessons
+you were shown, finished or skipped, so it can remember your place; that record is never
+counted as remembering anything. Listening to a lesson uses only a voice installed on your
+device, so your material is not sent to a speech service; without one, the app does not
+offer to read it aloud.
+
+The revision before that, effective 25 September, described study course generation before
 the app offered it: what is sent to Google's Gemini API and when, that each course keeps
 the history of each claim, lesson and question's status (checked, held back, reported,
 corrected), that a report you file and a version you correct are kept with it privately,
@@ -27,14 +36,14 @@ real name (the name your sign-in account supplies is kept), and it said the Anth
 fallback was "not enabled" while listing it as a processor (it is a setting the hosted
 service does not use, and is listed so that turning it on changes nothing you were told).
 
-The revision before that, effective 23 September, described private study import. When you
+Before that, the revision effective 23 September described private study import. When you
 save material in Studio's Prepare study material mode, we store the extracted text you
 approved and each corrected version in your private account. We do not upload the
 original file, and saving alone does not send the text to a model provider. You can delete
 a study source and all its versions from Studio. See
 [What you create](#what-you-create) and [How long we keep things](#how-long-we-keep-things).
 
-The one before that, effective 15 September, added Anthropic as an optional Studio
+And the one effective 15 September added Anthropic as an optional Studio
 summary fallback and described feedback sent through Settings. Those disclosures remain below.
 
 ## Scope
@@ -171,8 +180,10 @@ you report part of a course (`study_reports`), the report and any note you add (
 1,000 characters) are kept with it; you can resolve a report but not edit or withdraw it,
 because it is the record of why something was hidden. If you correct a lesson or question,
 your version is stored alongside the one it replaces, which is kept rather than deleted.
-Answers to a course's questions will be kept in `study_answer_events`; nothing records them
-yet. Which lessons and questions of a course you were shown, finished or skipped are
+Answers to a course's questions are kept in `study_answer_events`: what you chose or typed,
+or the order you put steps in (up to 1,000 characters), whether it was right, whether you
+had looked at the passage first or were trying again after a wrong answer, and whether you
+judged it yourself; the time is when it reached us. Which lessons and questions of a course you were shown, finished or skipped are
 recorded in `study_progress_events` so the course can remember your place, with the time
 your device reported (a time more than thirty days back, or in the future, is stored as the
 nearest time that is not) and the time it reached us; being
@@ -214,6 +225,7 @@ This is the category most services describe vaguely, so here it is precisely:
 | Learning path progress and completed steps                      | `path_progress`, `path_step_done`                            | Remembers your place, reflections and tested-out steps on curated learning paths    |
 | Sources you asked to see less of                                | `muted_works`                                                | Keeps them out of your feed and your Daily Pull until you unmute them               |
 | Lessons and questions of a study course you were shown          | `study_progress_events`                                      | Remembers your place in the course; never counted as recall                         |
+| Answers to your study courses' questions                        | `study_answer_events`                                        | What you practised, and what you have shown you remember; what you typed is kept    |
 
 **Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
 export, the text of each highlight is stored verbatim — that is the point of keeping it —
@@ -338,9 +350,9 @@ courses. It needs an account in the beta and your confirmation, each time, that 
 sending that text — including each time you prepare a course again, which sends the newest
 version of each of its sources.
 
-Checking a course, reporting part of it and correcting it involve no model. Answers you give
-to a course's questions are not recorded yet; before practice ships, this page will say
-what is recorded, including anything you type.
+Checking a course, reporting part of it, correcting it and answering its questions involve
+no model. An answer is checked by the database against the course's own answer, and what you
+type is kept only in your account.
 
 Two schema columns (`explanations.gap_score`, `graded_at`) anticipate a further feature that
 would have a model grade your Say It Back answers. **Nothing writes to them today, and no
@@ -420,7 +432,15 @@ What the app does put on your device, all of it first-party and all of it necess
   practice are free rather than a paid tier. All three are keyed to the account that
   fetched them, and the queued writes carry their owner and are only ever sent for them.
   Two mechanisms, one promise: a shared browser never shows one reader another's copy.
-  The downloaded practice is deleted when you sign out, rather than only being hidden.
+  The downloaded practice is deleted when you sign out, rather than only being hidden. The
+  queued writes wait through a sign-out, to be sent when the same account signs in again,
+  and are deleted from the device when you delete the account.
+- **A short answer you were judging**, in `localStorage`, from when the course's answer is
+  shown until what you say — whether you had it — is recorded or queued. If the page closes
+  first, it is sent as you judged it, or as not had if you had not judged it yet, so an
+  answer you had seen is never taken as one you remembered. It
+  is kept under your own id and the page's, sent only while you are signed in, waits through
+  a sign-out for you, and is removed from the device you delete your account on.
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all of it, and signs you out.

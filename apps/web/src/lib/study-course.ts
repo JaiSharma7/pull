@@ -210,16 +210,12 @@ export function shapeOutline(data: unknown): OutlineUnit[] {
   return units;
 }
 
-/** A lesson's own text and the claims it rests on, from the rows the API layer gathers. */
-export function shapeLessonContent(input: {
-  lesson: unknown;
+/** The claims a lesson or question rests on, each with its passages, from the rows gathered. */
+export function shapeClaims(input: {
   claims: unknown;
   evidence: unknown;
   versions: unknown;
-}): LessonContent | null {
-  const lesson = input.lesson;
-  if (!isRecord(lesson) || !str(lesson.id)) return null;
-
+}): LessonClaim[] {
   const titles = new Map(rows(input.versions).map((v) => [str(v.id), str(v.title)]));
   const spans = new Map<string, Evidence[]>();
   for (const e of rows(input.evidence)) {
@@ -234,7 +230,7 @@ export function shapeLessonContent(input: {
     spans.set(str(e.claim_id), list);
   }
 
-  const claims = rows(input.claims)
+  return rows(input.claims)
     .map((c): LessonClaim | null => {
       const claimId = str(c.id);
       if (!claimId) return null;
@@ -251,7 +247,17 @@ export function shapeLessonContent(input: {
     })
     .filter((c): c is LessonClaim => c !== null)
     .sort((a, b) => a.statement.localeCompare(b.statement));
+}
 
+/** A lesson's text and the claims it teaches, from the rows the API layer gathers. */
+export function shapeLessonContent(input: {
+  lesson: unknown;
+  claims: unknown;
+  evidence: unknown;
+  versions: unknown;
+}): LessonContent | null {
+  const lesson = input.lesson;
+  if (!isRecord(lesson) || !str(lesson.id)) return null;
   return {
     lessonId: str(lesson.id),
     title: str(lesson.title),
@@ -260,7 +266,7 @@ export function shapeLessonContent(input: {
     example: nullableStr(lesson.example),
     recap: str(lesson.recap),
     minutes: Math.max(1, int(lesson.minutes)),
-    claims,
+    claims: shapeClaims(input),
   };
 }
 
@@ -601,14 +607,17 @@ export function passageWindow(
 
 // ------------------------------------------------------------------ progress events
 
-export type ProgressKind = 'lesson_shown' | 'lesson_read' | 'lesson_skipped';
+export type LessonProgressKind = 'lesson_shown' | 'lesson_read' | 'lesson_skipped';
+export type ProgressKind = LessonProgressKind | 'item_shown';
 
-export interface ProgressEvent {
-  clientEventId: string;
-  kind: ProgressKind;
-  lessonId: string;
-  occurredAt: string;
-}
+/**
+ * One event for `record_study_progress`: a lesson's, naming its lesson, or a question's
+ * (`item_shown`), naming its question -- never both, and never neither, which the queue
+ * would otherwise file under an empty lesson.
+ */
+export type ProgressEvent =
+  | { clientEventId: string; kind: LessonProgressKind; lessonId: string; occurredAt: string }
+  | { clientEventId: string; kind: 'item_shown'; itemId: string; occurredAt: string };
 
 export interface ProgressResult {
   recorded: number;
@@ -636,10 +645,10 @@ export function shapeProgressResult(data: unknown): ProgressResult {
  */
 export function applyProgress(
   units: readonly OutlineUnit[],
-  events: readonly Pick<ProgressEvent, 'kind' | 'lessonId'>[],
+  events: readonly { kind: LessonProgressKind; lessonId: string }[],
 ): OutlineUnit[] {
   const rank: Record<LessonState, number> = { not_seen: 0, shown: 1, skipped: 2, read: 3 };
-  const reached: Record<ProgressKind, LessonState> = {
+  const reached: Record<LessonProgressKind, LessonState> = {
     lesson_shown: 'shown',
     lesson_skipped: 'skipped',
     lesson_read: 'read',
@@ -687,7 +696,7 @@ export function courseSelectionProblem(selected: number, goal: string): string |
 // ------------------------------------------------------------------ reports and corrections
 
 export type ReportReason = 'incorrect' | 'unsupported' | 'ambiguous' | 'unanswerable' | 'other';
-export type ReportKind = 'lesson' | 'claim';
+export type ReportKind = 'lesson' | 'claim' | 'item';
 
 /**
  * The reasons a reader may give, in words. `unanswerable` is a question's reason, so a
@@ -701,6 +710,13 @@ export const REPORT_REASONS: Record<
     { reason: 'incorrect', label: 'It gets something wrong' },
     { reason: 'unsupported', label: 'My sources do not say this' },
     { reason: 'ambiguous', label: 'It is unclear, or could be read two ways' },
+    { reason: 'other', label: 'Something else' },
+  ],
+  item: [
+    { reason: 'incorrect', label: 'Its answer is wrong' },
+    { reason: 'unsupported', label: 'My sources do not say this' },
+    { reason: 'ambiguous', label: 'More than one answer could be right' },
+    { reason: 'unanswerable', label: 'It cannot be answered from my sources' },
     { reason: 'other', label: 'Something else' },
   ],
   claim: [
