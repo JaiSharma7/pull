@@ -48,12 +48,12 @@ lapses, the last outcome, and the answer that last proved it. It is written only
 answer recorder, in the transaction that records the answer (`study_remember`); no API role
 writes it, and the reader reads their own.
 
-| The answer                                                                                 | What it does to the memory                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Proves recall                                                                              | A success. Stability grows as the feed's `grade_recall` good does, by 2 + (1 - difficulty), on the first success or once the claim was due -- a stability after its last success. Before then, answering again is repetition, not spacing, and stability stays: a reader who always reviews early does not grow it |
-| Wrong, where a right answer would have proved                                              | A lapse. Stability falls to 0.35 of itself (at least half a day), difficulty rises by 0.15. Graded deterministically, to a question the model wrote, validated when answered and now, on validated claims -- hinted or not                                                                                         |
-| Any other wrong answer: the reader's own "not had", their own version, a key they reported | Not known now: the last outcome is a lapse. Stability, difficulty and the lapse count are left as they were, and it does not prime the next success to grow stability -- a "not had" every day, then a proof, would compound a claim the reader keeps missing into years                                           |
-| Anything else                                                                              | Nothing. A hinted right answer does not clear a lapse                                                                                                                                                                                                                                                              |
+| The answer                                                                                 | What it does to the memory                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Proves recall                                                                              | A success. Stability grows as the feed's `grade_recall` good does, by 2 + (1 - difficulty), on the first success, or on a success following a success once the claim was due -- a stability after the last. Before then, answering again is repetition, not spacing, and stability stays: a reader who always reviews early does not grow it. A proof after a lapse -- scored or the reader's own "not had" -- is relearning: knowledge comes back, stability stays as the lapse left it |
+| Wrong, where a right answer would have proved                                              | A lapse. Stability falls to 0.35 of itself (at least half a day), difficulty rises by 0.15. Graded deterministically, to a question the model wrote, validated when answered and now, on validated claims -- hinted or not                                                                                                                                                                                                                                                               |
+| Any other wrong answer: the reader's own "not had", their own version, a key they reported | Not known now: the last outcome is a lapse, and the claim is due half an hour on. Stability, difficulty and the lapse count are left as they were, and it does not prime the next success to grow stability -- a "not had" at every due review, then a proof, would compound a claim the reader keeps missing into years                                                                                                                                                                 |
+| Anything else                                                                              | Nothing. A hinted right answer does not clear a lapse                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Retrievability is 0.9 ^ (days since the last success / stability), computed and never
 stored, as for the feed. Stability a proof added stays if the proof is later withdrawn: the
@@ -69,7 +69,10 @@ claim is not known while the proof no longer stands, and the next proof grows fr
   knows -- from this rule, read again once the check's answers are in, never a second rule
   of the screen's own.
 - **Faded lessons** -- known once, not now -- say "You knew this · time to refresh" (or
-  "Read · time to refresh") rather than returning to the course silently.
+  "Read · time to refresh") rather than returning to the course silently. One unread comes
+  back into sittings in its turn; one read is left to the review, where its questions come
+  due. A proof withdrawn since -- its question reported or corrected -- also reads as faded,
+  though nothing wore off: the proof no longer stands.
 - **Lessons to revisit** -- read, and a claim this version teaches lapsed since it was last
   read -- read "Worth rereading", come first in the next sitting, open on a line saying why,
   and turn the course page's button into "Reread what you got wrong". Only a lesson read:
@@ -100,9 +103,12 @@ claim is not known while the proof no longer stands, and the next proof grows fr
 - `study_course_questions(course)` gains `due_at` and `due`, the columns
   [`study-courses.md`](./study-courses.md) promised rather than a fifth state.
 
-The offline queue keeps every study answer in one order (`writeScope`): an answer is hinted by
-a wrong one to any question on the same idea, and the memory moves in the order answers
-arrive, so one held back holds back those after it.
+The offline queue keeps a course's study answers in one order (`writeScope`): an answer is
+hinted by a wrong one to any question on the same idea, and the memory moves in the order
+answers arrive, so one held back holds back that course's answers after it -- not every
+course's. An answer given live, while earlier ones wait in the queue, reaches the server
+first; the order holds among queued answers, and the hint's half hour, measured as answers
+arrive, covers the rest.
 
 A regeneration starts a new memory: its claims are new rows, and nothing carries over, as for
 progress and answers.

@@ -58,6 +58,12 @@
   white-space: nowrap;
 }
 
+/* A lesson's word on itself can run long ("You knew this · time to refresh"): it wraps
+   under the title rather than pushing the page sideways at phone widths. */
+.course__lesson-state {
+  white-space: normal;
+}
+
 .course__lesson-state--read {
   color: var(--accent);
 }

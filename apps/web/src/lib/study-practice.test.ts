@@ -64,6 +64,16 @@ describe('shaping questions', () => {
         due_at: '2026-09-25T11:00:00.123456+00:00',
         due: true,
       },
+      // Due by the server's clock, not the device's: a time without the flag is not due.
+      {
+        item_id: 'q4',
+        lesson_id: 'l1',
+        purpose: 'practice',
+        kind: 'cloze',
+        state: 'answered',
+        due_at: '2026-09-25T11:00:00+00:00',
+        due: false,
+      },
       { item_id: 'q2', kind: 'essay' },
       { kind: 'cloze' },
     ]);
@@ -87,6 +97,16 @@ describe('shaping questions', () => {
         authoredBy: 'model',
         dueAt: '2026-09-25T11:00:00.123456+00:00',
         due: true,
+      },
+      {
+        itemId: 'q4',
+        lessonId: 'l1',
+        purpose: 'practice',
+        kind: 'cloze',
+        state: 'answered',
+        authoredBy: 'model',
+        dueAt: '2026-09-25T11:00:00+00:00',
+        due: false,
       },
     ]);
   });
@@ -312,5 +332,8 @@ describe('delayed review', () => {
       entry('check', null, { lessonId: 'l1', purpose: 'placement', state: 'not_seen' }),
     ];
     expect(lessonPractice(entries, 'l1')).toEqual(['lapsed', 'fresh']);
+    // A practice question due and not yet shown remembered is asked once, among the due.
+    const twice = [...entries, entry('both', '2026-09-23T00:00:00Z', { lessonId: 'l1' })];
+    expect(lessonPractice(twice, 'l1')).toEqual(['both', 'lapsed', 'fresh']);
   });
 });

@@ -273,6 +273,16 @@ describe('shapeOutline', () => {
       units.map((u) => `${u.unitNo}:${u.title}:${u.lessons.map((l) => l.lessonKey).join('+')}`),
     ).toEqual(['1:Timing:l1+l2', '2:Spacing:l3+l4', '3:Review:l5']);
   });
+  it('reads the study Delta’s word on each lesson', () => {
+    const [unit] = shapeOutline([
+      { ...lessonRow('l1', 1, 1, 'T', 'read', 3), known: false, revisit: true, faded: true },
+      { ...lessonRow('l2', 2, 1, 'T', 'read', 3), known: 'yes', revisit: 1, faded: 'true' },
+    ]);
+    expect(unit?.lessons.map((l) => [l.known, l.revisit, l.faded])).toEqual([
+      [false, true, true],
+      [false, false, false],
+    ]);
+  });
   it('reads an unknown state as not seen and a missing minutes as one', () => {
     const [unit] = shapeOutline([{ ...lessonRow('l1', 1, 1, 'T', 'mystery', 0) }]);
     expect(unit?.lessons[0]?.state).toBe('not_seen');
@@ -695,6 +705,34 @@ describe('the study Delta in a session', () => {
     expect(answered[1]!.lessons[0]!.revisit).toBe(false);
     expect(nextLesson(answered)?.lessonId).toBe('c');
     expect(readSince(units, new Set())).toEqual(units);
+    // Only the lessons read here.
+    const two: OutlineUnit[] = [
+      {
+        unitNo: 1,
+        title: 'One',
+        lessons: [
+          lesson('a', 1, { state: 'read', revisit: true }),
+          lesson('b', 1, { state: 'read', revisit: true }),
+        ],
+      },
+    ];
+    expect(readSince(two, new Set(['a']))[0]!.lessons.map((l) => l.revisit)).toEqual([false, true]);
+  });
+
+  it('counts the lessons left out as known, not those already finished', () => {
+    const mixed: OutlineUnit[] = [
+      {
+        unitNo: 1,
+        title: 'One',
+        lessons: [
+          lesson('a', 1, { known: true }),
+          lesson('b', 1, { known: true, state: 'read' }),
+          lesson('c', 1, { known: true, state: 'skipped' }),
+          lesson('d', 1, { known: true, state: 'shown' }),
+        ],
+      },
+    ];
+    expect(knownUnread(mixed).map((l) => l.lessonId)).toEqual(['a', 'd']);
     expect(knownUnread(units).map((l) => l.lessonId)).toEqual(['b']);
   });
 

@@ -47,6 +47,7 @@ const FINISH_WAIT_MS = 8000;
 
 export function CoursePractice({
   userId,
+  courseId,
   itemIds,
   mode,
   heading,
@@ -55,6 +56,8 @@ export function CoursePractice({
   onLeave,
 }: {
   userId: string;
+  /** The course the run is in: its answers keep their order in the offline queue. */
+  courseId: string;
   itemIds: readonly string[];
   mode: PracticeMode;
   heading: string;
@@ -239,7 +242,7 @@ export function CoursePractice({
         ),
       );
     }
-    const sent = sendAnswer(userId, event).then(({ sent, result }) => {
+    const sent = sendAnswer(userId, event, courseId).then(({ sent, result }) => {
       if (held) releaseJudging(userId, held);
       // The server's grade is the one kept, and a first answer counts only once it has one --
       // its own, not a retry's.
@@ -434,7 +437,7 @@ export function CoursePractice({
           });
         }}
         nextBusy={finishing}
-        purposeLabel={mode === 'review' ? 'Review' : undefined}
+        purposeLabel={mode === 'review' ? 'Review' : mode === 'practice' ? 'Practice' : undefined}
         onHintOpen={() => loadHint(current)}
         onNext={next}
         nextLabel={index + 1 < questions.length ? 'Next question' : doneLabel}

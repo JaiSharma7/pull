@@ -202,7 +202,12 @@ export type PendingWrite =
    * server refuses for good (the question was deleted, say) is dropped; one refused because
    * the day's limit is reached stays queued for the next day.
    */
-  | { kind: 'study-answer'; event: StudyAnswerEvent };
+  | {
+      kind: 'study-answer';
+      event: StudyAnswerEvent;
+      /** The course it was given in, for its place in the queue; never sent. */
+      courseId?: string;
+    };
 
 /**
  * Which queued writes must keep their order relative to each other.
@@ -245,11 +250,15 @@ export function writeScope(write: PendingWrite): string {
       return write.event.kind === 'item_shown'
         ? `study-item:${write.event.itemId}`
         : `study-lesson:${write.event.lessonId}`;
-    // Every study answer in one order, not a question's: an answer is hinted by a wrong one
+    // A course's answers in one order, not a question's: an answer is hinted by a wrong one
     // to any question on the same idea, and the memory of each idea moves in the order the
-    // answers arrive. One held back must hold back those after it.
+    // answers arrive -- and ideas are a course's own. One held back holds back that course's
+    // answers after it, not every course's. One queued without its course (an unjudged
+    // answer sent as not had) keeps its question's order.
     case 'study-answer':
-      return 'study-answers';
+      return write.courseId
+        ? `study-answers:${write.courseId}`
+        : `study-item:${write.event.itemId}`;
   }
   /*
    * Unreachable for any `PendingWrite`, and the `never` is what proves it: a

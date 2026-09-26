@@ -144,7 +144,16 @@ export function LessonSources({
 }
 
 /** One lesson's text. Where it sits in the session is said by the screen around it. */
-export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitTitle: string }) {
+export function LessonBody({
+  lesson,
+  unitTitle,
+  note = null,
+}: {
+  lesson: LessonContent;
+  unitTitle: string;
+  /** Why this lesson is on screen, said under its heading, where a reader starts. */
+  note?: string | null;
+}) {
   return (
     <article className="course__lesson-body" aria-labelledby="course-lesson-title">
       <p className="meta">
@@ -152,9 +161,19 @@ export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitT
         {minutesLabel(lesson.minutes)}
       </p>
       {/* Focused when the lesson opens, so a keyboard or screen-reader reader starts here. */}
-      <h1 id="course-lesson-title" className="course__lesson-heading" tabIndex={-1}>
+      <h1
+        id="course-lesson-title"
+        className="course__lesson-heading"
+        tabIndex={-1}
+        aria-describedby={note ? 'course-lesson-note' : undefined}
+      >
         {lesson.title}
       </h1>
+      {note && (
+        <p className="meta" id="course-lesson-note">
+          {note}
+        </p>
+      )}
       <p className="course__objective">
         <span className="meta">By the end you should be able to</span> {lesson.objective}
       </p>

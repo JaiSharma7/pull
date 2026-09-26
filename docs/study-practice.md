@@ -106,7 +106,8 @@ duplicate arrives.
   first, until one of them is answered: a check left at its first question, or by a reload,
   is offered again, and one answered is not. A lesson whose every placement question was
   answered right the first time, graded by the rule and without looking, is known by the
-  study Delta ([`study-adaptation.md`](./study-adaptation.md)), which leaves it out of
+  study Delta ([`study-adaptation.md`](./study-adaptation.md)) when those questions tested
+  every claim the lesson teaches -- the Delta asks for each -- and it leaves such a lesson out of
   sittings while the reader remembers it; the result lists what the course now knows, once
   it has been read again with the answers in, and waits for the server's grades a few
   seconds at most, saying it is waiting. An answer without one -- queued offline, or not

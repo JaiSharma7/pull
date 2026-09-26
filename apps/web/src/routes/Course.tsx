@@ -144,10 +144,13 @@ export function Course({
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  // How many times the course has been read, for a screen that waits for the next.
-  const [loads, setLoads] = useState(0);
-  // Lessons read on this page since the outline was read: "worth rereading" is answered.
-  const [rereads, setRereads] = useState<ReadonlySet<string>>(() => new Set());
+  // How many times reading the course has settled, and whether the last failed: for a screen
+  // that waits for the next, and must not wait for ever.
+  const [loads, setLoads] = useState({ count: 0, failed: false });
+  // Lessons read on this page: "worth rereading" is answered. Each until a reading of the
+  // course begun after the server recorded it -- when, by this page's clock -- says so;
+  // one queued, or still on its way, stays.
+  const [rereads, setRereads] = useState<ReadonlyMap<string, number | null>>(() => new Map());
   const [view, setView] = useState<View>({ kind: 'overview' });
   const [lesson, setLesson] = useState<LessonContent | null>(null);
   const [lessonError, setLessonError] = useState<string | null>(null);
@@ -193,6 +196,15 @@ export function Course({
   const focusAfter = (id: string) => {
     focusNext.current = { id, draws: 0 };
   };
+
+  // The placement result is a new screen once the course has been read again: its heading
+  // takes focus then, rather than the "checking" heading it replaces being changed under it.
+  const placedPhase =
+    view.kind !== 'placed' ? null : loads.count <= view.after ? 'reading' : 'settled';
+  useEffect(() => {
+    if (placedPhase === 'settled') focusAfter('course-placed-title');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusAfter only writes a ref
+  }, [placedPhase]);
   useEffect(() => {
     const next = focusNext.current;
     if (next === null) return;
@@ -209,6 +221,7 @@ export function Course({
   // ---------------------------------------------------------------- loading
   useEffect(() => {
     const controller = new AbortController();
+    const started = Date.now();
     const load = async () => {
       const summary = await fetchCourse(courseId, controller.signal);
       if (controller.signal.aborted) return;
@@ -230,8 +243,11 @@ export function Course({
       setUnits(outline);
       setHeld(heldBack);
       setQuestions(questionList);
-      setRereads(new Set());
-      setLoads((n) => n + 1);
+      setRereads(
+        (reads) =>
+          new Map([...reads].filter(([, recorded]) => recorded === null || recorded >= started)),
+      );
+      setLoads((l) => ({ count: l.count + 1, failed: false }));
       setMissing(false);
       setError(null);
       setSettled(true);
@@ -242,6 +258,7 @@ export function Course({
       console.error('Course request failed', e);
       setOffline(isOfflineFailure(e));
       setError(e instanceof Error ? e.message : String(e));
+      setLoads((l) => ({ count: l.count + 1, failed: true }));
       setSettled(true);
     });
     return () => controller.abort();
@@ -328,7 +345,7 @@ export function Course({
   useEffect(() => onVoicesChanged(() => setLocalVoice(localVoiceURI())), []);
 
   // ---------------------------------------------------------------- progress
-  const shownUnits = readSince(applyProgress(units, recorded), rereads);
+  const shownUnits = readSince(applyProgress(units, recorded), new Set(rereads.keys()));
 
   /*
    * Every event is sent with its own client id, at once. One that cannot reach the server,
@@ -339,21 +356,26 @@ export function Course({
   const send = useCallback(
     (kind: LessonProgressKind, lessonId: string) => {
       setRecorded((r) => [...r, { kind, lessonId }]);
-      if (kind === 'lesson_read') setRereads((ids) => new Set(ids).add(lessonId));
+      if (kind === 'lesson_read') setRereads((reads) => new Map(reads).set(lessonId, null));
       void sendProgress(userId, {
         clientEventId: mutationId(),
         kind,
         lessonId,
         occurredAt: new Date().toISOString(),
-      }).then((sent) =>
+      }).then((sent) => {
+        if (kind === 'lesson_read' && sent === 'recorded') {
+          setRereads((reads) =>
+            reads.has(lessonId) ? new Map(reads).set(lessonId, Date.now()) : reads,
+          );
+        }
         setProgressNote(
           sent === 'queued'
             ? 'Saved on this device. Your place will be recorded when it can be sent.'
             : sent === 'failed'
               ? 'Your place in the course could not be saved just now.'
               : null,
-        ),
-      );
+        );
+      });
     },
     [userId],
   );
@@ -1013,6 +1035,7 @@ export function Course({
       <CoursePractice
         key={view.itemIds.join(',')}
         userId={userId}
+        courseId={courseId}
         itemIds={view.itemIds}
         mode={view.mode}
         heading={view.heading}
@@ -1025,7 +1048,7 @@ export function Course({
               kind: 'placed',
               tested: [...new Set(first.flatMap((a) => (a.lessonId === null ? [] : [a.lessonId])))],
               unchecked: first.some((a) => !a.confirmed),
-              after: loads,
+              after: loads.count,
             });
             focusAfter('course-placed-title');
           } else {
@@ -1045,9 +1068,12 @@ export function Course({
     // What the check found is what the course now says the reader knows: the same rule that
     // leaves lessons out of sittings, read once the course has been read again with these
     // answers in it -- not a second rule of the screen's own that could say otherwise.
-    const reading = loads <= view.after;
+    const reading = loads.count <= view.after;
+    // Read again and failed -- offline, or the server did not answer: said, with a way to
+    // ask again, rather than checking for ever.
+    const unread = !reading && loads.failed;
     const tested = new Set(view.tested);
-    const known = reading ? [] : lessons.filter((l) => tested.has(l.lessonId) && l.known);
+    const known = reading || unread ? [] : lessons.filter((l) => tested.has(l.lessonId) && l.known);
     const one = known.length === 1;
     return (
       <section className="stack measure course">
@@ -1055,21 +1081,46 @@ export function Course({
         <p className="meta">What you already know</p>
         {reading ? (
           <>
-            <h1 className="display" tabIndex={-1} id="course-placed-title">
+            <h1 className="display" tabIndex={-1} id="course-placed-title" key="reading">
               Checking your answers…
             </h1>
             <p role="status">Reading the course again with your answers in it.</p>
           </>
+        ) : unread ? (
+          <>
+            <h1 className="display" tabIndex={-1} id="course-placed-title" key="unread">
+              Your answers could not be read back yet.
+            </h1>
+            <p>
+              They may be recorded, but the course could not be read again with them in it — you may
+              be offline. Try again once you are connected, or go back to the course.
+            </p>
+            <div className="course__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => {
+                  setView({ ...view, after: loads.count });
+                  setAttempt((n) => n + 1);
+                }}
+              >
+                Try again
+              </button>
+              <button type="button" className="btn" onClick={toOverview}>
+                Back to the course
+              </button>
+            </div>
+          </>
         ) : known.length > 0 ? (
           <>
-            <h1 className="display" tabIndex={-1} id="course-placed-title">
+            <h1 className="display" tabIndex={-1} id="course-placed-title" key="known">
               You already know {one ? 'one lesson' : `${known.length} lessons`}.
             </h1>
             <p>
               Your answers showed you remember what {one ? 'it teaches' : 'they teach'}, so your
               sittings leave {one ? 'it' : 'them'} out while you do.{' '}
-              {one ? 'It stays' : 'They stay'} in the outline: open {one ? 'it' : 'any'} to read it
-              anyway.
+              {one ? 'It stays' : 'They stay'} in the outline: open {one ? 'it' : 'any of them'} to
+              read it anyway.
             </p>
             <ul className="course__covered">
               {known.map((l) => (
@@ -1092,7 +1143,7 @@ export function Course({
           // Said as what it is: answers without a grade suggest nothing, and "you know none of
           // it" would be false.
           <>
-            <h1 className="display" tabIndex={-1} id="course-placed-title">
+            <h1 className="display" tabIndex={-1} id="course-placed-title" key="unchecked">
               Your answers have not been checked yet.
             </h1>
             <p>
@@ -1115,7 +1166,7 @@ export function Course({
           </>
         ) : (
           <>
-            <h1 className="display" tabIndex={-1} id="course-placed-title">
+            <h1 className="display" tabIndex={-1} id="course-placed-title" key="start">
               Start from the beginning.
             </h1>
             <p>
@@ -1170,7 +1221,6 @@ export function Course({
         </div>
         {noticeLine}
         {unsavedLine('top')}
-        {revisiting && <p className="meta">Worth rereading: your last answer on this was wrong.</p>}
         {lessonError && (
           <p className="remember__error" role="alert">
             {lessonError}
@@ -1183,7 +1233,15 @@ export function Course({
         )}
         {lesson && (
           <>
-            <LessonBody lesson={lesson} unitTitle={current.unitTitle} />
+            <LessonBody
+              lesson={lesson}
+              unitTitle={current.unitTitle}
+              note={
+                revisiting
+                  ? 'Worth rereading: you missed a question on this since you last read it.'
+                  : null
+              }
+            />
             {player.supported &&
               (localVoice ? (
                 <p>

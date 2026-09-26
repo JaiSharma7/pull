@@ -54,7 +54,12 @@ export interface AnswerSent {
   result: AnswerResult | null;
 }
 
-export async function sendAnswer(userId: string, event: AnswerEvent): Promise<AnswerSent> {
+export async function sendAnswer(
+  userId: string,
+  event: AnswerEvent,
+  courseId?: string,
+): Promise<AnswerSent> {
+  const write = { kind: 'study-answer' as const, event, ...(courseId ? { courseId } : {}) };
   // An answer left unjudged goes first, so the one after it is judged as following it.
   await flushJudging(userId);
   try {
@@ -63,13 +68,13 @@ export async function sendAnswer(userId: string, event: AnswerEvent): Promise<An
     if (result) return { sent: 'recorded', result };
     const refusal = recorded.refused[0];
     if (refusal?.reason === 'limit') {
-      const queued = await queueMutation(userId, { kind: 'study-answer', event });
+      const queued = await queueMutation(userId, write);
       return { sent: queued ? 'full' : 'failed', result: null };
     }
     return { sent: 'refused', result: null };
   } catch (error: unknown) {
     if (!worthQueueing(error)) return { sent: 'failed', result: null };
-    const queued = await queueMutation(userId, { kind: 'study-answer', event });
+    const queued = await queueMutation(userId, write);
     return { sent: queued ? 'queued' : 'failed', result: null };
   }
 }
