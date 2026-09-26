@@ -996,6 +996,13 @@ export function Course({
   const title = courseTitle(course);
 
   if (view.kind === 'practice') {
+    // Where practice hands back to, at its heading. A lesson takes focus once it has loaded;
+    // the end of a sitting did not, so a reader who finished it there was left on the page.
+    const handBack = (next: View) => {
+      setView(next);
+      if (next.kind === 'overview') focusAfter('course-title');
+      else if (next.kind === 'stop') focusAfter('course-stop-title');
+    };
     return (
       <CoursePractice
         key={view.itemIds.join(',')}
@@ -1017,15 +1024,13 @@ export function Course({
             });
             focusAfter('course-placed-title');
           } else {
-            setView(view.then);
-            if (view.then.kind === 'overview') focusAfter('course-title');
+            handBack(view.then);
           }
           window.scrollTo(0, 0);
         }}
         onLeave={() => {
           setAttempt((n) => n + 1);
-          setView(view.mode === 'practice' ? view.then : { kind: 'overview' });
-          if (view.mode !== 'practice') focusAfter('course-title');
+          handBack(view.mode === 'practice' ? view.then : { kind: 'overview' });
         }}
       />
     );

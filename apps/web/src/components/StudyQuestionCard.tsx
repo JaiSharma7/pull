@@ -10,7 +10,7 @@
  * Archive rules (docs/design.md): the verdict is said in words, never by colour alone, and
  * every control is a real button, input or select a keyboard reaches.
  */
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { gradeStudyResponse, type Graded, type SelfGrade } from '../lib/study-grade.js';
 import {
   choiceOptions,
@@ -73,6 +73,30 @@ export function StudyQuestionCard({
   const [hintOpen, setHintOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
+  /*
+   * Where focus goes once the card has redrawn. The button pressed is gone by then -- Check
+   * is replaced by the feedback, "I had it" by the verdict -- and focus left on nothing falls
+   * to the page, where a keyboard or screen-reader reader has lost the question. Moving it is
+   * also what says the feedback aloud: a live region drawn together with its text is not
+   * reliably announced.
+   */
+  const focusNext = useRef<'prompt' | 'judge' | 'verdict' | null>(null);
+  const promptRef = useRef<HTMLHeadingElement>(null);
+  const judgeRef = useRef<HTMLParagraphElement>(null);
+  const verdictRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    if (target === null) return;
+    focusNext.current = null;
+    const element: HTMLElement | null =
+      target === 'prompt'
+        ? promptRef.current
+        : target === 'judge'
+          ? judgeRef.current
+          : verdictRef.current;
+    element?.focus();
+  }, [phase, attempt]);
+
   const finish = (response: string | number[], graded: Graded, selfGrade?: SelfGrade) => {
     const answer: SubmittedAnswer = {
       response,
@@ -81,6 +105,7 @@ export function StudyQuestionCard({
       ...(selfGrade ? { selfGrade } : {}),
     };
     onAnswer(answer);
+    focusNext.current = 'verdict';
     setPhase({ kind: 'done', answer, chosen: typeof response === 'string' ? response : null });
   };
 
@@ -122,6 +147,7 @@ export function StudyQuestionCard({
       return;
     }
     if (question.kind === 'short_recall' && typeof response === 'string') {
+      focusNext.current = 'judge';
       setPhase({ kind: 'judging', typed: response });
       return;
     }
@@ -135,6 +161,7 @@ export function StudyQuestionCard({
   };
 
   const retry = () => {
+    focusNext.current = 'prompt';
     setAttempt((n) => n + 1);
     setPhase({ kind: 'answering' });
     setChoice(null);
@@ -153,7 +180,7 @@ export function StudyQuestionCard({
         {PURPOSE_LABEL[question.purpose]} · {label}
         {attempt > 0 ? ' · another try' : ''}
       </p>
-      <h2 id={promptId} className="study-q__prompt" tabIndex={-1}>
+      <h2 id={promptId} ref={promptRef} className="study-q__prompt" tabIndex={-1}>
         {question.prompt}
       </h2>
       {question.authoredBy === 'reader' && (
@@ -316,8 +343,10 @@ export function StudyQuestionCard({
       )}
 
       {phase.kind === 'judging' && (
-        <div className="stack study-q__judge" role="status">
-          <p className="meta">The answer in your course</p>
+        <div className="stack study-q__judge">
+          <p ref={judgeRef} className="meta" tabIndex={-1}>
+            The answer in your course
+          </p>
           <p className="study-q__model">{question.answer}</p>
           <p>Compare it with yours. Did you have it?</p>
           <div className="course__actions">
@@ -336,8 +365,8 @@ export function StudyQuestionCard({
       )}
 
       {phase.kind === 'done' && (
-        <div className="stack study-q__feedback" role="status">
-          <p className="study-q__verdict">
+        <div className="stack study-q__feedback">
+          <p ref={verdictRef} className="study-q__verdict" tabIndex={-1}>
             {phase.answer.graded.correct
               ? phase.answer.graded.grading === 'self'
                 ? 'You had it.'
