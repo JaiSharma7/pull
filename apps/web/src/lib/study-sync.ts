@@ -75,21 +75,24 @@ export async function sendAnswer(userId: string, event: AnswerEvent): Promise<An
 }
 
 /*
- * An answer shown for judging and not yet judged. Judging a short answer shows the course's
- * answer, so a reader who leaves then has seen it, and the next answer to that question is
- * practice, not proof -- which the server can only know from an answer on record. It is held
- * here when judging starts, holds the judgement once the reader judges, and is let go when
- * that is recorded or queued; if the reader leaves before judging --
- * inside the app, or by closing or reloading the page -- it is sent as not had. In local
- * storage, because it must outlive the page; it holds what they typed, as a queued answer
- * does, and waits through a sign-out for the same reader.
+ * An answer shown for judging. Judging a short answer shows the course's answer, so a reader
+ * who leaves then has seen it, and the next answer to that question is practice, not proof --
+ * which the server can only know from an answer on record. It is held here when judging
+ * starts; once the reader judges, the hold is the judgement, until that is recorded or
+ * queued. If the page goes first -- or the reader leaves practice before judging -- it is
+ * sent as it stands: as judged, or as not had. In local storage, because it must outlive the
+ * page (and in memory as well, for a page that has none); it holds what they typed, as a
+ * queued answer does, and waits through a sign-out for the same reader.
  *
  * Held per page, not per reader: a flush elsewhere -- the shell's drain, another tab -- must
  * not send a hold whose page is still judging, which recorded the attempt twice, and two
  * tabs judging at once must not let go of each other's. Each page holds a Web Lock for its
- * life, and a hold is taken only from a page whose lock is free: a page that is gone. Its own
- * page takes it only when the reader leaves practice. And the reader's judgement is sent with
- * the hold's own event id, so whatever races, the attempt is recorded once.
+ * life, and a hold is taken only from a page whose lock is free: a page that is gone. Without
+ * Web Locks (an insecure origin, an old browser) a page keeps its holds' `heldAt` fresh
+ * instead, and another page takes one only once it has gone stale. A page takes its own only
+ * when the reader leaves practice, or when the next hold would overwrite it. And the
+ * judgement is sent with the hold's own event id, so whatever races, the attempt is recorded
+ * once.
  */
 const PAGE =
   typeof globalThis.crypto?.randomUUID === 'function'
@@ -98,27 +101,84 @@ const PAGE =
 const JUDGING = 'wap:study-judging:';
 const judgingKey = (userId: string, page = PAGE) => `${JUDGING}${userId}:${page}`;
 const pageLock = (page: string) => `wap.judging.${page}`;
+/** How often a page without Web Locks says its holds are live, and when one is not. */
+const HEARTBEAT_MS = 15_000;
+const STALE_MS = 60_000;
+
+/** This page's holds, as written: the copy a page without storage keeps. */
+const mine = new Map<string, string>();
 
 let pageLocked = false;
-function holdPageLock(): void {
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+function keepPageAlive(): void {
   const locks = globalThis.navigator?.locks;
-  if (pageLocked || !locks) return;
-  pageLocked = true;
-  // Never released while the page lives; the browser releases it when the page goes.
-  void locks
-    .request(pageLock(PAGE), () => new Promise<void>(() => undefined))
-    .catch(() => {
-      pageLocked = false;
-    });
+  if (locks) {
+    if (pageLocked) return;
+    pageLocked = true;
+    // Never released while the page lives; the browser releases it when the page goes.
+    void locks
+      .request(pageLock(PAGE), () => new Promise<void>(() => undefined))
+      .catch(() => {
+        pageLocked = false;
+      });
+    return;
+  }
+  if (heartbeat) return;
+  heartbeat = setInterval(() => {
+    for (const [key, raw] of mine)
+      write(key, { ...(JSON.parse(raw) as object), heldAt: Date.now() });
+  }, HEARTBEAT_MS);
+  // Never what keeps a process alive where timers can (a test runner).
+  (heartbeat as { unref?: () => void }).unref?.();
 }
 
-export function holdJudging(userId: string, event: AnswerEvent): void {
-  holdPageLock();
+function write(key: string, value: object): void {
+  const raw = JSON.stringify(value);
+  mine.set(key, raw);
   try {
-    localStorage.setItem(judgingKey(userId), JSON.stringify(event));
+    localStorage.setItem(key, raw);
   } catch {
-    /* no storage: judged or not, nothing outlives the page */
+    /* no storage: the copy in memory is all there is, and it goes with the page */
   }
+}
+
+function read(key: string): string | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) return raw;
+  } catch {
+    /* as above */
+  }
+  return mine.get(key) ?? null;
+}
+
+function remove(key: string): void {
+  mine.delete(key);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* as above */
+  }
+}
+
+/**
+ * Hold an answer for this page. A different answer already held here -- a judgement still on
+ * its way when the next question went to judging, or one a sign-out left unsent -- is sent
+ * first rather than overwritten: the server keeps one answer per event id, so a judgement
+ * that did land is not recorded twice.
+ */
+export function holdJudging(userId: string, event: AnswerEvent): void {
+  keepPageAlive();
+  const key = judgingKey(userId);
+  const displaced = parseHold(read(key));
+  if (
+    displaced &&
+    displaced.clientEventId !== event.clientEventId &&
+    getCurrentUserId() === userId
+  ) {
+    void sendAnswer(userId, displaced);
+  }
+  write(key, { ...event, heldAt: Date.now() });
 }
 
 /**
@@ -126,57 +186,32 @@ export function holdJudging(userId: string, event: AnswerEvent): void {
  * recorded late does not let go of the hold of the question after it.
  */
 export function releaseJudging(userId: string, clientEventId?: string): void {
-  try {
-    const key = judgingKey(userId);
-    if (clientEventId !== undefined) {
-      const raw = localStorage.getItem(key);
-      if (raw === null) return;
-      const held: unknown = JSON.parse(raw);
-      if (
-        typeof held !== 'object' ||
-        held === null ||
-        (held as { clientEventId?: unknown }).clientEventId !== clientEventId
-      )
-        return;
-    }
-    localStorage.removeItem(key);
-  } catch {
-    /* as above */
-  }
+  const key = judgingKey(userId);
+  if (clientEventId !== undefined && parseHold(read(key))?.clientEventId !== clientEventId) return;
+  remove(key);
 }
 
 /** Every page's hold of this reader's, for an account being deleted. */
 export function releaseAllJudging(userId: string): void {
-  for (const key of judgingKeys(userId)) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* as above */
-    }
-  }
+  for (const key of judgingKeys(userId)) remove(key);
+  for (const key of [...mine.keys()]) if (key.startsWith(`${JUDGING}${userId}:`)) remove(key);
 }
 
 function judgingKeys(userId: string): string[] {
-  const keys: string[] = [];
+  const keys = new Set<string>();
   try {
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
-      if (key?.startsWith(`${JUDGING}${userId}:`)) keys.push(key);
+      if (key?.startsWith(`${JUDGING}${userId}:`)) keys.add(key);
     }
   } catch {
     /* no storage */
   }
-  return keys;
+  for (const key of mine.keys()) if (key.startsWith(`${JUDGING}${userId}:`)) keys.add(key);
+  return [...keys];
 }
 
-function takeJudging(key: string): AnswerEvent | null {
-  let raw: string | null;
-  try {
-    raw = localStorage.getItem(key);
-    localStorage.removeItem(key);
-  } catch {
-    return null;
-  }
+function parseHold(raw: string | null): AnswerEvent | null {
   if (raw === null) return null;
   try {
     const held = JSON.parse(raw) as Partial<AnswerEvent> | null;
@@ -185,7 +220,7 @@ function takeJudging(key: string): AnswerEvent | null {
       typeof held.clientEventId !== 'string' ||
       typeof held.itemId !== 'string' ||
       typeof held.response !== 'string' ||
-      held.selfGrade !== 'incorrect'
+      (held.selfGrade !== 'incorrect' && held.selfGrade !== 'correct')
     ) {
       return null;
     }
@@ -193,7 +228,7 @@ function takeJudging(key: string): AnswerEvent | null {
       clientEventId: held.clientEventId,
       itemId: held.itemId,
       response: held.response,
-      selfGrade: 'incorrect',
+      selfGrade: held.selfGrade,
       ...(held.hinted === true ? { hinted: true } : {}),
     };
   } catch {
@@ -201,28 +236,50 @@ function takeJudging(key: string): AnswerEvent | null {
   }
 }
 
+/** Whether a page without Web Locks has let a hold go stale: it is gone. */
+function stale(raw: string | null): boolean {
+  try {
+    const heldAt = (JSON.parse(raw ?? 'null') as { heldAt?: unknown } | null)?.heldAt;
+    return typeof heldAt !== 'number' || Date.now() - heldAt > STALE_MS;
+  } catch {
+    return true;
+  }
+}
+
+/** Taken as it is read, so it goes once. */
+function takeJudging(key: string): AnswerEvent | null {
+  const held = parseHold(read(key));
+  remove(key);
+  return held;
+}
+
 /**
- * Record the answers this reader left unjudged, as not had: every page's that is gone, and
- * this page's own when `own` -- the reader leaving practice. Only for the reader signed in:
- * sent under someone else's session it was refused and lost, and it is theirs to send when
- * they are back. Each is taken before it is sent, so it goes once.
+ * Record the answers this reader left held: every page's that is gone, and this page's own
+ * when `own` -- the reader leaving practice -- as judged, or as not had. Only for the reader
+ * signed in, asked again before each: sent under someone else's session it was refused and
+ * lost, and it is theirs to send when they are back.
  */
 export async function flushJudging(userId: string, { own = false } = {}): Promise<void> {
-  if (getCurrentUserId() !== userId) return;
+  const signedIn = () => getCurrentUserId() === userId;
+  if (!signedIn()) return;
+  // This page's own is taken before anything is waited on: a practice run begun meanwhile
+  // holds its own answer under the same key.
+  const ours = own ? takeJudging(judgingKey(userId)) : null;
+  if (ours) await sendAnswer(userId, ours);
   const locks = globalThis.navigator?.locks;
   for (const key of judgingKeys(userId)) {
-    const page = key.slice(`${JUDGING}${userId}:`.length);
+    if (key === judgingKey(userId)) continue;
     const send = async () => {
+      if (!signedIn()) return;
       const held = takeJudging(key);
       if (held) await sendAnswer(userId, held);
     };
-    if (page === PAGE) {
-      if (own) await send();
-    } else if (locks) {
+    if (locks) {
+      const page = key.slice(`${JUDGING}${userId}:`.length);
       await locks.request(pageLock(page), { ifAvailable: true }, async (lock) => {
         if (lock) await send();
       });
-    } else {
+    } else if (stale(read(key))) {
       await send();
     }
   }

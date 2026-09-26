@@ -2157,6 +2157,7 @@ export type Database = {
           hinted: boolean
           id: string
           item_id: string
+          looked: boolean
           owner_id: string
           response: string | null
         }
@@ -2168,6 +2169,7 @@ export type Database = {
           hinted: boolean
           id?: string
           item_id: string
+          looked?: boolean
           owner_id: string
           response?: string | null
         }
@@ -2179,6 +2181,7 @@ export type Database = {
           hinted?: boolean
           id?: string
           item_id?: string
+          looked?: boolean
           owner_id?: string
           response?: string | null
         }

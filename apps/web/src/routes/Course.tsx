@@ -1094,8 +1094,8 @@ export function Course({
             </h1>
             <p>
               The check needs the grades your account gives them to suggest anything, and they have
-              not come back — you may be offline. Check again once you are connected, or start at
-              the first lesson.
+              not come back — you may be offline, or they could not be recorded. Check again once
+              you are connected, or go back to the course, which starts at its first lesson.
             </p>
             <div className="course__actions">
               <button

@@ -378,9 +378,12 @@ begin
     '"not an object"'::jsonb,
     jsonb_build_object('clientEventId', 'x', 'itemId', q_mc, 'response', 'The restudy group'),
     jsonb_build_object('clientEventId', extensions.gen_random_uuid(), 'itemId', q_mc,
-                       'response', 'The restudy group', 'hinted', 'yes')));
+                       'response', 'The restudy group', 'hinted', 'yes'),
+    -- Not a uuid: refused as this answer, never raised for the whole batch.
+    jsonb_build_object('clientEventId', extensions.gen_random_uuid(), 'itemId', 'x',
+                       'response', 'The restudy group')));
   if (select count(*) from jsonb_array_elements(r -> 'refused') x
-      where x ->> 'reason' = 'malformed') <> 3 then
+      where x ->> 'reason' = 'malformed') <> 4 then
     raise exception 'malformed answers were not all refused: %', r;
   end if;
   begin
@@ -412,8 +415,13 @@ begin
      or (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not false then
     raise exception 'an answer to a reported question was refused or proof: %', r;
   end if;
-  q_mine := public.revise_study_item(q_recall, '{"prompt": "Which won after five minutes?"}');
-  r := pg_temp.answer(q_mine, '"restudying"');
+  -- On another claim than the one it replaces -- one no recent answer touched -- so only
+  -- the version it replaces can have hinted it.
+  q_mine := public.revise_study_item(q_recall, jsonb_build_object(
+    'prompt', 'What did the students read?', 'answer', 'prose',
+    'claimIds', jsonb_build_array((select c.id from public.study_claims c
+                                   where c.generation_id = gen and c.claim_key = 's1c3'))));
+  r := pg_temp.answer(q_mine, '"prose"');
   if (r -> 'results' -> 0 ->> 'correct')::boolean is not true
      or (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not false then
     raise exception 'an answer to the reader''s own version was proof: %', r;
@@ -421,6 +429,23 @@ begin
   -- Hinted across versions: the self-graded answer above was to the version this replaced.
   if (r -> 'results' -> 0 ->> 'hinted')::boolean is not true then
     raise exception 'an answer to a new version was not hinted by one to the old: %', r;
+  end if;
+  -- Looking hints the other questions on the idea as a wrong answer does: the passage stated
+  -- it. Answered right with the passage open, then the course's question on the same claim:
+  -- not proof. What the rule derived does not count as looking, or it would chain.
+  r := pg_temp.answer(q_mine, '"prose"', null, true);
+  if (select looked from public.study_answer_events
+      where client_event_id = (r -> 'results' -> 0 ->> 'clientEventId')::uuid) is not true then
+    raise exception 'the reader''s own hint was not kept: %', r;
+  end if;
+  r := pg_temp.answer(q_fresh, '"Prose"');
+  if (r -> 'results' -> 0 ->> 'hinted')::boolean is not true
+     or (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not false then
+    raise exception 'a question on a claim just read in its passage was proof: %', r;
+  end if;
+  if (select looked from public.study_answer_events
+      where client_event_id = (r -> 'results' -> 0 ->> 'clientEventId')::uuid) is not false then
+    raise exception 'a hint the rule derived was kept as looking: %', r;
   end if;
   -- A retired question was shown, so it can still be answered from an offline copy; it is
   -- no longer validated, so it proves nothing.

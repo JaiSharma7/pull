@@ -67,6 +67,11 @@ export function CoursePractice({
   const [index, setIndex] = useState(0);
   const [note, setNote] = useState<string | null>(null);
   const [fix, setFix] = useState<null | 'report' | 'withdraw'>(null);
+  // The form on screen, for a failure that lands after the reader closed it.
+  const fixShown = useRef<null | 'report' | 'withdraw'>(null);
+  useEffect(() => {
+    fixShown.current = fix;
+  }, [fix]);
   const [fixError, setFixError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const [hints, setHints] = useState<Record<string, LessonClaim[] | 'loading' | 'failed'>>({});
@@ -160,7 +165,8 @@ export function CoursePractice({
     setFinishing(true);
     // What a first answer shows is the server's grade, so the answers still on their way are
     // waited for -- a while, and said: one that never comes has no grade, and counts for
-    // nothing either way.
+    // nothing either way. In every mode, not only placement: the course reads its questions
+    // again as the run hands back, and what it shows next should follow these answers.
     if (sending.current.size > 0) setNote('Waiting for your answers to be recorded…');
     void Promise.race([
       Promise.allSettled([...sending.current]),
@@ -198,8 +204,9 @@ export function CoursePractice({
       setFix(null);
       setFixError(null);
       // Reported while being judged: the reader said the question is wrong, so it is not
-      // recorded as not had.
-      releaseJudging(userId);
+      // recorded as not had. Only its own hold: one the question before it left, a judgement
+      // still on its way, stays until that lands.
+      if (heldId.current) releaseJudging(userId, heldId.current);
       heldId.current = null;
     }
     setNote(message);
@@ -280,13 +287,13 @@ export function CoursePractice({
     return <LessonSources claims={claims} />;
   };
 
-  // Said beside the form while its panel is open; folded meanwhile, in the note line, which
-  // is always there to say it.
+  // Said beside the form while it is on screen; with the form gone -- the panel folded, or
+  // opened again on its choices -- in the note line, which is always there to say it.
   const failed = (e: unknown) => {
     const why = isOfflineFailure(e)
       ? 'That has not reached your account — you look offline.'
       : (reportRefusal(sqlState(e)) ?? asSentence(e instanceof Error ? e.message : String(e)));
-    if (fixPanel.current?.open) setFixError(why);
+    if (fixPanel.current?.open && fixShown.current !== null) setFixError(why);
     else setNote(why);
   };
 

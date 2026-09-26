@@ -360,7 +360,8 @@ short: the account row, then the reader's study lock, then their sources, then a
 
 - **Questions in id order.** The answer recorder share-locks a batch's questions, in id
   order, before it records any -- every id in any form a uuid is written in, and never a
-  draft, which it refuses unshown and which validation takes in its own order; a claim report
+  draft, which validation takes in its own order; an id it did not lock, such as a draft
+  validated since, it refuses unshown rather than locking late; a claim report
   (`study_refresh_claim_dependents`) locks the questions resting on the claim in id order;
   and a lesson's correction or withdrawal (`revise_study_lesson`, `retire_study_content`)
   locks the lesson's questions in id order before it moves them. Locked in a batch's order or

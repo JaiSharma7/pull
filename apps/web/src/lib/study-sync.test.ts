@@ -87,6 +87,9 @@ beforeEach(() => {
   store.clear();
   session.current = 'u1';
   delete nav.locks;
+  // This page's copies in memory, from the test before.
+  releaseAllJudging('u1');
+  releaseAllJudging('u2');
 });
 
 describe('sendAnswer', () => {
@@ -161,6 +164,7 @@ describe('an answer left unjudged', () => {
   });
 
   it('is recorded as not had before the next answer, once', async () => {
+    nav.locks = locks;
     holdElsewhere();
     await sendAnswer('u1', event('next'));
     expect(sentIds()).toEqual(['held', 'next']);
@@ -208,6 +212,7 @@ describe('an answer left unjudged', () => {
   });
 
   it('is sent only for the reader signed in, and waits for them', async () => {
+    nav.locks = locks;
     holdElsewhere();
     session.current = 'u2';
     await flushJudging('u1');
@@ -227,6 +232,57 @@ describe('an answer left unjudged', () => {
     holdElsewhere('u2', 'gone', { clientEventId: 'x', itemId: 'q1', response: 1 });
     await flushJudging('u2');
     expect(api.recordAnswers).not.toHaveBeenCalled();
+  });
+
+  it('is sent as judged when the page closed before the judgement landed', async () => {
+    nav.locks = locks;
+    holdElsewhere('u1', 'gone', { ...held, selfGrade: 'correct' });
+    await flushJudging('u1');
+    expect(api.recordAnswers.mock.calls[0]![0][0]).toMatchObject({
+      clientEventId: 'held',
+      selfGrade: 'correct',
+    });
+  });
+
+  it('holds the page for its life, and says so', () => {
+    nav.locks = locks;
+    holdJudging('u1', held);
+    expect([...heldLocks].some((n) => n.startsWith('wap.judging.'))).toBe(true);
+  });
+
+  it('is sent, not overwritten, when the next hold takes its place', async () => {
+    holdJudging('u1', held);
+    // The same answer, judged: the hold becomes the judgement, and nothing is sent.
+    holdJudging('u1', { ...held, selfGrade: 'correct' });
+    expect(api.recordAnswers).not.toHaveBeenCalled();
+    // The next question's: the one it replaces goes first.
+    holdJudging('u1', { ...held, clientEventId: 'next', itemId: 'q2' });
+    await vi.waitFor(() => expect(sentIds()).toEqual(['held']));
+    expect(api.recordAnswers.mock.calls[0]![0][0]).toMatchObject({ selfGrade: 'correct' });
+    // Not under someone else's session.
+    session.current = 'u2';
+    holdJudging('u1', { ...held, clientEventId: 'third' });
+    await Promise.resolve();
+    expect(sentIds()).toEqual(['held']);
+  });
+
+  it('is taken from a page without Web Locks only once that page has gone quiet', async () => {
+    holdElsewhere('u1', 'live', { ...held, heldAt: Date.now() });
+    holdElsewhere('u1', 'quiet', { ...held, clientEventId: 'quiet', heldAt: Date.now() - 120_000 });
+    await flushJudging('u1');
+    expect(sentIds()).toEqual(['quiet']);
+    expect(store.has('wap:study-judging:u1:live')).toBe(true);
+  });
+
+  it('is kept in memory when the page has no storage, and sent when the reader leaves', async () => {
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    holdJudging('u1', held);
+    setItem.mockRestore();
+    expect(ownKey()).toBeUndefined();
+    await flushJudging('u1', { own: true });
+    expect(sentIds()).toEqual(['held']);
   });
 
   it('goes from every page with the account', () => {

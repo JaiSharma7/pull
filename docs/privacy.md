@@ -436,8 +436,9 @@ What the app does put on your device, all of it first-party and all of it necess
   queued writes wait through a sign-out, to be sent when the same account signs in again,
   and are deleted from the device when you delete the account.
 - **A short answer you were judging**, in `localStorage`, from when the course's answer is
-  shown until what you say — whether you had it — is recorded or queued. If you leave first,
-  it is sent as not had, so an answer you had seen is never taken as one you remembered. It
+  shown until what you say — whether you had it — is recorded or queued. If the page closes
+  first, it is sent as you judged it, or as not had if you had not judged it yet, so an
+  answer you had seen is never taken as one you remembered. It
   is kept under your own id and the page's, sent only while you are signed in, waits through
   a sign-out for you, and is removed from the device you delete your account on.
 - **The app itself**, cached by a service worker.

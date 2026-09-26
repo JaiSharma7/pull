@@ -26,11 +26,12 @@
 --                     model answer and says whether they had it: `self` grading, which the
 --                     proof rule never counts.
 --
--- Hinted: the reader says so when they looked before answering or are trying again, and the
--- server adds its own rule -- an answer within thirty minutes of a wrong or a self-graded
--- answer to the same question (any of its versions), or to another question on a claim it
--- tests, is hinted, because the feedback on the one, and the course's answer the other is
--- judged against, showed the right one. A retry is practice, not proof.
+-- Hinted: the reader says so when they looked before answering or are trying again -- kept
+-- as `looked` -- and the server adds its own rule: an answer within thirty minutes of a
+-- wrong, a self-graded or a looked-at answer to the same question (any of its versions), or
+-- to another question on a claim it tests, is hinted, because the feedback on the one, the
+-- course's answer the other is judged against, and the passage the reader opened, showed
+-- the right one. A retry is practice, not proof.
 --
 -- The recorder share-locks a batch's questions in id order, and `revise_study_lesson`
 -- (20260925100000) and `retire_study_content` (20260925060000), which are pushed, are
@@ -149,6 +150,15 @@ revoke all on function public.study_grade_response(text, text, text[], jsonb, te
 
 -- ------------------------------------------------------------------ 2. the recorder
 
+alter table public.study_answer_events
+  add column looked boolean not null default false;
+
+comment on column public.study_answer_events.looked is
+  'Whether the reader said they looked before answering: opened the passage, or tried again '
+  'after feedback. Part of `hinted`, which the recorder''s own rule adds to; kept apart so '
+  'that looking hints the other questions on the same claim without a derived hint chaining '
+  'one half hour to the next.';
+
 /*
  * Record a batch of answers, graded here. Each is
  *
@@ -182,6 +192,7 @@ declare
   v_self     text;
   v_graded   jsonb;
   v_shown    boolean;
+  v_locked   uuid[];
   v_event    public.study_answer_events%rowtype;
   it         public.study_items%rowtype;
   v_now      timestamptz;
@@ -209,18 +220,20 @@ begin
   -- and a correction lock them (see below). The stamp share-locks each as it is recorded, and
   -- in the batch's own order that deadlocked with either. Every id the loop below will read,
   -- in any form a uuid is written in -- a stricter test left some to be locked in the batch's
-  -- order after all -- and never a draft: a draft is refused unshown and never locked, and
-  -- validation takes drafts in its own order.
-  perform 1
-  from public.study_items i
-  where i.owner_id = uid
-    and i.status <> 'draft'
-    and i.id in (select (a.value ->> 'itemId')::uuid
-                 from jsonb_array_elements(p_answers) as a
-                 where jsonb_typeof(a.value) = 'object'
-                   and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid'))
-  order by i.id
-  for share;
+  -- order after all -- and never a draft: validation takes drafts in its own order. The ids
+  -- locked are kept, and one the loop finds that is not among them -- a draft validated
+  -- since -- is refused unshown, as it was when the batch began, rather than locked late.
+  select coalesce(array_agg(l.id), '{}') into v_locked
+  from (select i.id
+        from public.study_items i
+        where i.owner_id = uid
+          and i.status <> 'draft'
+          and i.id in (select (a.value ->> 'itemId')::uuid
+                       from jsonb_array_elements(p_answers) as a
+                       where jsonb_typeof(a.value) = 'object'
+                         and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid'))
+        order by i.id
+        for share) as l;
 
   -- The time once the locks are held, not when the call began: a call that waited across
   -- midnight counts today's answers, not yesterday's.
@@ -275,9 +288,11 @@ begin
         'index', ord - 1, 'clientEventId', v_client, 'reason', 'not_found');
       continue;
     end if;
-    -- A question a learner could have been shown: validated at some point.
-    v_shown := exists (select 1 from public.study_status_log s
-                       where s.item_id = it.id and s.owner_id = uid and s.to_status = 'validated');
+    -- A question a learner could have been shown: validated at some point, and not a draft
+    -- when the batch took its locks.
+    v_shown := it.id = any(v_locked)
+      and exists (select 1 from public.study_status_log s
+                  where s.item_id = it.id and s.owner_id = uid and s.to_status = 'validated');
     if not v_shown then
       refused := refused || jsonb_build_object(
         'index', ord - 1, 'clientEventId', v_client, 'reason', 'not_shown');
@@ -298,16 +313,19 @@ begin
       continue;
     end if;
 
-    -- Hinted when the reader says so, or when an answer recorded in the last half hour
-    -- showed the right one: a wrong answer's feedback does, and so does judging your own,
-    -- which is done against the course's answer. To this question, in any of its versions --
-    -- or to any other question on an idea this one tests: the feedback states the idea, and
-    -- a second question on it asked straight after is answered from that, not from memory.
+    -- Hinted when the reader says so, or when an answer recorded in the last half hour --
+    -- by the server's clock, as answers arrive -- showed the right one: a wrong answer's
+    -- feedback does, judging your own does, as it is done against the course's answer, and
+    -- so does an answer given with the passage open. To this question, in any of its
+    -- versions -- or to any other question on an idea this one tests: the feedback and the
+    -- passage state the idea, and a second question on it asked straight after is answered
+    -- from that, not from memory. Only what the reader said they looked at counts as looking
+    -- (`looked`), not a hint this rule derived, which would chain one half hour to the next.
     v_hinted := coalesce((ev ->> 'hinted')::boolean, false)
       or exists (select 1 from public.study_answer_events e
                  join public.study_items v on v.id = e.item_id
                  where e.owner_id = uid
-                   and (not e.correct or e.grading = 'self')
+                   and (not e.correct or e.grading = 'self' or e.looked)
                    and e.answered_at > v_since
                    and (v.lineage_id = it.lineage_id
                         or exists (select 1 from public.study_item_claims p
@@ -316,9 +334,10 @@ begin
 
     begin
       insert into public.study_answer_events
-        (owner_id, item_id, client_event_id, correct, hinted, grading, response)
+        (owner_id, item_id, client_event_id, correct, hinted, looked, grading, response)
       values
         (uid, it.id, v_client, (v_graded ->> 'correct')::boolean, v_hinted,
+         coalesce((ev ->> 'hinted')::boolean, false),
          v_graded ->> 'grading', v_graded ->> 'response')
       returning * into v_event;
       recorded := recorded + 1;
