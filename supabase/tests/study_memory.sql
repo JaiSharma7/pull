@@ -207,6 +207,14 @@ begin
   end if;
 
   -- ---------------------------------------------------------------- proof
+  -- Half an hour on, so the self-graded answer above -- judged against the course's answer
+  -- -- no longer hints the next. Aged as the owner, past the trigger that keeps answers final.
+  perform pg_temp.as_owner();
+  alter table public.study_answer_events disable trigger study_answer_events_are_final;
+  update public.study_answer_events set answered_at = clock_timestamp() - interval '31 minutes'
+  where owner_id = reader;
+  alter table public.study_answer_events enable trigger study_answer_events_are_final;
+  perform pg_temp.become_reader(reader);
   r := pg_temp.answer(q3, '"restudying"');
   if (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not true then
     raise exception 'the proving answer did not prove: %', r;

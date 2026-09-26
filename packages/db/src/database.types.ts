@@ -2256,6 +2256,67 @@ export type Database = {
           },
         ]
       }
+      study_claim_memory: {
+        Row: {
+          claim_id: string
+          difficulty: number
+          lapses: number
+          last_answered_at: string
+          last_outcome: string
+          last_success_at: string | null
+          last_success_id: string | null
+          owner_id: string
+          reps: number
+          stability: number
+        }
+        Insert: {
+          claim_id: string
+          difficulty?: number
+          lapses?: number
+          last_answered_at: string
+          last_outcome: string
+          last_success_at?: string | null
+          last_success_id?: string | null
+          owner_id: string
+          reps?: number
+          stability?: number
+        }
+        Update: {
+          claim_id?: string
+          difficulty?: number
+          lapses?: number
+          last_answered_at?: string
+          last_outcome?: string
+          last_success_at?: string | null
+          last_success_id?: string | null
+          owner_id?: string
+          reps?: number
+          stability?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_claim_memory_claim_id_owner_id_fkey"
+            columns: ["claim_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_claims"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_claim_memory_claim_id_owner_id_fkey"
+            columns: ["claim_id", "owner_id"]
+            isOneToOne: false
+            referencedRelation: "study_visible_claims"
+            referencedColumns: ["id", "owner_id"]
+          },
+          {
+            foreignKeyName: "study_claim_memory_last_success_id_fkey"
+            columns: ["last_success_id"]
+            isOneToOne: false
+            referencedRelation: "study_answer_events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       study_claims: {
         Row: {
           attribution: string | null
@@ -4673,6 +4734,16 @@ export type Database = {
         Args: { p_limits: Json; p_revision: Json }
         Returns: undefined
       }
+      study_claim_knowledge: {
+        Args: { p_at?: string; p_course_id: string }
+        Returns: {
+          claim_id: string
+          due_at: string
+          known: boolean
+          lapsed: boolean
+          retrievability: number
+        }[]
+      }
       study_claim_problems: {
         Args: { p_claim_id: string; p_links: Json }
         Returns: string[]
@@ -4696,6 +4767,7 @@ export type Database = {
         Returns: {
           first_shown_at: string
           generation_id: string
+          known: boolean
           lesson_id: string
           lesson_key: string
           lesson_position: number
@@ -4703,6 +4775,7 @@ export type Database = {
           objective: string
           question_count: number
           read_at: string
+          revisit: boolean
           state: string
           title: string
           unit_no: number
@@ -4715,6 +4788,7 @@ export type Database = {
           authored_by: string
           demonstrated_at: string
           difficulty: number
+          due_at: string
           first_shown_at: string
           generation_id: string
           item_id: string
@@ -4848,6 +4922,7 @@ export type Database = {
         Returns: undefined
       }
       study_refused_class: { Args: never; Returns: string }
+      study_remember: { Args: { p_event_id: string }; Returns: undefined }
       study_requester_daily_cap_cents: { Args: never; Returns: number }
       study_requester_spend_today: {
         Args: { p_requester: string }
