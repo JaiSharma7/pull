@@ -17,17 +17,23 @@ what the reader does not in fact know -- is the first risk. The study Delta has 
 rule. A lesson is left out of a session only when every claim it teaches is known now, and a
 claim is known only when all of these hold:
 
-- the reader's last deterministic answer on it was a success -- a later wrong answer takes
-  the knowledge away at once;
+- the reader's last answer on it was a success -- a later wrong answer takes the knowledge
+  away at once, and so does their own "not had" on a short answer, or a wrong answer to
+  their own version of a question: neither is evidence to schedule by, but both are word
+  that they do not have it now;
 - that success still proves recall (`study_answer_proves_recall`), re-read every time, so a
   report or a withdrawal of the question or a claim since takes it away;
-- its retrievability now is at least 0.7, the feed's floor -- an old success expires;
+- its retrievability now is above 0.7, the feed's floor (`known_retrievability_floor()`,
+  compared as the feed compares it) -- an old success expires;
 - the claim is validated now.
 
-Nothing else counts: being shown a lesson, reading it, a self-graded answer, a hinted one, an
-answer to the reader's own version of a question, an answer to a question held back, or an
+Nothing else counts: being shown a lesson, reading it, a self-graded answer, a hinted one --
+and an answer is hinted by a wrong or self-graded one in the half hour before to any question
+on the same claim, so a second question on an idea just got wrong cannot clear the lapse --
+an answer to the reader's own version of a question, an answer to a question held back, or an
 answer in another reader's course. The suite asserts each of these as a case that must not
-make a lesson known, under the reader's RLS.
+make a lesson known, under the reader's RLS. A lesson is known by every claim any version of
+it cited: a reader's revision can add to what it must be known by, never take away from it.
 
 ## The memory
 
@@ -36,11 +42,12 @@ lapses, the last outcome, and the answer that last proved it. It is written only
 answer recorder, in the transaction that records the answer (`study_remember`); no API role
 writes it, and the reader reads their own.
 
-| The answer                                                   | What it does to the memory                                                                                                                                                                              |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Proves recall                                                | A success. Stability grows as the feed's `grade_recall` good does, by 2 + (1 - difficulty), unless the last success was under twelve hours ago: answering again the same day is repetition, not spacing |
-| Wrong, graded deterministically, on a model-written question | A lapse. Stability falls to 0.35 of itself (at least half a day), difficulty rises by 0.15                                                                                                              |
-| Anything else                                                | Nothing. A hinted right answer does not clear a lapse                                                                                                                                                   |
+| The answer                                                   | What it does to the memory                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Proves recall                                                | A success. Stability grows as the feed's `grade_recall` good does, by 2 + (1 - difficulty), on the first success, after a lapse, or once the claim was due -- a stability after its last success. Before then, answering again is repetition, not spacing, and stability stays |
+| Wrong, graded deterministically, on a model-written question | A lapse. Stability falls to 0.35 of itself (at least half a day), difficulty rises by 0.15                                                                                                                                                                                     |
+| The reader's own "not had", or wrong on their own version    | Not known now: the last outcome is a lapse. Stability, difficulty and the lapse count are left as they were                                                                                                                                                                    |
+| Anything else                                                | Nothing. A hinted right answer does not clear a lapse                                                                                                                                                                                                                          |
 
 Retrievability is 0.9 ^ (days since the last success / stability), computed and never
 stored, as for the feed.
@@ -52,7 +59,8 @@ stored, as for the feed.
   "Read", which says as much. They stay in the outline, and opening one reads it like any
   other.
 - **Lessons to revisit** -- one of their claims was last answered wrong -- read "Worth
-  rereading" and come first in the next session.
+  rereading" and come first in the next session, for as long as a question on that claim
+  can be answered to clear it; with every one withdrawn, nothing ever could, and it goes.
 - **Due questions.** A question is due once answered, when the first claim it tests is due:
   at once after a lapse, otherwise one stability after the last success, when its recall has
   fallen to 0.9. A review asks what is due, soonest first; when nothing is due it asks the
@@ -69,3 +77,11 @@ stored, as for the feed.
 
 A regeneration starts a new memory: its claims are new rows, and nothing carries over, as for
 progress and answers.
+
+## Locks
+
+`study_remember` writes the memory inside the recorder, whose foreign key to the claim
+key-shares it. A claim report or withdrawal locks the claim before its questions, so the
+recorder key-shares a batch's claims, in id order, before it share-locks the batch's
+questions: taken after them, a batch and a claim report deadlocked every time. See
+[Lock order](./study-courses.md#lock-order).

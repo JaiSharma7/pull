@@ -8,8 +8,9 @@ teaches, we keep how well you remember it — worked out from your answers the c
 check, the way your feed's review schedule is — and when you last answered it right or
 wrong (`study_claim_memory`). The course uses it to leave out lessons you have recently shown
 you know, to bring back a lesson after a wrong answer, and to ask questions again as memory
-fades. Only answers the course checked itself count; being shown a lesson, your own
-judgement of an answer, and an answer you looked up never do. Nothing is sent to a model.
+fades. Only answers the course checked itself show that you know something; being shown a
+lesson, your own judgement of an answer, and an answer you looked up never do — though a
+wrong answer, or your own "not had", still says you did not. Nothing is sent to a model.
 See [What you create](#what-you-create).
 
 The previous revision, effective 27 September, **recorded answers to your study courses'
@@ -196,8 +197,9 @@ judged it yourself; the time is when it reached us. Which lessons and questions 
 recorded in `study_progress_events` so the course can remember your place, with the time
 your device reported (a time more than thirty days back, or in the future, is stored as the
 nearest time that is not) and the time it reached us; being
-shown something is never counted as remembering it. All of this is readable only by you, is
-never reviewed by us, and is in your export. It is deleted with the version of the course it
+shown something is never counted as remembering it. How well you remember each claim of a
+course is kept in `study_claim_memory`, worked out from those answers. All of this is
+readable only by you, is never reviewed by us, and is in your export. It is deleted with the version of the course it
 belongs to — which deleting any source of that version deletes — with the course, and with
 your account.
 

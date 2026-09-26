@@ -112,6 +112,9 @@ declare
   rep      uuid;
   r        jsonb;
   st       double precision;
+  lsa      timestamptz;
+  x        uuid := extensions.gen_random_uuid();
+  n        int;
 begin
   insert into auth.users
     (id, instance_id, aud, role, email, encrypted_password,
@@ -183,6 +186,20 @@ begin
     raise exception 'a lesson read as known before anything was answered';
   end if;
 
+  -- A reader's own revision of a lesson can add to what it must be known by, never take away:
+  -- re-citing a proven claim does not make an unstudied lesson known. Probed, and undone.
+  begin
+    perform pg_temp.answer(q1, '"The recall test group"');
+    perform public.revise_study_lesson(l1, jsonb_build_object('claimIds', jsonb_build_array(c2)));
+    if exists (select 1 from public.study_course_outline(course)
+               where lesson_key = 'l1' and known) then
+      raise exception 'a lesson revised to cite a proven claim read as known unstudied';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+
   -- ---------------------------------------------------------------- what proves nothing
   -- Exposure.
   perform public.record_study_progress(jsonb_build_array(
@@ -195,9 +212,19 @@ begin
   -- An answer to the reader's own version.
   q5_mine := public.revise_study_item(q5, '{"prompt": "What did the group that won at five minutes do?"}');
   perform pg_temp.answer(q5_mine, '"restudied"');
-  -- An answer to a question held back by a report.
+  -- An answer to a question held back by a report -- half an hour on, so it is not hinted by
+  -- the self-grade above and it is the holding back, alone, that makes it prove nothing.
+  perform pg_temp.as_owner();
+  alter table public.study_answer_events disable trigger study_answer_events_are_final;
+  update public.study_answer_events set answered_at = clock_timestamp() - interval '31 minutes'
+  where owner_id = reader;
+  alter table public.study_answer_events enable trigger study_answer_events_are_final;
+  perform pg_temp.become_reader(reader);
   rep := public.report_study_content('item', q3, 'ambiguous', null);
-  perform pg_temp.answer(q3, '"restudying"');
+  r := pg_temp.answer(q3, '"restudying"');
+  if (r -> 'results' -> 0 ->> 'hinted')::boolean is not false then
+    raise exception 'the held-back answer was hinted, so it tests nothing: %', r;
+  end if;
   perform public.dismiss_study_report(rep);
   if (select known from public.study_course_outline(course) where lesson_id = l1)
      is distinct from false
@@ -250,6 +277,50 @@ begin
                        from public.study_claim_memory where claim_id = c1) then
     raise exception 'a proven question is not due one stability after its success';
   end if;
+  -- Asked about the past, nothing proven since counts; not asked, it is now.
+  if (select known from public.study_claim_knowledge(course, now() - interval '1 year')
+      where claim_id = c1) is distinct from false
+     or (select known from public.study_claim_knowledge(course, null) where claim_id = c1)
+        is distinct from true then
+    raise exception 'knowledge asked about the past, or about no time, was wrong';
+  end if;
+  -- Half a day on is still before it is due: repetition, not spacing, however many hours --
+  -- a proof every half day compounded stability into years.
+  perform pg_temp.as_owner();
+  update public.study_claim_memory set last_success_at = last_success_at - interval '13 hours'
+  where claim_id = c1;
+  perform pg_temp.become_reader(reader);
+  perform pg_temp.answer(q3, '"restudying"');
+  if (select stability from public.study_claim_memory where claim_id = c1) is distinct from st then
+    raise exception 'a success before the claim was due grew stability';
+  end if;
+  -- Once due, a success is spacing, and stability grows: the last success is set back past
+  -- one stability, as the owner, and the claim proven again.
+  perform pg_temp.as_owner();
+  update public.study_claim_memory set last_success_at = last_success_at - interval '3 days'
+  where claim_id = c1;
+  perform pg_temp.become_reader(reader);
+  perform pg_temp.answer(q3, '"restudying"');
+  select stability, last_success_at into st, lsa from public.study_claim_memory where claim_id = c1;
+  if abs(st - 2.7 * 2.7) > 1e-9 then
+    raise exception 'a success once due did not grow stability: %', st;
+  end if;
+  -- Known down to the feed Delta's floor and no further: either side of 0.7.
+  if (select known from public.study_claim_knowledge(course,
+        lsa + make_interval(secs => st * ln(0.75) / ln(0.9) * 86400)) where claim_id = c1)
+       is distinct from true
+     or (select known from public.study_claim_knowledge(course,
+           lsa + make_interval(secs => st * ln(0.65) / ln(0.9) * 86400)) where claim_id = c1)
+       is distinct from false then
+    raise exception 'knowledge did not end at the retrievability floor';
+  end if;
+  -- An answer sent twice moves the memory once.
+  perform pg_temp.answer(q3, '"restudying"', null, null, x);
+  select reps into n from public.study_claim_memory where claim_id = c1;
+  perform pg_temp.answer(q3, '"restudying"', null, null, x);
+  if (select reps from public.study_claim_memory where claim_id = c1) is distinct from n then
+    raise exception 'a duplicate answer moved the memory again';
+  end if;
 
   r := pg_temp.answer(q1, '"The recall test group"');
   if (select string_agg(known::text, ',' order by lesson_position)
@@ -268,13 +339,39 @@ begin
      is distinct from true then
     raise exception 'dismissing the report did not restore the proof';
   end if;
+  -- And a report of the claim itself: it leaves what the course can say it knows.
+  rep := public.report_study_content('claim', c2, 'ambiguous', null);
+  if exists (select 1 from public.study_claim_knowledge(course) where claim_id = c2 and known) then
+    raise exception 'a proof survived a report of the claim it proved';
+  end if;
+  perform public.dismiss_study_report(rep);
+  if (select known from public.study_claim_knowledge(course) where claim_id = c2)
+     is distinct from true then
+    raise exception 'dismissing the claim''s report did not restore the proof';
+  end if;
 
   -- ---------------------------------------------------------------- a lapse
+  -- A wrong answer to the reader's own version is word that they do not have it now, though
+  -- no evidence to schedule by. Probed, and undone.
+  begin
+    perform pg_temp.answer(q5_mine, '"memorised it"', 'incorrect');
+    if (select known from public.study_course_outline(course) where lesson_id = l1)
+       is distinct from false then
+      raise exception 'a wrong answer to the reader''s own version left the lesson known';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  -- So is their own "not had": it takes the knowledge away, and moves nothing else. A claim
+  -- tested only by short answers could otherwise never be un-known.
   perform pg_temp.answer(q3, '"memorising it"', 'incorrect');
-  -- A self-graded wrong answer is practice too: no lapse from it.
-  if (select last_outcome from public.study_claim_memory where claim_id = c1)
-     is distinct from 'success' then
-    raise exception 'a self-graded answer moved the memory';
+  if (select known from public.study_course_outline(course) where lesson_id = l1)
+       is distinct from false
+     or (select row(last_outcome, stability, lapses)::text from public.study_claim_memory
+         where claim_id = c1) is distinct from row('lapse', st, 0)::text then
+    raise exception 'a self-graded "not had" did not take the knowledge away, or moved more: %',
+      (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
   end if;
   perform pg_temp.answer(q1, '"The restudy group"');
   if (select known from public.study_course_outline(course) where lesson_id = l2)
@@ -285,7 +382,8 @@ begin
         is distinct from false
      or (select due_at from public.study_course_questions(course) where item_id = q1)
         > clock_timestamp()
-     or (select lapses from public.study_claim_memory where claim_id = c2) is distinct from 1 then
+     or (select row(lapses, stability, difficulty)::text from public.study_claim_memory
+         where claim_id = c2) is distinct from row(1, 2.7 * 0.35, 0.3 + 0.15)::text then
     raise exception 'a wrong answer did not take the claim''s knowledge away at once: %',
       (select jsonb_agg(to_jsonb(o)) from public.study_course_outline(course) o);
   end if;
@@ -299,8 +397,26 @@ begin
     raise exception 'a retry after a wrong answer restored knowledge';
   end if;
 
+  -- With every question on a lapsed claim withdrawn, nothing could ever clear "worth
+  -- rereading", so it goes. Probed, and undone.
+  begin
+    perform public.retire_study_content('item', q1);
+    if (select revisit from public.study_course_outline(course) where lesson_id = l2)
+       is distinct from false then
+      raise exception 'a lapse with no question left to clear it still read as worth rereading';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+
   -- ---------------------------------------------------------------- reach
   perform pg_temp.become_reader(other);
+  -- Another reader's answer to this course's question is refused, and moves no memory.
+  r := pg_temp.answer(q1, '"The recall test group"');
+  if r -> 'refused' -> 0 ->> 'reason' is distinct from 'not_found' then
+    raise exception 'another reader answered this reader''s question: %', r;
+  end if;
   if exists (select 1 from public.study_claim_memory)
      or exists (select 1 from public.study_claim_knowledge(course)) then
     raise exception 'another reader could see this reader''s memory';
