@@ -98,7 +98,7 @@ export function Studio({
       </div>
       {studyOpened && (
         <div hidden={view !== 'study'}>
-          <StudyImport key={userId} userId={userId} />
+          <StudyImport key={userId} userId={userId} onNavigate={onNavigate} />
         </div>
       )}
     </>

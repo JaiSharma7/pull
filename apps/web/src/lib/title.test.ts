@@ -70,6 +70,17 @@ describe('titleFor', () => {
     );
   });
 
+  it('names a private course once loaded, and never by its id', () => {
+    expect(titleFor({ ...base, pathname: '/courses' })).toBe('Courses · What a Pull');
+    expect(titleFor({ ...base, pathname: '/course/8f3e', documentTitle: 'Timing' })).toBe(
+      'Timing · What a Pull',
+    );
+    expect(titleFor({ ...base, pathname: '/course/8f3e' })).toBe('Course · What a Pull');
+    expect(isKnownPath('/course/8f3e')).toBe(true);
+    expect(isKnownPath('/course/8f3e/lesson')).toBe(false);
+    expect(isKnownPath('/course')).toBe(false);
+  });
+
   it('says so when the address matches nothing', () => {
     expect(titleFor({ ...base, pathname: '/nonsense' })).toBe('Not found · What a Pull');
     expect(titleFor({ ...base, pathname: '/source' })).toBe('Not found · What a Pull');

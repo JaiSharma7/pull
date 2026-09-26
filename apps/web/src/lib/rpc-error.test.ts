@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isPermanentFailure, isSchemaMismatch, rpcError, TRANSPORT_ERROR } from './rpc-error.js';
+import {
+  isPermanentFailure,
+  isSchemaMismatch,
+  rpcError,
+  sqlDetail,
+  sqlState,
+  TRANSPORT_ERROR,
+} from './rpc-error.js';
 import { isOfflineFailure } from './offline.js';
 
 /**
@@ -46,6 +53,19 @@ describe('rpcError', () => {
     expect(e.message).toContain('insert violates policy');
     expect(e.message).toContain('Failing row contains');
     expect(e.message).toContain('Check the RLS policy');
+  });
+
+  it('keeps the DETAIL reachable, since one SQLSTATE can carry several refusals', () => {
+    const e = rpcError({
+      message: 'this course is already being prepared',
+      details: 'preparing',
+      code: '55000',
+    });
+    expect(sqlState(e)).toBe('55000');
+    expect(sqlDetail(e)).toBe('preparing');
+    expect(sqlDetail(rpcError(postgrest))).toBeUndefined();
+    expect(sqlDetail({ code: '55000', details: 'unchanged' })).toBe('unchanged');
+    expect(sqlDetail(new Error('x'))).toBeUndefined();
   });
 
   it('passes a real Error through untouched, so stacks survive', () => {

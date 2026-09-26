@@ -15,8 +15,7 @@ The schema is `supabase/migrations/20260925120000_study_course_structure.sql`, w
 behaviour is asserted in `supabase/tests/study_courses.sql`, as the `authenticated` role
 under RLS.
 
-Nothing here adds a screen: the guided course is a later change, and it reads what this
-page describes.
+The screens that read it are described under [The screens](#the-screens).
 
 ## The shape
 
@@ -209,6 +208,54 @@ generation); the outline's `first_shown_at` and `read_at`; the question list's `
 mark every column nullable; these never are: `course_id`, `goal`, `created_at`, every
 count, `preparing`, `newer_generation_held_back`, `held_back`, `update_available`, and `objectives`,
 `disagreements` and `withheld` (empty rather than null while the text is not validated).
+
+## The screens
+
+Signed in and not a guest, as Studio is; the two addresses answer a guest with the note the
+other signed-in destinations give, and a visitor with sign-in.
+
+- **Making a course** is in Studio, under the saved sources: choose one to five, say what
+  the course is for, and confirm that the text goes to the model provider. It is offered
+  only when `study_generation_available()` says the reader is in the beta, and it keeps one
+  mutation id across retries of the same request, dropping it only once the server has
+  answered with a refusal -- so a lost response is answered by the course already queued.
+- **`/courses`** lists the reader's courses from `study_course_overview`, each with where it
+  stands: being prepared, could not be prepared, its sources deleted, or lessons read.
+- **`/course/:id`** is one course: its overview and objectives, the outline by unit, and a
+  way in. While a generation is on its way -- a job queued or running, or a finished one
+  whose validation has not settled -- it looks again every fifteen seconds.
+- **A session** is about ten minutes: unfinished lessons in course order until their
+  minutes reach ten, and it does not start a new unit once half the time is spent. Opening
+  a lesson records `lesson_shown`; Done records `lesson_read`, Skip `lesson_skipped`. It
+  ends on a screen of its own that lists what was covered, each with its recap to say from
+  memory, and offers to stop before it offers to go on.
+- **A lesson** shows where it comes from: each claim it teaches, read from
+  `study_visible_claims`, with the passages of the reader's text it rests on
+  (`study_claim_evidence`, for those claims only), and on request the passage in its
+  surrounding text from `study_source_versions.extracted_text`. Offsets are code points,
+  and a span that no longer matches the text is shown alone rather than in the wrong place.
+- **Listening** reads a lesson with a voice installed on the device, and only then: the
+  reader's material is not sent to a speech service, and without a local voice the screen
+  says so rather than offering to read it.
+- **Progress is sent at once** and kept in memory until the server accepts it; an event
+  refused with `limit` stays and is sent with the next one. A durable offline queue, and
+  questions, are the practice change's.
+- **Something wrong with a lesson** is answered beside it: report it (a reason, and a
+  note if the reader wants), correct it, or withdraw it. A report holds the lesson back at
+  once and the session moves on, with an undo; a correction is saved through
+  `revise_study_lesson` as a new version that keeps the reader's place, and its failed
+  checks are said in words; a withdrawal asks first. Each claim in "where this comes from"
+  can be reported too, which holds back the lessons resting on it. The course page lists
+  what the reader has reported and not settled, each with a Restore
+  (`dismiss_study_report`); it reads the open reports and each one's title or statement
+  from the tables, since reported content is what the visible views hide.
+- **Preparing again** is offered when `update_available`, or when there is no current
+  generation and nothing is on its way; it asks for consent each time. **Deleting** calls
+  `delete_study_course` and returns to the list, including when the course had already
+  gone.
+- **Refusals** are read by SQLSTATE and DETAIL, as below: `unchanged`, `preparing`, `beta`
+  and `unavailable` each have their own sentence, and anything else shows the server's
+  message.
 
 ## Deletion
 

@@ -26,9 +26,10 @@ source full of links) validated under the worker's 8-second statement timeout.
 `scripts/test-study-fold-parity.mjs` holds the SQL text functions to their TypeScript
 counterparts; both run in `pnpm db:test`.
 
-Nothing here adds a screen. The report and correction controls belong beside each question
-and lesson in the guided course, which is a later change. So does the server-side recorder
-that grades an answer and writes it down.
+Nothing here adds a screen. The report, correction and withdrawal controls for lessons and
+claims are in the guided course (see [`study-courses.md`](./study-courses.md#the-screens));
+those for questions, and the server-side recorder that grades an answer and writes it down,
+are the practice change's.
 
 What this change settles is the rules those screens must obey. Status changes, the checks
 and the proof rule live in the database, where no screen can skip them. What a learner is

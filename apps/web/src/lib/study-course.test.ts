@@ -1,0 +1,458 @@
+import { describe, expect, it } from 'vitest';
+import {
+  applyProgress,
+  asSentence,
+  correctionRefusal,
+  lessonDraftProblem,
+  lessonRevision,
+  reportRefusal,
+  type LessonDraft,
+  awaitingPreparation,
+  courseProgressLabel,
+  courseSelectionProblem,
+  courseStatus,
+  courseTitle,
+  lessonStateLabel,
+  newerPreparationFailed,
+  nextLesson,
+  passageWindow,
+  planSession,
+  preparationRefusal,
+  shapeCourseSummaries,
+  shapeCourseSummary,
+  shapeLessonContent,
+  shapeOutline,
+  shapeProgressResult,
+  type CourseSummary,
+  type OutlineUnit,
+} from './study-course.js';
+
+const overviewRow = {
+  course_id: 'c1',
+  goal: 'Explain the argument',
+  created_at: '2026-09-25T10:00:00Z',
+  source_count: 2,
+  generation_id: 'g1',
+  title: 'Immediate versus delayed',
+  overview: 'What the notes say about timing.',
+  objectives: ['Explain the contrast.'],
+  recap: 'Timing matters.',
+  disagreements: [{ claimKeys: ['s1c1', 's2c1'], description: 'They differ on timing.' }],
+  withheld: [{ prompt: 'Does it work for everyone?', reason: 'The notes do not say.' }],
+  latest_generation_id: 'g1',
+  latest_job_status: 'succeeded',
+  preparing: false,
+  newer_generation_held_back: false,
+  held_back: false,
+  update_available: true,
+  lesson_count: 3,
+  lessons_read_count: 1,
+  question_count: 4,
+  claim_count: 3,
+  claims_demonstrated_count: 0,
+};
+
+function course(overrides: Partial<CourseSummary> = {}): CourseSummary {
+  return { ...(shapeCourseSummary(overviewRow) as CourseSummary), ...overrides };
+}
+
+function outline(): OutlineUnit[] {
+  return shapeOutline([
+    lessonRow('l3', 3, 2, 'Spacing', 'not_seen', 3),
+    lessonRow('l1', 1, 1, 'Timing', 'read', 3),
+    lessonRow('l2', 2, 1, 'Timing', 'not_seen', 4),
+    lessonRow('l4', 4, 2, 'Spacing', 'not_seen', 3),
+    lessonRow('l5', 5, 3, 'Review', 'not_seen', 2),
+  ]);
+}
+
+function lessonRow(
+  key: string,
+  position: number,
+  unit: number,
+  unitTitle: string,
+  state: string,
+  minutes: number,
+) {
+  return {
+    generation_id: 'g1',
+    unit_no: unit,
+    unit_title: unitTitle,
+    lesson_id: `id-${key}`,
+    lesson_key: key,
+    lesson_position: position,
+    title: `Lesson ${key}`,
+    objective: 'Explain it.',
+    minutes,
+    question_count: 1,
+    state,
+    first_shown_at: state === 'not_seen' ? null : '2026-09-25T10:00:00Z',
+    read_at: state === 'read' ? '2026-09-25T10:05:00Z' : null,
+  };
+}
+
+describe('shapeCourseSummary', () => {
+  it('reads every column of the overview', () => {
+    const c = shapeCourseSummary(overviewRow);
+    expect(c).toMatchObject({
+      courseId: 'c1',
+      generationId: 'g1',
+      title: 'Immediate versus delayed',
+      objectives: ['Explain the contrast.'],
+      disagreements: [{ claimKeys: ['s1c1', 's2c1'], description: 'They differ on timing.' }],
+      withheld: [{ prompt: 'Does it work for everyone?', reason: 'The notes do not say.' }],
+      updateAvailable: true,
+      lessonCount: 3,
+      lessonsReadCount: 1,
+    });
+  });
+
+  it('treats absent text as absent, and drops a row with no course id', () => {
+    const c = shapeCourseSummary({
+      ...overviewRow,
+      title: null,
+      objectives: null,
+      generation_id: null,
+    });
+    expect(c?.title).toBeNull();
+    expect(c?.objectives).toEqual([]);
+    expect(c?.generationId).toBeNull();
+    expect(shapeCourseSummaries([{ goal: 'no id' }, overviewRow, 'junk'])).toHaveLength(1);
+  });
+});
+
+describe('courseStatus and courseTitle', () => {
+  it('is ready with a current generation, even while a newer one is prepared', () => {
+    expect(courseStatus(course({ preparing: true }))).toBe('ready');
+  });
+  it('is preparing before the first generation finishes, including validation', () => {
+    expect(courseStatus(course({ generationId: null, preparing: true }))).toBe('preparing');
+    expect(courseStatus(course({ generationId: null, latestJobStatus: 'succeeded' }))).toBe(
+      'preparing',
+    );
+  });
+  it('failed when the only generation failed or was cancelled; empty when there is none', () => {
+    expect(courseStatus(course({ generationId: null, latestJobStatus: 'failed' }))).toBe('failed');
+    expect(courseStatus(course({ generationId: null, latestJobStatus: 'cancelled' }))).toBe(
+      'failed',
+    );
+    expect(courseStatus(course({ generationId: null, latestJobStatus: null }))).toBe('empty');
+  });
+  it('is called by its validated title, else by the goal', () => {
+    expect(courseTitle(course())).toBe('Immediate versus delayed');
+    expect(courseTitle(course({ title: null }))).toBe('Explain the argument');
+    expect(courseTitle(course({ title: '  ', goal: '' }))).toBe('Untitled course');
+  });
+  it('counts lessons read, never "0 of 0"', () => {
+    expect(courseProgressLabel(course())).toBe('1 of 3 lessons read');
+    expect(courseProgressLabel(course({ lessonCount: 0, lessonsReadCount: 0 }))).toBe(
+      'Nothing to read',
+    );
+    expect(
+      courseProgressLabel(course({ lessonCount: 0, lessonsReadCount: 0, heldBack: true })),
+    ).toBe('Held back by its checks');
+    expect(courseProgressLabel(course({ lessonsReadCount: 3 }))).toBe('Every lesson read');
+  });
+});
+
+describe('what is on its way', () => {
+  it('looks again while a job runs, or while a finished one awaits validation', () => {
+    expect(awaitingPreparation(course({ preparing: true }))).toBe(true);
+    expect(awaitingPreparation(course({ generationId: null, latestJobStatus: 'succeeded' }))).toBe(
+      true,
+    );
+    expect(awaitingPreparation(course())).toBe(false);
+    expect(awaitingPreparation(course({ generationId: null, latestJobStatus: 'failed' }))).toBe(
+      false,
+    );
+  });
+
+  it('says a newer preparation failed only when an older one is still being read', () => {
+    const failedAgain = { latestGenerationId: 'g2', latestJobStatus: 'failed' };
+    expect(newerPreparationFailed(course(failedAgain))).toBe(true);
+    expect(newerPreparationFailed(course({ ...failedAgain, latestJobStatus: 'cancelled' }))).toBe(
+      true,
+    );
+    // The failed one is the one on screen, there is none on screen, or another is running.
+    expect(newerPreparationFailed(course({ latestJobStatus: 'failed' }))).toBe(false);
+    expect(newerPreparationFailed(course({ ...failedAgain, generationId: null }))).toBe(false);
+    expect(newerPreparationFailed(course({ ...failedAgain, preparing: true }))).toBe(false);
+    expect(
+      newerPreparationFailed(course({ latestGenerationId: 'g2', latestJobStatus: 'succeeded' })),
+    ).toBe(false);
+  });
+});
+
+describe('preparationRefusal', () => {
+  it('reads the DETAIL a code shares between refusals', () => {
+    expect(preparationRefusal('55000', 'preparing')).toMatch(/already being prepared/);
+    expect(preparationRefusal('55000', 'unchanged')).toMatch(/has changed since/);
+    expect(preparationRefusal('42501', 'beta')).toMatch(/limited beta/);
+    expect(preparationRefusal('42501', 'unavailable')).toMatch(/no longer in your account/);
+    expect(preparationRefusal('22023', 'too_large')).toMatch(/200,000-character limit/);
+    expect(preparationRefusal('22023', undefined)).toBeNull();
+  });
+
+  it('says nothing of a refusal it does not know, so the server’s own message is shown', () => {
+    expect(preparationRefusal('55000', undefined)).toBeNull();
+    expect(preparationRefusal('42501', 'something new')).toBeNull();
+    expect(preparationRefusal('53400', undefined)).toBeNull();
+    expect(preparationRefusal(undefined, undefined)).toBeNull();
+    expect(preparationRefusal('P0002', undefined)).toBe('This course no longer exists.');
+  });
+
+  it('turns a server message into a sentence', () => {
+    expect(asSentence('  the daily generation budget is spent.')).toBe(
+      'The daily generation budget is spent.',
+    );
+    expect(asSentence('')).toBe('');
+  });
+});
+
+describe('shapeOutline', () => {
+  it('groups lessons into units in course order', () => {
+    const units = outline();
+    expect(
+      units.map((u) => `${u.unitNo}:${u.title}:${u.lessons.map((l) => l.lessonKey).join('+')}`),
+    ).toEqual(['1:Timing:l1+l2', '2:Spacing:l3+l4', '3:Review:l5']);
+  });
+  it('reads an unknown state as not seen and a missing minutes as one', () => {
+    const [unit] = shapeOutline([{ ...lessonRow('l1', 1, 1, 'T', 'mystery', 0) }]);
+    expect(unit?.lessons[0]?.state).toBe('not_seen');
+    expect(unit?.lessons[0]?.minutes).toBe(1);
+  });
+  it('labels states in words, so colour is never the only signal', () => {
+    expect(
+      ['not_seen', 'shown', 'read', 'skipped'].map((s) => lessonStateLabel(s as never)),
+    ).toEqual(['Not started', 'Started', 'Read', 'Skipped']);
+  });
+});
+
+describe('what to read next', () => {
+  it('is the first lesson not read or skipped', () => {
+    expect(nextLesson(outline())?.lessonKey).toBe('l2');
+    const done = applyProgress(outline(), [
+      { kind: 'lesson_read', lessonId: 'id-l2' },
+      { kind: 'lesson_skipped', lessonId: 'id-l3' },
+    ]);
+    expect(nextLesson(done)?.lessonKey).toBe('l4');
+  });
+
+  it('plans about ten minutes, stopping at a unit break once half is spent', () => {
+    // l2 (4) is unit 1; l3 (3) starts unit 2 at 4 minutes, under half: continue.
+    // l4 (3) brings it to 10: stop.
+    expect(planSession(outline()).map((l) => l.lessonKey)).toEqual(['l2', 'l3', 'l4']);
+    // From l3: l3 (3) + l4 (3) = 6, and l5 starts a new unit past half the budget: stop.
+    expect(planSession(outline(), 'id-l3').map((l) => l.lessonKey)).toEqual(['l3', 'l4']);
+  });
+
+  it('starts from a finished lesson the reader chose, and skips finished ones after it', () => {
+    expect(planSession(outline(), 'id-l1', 4).map((l) => l.lessonKey)).toEqual(['l1', 'l2']);
+  });
+
+  it('always has at least one lesson when any is unfinished, and none when all are', () => {
+    expect(planSession(outline(), null, 1)).toHaveLength(1);
+    const all = applyProgress(outline(), [
+      { kind: 'lesson_read', lessonId: 'id-l2' },
+      { kind: 'lesson_read', lessonId: 'id-l3' },
+      { kind: 'lesson_read', lessonId: 'id-l4' },
+      { kind: 'lesson_read', lessonId: 'id-l5' },
+    ]);
+    expect(planSession(all)).toEqual([]);
+    expect(nextLesson(all)).toBeNull();
+  });
+});
+
+describe('applyProgress', () => {
+  it('only ever moves forward', () => {
+    const units = applyProgress(outline(), [
+      { kind: 'lesson_shown', lessonId: 'id-l1' },
+      { kind: 'lesson_read', lessonId: 'id-l2' },
+      { kind: 'lesson_shown', lessonId: 'id-l2' },
+    ]);
+    const states = Object.fromEntries(
+      units.flatMap((u) => u.lessons).map((l) => [l.lessonKey, l.state]),
+    );
+    expect(states.l1).toBe('read');
+    expect(states.l2).toBe('read');
+  });
+});
+
+describe('passageWindow', () => {
+  const text =
+    'Before the passage. On a final test five minutes later, the group that restudied remembered more. After it.';
+  const spanText = 'the group that restudied remembered more';
+  const start = Array.from(text.slice(0, text.indexOf(spanText))).length;
+
+  it('shows the span in its context, cut at word boundaries', () => {
+    const w = passageWindow(
+      text,
+      { start, end: start + Array.from(spanText).length, spanText },
+      20,
+    );
+    expect(w?.span).toBe(spanText);
+    expect(w?.before.endsWith('later, ')).toBe(true);
+    expect(w?.before.startsWith(' ') || /^\S/.test(w?.before ?? '')).toBe(true);
+    expect(w?.clippedStart).toBe(true);
+    expect(w?.clippedEnd).toBe(false);
+  });
+
+  it('counts code points, as the database does', () => {
+    const astral = '𝟏𝟐 then the span here';
+    // Two astral digits are two code points but four UTF-16 units.
+    const w = passageWindow(astral, { start: 12, end: 16, spanText: 'span' });
+    expect(w?.span).toBe('span');
+    expect(w?.before).toBe('𝟏𝟐 then the ');
+  });
+
+  it('refuses offsets that do not hold the recorded span', () => {
+    expect(passageWindow(text, { start: 0, end: 5, spanText: 'nope!' })).toBeNull();
+    expect(passageWindow(text, { start: 5, end: 99999, spanText })).toBeNull();
+    expect(passageWindow(text, { start: 9, end: 3, spanText })).toBeNull();
+  });
+});
+
+describe('shapeLessonContent', () => {
+  it('gathers a lesson, its claims, their resolved spans and source titles', () => {
+    const content = shapeLessonContent({
+      lesson: {
+        id: 'l1',
+        title: 'Timing',
+        objective: 'Explain.',
+        explanation: 'Text.',
+        example: null,
+        recap: 'R.',
+        minutes: 3,
+      },
+      claims: [
+        {
+          id: 'c1',
+          statement: 'Restudying won early.',
+          qualifications: ['at five minutes'],
+          attribution: null,
+          source_version_id: 'v1',
+        },
+      ],
+      evidence: [
+        {
+          claim_id: 'c1',
+          ordinal: 2,
+          span_text: 'second',
+          start_offset: 10,
+          end_offset: 16,
+          page: null,
+          match: 'exact',
+        },
+        {
+          claim_id: 'c1',
+          ordinal: 1,
+          span_text: 'first',
+          start_offset: 0,
+          end_offset: 5,
+          page: 3,
+          match: 'normalized',
+        },
+        {
+          claim_id: 'c1',
+          ordinal: 3,
+          span_text: null,
+          start_offset: null,
+          end_offset: null,
+          match: 'unresolved',
+        },
+      ],
+      versions: [{ id: 'v1', title: 'Prose memory' }],
+    });
+    expect(content?.claims[0]?.sourceTitle).toBe('Prose memory');
+    expect(content?.claims[0]?.evidence.map((e) => e.spanText)).toEqual(['first', 'second']);
+    expect(content?.claims[0]?.evidence[0]?.page).toBe(3);
+  });
+
+  it('is null without a lesson', () => {
+    expect(shapeLessonContent({ lesson: null, claims: [], evidence: [], versions: [] })).toBeNull();
+  });
+});
+
+describe('shapeProgressResult', () => {
+  it('reads counts and refusals, tolerating junk', () => {
+    expect(
+      shapeProgressResult({
+        recorded: 2,
+        duplicates: 1,
+        refused: [{ index: 3, reason: 'limit', clientEventId: 'e' }, 'x'],
+      }),
+    ).toEqual({
+      recorded: 2,
+      duplicates: 1,
+      refused: [{ index: 3, clientEventId: 'e', reason: 'limit' }],
+    });
+    expect(shapeProgressResult(null)).toEqual({ recorded: 0, duplicates: 0, refused: [] });
+  });
+});
+
+describe('courseSelectionProblem', () => {
+  it('holds a course to one to five sources and a goal', () => {
+    expect(courseSelectionProblem(0, 'Explain it')).toMatch(/at least one/);
+    expect(courseSelectionProblem(6, 'Explain it')).toMatch(/at most 5/);
+    expect(courseSelectionProblem(1, '   ')).toMatch(/what the course is for/);
+    expect(courseSelectionProblem(1, 'x'.repeat(301))).toMatch(/300/);
+    expect(courseSelectionProblem(5, 'Explain it')).toBeNull();
+  });
+});
+
+describe('correcting a lesson', () => {
+  const before: LessonDraft = {
+    unitTitle: 'Timing',
+    title: 'Five minutes later',
+    objective: 'Explain the early result.',
+    explanation: 'Restudying won.',
+    example: '',
+    recap: 'Restudying won early.',
+  };
+
+  it('sends only what changed, and nothing when nothing did', () => {
+    expect(lessonRevision(before, { ...before })).toBeNull();
+    expect(lessonRevision(before, { ...before, title: '  Five minutes later ' })).toBeNull();
+    expect(lessonRevision(before, { ...before, title: 'At five minutes' })).toEqual({
+      title: 'At five minutes',
+    });
+    expect(lessonRevision(before, { ...before, unitTitle: 'When it was tested' })).toEqual({
+      unitTitle: 'When it was tested',
+    });
+  });
+
+  it('clears an emptied example rather than sending an empty one', () => {
+    const withExample = { ...before, example: 'A quiz a week later.' };
+    expect(lessonRevision(withExample, { ...withExample, example: '  ' })).toEqual({
+      example: null,
+    });
+  });
+
+  it('refuses an empty field or one over its limit before sending anything', () => {
+    expect(lessonDraftProblem(before)).toBeNull();
+    expect(lessonDraftProblem({ ...before, recap: ' ' })).toBe('The recap cannot be empty.');
+    expect(lessonDraftProblem({ ...before, title: 'x'.repeat(201) })).toBe(
+      'The title can be at most 200 characters.',
+    );
+    // Counted in code points, as the database counts them.
+    expect(lessonDraftProblem({ ...before, title: '😀'.repeat(200) })).toBeNull();
+  });
+
+  it('says a failed check in words, one sentence per reason', () => {
+    expect(correctionRefusal('22023', 'instruction_like,unsourced_link')).toBe(
+      'Part of it reads like an instruction to a model rather than teaching. ' +
+        'It links to a page none of your sources mention.',
+    );
+    expect(correctionRefusal('22023', 'new_check')).toBe('It did not pass a check (new_check).');
+    expect(correctionRefusal('22023', undefined)).toBeNull();
+    expect(correctionRefusal('55P03', undefined)).toMatch(/Try again in a moment/);
+    expect(correctionRefusal('54000', undefined)).toMatch(/00:00 UTC/);
+    expect(correctionRefusal('XX000', undefined)).toBeNull();
+  });
+
+  it('says why a report was refused', () => {
+    expect(reportRefusal('54000')).toMatch(/as many reports/);
+    expect(reportRefusal('P0002')).toBe('It is no longer in your course.');
+    expect(reportRefusal(undefined)).toBeNull();
+  });
+});

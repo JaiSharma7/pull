@@ -80,6 +80,14 @@ export interface SpeakOptions {
    * new one. A caller that ignores the argument keeps today's behaviour.
    */
   onEnd?: (token: SpeechToken) => void;
+  /**
+   * Speak only with a voice on this device, or not at all. For text that must not leave
+   * the device -- a reader's own study material -- a remote voice would send it to the
+   * browser's vendor. Checked every time the utterance starts, including a resume and a
+   * change of rate, so a voice that disappears between choosing and speaking silences the
+   * text rather than handing it to the browser's default.
+   */
+  localOnly?: boolean;
 }
 
 /**
@@ -151,6 +159,17 @@ function preferredLocalVoice(): SpeechSynthesisVoice | null {
   );
 }
 
+/**
+ * The voice that speaks on this device in the reader's language, or null when there is
+ * none. For text that should not leave the device -- a reader's own study material -- a
+ * caller speaks with this voice and offers nothing without one, rather than letting the
+ * browser choose a remote voice and send the text to its vendor.
+ */
+export function localVoiceURI(): string | null {
+  if (!speechSupported()) return null;
+  return preferredLocalVoice()?.voiceURI ?? null;
+}
+
 function finish(record: Live): void {
   if (record.done) return;
   record.done = true;
@@ -184,6 +203,11 @@ function begin(text: string, from: number, options: SpeakOptions, token: SpeechT
   // matters there: handing the choice back can mean a remote voice, and a remote
   // voice sends the text of the Pull to the browser's vendor.
   const voice = (voiceURI ? findVoice(voiceURI) : null) ?? preferredLocalVoice();
+  if (options.localOnly && !voice?.localService) {
+    // Nothing local to speak it with: say nothing, and tell the caller it has ended.
+    options.onEnd?.(token);
+    return;
+  }
   if (voice) utterance.voice = voice;
 
   const record: Live = {
