@@ -76,6 +76,9 @@ describe('fetchCourses', () => {
     });
     expect(list.courses).toHaveLength(COURSE_LIST_LIMIT);
     expect(list.more).toBe(true);
+    // Exactly as many as the list shows is every course: a full page is not "more".
+    total = COURSE_LIST_LIMIT;
+    expect((await fetchCourses()).more).toBe(false);
     rows = rows.slice(0, 3);
     total = 3;
     expect((await fetchCourses()).more).toBe(false);

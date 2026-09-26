@@ -408,12 +408,21 @@ export function Course({
   const unsaved =
     lesson !== null && current !== null && draftUnsaved(lesson, current.unitTitle, draft);
 
-  const fixFailed = (e: unknown, refusal: string | null) => {
-    setFixError(
-      isOfflineFailure(e)
-        ? 'That has not reached your account — you look offline. Try again when you reconnect.'
-        : (refusal ?? asSentence(e instanceof Error ? e.message : String(e))),
-    );
+  /**
+   * A change that failed is said beside the form it came from while its lesson is on screen.
+   * Once the reader has moved on, the form on screen is another lesson's, and an error there
+   * would be about a change it never asked for while nothing said this one failed -- so it
+   * is said in the notice instead, naming the lesson.
+   */
+  const fixFailed = (lessonId: string, what: string, e: unknown, refusal: string | null) => {
+    const why = isOfflineFailure(e)
+      ? 'That has not reached your account — you look offline. Try again when you reconnect.'
+      : (refusal ?? asSentence(e instanceof Error ? e.message : String(e)));
+    if (onScreen.current === lessonId) {
+      setFixError(why);
+      return;
+    }
+    setNotice({ text: `${what} ${why}`, undo: null });
   };
 
   const report = async (
@@ -423,6 +432,7 @@ export function Course({
     note: string | null,
   ) => {
     if (working || !lesson) return;
+    const from = lesson;
     setWorking(true);
     setFixError(null);
     try {
@@ -438,7 +448,14 @@ export function Course({
       dropLesson(lesson.lessonId);
       setAttempt((n) => n + 1);
     } catch (e: unknown) {
-      fixFailed(e, reportRefusal(sqlState(e)));
+      fixFailed(
+        from.lessonId,
+        kind === 'lesson'
+          ? `Could not report “${from.title}”.`
+          : `Could not report the claim in “${from.title}”.`,
+        e,
+        reportRefusal(sqlState(e)),
+      );
     } finally {
       setWorking(false);
     }
@@ -446,6 +463,7 @@ export function Course({
 
   const withdraw = async () => {
     if (working || !lesson) return;
+    const from = lesson;
     setWorking(true);
     setFixError(null);
     try {
@@ -457,7 +475,12 @@ export function Course({
       dropLesson(lesson.lessonId);
       setAttempt((n) => n + 1);
     } catch (e: unknown) {
-      fixFailed(e, reportRefusal(sqlState(e)));
+      fixFailed(
+        from.lessonId,
+        `Could not withdraw “${from.title}”.`,
+        e,
+        reportRefusal(sqlState(e)),
+      );
     } finally {
       setWorking(false);
     }
@@ -471,6 +494,7 @@ export function Course({
       return;
     }
     const oldId = lesson.lessonId;
+    const oldTitle = lesson.title;
     const unitNo = current.unitNo;
     setWorking(true);
     setFixError(null);
@@ -499,7 +523,12 @@ export function Course({
       });
       setAttempt((n) => n + 1);
     } catch (e: unknown) {
-      fixFailed(e, correctionRefusal(sqlState(e), sqlDetail(e)));
+      fixFailed(
+        oldId,
+        `Your correction to “${oldTitle}” was not saved.`,
+        e,
+        correctionRefusal(sqlState(e), sqlDetail(e)),
+      );
     } finally {
       setWorking(false);
     }
@@ -576,6 +605,9 @@ export function Course({
   };
 
   const toOverview = () => {
+    // A change on its way is waited for, as Done and Skip wait for it: leaving under a
+    // correction being saved asked whether to leave it unsaved, and took its draft with it.
+    if (working) return;
     if (!mayLeave('top')) return;
     leaveLesson();
     setView({ kind: 'overview' });
@@ -890,7 +922,12 @@ export function Course({
     return (
       <section className="stack measure course">
         <div className="course__bar">
-          <button type="button" className="btn btn--plain meta" onClick={toOverview}>
+          <button
+            type="button"
+            className="btn btn--plain meta"
+            aria-disabled={working}
+            onClick={toOverview}
+          >
             ← {title}
           </button>
           <span className="meta">
@@ -1130,7 +1167,12 @@ export function Course({
     return (
       <section className="stack measure course">
         <div className="course__bar">
-          <button type="button" className="btn btn--plain meta" onClick={toOverview}>
+          <button
+            type="button"
+            className="btn btn--plain meta"
+            aria-disabled={working}
+            onClick={toOverview}
+          >
             ← {title}
           </button>
         </div>
