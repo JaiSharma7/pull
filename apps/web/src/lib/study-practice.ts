@@ -172,9 +172,13 @@ export function clozeParts(cloze: string): { before: string; after: string } {
 export interface PlacementAnswer {
   itemId: string;
   lessonId: string | null;
+  /** The first answer's own event, so a retry's grade is never taken for it. */
+  clientEventId: string;
   correct: boolean;
   grading: 'deterministic' | 'self';
   hinted: boolean;
+  /** The server graded it. One that could only be queued has the browser's grade alone. */
+  confirmed: boolean;
 }
 
 /**
@@ -199,7 +203,7 @@ export function knownLessons(
     return (
       list !== undefined &&
       list.length > 0 &&
-      list.every((a) => a.correct && a.grading === 'deterministic' && !a.hinted)
+      list.every((a) => a.confirmed && a.correct && a.grading === 'deterministic' && !a.hinted)
     );
   });
 }

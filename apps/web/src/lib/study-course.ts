@@ -610,14 +610,14 @@ export function passageWindow(
 export type LessonProgressKind = 'lesson_shown' | 'lesson_read' | 'lesson_skipped';
 export type ProgressKind = LessonProgressKind | 'item_shown';
 
-/** One event for `record_study_progress`: a lesson's, or a question's (`item_shown`). */
-export interface ProgressEvent {
-  clientEventId: string;
-  kind: ProgressKind;
-  lessonId?: string;
-  itemId?: string;
-  occurredAt: string;
-}
+/**
+ * One event for `record_study_progress`: a lesson's, naming its lesson, or a question's
+ * (`item_shown`), naming its question -- never both, and never neither, which the queue
+ * would otherwise file under an empty lesson.
+ */
+export type ProgressEvent =
+  | { clientEventId: string; kind: LessonProgressKind; lessonId: string; occurredAt: string }
+  | { clientEventId: string; kind: 'item_shown'; itemId: string; occurredAt: string };
 
 export interface ProgressResult {
   recorded: number;

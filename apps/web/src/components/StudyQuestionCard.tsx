@@ -46,6 +46,8 @@ export function StudyQuestionCard({
   question,
   label,
   onAnswer,
+  onJudging,
+  onHintOpen,
   onNext,
   nextLabel = 'Next',
   renderHint,
@@ -55,6 +57,14 @@ export function StudyQuestionCard({
   /** Where the question sits, e.g. "Question 2 of 3". */
   label: string;
   onAnswer: (answer: SubmittedAnswer) => void;
+  /**
+   * Judging a short answer shows the course's answer before the reader says whether they had
+   * it: called with what they typed when judging starts, and with null once they judge, so
+   * the screen can keep a record that outlives the page of an answer seen and not judged.
+   */
+  onJudging?: (held: { response: string; hinted: boolean } | null) => void;
+  /** The passage behind the question was opened: fetch it, outside a render. */
+  onHintOpen?: () => void;
   onNext: () => void;
   nextLabel?: string;
   /** The passages the question rests on; opening them before answering makes it hinted. */
@@ -72,6 +82,8 @@ export function StudyQuestionCard({
   const [hinted, setHinted] = useState(false);
   const [hintOpen, setHintOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Where a moved step now stands, said aloud: the button keeps focus and its name.
+  const [moved, setMoved] = useState('');
 
   /*
    * Where focus goes once the card has redrawn. The button pressed is gone by then -- Check
@@ -96,36 +108,6 @@ export function StudyQuestionCard({
           : verdictRef.current;
     element?.focus();
   }, [phase, attempt]);
-
-  /*
-   * Judging a short answer shows the course's answer first. A reader who leaves there without
-   * judging has still seen it, and nothing recorded says so: the next answer, typed from what
-   * they just read, would count as proof. So leaving records it as not had -- never proof,
-   * and what makes the next answer to it practice.
-   */
-  const judging = useRef<{
-    question: StudyQuestion;
-    typed: string;
-    answer: typeof onAnswer;
-    hinted: boolean;
-  } | null>(null);
-  useEffect(() => {
-    judging.current =
-      phase.kind === 'judging' ? { question, typed: phase.typed, answer: onAnswer, hinted } : null;
-  }, [phase, question, onAnswer, hinted]);
-  // On leaving only: everything it needs is read from the ref, so nothing else re-runs it.
-  useEffect(
-    () => () => {
-      const left = judging.current;
-      if (left === null) return;
-      judging.current = null;
-      const graded = gradeStudyResponse(left.question, left.typed, 'incorrect');
-      if (graded) {
-        left.answer({ response: left.typed, hinted: left.hinted, graded, selfGrade: 'incorrect' });
-      }
-    },
-    [],
-  );
 
   const finish = (response: string | number[], graded: Graded, selfGrade?: SelfGrade) => {
     const answer: SubmittedAnswer = {
@@ -168,7 +150,17 @@ export function StudyQuestionCard({
           setProblem('Match every item first.');
           return;
         }
-        response = matches as number[];
+        {
+          const chosen = matches as number[];
+          const twice = chosen.find((m, i) => chosen.indexOf(m) !== i);
+          if (twice !== undefined) {
+            setProblem(
+              `Each answer can be used once — “${question.pairs[twice]?.right ?? ''}” is chosen twice.`,
+            );
+            return;
+          }
+          response = chosen;
+        }
         break;
     }
     const graded = gradeStudyResponse(question, response);
@@ -178,6 +170,7 @@ export function StudyQuestionCard({
     }
     if (question.kind === 'short_recall' && typeof response === 'string') {
       focusNext.current = 'judge';
+      onJudging?.({ response, hinted });
       setPhase({ kind: 'judging', typed: response });
       return;
     }
@@ -187,7 +180,10 @@ export function StudyQuestionCard({
   const judge = (self: SelfGrade) => {
     if (phase.kind !== 'judging') return;
     const graded = gradeStudyResponse(question, phase.typed, self);
-    if (graded) finish(phase.typed, graded, self);
+    if (graded) {
+      onJudging?.(null);
+      finish(phase.typed, graded, self);
+    }
   };
 
   const retry = () => {
@@ -224,7 +220,7 @@ export function StudyQuestionCard({
         question.kind === 'comparison' ||
         question.kind === 'application') && (
         <fieldset className="study-q__options" disabled={!answering}>
-          <legend className="sr-only">Choose one</legend>
+          <legend className="sr-only">{question.prompt}</legend>
           {choiceOptions(question).map((option, i) => (
             <label key={`${option}-${i}`} className="study-q__option">
               <input
@@ -245,7 +241,7 @@ export function StudyQuestionCard({
           {clozeParts(question.cloze).before}
           <input
             className="field__input study-q__blank"
-            aria-label="The missing word or words"
+            aria-label={`The missing word or words: ${clozeParts(question.cloze).before}…${clozeParts(question.cloze).after}`}
             value={typed}
             maxLength={1000}
             disabled={!answering}
@@ -281,40 +277,55 @@ export function StudyQuestionCard({
             const text = question.sequence[step] ?? '';
             return (
               <li key={step} className="study-q__step">
-                <span>{text}</span>
-                {answering && (
-                  <span className="study-q__moves">
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      aria-label={`Move “${text}” up`}
-                      aria-disabled={i === 0}
-                      onClick={() => setOrder((o) => moveStep(o, i, -1))}
-                    >
-                      Up
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--plain"
-                      aria-label={`Move “${text}” down`}
-                      aria-disabled={i === order.length - 1}
-                      onClick={() => setOrder((o) => moveStep(o, i, 1))}
-                    >
-                      Down
-                    </button>
-                  </span>
-                )}
+                <span className="study-q__step-row">
+                  <span>{text}</span>
+                  {answering && (
+                    <span className="study-q__moves">
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        aria-label={`Move “${text}” up`}
+                        aria-disabled={i === 0}
+                        onClick={() => {
+                          if (i === 0) return;
+                          setOrder((o) => moveStep(o, i, -1));
+                          setMoved(`“${text}” is now ${i} of ${order.length}.`);
+                        }}
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--plain"
+                        aria-label={`Move “${text}” down`}
+                        aria-disabled={i === order.length - 1}
+                        onClick={() => {
+                          if (i === order.length - 1) return;
+                          setOrder((o) => moveStep(o, i, 1));
+                          setMoved(`“${text}” is now ${i + 2} of ${order.length}.`);
+                        }}
+                      >
+                        Down
+                      </button>
+                    </span>
+                  )}
+                </span>
               </li>
             );
           })}
         </ol>
+      )}
+      {question.kind === 'ordering' && (
+        <p className="sr-only" role="status">
+          {moved}
+        </p>
       )}
 
       {question.kind === 'matching' && (
         <div className="study-q__pairs">
           {question.pairs.map((pair, i) => (
             <div className="field study-q__pair" key={`${pair.left}-${i}`}>
-              <label className="field__label" htmlFor={`${id}-match-${i}`}>
+              <label className="study-q__match-left" htmlFor={`${id}-match-${i}`}>
                 {pair.left}
               </label>
               <select
@@ -359,6 +370,7 @@ export function StudyQuestionCard({
               className="btn btn--plain"
               aria-expanded={hintOpen}
               onClick={() => {
+                if (!hintOpen) onHintOpen?.();
                 setHintOpen((o) => !o);
                 setHinted(true);
               }}
@@ -406,13 +418,20 @@ export function StudyQuestionCard({
                 : 'Right.'
               : 'Not quite.'}
           </p>
+          {/* A right answer that proves nothing says so, rather than reading as one that does. */}
+          {phase.answer.graded.correct &&
+            (phase.answer.graded.grading === 'self' ? (
+              <p className="meta">Practice, not proof: judged by you, not checked by the course.</p>
+            ) : phase.answer.hinted ? (
+              <p className="meta">Practice, not proof: the answer had been in view.</p>
+            ) : null)}
           {!phase.answer.graded.correct && (
             <>
               <p className="meta">The answer</p>
               <Paragraphs text={rightAnswer(question).replace(/\n/g, '\n\n')} />
               {phase.chosen && whyChosenWrong(question, phase.chosen, phase.answer.graded) && (
                 <p>
-                  <span className="meta">Why not “{phase.chosen}”</span>{' '}
+                  <strong>Why not “{phase.chosen}”?</strong>{' '}
                   {whyChosenWrong(question, phase.chosen, phase.answer.graded)}
                 </p>
               )}

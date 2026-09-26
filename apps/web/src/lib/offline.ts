@@ -243,9 +243,9 @@ export function writeScope(write: PendingWrite): string {
     // Per question: a retry is recorded as hinted only when it follows the wrong answer
     // it retried, so a question's answers keep their order. A lesson's events likewise.
     case 'study-progress':
-      return write.event.itemId
+      return write.event.kind === 'item_shown'
         ? `study-item:${write.event.itemId}`
-        : `study-lesson:${write.event.lessonId ?? ''}`;
+        : `study-lesson:${write.event.lessonId}`;
     case 'study-answer':
       return `study-item:${write.event.itemId}`;
   }

@@ -50,7 +50,10 @@ describe('StudyQuestionCard', () => {
       cloze: 'After a week, the ____ group won.',
       distractors: [],
     });
-    expect(html).toMatch(/After a week, the <input[^>]*aria-label="The missing word or words"/);
+    // Named with the sentence it sits in, not only as "the missing word".
+    expect(html).toMatch(
+      /After a week, the <input[^>]*aria-label="The missing word or words: After a week, the … group won\."/,
+    );
   });
 
   it('lets each step move with buttons that name the step', () => {

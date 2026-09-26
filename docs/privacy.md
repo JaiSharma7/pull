@@ -435,6 +435,10 @@ What the app does put on your device, all of it first-party and all of it necess
   The downloaded practice is deleted when you sign out, rather than only being hidden. The
   queued writes wait through a sign-out, to be sent when the same account signs in again,
   and are deleted from the device when you delete the account.
+- **A short answer you were judging**, in `localStorage`, from when the course's answer is
+  shown until you say whether you had it. If the page closes first, it is sent — as not had —
+  before your next answer, so an answer you had seen is never taken as one you remembered.
+  It is kept under your own id, and deleted with your account.
 - **The app itself**, cached by a service worker.
 
 Clearing your browser's site data removes all of it, and signs you out.

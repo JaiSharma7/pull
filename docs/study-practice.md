@@ -75,7 +75,9 @@ question, in any of its versions, was recorded in the half hour before: the feed
 one, and the course's answer the other was judged against, showed the right one. A hinted
 answer is recorded and never proof. So a retry is practice, whatever order its answers reach
 the server in. A reader who leaves while judging their own answer has seen the course's; it
-is recorded as not had, so the next answer to it is practice too.
+is recorded as not had, so the next answer to it is practice too -- whether they leave inside
+the app or the page closes: the answer is held on the device when judging starts, let go when
+they judge, and otherwise sent, as not had, before their next answer.
 
 **Proof** is `study_answer_proves_recall`, unchanged: right, unhinted, graded
 deterministically, to a model-written question that was validated when it was answered and
@@ -88,13 +90,18 @@ duplicate arrives.
 - **After a lesson.** Done on a lesson opens its practice questions -- those the reader has
   not yet shown they remember -- before the session goes on. Leaving them goes on.
 - **Checking what you know.** A course nobody has opened offers its placement questions
-  first. A lesson whose every placement question was answered right the first time, graded
-  by the rule and without looking, is suggested as known; the reader chooses whether to skip
-  the suggested lessons, and a skip is an ordinary `lesson_skipped`. A retry never counts.
+  first, once: after they have been shown, it does not offer them again. A lesson whose every
+  placement question was answered right the first time, graded by the rule and without
+  looking, is suggested as known -- by the server's grade, which the suggestion waits for; an
+  answer that could only be queued has none, and counts for nothing. The reader chooses
+  whether to skip the suggested lessons, and a skip is an ordinary `lesson_skipped`. A retry
+  never counts, and nor does a question reported or withdrawn during the check.
 - **Review.** The course's review questions, not yet demonstrated first, from the course page
   or the end of a session.
 - **Each question** says whether it was right in words, shows the right answer and why a
-  chosen wrong option was wrong, then the question's explanation, and offers another try.
+  chosen wrong option was wrong, then the question's explanation, and offers another try. A
+  right answer that proves nothing -- hinted, or judged by the reader -- says it is practice,
+  not proof.
   It can show the passage it rests on (which makes the answer hinted), and it can be reported
   or withdrawn, as a lesson can.
 - **Shown.** A question on screen is recorded as `item_shown` once, which is exposure and
@@ -107,10 +114,13 @@ into the app's offline queue (`apps/web/src/lib/offline.ts`), and the shell send
 connection returns (`replay.ts`), one event per call, in order per question and per lesson,
 so a retry still follows the wrong answer it retried -- and is marked hinted when it is sent,
 so it is practice even if it arrives first. The feedback the reader saw came from the
-browser's grade; the server's is recorded. An event refused with `limit` stays queued, and the
-rest of that kind wait for the next drain rather than each being refused in turn; one refused
-for good is dropped. An event that lost a deadlock or a serialization race (40P01, 40001) is
-queued, not dropped. Queued answers hold what the reader typed; they wait through a sign-out
+browser's grade; the server's is recorded. An event refused with `limit` stays queued -- the
+screen says the day's record is full, not that the connection is gone -- and the rest of that
+kind wait for the next drain rather than each being refused in turn; one refused for good is
+dropped. Every other failure is queued, as the drain keeps it: a lost race (40P01, 40001), a
+lock waited on too long (57014, 55P03), a request that went without its session (28000).
+Only a refusal a retry cannot change (`isPermanentFailure`) is given up. Practice after a
+lesson is skipped offline, where its questions cannot open; they are there next time. Queued answers hold what the reader typed; they wait through a sign-out
 for the same reader, and are cleared from the device when the account is deleted.
 
 ## Limits and errors

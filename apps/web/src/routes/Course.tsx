@@ -663,9 +663,11 @@ export function Course({
         ? { ...view, index: view.index + 1 }
         : { kind: 'stop', plan: view.plan };
     // A lesson read is practised before the session goes on: its own questions, those the
-    // reader has not yet shown they remember.
+    // reader has not yet shown they remember. Not offline, where the questions cannot open
+    // and practice was a screen that loaded for seconds and then only said so: the session
+    // goes on, and the questions are there next time.
     const practice =
-      kind === 'lesson_read' && shown
+      kind === 'lesson_read' && shown && navigator.onLine
         ? questions
             .filter(
               (q) =>
@@ -682,7 +684,7 @@ export function Course({
             mode: 'practice',
             itemIds: practice,
             heading: shown ? `Practise “${shown.title}”` : 'Practise',
-            doneLabel: onward.kind === 'session' ? 'Next lesson' : 'Finish the session',
+            doneLabel: onward.kind === 'session' ? 'Next lesson' : 'Finish the sitting',
             then: onward,
           }
         : onward,
@@ -1051,8 +1053,8 @@ export function Course({
               You may already know {known.length === 1 ? 'one lesson' : `${known.length} lessons`}.
             </h1>
             <p>
-              You answered every check question for these without help. Skipping them starts you
-              further in; they stay in the outline if you want them later.
+              You answered every check question for these without help. Skipping them leaves them
+              out of your sittings; they stay in the outline if you want them later.
             </p>
             <ul className="course__covered">
               {known.map((l) => (
@@ -1358,6 +1360,11 @@ export function Course({
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
   const reviewCount = questionsFor('review').length;
   const placementCount = questionsFor('placement').length;
+  // Offered once: after a check has run, its questions are no longer unseen, and answering
+  // them changes no lesson's state -- so the lessons alone would offer it again and again.
+  const placementFresh =
+    placementCount > 0 &&
+    questions.filter((q) => q.purpose === 'placement').every((q) => q.state === 'not_seen');
 
   if (view.kind === 'stop') {
     // What this sitting read, from the lessons it planned and the reads it recorded -- not
@@ -1522,7 +1529,7 @@ export function Course({
                     </button>
                   )
                 )}
-                {untouched && placementCount > 0 && (
+                {untouched && placementFresh && (
                   <button type="button" className="btn" onClick={() => startPractice('placement')}>
                     Check what you already know first
                   </button>
@@ -1533,7 +1540,7 @@ export function Course({
                   </button>
                 )}
               </div>
-              {untouched && placementCount > 0 && (
+              {untouched && placementFresh && (
                 <p>
                   {placementCount === 1 ? 'One question' : `${placementCount} questions`}, to find
                   lessons you could skip. Nothing is skipped unless you choose to.

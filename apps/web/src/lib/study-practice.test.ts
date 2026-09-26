@@ -155,46 +155,42 @@ describe('grading, as the server grades', () => {
 });
 
 describe('placement', () => {
+  const a = (
+    itemId: string,
+    lessonId: string | null,
+    over: Partial<{
+      correct: boolean;
+      grading: 'deterministic' | 'self';
+      hinted: boolean;
+      confirmed: boolean;
+    }> = {},
+  ) => ({
+    itemId,
+    lessonId,
+    clientEventId: `e-${itemId}`,
+    correct: true,
+    grading: 'deterministic' as const,
+    hinted: false,
+    confirmed: true,
+    ...over,
+  });
+
   it('suggests only lessons whose every placement question was checked right, unaided', () => {
     const answers = [
-      {
-        itemId: 'p1',
-        lessonId: 'l1',
-        correct: true,
-        grading: 'deterministic' as const,
-        hinted: false,
-      },
-      {
-        itemId: 'p2',
-        lessonId: 'l1',
-        correct: true,
-        grading: 'deterministic' as const,
-        hinted: false,
-      },
-      { itemId: 'p3', lessonId: 'l2', correct: true, grading: 'self' as const, hinted: false },
-      {
-        itemId: 'p4',
-        lessonId: 'l3',
-        correct: true,
-        grading: 'deterministic' as const,
-        hinted: true,
-      },
-      {
-        itemId: 'p5',
-        lessonId: 'l4',
-        correct: false,
-        grading: 'deterministic' as const,
-        hinted: false,
-      },
-      {
-        itemId: 'p6',
-        lessonId: null,
-        correct: true,
-        grading: 'deterministic' as const,
-        hinted: false,
-      },
+      a('p1', 'l1'),
+      a('p2', 'l1'),
+      a('p3', 'l2', { grading: 'self' }),
+      a('p4', 'l3', { hinted: true }),
+      a('p5', 'l4', { correct: false }),
+      a('p6', null),
     ];
     expect(knownLessons(answers, ['l4', 'l3', 'l2', 'l1', 'l5'])).toEqual(['l1']);
+  });
+
+  it('counts an answer only once the server has graded it', () => {
+    // Queued offline, or still on its way: the browser's grade alone suggests nothing.
+    expect(knownLessons([a('p1', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
+    expect(knownLessons([a('p1', 'l1'), a('p2', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
   });
 });
 
