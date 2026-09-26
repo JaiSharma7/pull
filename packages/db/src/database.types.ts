@@ -3756,6 +3756,7 @@ export type Database = {
           held_back: boolean | null
           latest_generation_id: string | null
           latest_job_status: Database["public"]["Enums"]["job_status"] | null
+          latest_settled: boolean | null
           lesson_count: number | null
           lessons_read_count: number | null
           newer_generation_held_back: boolean | null

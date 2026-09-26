@@ -57,7 +57,7 @@ again from the newest version of each source in its bundle, for the course's own
   then refused with 22023 and DETAIL `too_large`, however often it is asked, until the
   reader saves a shorter version or deletes a source.
 - It is refused with 55000 and DETAIL `preparing` while a generation of the course is still
-  queued or running.
+  queued or running, or saved and awaiting its validation (`awaiting_validation`, below).
 - It is refused with 55000 and DETAIL `unchanged` when a finished generation already used
   exactly these versions: while the prompt, schema and model are unchanged, the stage cache
   would return the same course and the reader would pay a job for it. That includes a
@@ -70,10 +70,11 @@ again from the newest version of each source in its bundle, for the course's own
   nothing about the new one.
 
 `study_course_overview.update_available` says when a bundle source has a newer version than
-the newest finished generation used -- the newest, not the current, so it never offers a
-regeneration that would be refused as unchanged. It does not know whether one is already
-being prepared, or whether the newest versions pass the size limit: offer preparation only
-when `preparing` is false, and say `too_large` in words. It is also false when no
+the newest generation finished or awaiting its validation used -- the newest, not the
+current, so it never offers a regeneration that would be refused as unchanged. It does not
+know whether one is queued or running, or whether the newest versions pass the size limit:
+offer preparation only when `preparing` and `awaiting_validation` are both false, and say
+`too_large` in words. It is also false when no
 generation has finished -- the first failed before it was persisted, or a source deletion
 took them all -- and a regeneration is then accepted, so offer preparation whenever
 `generation_id` is null and nothing is preparing. `newer_generation_held_back` says when
@@ -154,7 +155,8 @@ give structure and state; the lessons' and questions' own text is read from the
 | `newer_generation_held_back`                      | The newest finished generation is not current: validation passed no lesson in it          |
 | `held_back`                                       | There is a current generation, and validation passed no lesson in it                      |
 | `awaiting_validation`                             | The newest generation is saved and waits for the validation sweep, for up to a day        |
-| `update_available`                                | A bundle source has a newer version than the newest finished generation used              |
+| `latest_settled`                                  | The newest generation is saved and validation settled it, whatever its job's status       |
+| `update_available`                                | A bundle source has a newer version than the newest generation finished or awaiting used  |
 | `lesson_count`, `lessons_read_count`              | Validated lessons of the current generation, and how many were read (skipped is not read) |
 | `question_count`                                  | Validated questions of the current generation                                             |
 | `claim_count`, `claims_demonstrated_count`        | Validated claims, and those whose recall the reader has demonstrated                      |
@@ -172,7 +174,10 @@ the job has ended, the course is saved (`assembled_at`, as the sweep keys on), i
 pending -- for a day, after which one validation keeps refusing stops standing in the
 reader's way. A screen shows such a course as on its way rather than failed;
 `update_available` is judged against it, so it is not offered again; and preparing the
-course again is refused with `preparing` while it awaits, as while a job is queued or running
+course again is refused with `preparing` while it awaits, as while a job is queued or running.
+The sweep takes courses within their day first, so ones validation keeps refusing do not hold
+up the rest; and `latest_settled` says when a newest generation whose job failed was saved and
+settled after all, so a screen says it was held back rather than that it failed
 (`20260925190000_study_course_awaiting_validation.sql`).
 
 **`study_course_outline(course)`**: the current generation's validated lessons in course

@@ -683,7 +683,8 @@ begin
   -- Saved, the job still running: preparing, and not yet awaiting validation.
   perform pg_temp.become_reader(reader_a);
   if not exists (select 1 from public.study_course_overview
-                 where course_id = course_a and preparing and not awaiting_validation) then
+                 where course_id = course_a and preparing and not awaiting_validation
+                   and not latest_settled) then
     raise exception 'a saved generation whose job runs on did not read as preparing: %',
       (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
   end if;
@@ -708,15 +709,37 @@ begin
       raise exception 'a regeneration refused while one awaits said %', d;
     end if;
   end;
-  -- For a day: one validation keeps refusing stops standing in the reader's way.
+  -- A job cancelled after saving is ended too: the course still awaits its validation.
   perform pg_temp.as_owner();
-  update public.study_generations set created_at = now() - interval '25 hours' where id = gen_2;
+  update public.generation_jobs set status = 'cancelled' where id = job_2;
   perform pg_temp.become_reader(reader_a);
-  if exists (select 1 from public.study_course_overview
-             where course_id = course_a and awaiting_validation) then
-    raise exception 'a generation awaited its validation for more than a day';
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and awaiting_validation) then
+    raise exception 'a saved generation whose job was cancelled did not await validation';
   end if;
   perform pg_temp.as_owner();
+  update public.generation_jobs set status = 'failed' where id = job_2;
+  perform pg_temp.become_reader(reader_a);
+  -- For a day: one validation keeps refusing stops standing in the reader's way.
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() - interval '2 days' where id = gen_1;
+  update public.study_generations set created_at = now() - interval '25 hours' where id = gen_2;
+  perform pg_temp.become_reader(reader_a);
+  if not exists (select 1 from public.study_course_overview
+                 where course_id = course_a and latest_generation_id = gen_2
+                   and not awaiting_validation and update_available) then
+    raise exception 'a generation awaited its validation for more than a day: %',
+      (select to_jsonb(o) from public.study_course_overview o where o.course_id = course_a);
+  end if;
+  -- And preparing it again is accepted: probed, and undone by the probe's own exception.
+  begin
+    perform public.regenerate_study_course(course_a, extensions.gen_random_uuid(), true);
+    raise exception using errcode = 'P0001', message = 'probe accepted';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe accepted' then raise; end if;
+  end;
+  perform pg_temp.as_owner();
+  update public.study_generations set created_at = now() - interval '1 hour' where id = gen_1;
   update public.study_generations set created_at = now() where id = gen_2;
 
   perform pg_temp.become_worker();
@@ -726,6 +749,7 @@ begin
   perform pg_temp.become_reader(reader_a);
   if not exists (select 1 from public.study_course_overview
                  where course_id = course_a and generation_id = gen_2 and not preparing
+                   and latest_settled
                    and not update_available and lessons_read_count = 0
                    and claims_demonstrated_count = 0) then
     raise exception 'the regenerated course is not current, or carried progress over: %',

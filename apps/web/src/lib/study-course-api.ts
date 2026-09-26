@@ -23,25 +23,28 @@ import {
 } from './study-course.js';
 import { supabase } from './supabase.js';
 
-/** How many courses the list shows: the newest. */
-export const COURSE_LIST_LIMIT = 200;
+/**
+ * How many courses the list shows: the newest. The API answers at most 100 rows whatever a
+ * request asks (`max_rows` in supabase/config.toml), so the list is that long.
+ */
+export const COURSE_LIST_LIMIT = 100;
 
 /**
- * The reader's courses, newest first, and whether there are more than the list shows -- one
- * more is asked for, so a long list says it was cut rather than silently losing its end.
+ * The reader's courses, newest first, and whether there are more than the list shows --
+ * counted, since a longer request would be cut to the same 100 rows without a word.
  */
 export async function fetchCourses(
   signal?: AbortSignal,
 ): Promise<{ courses: CourseSummary[]; more: boolean }> {
   const request = supabase
     .from('study_course_overview')
-    .select('*')
+    .select('*', { count: 'exact' })
     .order('created_at', { ascending: false })
-    .limit(COURSE_LIST_LIMIT + 1);
-  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+    .limit(COURSE_LIST_LIMIT);
+  const { data, error, count } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw rpcError(error);
   const courses = shapeCourseSummaries(data);
-  return { courses: courses.slice(0, COURSE_LIST_LIMIT), more: courses.length > COURSE_LIST_LIMIT };
+  return { courses, more: (count ?? courses.length) > courses.length };
 }
 
 /** A course id's shape. Anything else is no course, not a request Postgres refuses. */

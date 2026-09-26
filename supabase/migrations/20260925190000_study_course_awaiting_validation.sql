@@ -19,6 +19,11 @@
 --    version on its way is not offered again.
 -- 3. `study_enqueue_course` refuses to prepare a course again while one awaits, with DETAIL
 --    `preparing`, as it does while one is queued or running.
+-- 4. The sweep takes courses awaiting within their day first. It retries without end, oldest
+--    first, five a run, so five courses validation always refuses -- anywhere -- took every
+--    run, and every other course waited out its day and was offered as failed.
+-- 5. `latest_settled` says the newest generation was saved and validation settled it, so a
+--    screen does not call it both failed and held back.
 
 create function public.study_generation_awaiting_validation(p_generation_id uuid)
 returns boolean
@@ -100,7 +105,12 @@ select
    where cl.generation_id = cur.id and cl.status = 'validated'
      and cl.id in (select proven.claim_id from proven))::int as claims_demonstrated_count,
   coalesce(cur.id is not null and public.study_generation_rank(cur.id) < 2, false) as held_back,
-  public.study_generation_awaiting_validation(latest.generation_id) as awaiting_validation
+  public.study_generation_awaiting_validation(latest.generation_id) as awaiting_validation,
+  -- The newest generation is saved and validation has settled it: whatever its job's
+  -- status, it was not lost, and `newer_generation_held_back` or the current generation say
+  -- what became of it.
+  coalesce(latest.assembled_at is not null and latest.text_status <> 'pending', false)
+    as latest_settled
 from public.study_courses c
 left join lateral (
   select g.* from public.study_generations g
@@ -122,13 +132,54 @@ left join lateral (
   limit 1
 ) as saved on true
 left join lateral (
-  select g.id as generation_id, j.status as job_status
+  select g.id as generation_id, j.status as job_status, g.assembled_at, g.text_status
   from public.study_generations g
   join public.generation_jobs j on j.id = g.job_id
   where g.course_id = c.id
   order by g.created_at desc, g.id desc
   limit 1
 ) as latest on true;
+
+-- ------------------------------------------------------------------ 4. the sweep
+
+/* As 20260925100000, taking the courses awaiting within their day first. */
+create or replace function public.validate_stranded_study_courses(
+  p_older_than interval default interval '10 minutes',
+  p_limit integer default 5
+)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  stranded uuid;
+  done     integer := 0;
+begin
+  for stranded in
+    select g.job_id
+    from public.study_generations g
+    join public.generation_jobs j on j.id = g.job_id
+    where g.text_status = 'pending'
+      and g.assembled_at is not null
+      and g.created_at < now() - p_older_than
+      and j.status not in ('queued', 'running')
+    order by (g.created_at > now() - interval '1 day') desc, g.created_at
+    limit greatest(coalesce(p_limit, 5), 0)
+  loop
+    begin
+      -- Taken without waiting: a course a deletion, a correction or the worker holds is
+      -- left for the next run rather than waited on while this run holds the ones before.
+      perform 1 from public.study_generations g where g.job_id = stranded for update nowait;
+      perform public.validate_study_course(stranded);
+      done := done + 1;
+    exception when others then
+      raise warning 'validate_stranded_study_courses: % skipped: %', stranded, sqlerrm;
+    end;
+  end loop;
+  return done;
+end
+$fn$;
 
 -- ------------------------------------------------------------------ 3. preparing again
 

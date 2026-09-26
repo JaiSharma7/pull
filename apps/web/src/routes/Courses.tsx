@@ -129,9 +129,11 @@ export function Courses({
               delete courses you are done with to see them here.
             </p>
           )}
-          <p className="meta">
-            That is every course. They are private to you, and new ones are made in Studio.
-          </p>
+          {!more && (
+            <p className="meta">
+              That is every course. They are private to you, and new ones are made in Studio.
+            </p>
+          )}
         </>
       )}
     </section>

@@ -54,6 +54,7 @@ const overviewRow = {
   newer_generation_held_back: false,
   held_back: false,
   awaiting_validation: false,
+  latest_settled: false,
   update_available: true,
   lesson_count: 3,
   lessons_read_count: 1,
@@ -137,8 +138,14 @@ describe('courseStatus and courseTitle', () => {
   });
   it('is preparing before the first generation finishes, including validation', () => {
     expect(courseStatus(course({ generationId: null, preparing: true }))).toBe('preparing');
+    expect(
+      courseStatus(
+        course({ generationId: null, latestJobStatus: 'succeeded', awaitingValidation: true }),
+      ),
+    ).toBe('preparing');
+    // Past its day, a course validation never settled is not polled for ever.
     expect(courseStatus(course({ generationId: null, latestJobStatus: 'succeeded' }))).toBe(
-      'preparing',
+      'failed',
     );
   });
   it('failed when the only generation failed or was cancelled; empty when there is none', () => {
@@ -170,6 +177,8 @@ describe('courseStatus and courseTitle', () => {
     const failed = { ...newer, awaitingValidation: false };
     expect(newerPreparationComing(failed)).toBe(false);
     expect(newerPreparationFailed(failed)).toBe(true);
+    // Saved and settled -- held back by validation -- is said as that, not as a failure.
+    expect(newerPreparationFailed({ ...failed, latestSettled: true })).toBe(false);
     expect(newerPreparationComing(course({ preparing: true, latestGenerationId: 'g2' }))).toBe(
       true,
     );
@@ -195,8 +204,14 @@ describe('courseStatus and courseTitle', () => {
 describe('what is on its way', () => {
   it('looks again while a job runs, or while a finished one awaits validation', () => {
     expect(awaitingPreparation(course({ preparing: true }))).toBe(true);
+    expect(
+      awaitingPreparation(
+        course({ generationId: null, latestJobStatus: 'succeeded', awaitingValidation: true }),
+      ),
+    ).toBe(true);
+    // A finished job whose course was never settled, past its day, is not looked for again.
     expect(awaitingPreparation(course({ generationId: null, latestJobStatus: 'succeeded' }))).toBe(
-      true,
+      false,
     );
     expect(awaitingPreparation(course())).toBe(false);
     expect(awaitingPreparation(course({ generationId: null, latestJobStatus: 'failed' }))).toBe(

@@ -51,6 +51,8 @@ export interface CourseSummary {
    * validation step gave up.
    */
   awaitingValidation: boolean;
+  /** The newest generation was saved and validation settled it, whatever its job said. */
+  latestSettled: boolean;
   updateAvailable: boolean;
   lessonCount: number;
   lessonsReadCount: number;
@@ -151,6 +153,7 @@ export function shapeCourseSummary(row: unknown): CourseSummary | null {
     newerGenerationHeldBack: bool(row.newer_generation_held_back),
     heldBack: bool(row.held_back),
     awaitingValidation: bool(row.awaiting_validation),
+    latestSettled: bool(row.latest_settled),
     updateAvailable: bool(row.update_available),
     lessonCount: int(row.lesson_count),
     lessonsReadCount: int(row.lessons_read_count),
@@ -276,11 +279,9 @@ export type CourseStatus =
 export function courseStatus(course: CourseSummary): CourseStatus {
   if (course.generationId) return 'ready';
   if (course.preparing || course.awaitingValidation) return 'preparing';
-  if (course.latestJobStatus === 'failed' || course.latestJobStatus === 'cancelled') {
-    return 'failed';
-  }
-  // The job finished and its validation has not yet: the sweep settles it within minutes.
-  if (course.latestJobStatus === 'succeeded') return 'preparing';
+  // A job that ended with nothing to read -- failed, cancelled, or finished with a course
+  // validation never settled within its day -- has failed, and can be prepared again.
+  if (course.latestJobStatus !== null) return 'failed';
   return 'empty';
 }
 
@@ -309,6 +310,8 @@ export function newerPreparationFailed(course: CourseSummary): boolean {
     course.latestGenerationId !== course.generationId &&
     !course.preparing &&
     !course.awaitingValidation &&
+    // Saved and settled is not lost: validation held it back, and that is said instead.
+    !course.latestSettled &&
     (course.latestJobStatus === 'failed' || course.latestJobStatus === 'cancelled')
   );
 }
