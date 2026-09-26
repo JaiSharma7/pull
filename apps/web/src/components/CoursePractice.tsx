@@ -47,6 +47,7 @@ const FINISH_WAIT_MS = 8000;
 
 export function CoursePractice({
   userId,
+  courseId,
   itemIds,
   mode,
   heading,
@@ -55,6 +56,8 @@ export function CoursePractice({
   onLeave,
 }: {
   userId: string;
+  /** The course the run is in: its answers keep their order in the offline queue. */
+  courseId: string;
   itemIds: readonly string[];
   mode: PracticeMode;
   heading: string;
@@ -228,7 +231,7 @@ export function CoursePractice({
       hinted: sub.hinted,
       ...(sub.selfGrade ? { selfGrade: sub.selfGrade } : {}),
     };
-    if (held) holdJudging(userId, event);
+    if (held) holdJudging(userId, event, courseId);
     if (!first.current.has(q.itemId)) {
       first.current.set(
         q.itemId,
@@ -239,7 +242,7 @@ export function CoursePractice({
         ),
       );
     }
-    const sent = sendAnswer(userId, event).then(({ sent, result }) => {
+    const sent = sendAnswer(userId, event, courseId).then(({ sent, result }) => {
       if (held) releaseJudging(userId, held);
       // The server's grade is the one kept, and a first answer counts only once it has one --
       // its own, not a retry's.
@@ -256,7 +259,12 @@ export function CoursePractice({
               ? 'This question is no longer in your course, so the answer was not kept.'
               : sent === 'failed'
                 ? 'This answer could not be saved.'
-                : null;
+                : // The screen said "Right"; the server says it follows an answer that showed
+                  // this one's, on the same idea, so it counts toward nothing. Said, or the
+                  // reader cannot tell it from one that did.
+                  result?.correct && result.hinted && !sub.hinted
+                  ? 'Right, but you saw the answer on this idea less than half an hour ago, so it is practice, not proof.'
+                  : null;
       if (said) setNote(said);
     });
     sending.current.add(sent);
@@ -420,15 +428,20 @@ export function CoursePractice({
           // Judged: `answer` takes the hold over.
           if (held === null) return;
           heldId.current = mutationId();
-          holdJudging(userId, {
-            clientEventId: heldId.current,
-            itemId: current.itemId,
-            response: held.response,
-            selfGrade: 'incorrect',
-            ...(held.hinted ? { hinted: true } : {}),
-          });
+          holdJudging(
+            userId,
+            {
+              clientEventId: heldId.current,
+              itemId: current.itemId,
+              response: held.response,
+              selfGrade: 'incorrect',
+              ...(held.hinted ? { hinted: true } : {}),
+            },
+            courseId,
+          );
         }}
         nextBusy={finishing}
+        purposeLabel={mode === 'review' ? 'Review' : mode === 'practice' ? 'Practice' : undefined}
         onHintOpen={() => loadHint(current)}
         onNext={next}
         nextLabel={index + 1 < questions.length ? 'Next question' : doneLabel}

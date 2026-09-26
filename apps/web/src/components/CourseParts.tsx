@@ -8,7 +8,8 @@
  */
 import type { ReactNode } from 'react';
 import {
-  lessonStateLabel,
+  lessonLabel,
+  toRevisit,
   minutesLabel,
   type CourseSummary,
   type LessonClaim,
@@ -53,21 +54,27 @@ export function CourseOutline({
           </h2>
           <ol className="course__lessons">
             {unit.lessons.map((lesson) => {
-              const label = lessonStateLabel(lesson.state);
+              const label = lessonLabel(lesson);
               const current = lesson.lessonId === currentLessonId;
+              const stateId = `lesson-state-${lesson.lessonId}`;
               return (
                 <li key={lesson.lessonId} className="course__lesson">
                   <button
                     type="button"
                     className="btn btn--plain course__lesson-title"
                     aria-current={current ? 'step' : undefined}
+                    // Why it is left out or back is part of what the lesson is.
+                    aria-describedby={stateId}
                     onClick={() => onOpen(lesson)}
                   >
                     {lesson.title}
                   </button>
                   <span
+                    id={stateId}
                     className={`course__lesson-state${
-                      lesson.state === 'read' ? ' course__lesson-state--read' : ''
+                      lesson.state === 'read' && !toRevisit(lesson)
+                        ? ' course__lesson-state--read'
+                        : ''
                     }`}
                   >
                     {current ? 'Next · ' : ''}
@@ -137,7 +144,16 @@ export function LessonSources({
 }
 
 /** One lesson's text. Where it sits in the session is said by the screen around it. */
-export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitTitle: string }) {
+export function LessonBody({
+  lesson,
+  unitTitle,
+  note = null,
+}: {
+  lesson: LessonContent;
+  unitTitle: string;
+  /** Why this lesson is on screen, said under its heading, where a reader starts. */
+  note?: string | null;
+}) {
   return (
     <article className="course__lesson-body" aria-labelledby="course-lesson-title">
       <p className="meta">
@@ -145,9 +161,19 @@ export function LessonBody({ lesson, unitTitle }: { lesson: LessonContent; unitT
         {minutesLabel(lesson.minutes)}
       </p>
       {/* Focused when the lesson opens, so a keyboard or screen-reader reader starts here. */}
-      <h1 id="course-lesson-title" className="course__lesson-heading" tabIndex={-1}>
+      <h1
+        id="course-lesson-title"
+        className="course__lesson-heading"
+        tabIndex={-1}
+        aria-describedby={note ? 'course-lesson-note' : undefined}
+      >
         {lesson.title}
       </h1>
+      {note && (
+        <p className="meta" id="course-lesson-note">
+          {note}
+        </p>
+      )}
       <p className="course__objective">
         <span className="meta">By the end you should be able to</span> {lesson.objective}
       </p>
@@ -176,6 +202,7 @@ export function StoppingPoint({
   covered,
   remaining,
   skipped = 0,
+  known = 0,
   onDone,
   onContinue,
 }: {
@@ -183,6 +210,8 @@ export function StoppingPoint({
   remaining: number;
   /** Lessons of the course the reader skipped, which the course page offers again. */
   skipped?: number;
+  /** Lessons sittings leave out because the reader has shown they know them. */
+  known?: number;
   onDone: () => void;
   onContinue: (() => void) | null;
 }) {
@@ -215,7 +244,13 @@ export function StoppingPoint({
             ? `You have been through every lesson. ${
                 skipped === 1 ? 'The one you skipped is' : `The ${skipped} you skipped are`
               } on the course page when you want ${skipped === 1 ? 'it' : 'them'}.`
-            : 'That was the last lesson of the course.'}
+            : known > 0
+              ? `That was the last lesson you had left. ${
+                  known === 1
+                    ? 'The other one you have shown you know; it is'
+                    : `The other ${known} you have shown you know; they are`
+                } in the outline.`
+              : 'That was the last lesson of the course.'}
       </p>
       <div className="course__actions">
         <button type="button" className="btn btn--primary" onClick={onDone}>

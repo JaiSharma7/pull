@@ -21,6 +21,10 @@ export interface QuestionEntry {
   kind: StudyKind;
   state: QuestionState;
   authoredBy: 'model' | 'reader';
+  /** When the claims it tests fall due for review; null before it is answered. */
+  dueAt: string | null;
+  /** Due now, by the server's clock -- which timed the lapse -- not the device's. */
+  due: boolean;
 }
 
 /** A question's own text, from `study_visible_items`. */
@@ -63,6 +67,8 @@ export function shapeQuestionEntries(data: unknown): QuestionEntry[] {
         kind,
         state: oneOf(r.state, STATES, 'not_seen'),
         authoredBy: r.authored_by === 'reader' ? 'reader' : 'model',
+        dueAt: nullableStr(r.due_at),
+        due: r.due === true,
       } satisfies QuestionEntry;
     })
     .filter((q): q is QuestionEntry => q !== null);
@@ -230,33 +236,6 @@ export function placementOffered(
   );
 }
 
-/**
- * The lessons a placement check suggests the reader already knows: every placement question
- * of the lesson answered right, graded by the rule rather than by the reader, and without a
- * hint. A lesson with no placement question is never suggested -- nothing was checked -- and
- * the reader decides whether to skip what is suggested.
- */
-export function knownLessons(
-  answers: readonly PlacementAnswer[],
-  lessonOrder: readonly string[],
-): string[] {
-  const byLesson = new Map<string, PlacementAnswer[]>();
-  for (const a of answers) {
-    if (!a.lessonId) continue;
-    const list = byLesson.get(a.lessonId) ?? [];
-    list.push(a);
-    byLesson.set(a.lessonId, list);
-  }
-  return lessonOrder.filter((id) => {
-    const list = byLesson.get(id);
-    return (
-      list !== undefined &&
-      list.length > 0 &&
-      list.every((a) => a.confirmed && a.correct && a.grading === 'deterministic' && !a.hinted)
-    );
-  });
-}
-
 // ------------------------------------------------------------------ recording
 
 export interface AnswerEvent {
@@ -302,4 +281,52 @@ export function shapeAnswersRecorded(data: unknown): AnswersRecorded {
       provesRecall: x.provesRecall === true,
     })),
   };
+}
+
+// ------------------------------------------------------------------ delayed review
+
+/**
+ * The questions due for review, soonest-due first: those whose claims the reader last got
+ * wrong come due half an hour on, when an answer can clear the lapse; the rest when their
+ * claims' recall has fallen to 0.9. A question never answered is not due -- it has nothing
+ * to review yet -- and nor is the reader's own version, which can clear nothing.
+ */
+export function dueQuestions(entries: readonly QuestionEntry[]): QuestionEntry[] {
+  const at = (q: QuestionEntry) => (q.dueAt === null ? Infinity : Date.parse(q.dueAt));
+  return entries.filter((q) => q.due).sort((a, b) => at(a) - at(b));
+}
+
+/** A course's questions of one purpose, those not yet demonstrated first. */
+export function questionsOf(
+  entries: readonly QuestionEntry[],
+  purpose: QuestionPurpose,
+): QuestionEntry[] {
+  const of = entries.filter((q) => q.purpose === purpose);
+  return [
+    ...of.filter((q) => q.state !== 'recall_demonstrated'),
+    ...of.filter((q) => q.state === 'recall_demonstrated'),
+  ];
+}
+
+/**
+ * What a review asks: the questions due now, and, when none is, the course's review
+ * questions.
+ */
+export function reviewQueue(entries: readonly QuestionEntry[]): string[] {
+  const due = dueQuestions(entries);
+  return (due.length > 0 ? due : questionsOf(entries, 'review')).map((q) => q.itemId);
+}
+
+/**
+ * What a lesson just read is practised with: its questions that are due -- a lapse on it can
+ * be cleared here, rather than only from the review -- then its practice questions the reader
+ * has not yet shown they remember.
+ */
+export function lessonPractice(entries: readonly QuestionEntry[], lessonId: string): string[] {
+  const mine = entries.filter((q) => q.lessonId === lessonId);
+  const due = dueQuestions(mine);
+  const fresh = mine.filter(
+    (q) => q.purpose === 'practice' && q.state !== 'recall_demonstrated' && !q.due,
+  );
+  return [...due, ...fresh].map((q) => q.itemId);
 }

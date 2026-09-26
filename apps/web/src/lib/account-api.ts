@@ -271,6 +271,9 @@ const EXPORTED: { table: string; column: string; key: string; page?: number }[] 
   { table: 'study_courses', column: 'owner_id', key: 'id' },
   { table: 'study_course_sources', column: 'owner_id', key: 'id' },
   { table: 'study_progress_events', column: 'owner_id', key: 'id' },
+  // What the reader's answers left of each claim (20260925210000): the memory the study
+  // Delta reads. Keyed by claim, one row a claim for each reader.
+  { table: 'study_claim_memory', column: 'owner_id', key: 'claim_id' },
 ];
 
 /*

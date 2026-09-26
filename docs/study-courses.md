@@ -212,9 +212,9 @@ difficulty, authorship and state, with `first_shown_at`, `last_answered_at` and
 | `shown`               | Shown, not answered                                            |
 | `not_seen`            | Neither                                                        |
 
-`due` belongs to the scheduler, which is a later change: nothing here marks a question due.
-It is orthogonal to these states -- a question can be demonstrated and due -- so it will be a
-column, not a fifth state.
+`due` is orthogonal to these states -- a question can be demonstrated and due -- so it is a
+column, `due_at`, not a fifth state; the outline likewise gains `known` and `revisit`. Both
+come from the study Delta ([`study-adaptation.md`](./study-adaptation.md)).
 
 In this list, a question's `lesson_id` names only a lesson the outline shows -- so group
 questions by the list's `lesson_id`, not by the one on `study_visible_items`, which keeps the
@@ -358,10 +358,13 @@ short: the account row, then the reader's study lock, then their sources, then a
   its versions. The last-source trigger takes the course row before it looks for the
   bundle's other rows, so two deletions of a course's last two sources cannot both leave it.
 
-- **Questions in id order.** The answer recorder share-locks a batch's questions, in id
-  order, before it records any -- every id in any form a uuid is written in, and never a
-  draft, which validation takes in its own order; an id it did not lock, such as a draft
-  validated since, it refuses unshown rather than locking late; a claim report
+- **Questions in id order, after their claims.** The answer recorder key-shares the claims a
+  batch's questions test, in id order, then share-locks the batch's questions, in id order,
+  before it records any: a claim report locks its claim before its questions, and the memory
+  of each claim is written through a key to it (20260925210000). Both are taken for one set,
+  read once -- every id in any form a uuid is written in, and never a draft, which validation
+  takes in its own order; an id it did not lock, such as a draft validated since, it refuses
+  unshown rather than locking late. A claim report
   (`study_refresh_claim_dependents`) locks the questions resting on the claim in id order;
   and a lesson's correction or withdrawal (`revise_study_lesson`, `retire_study_content`)
   locks the lesson's questions in id order before it moves them. Locked in a batch's order or

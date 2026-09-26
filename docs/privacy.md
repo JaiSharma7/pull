@@ -1,19 +1,29 @@
 # Privacy Policy
 
-**Effective 27 September 2026.** Every revision of this document is a commit in this
+**Effective 28 September 2026.** Every revision of this document is a commit in this
 repository, so what changed and when is public history rather than a claim.
 
-**Answers to your study courses' questions are now recorded.** When you answer a question in
-one of your courses, we keep what you chose, typed or arranged (up to 1,000 characters),
-whether it was right, whether you looked at the passage first or were trying again after
-seeing the answer, and — for a short answer the course cannot check itself — your own
-judgement of it. The course uses these to show what you have practised and which ideas you
-have shown you remember. Your answers are checked by the database, not by a model, and no
-answer is sent to any model provider. An answer given without a connection waits on your
-device until it can be sent — through a sign-out, for when you sign in again — and is removed
-from the device when you delete your account. See [What you create](#what-you-create).
+**Your study courses now remember what your answers show.** For each claim a course
+teaches, we keep how well you remember it — worked out from your answers the course could
+check, the way your feed's review schedule is — and when you last answered it right or
+wrong (`study_claim_memory`). The course uses it to leave out lessons you have recently shown
+you know, to bring back a lesson after a wrong answer, and to ask questions again as memory
+fades. Only answers the course checked itself show that you know something; being shown a
+lesson, your own judgement of an answer, and an answer you looked up never do — though a
+wrong answer, or your own "not had", still says you did not. Nothing is sent to a model.
+See [What you create](#what-you-create).
 
-The previous revision, effective 26 September, **offered study courses in the app** to
+The previous revision, effective 27 September, **recorded answers to your study courses'
+questions.** When you answer a question in one of your courses, we keep what you chose,
+typed or arranged (up to 1,000 characters), whether it was right, whether you looked at the
+passage first or were trying again after seeing the answer, and — for a short answer the
+course cannot check itself — your own judgement of it. The course uses these to show what
+you have practised and which ideas you have shown you remember. Your answers are checked by
+the database, not by a model, and no answer is sent to any model provider. An answer given
+without a connection waits on your device until it can be sent — through a sign-out, for
+when you sign in again — and is removed from the device when you delete your account.
+
+The revision before, effective 26 September, **offered study courses in the app** to
 accounts in the limited beta. In Studio you choose up to five study sources you saved and
 say what the course is for; once you confirm, the title and text of those sources, and that
 goal, are sent to Google's Gemini API, and the course it prepares is stored privately in
@@ -24,7 +34,7 @@ counted as remembering anything. Listening to a lesson uses only a voice install
 device, so your material is not sent to a speech service; without one, the app does not
 offer to read it aloud.
 
-The revision before that, effective 25 September, described study course generation before
+Before that, the revision effective 25 September described study course generation before
 the app offered it: what is sent to Google's Gemini API and when, that each course keeps
 the history of each claim, lesson and question's status (checked, held back, reported,
 corrected), that a report you file and a version you correct are kept with it privately,
@@ -36,7 +46,7 @@ real name (the name your sign-in account supplies is kept), and it said the Anth
 fallback was "not enabled" while listing it as a processor (it is a setting the hosted
 service does not use, and is listed so that turning it on changes nothing you were told).
 
-Before that, the revision effective 23 September described private study import. When you
+Earlier, the revision effective 23 September described private study import. When you
 save material in Studio's Prepare study material mode, we store the extracted text you
 approved and each corrected version in your private account. We do not upload the
 original file, and saving alone does not send the text to a model provider. You can delete
@@ -187,8 +197,9 @@ judged it yourself; the time is when it reached us. Which lessons and questions 
 recorded in `study_progress_events` so the course can remember your place, with the time
 your device reported (a time more than thirty days back, or in the future, is stored as the
 nearest time that is not) and the time it reached us; being
-shown something is never counted as remembering it. All of this is readable only by you, is
-never reviewed by us, and is in your export. It is deleted with the version of the course it
+shown something is never counted as remembering it. How well you remember each claim of a
+course is kept in `study_claim_memory`, worked out from those answers. All of this is
+readable only by you, is never reviewed by us, and is in your export. It is deleted with the version of the course it
 belongs to — which deleting any source of that version deletes — with the course, and with
 your account.
 
@@ -226,6 +237,7 @@ This is the category most services describe vaguely, so here it is precisely:
 | Sources you asked to see less of                                | `muted_works`                                                | Keeps them out of your feed and your Daily Pull until you unmute them               |
 | Lessons and questions of a study course you were shown          | `study_progress_events`                                      | Remembers your place in the course; never counted as recall                         |
 | Answers to your study courses' questions                        | `study_answer_events`                                        | What you practised, and what you have shown you remember; what you typed is kept    |
+| How well you remember each claim of your study courses          | `study_claim_memory`                                         | Leaves out lessons you know, brings back ones you got wrong, schedules review       |
 
 **Highlights you import are yours, and stay yours.** When you keep a Kindle or Readwise
 export, the text of each highlight is stored verbatim — that is the point of keeping it —
