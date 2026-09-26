@@ -9,6 +9,7 @@
 import type { ReactNode } from 'react';
 import {
   lessonLabel,
+  toRevisit,
   minutesLabel,
   type CourseSummary,
   type LessonClaim,
@@ -55,19 +56,25 @@ export function CourseOutline({
             {unit.lessons.map((lesson) => {
               const label = lessonLabel(lesson);
               const current = lesson.lessonId === currentLessonId;
+              const stateId = `lesson-state-${lesson.lessonId}`;
               return (
                 <li key={lesson.lessonId} className="course__lesson">
                   <button
                     type="button"
                     className="btn btn--plain course__lesson-title"
                     aria-current={current ? 'step' : undefined}
+                    // Why it is left out or back is part of what the lesson is.
+                    aria-describedby={stateId}
                     onClick={() => onOpen(lesson)}
                   >
                     {lesson.title}
                   </button>
                   <span
+                    id={stateId}
                     className={`course__lesson-state${
-                      lesson.state === 'read' ? ' course__lesson-state--read' : ''
+                      lesson.state === 'read' && !toRevisit(lesson)
+                        ? ' course__lesson-state--read'
+                        : ''
                     }`}
                   >
                     {current ? 'Next · ' : ''}
@@ -176,6 +183,7 @@ export function StoppingPoint({
   covered,
   remaining,
   skipped = 0,
+  known = 0,
   onDone,
   onContinue,
 }: {
@@ -183,6 +191,8 @@ export function StoppingPoint({
   remaining: number;
   /** Lessons of the course the reader skipped, which the course page offers again. */
   skipped?: number;
+  /** Lessons sittings leave out because the reader has shown they know them. */
+  known?: number;
   onDone: () => void;
   onContinue: (() => void) | null;
 }) {
@@ -215,7 +225,13 @@ export function StoppingPoint({
             ? `You have been through every lesson. ${
                 skipped === 1 ? 'The one you skipped is' : `The ${skipped} you skipped are`
               } on the course page when you want ${skipped === 1 ? 'it' : 'them'}.`
-            : 'That was the last lesson of the course.'}
+            : known > 0
+              ? `That was the last lesson you had left. ${
+                  known === 1
+                    ? 'The other one you have shown you know; it is'
+                    : `The other ${known} you have shown you know; they are`
+                } in the outline.`
+              : 'That was the last lesson of the course.'}
       </p>
       <div className="course__actions">
         <button type="button" className="btn btn--primary" onClick={onDone}>

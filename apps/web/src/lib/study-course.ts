@@ -6,9 +6,10 @@
  * pure -- shaping, grouping, choosing what to read next, planning a session with an end
  * -- so it can be tested in `environment: 'node'` without the Supabase client.
  *
- * Nothing here decides what the reader knows. Reading a lesson is exposure; whether
- * recall was demonstrated is the database's proof rule, and a later change asks the
- * questions that can establish it.
+ * Nothing here decides what the reader knows. Reading a lesson is exposure; whether recall
+ * was demonstrated is the database's proof rule, and what the reader knows now -- `known`,
+ * `revisit` and `faded` on each lesson -- is the study Delta's (`study_course_outline`).
+ * This only chooses what to read next from it.
  */
 import { int, isRecord, nullableInt, nullableStr, rows, str } from './shape.js';
 
@@ -75,8 +76,13 @@ export interface OutlineLesson {
   readAt: string | null;
   /** Every claim it teaches is remembered now, on strict evidence (the study Delta). */
   known: boolean;
-  /** The reader's last answer on one of its claims was wrong. */
+  /**
+   * Read, and a claim it teaches lapsed since it was last read, while a question can still
+   * clear that lapse. Reading it again answers it; the claim stays due for review.
+   */
   revisit: boolean;
+  /** Not known now, but every claim it teaches was proven once: time has worn it. */
+  faded: boolean;
 }
 
 export interface OutlineUnit {
@@ -195,8 +201,9 @@ export function shapeOutline(data: unknown): OutlineUnit[] {
           state: lessonState(r.state),
           firstShownAt: nullableStr(r.first_shown_at),
           readAt: nullableStr(r.read_at),
-          known: r.known === true,
-          revisit: r.revisit === true,
+          known: bool(r.known),
+          revisit: bool(r.revisit),
+          faded: bool(r.faded),
         } satisfies OutlineLesson,
         unitTitle: str(r.unit_title),
       };
@@ -383,9 +390,16 @@ export function courseTitle(course: CourseSummary): string {
 }
 
 /** What the outline says of a lesson: what the reader should know about it first. */
-export function lessonLabel(lesson: Pick<OutlineLesson, 'state' | 'known' | 'revisit'>): string {
-  if (lesson.revisit) return 'Worth rereading';
-  if (lesson.known && lesson.state !== 'read') return 'You know this';
+export function lessonLabel(
+  lesson: Pick<OutlineLesson, 'state' | 'known' | 'revisit' | 'faded'>,
+): string {
+  if (toRevisit(lesson)) return 'Worth rereading';
+  if (lesson.known && lesson.state !== 'read') {
+    return lesson.state === 'skipped' ? 'Skipped · you know this' : 'You know this';
+  }
+  if (lesson.faded) {
+    return `${lesson.state === 'read' || lesson.state === 'skipped' ? lessonStateLabel(lesson.state) : 'You knew this'} · time to refresh`;
+  }
   return lessonStateLabel(lesson.state);
 }
 
@@ -421,13 +435,42 @@ function finished(lesson: OutlineLesson): boolean {
 }
 
 /**
- * Whether a session should bring this lesson up unasked: one the reader's last answers say
- * to revisit, or one not yet finished that they do not already know. A known lesson is left
- * out -- the reader showed they remember every claim it teaches -- and stays in the outline
- * for whoever wants it.
+ * Whether a lesson is worth reading again: read, and its claim lapsed since. Only a lesson
+ * read -- one never read comes up in its turn -- which the database says too; asked here as
+ * well, so a lesson whose read is still on its way is not sent back.
+ */
+export function toRevisit(lesson: Pick<OutlineLesson, 'state' | 'revisit'>): boolean {
+  return lesson.revisit && lesson.state === 'read';
+}
+
+/**
+ * Whether a session should bring this lesson up unasked: one to revisit, or one not yet
+ * finished that the reader does not already know. A known lesson is left out -- the reader
+ * showed they remember every claim it teaches -- and stays in the outline for whoever wants
+ * it.
  */
 function wanted(lesson: OutlineLesson): boolean {
-  return lesson.revisit || (!finished(lesson) && !lesson.known);
+  return toRevisit(lesson) || (!finished(lesson) && !lesson.known);
+}
+
+/** The lessons sittings leave out because the reader has shown they know them. */
+export function knownUnread(units: readonly OutlineUnit[]): OutlineLesson[] {
+  return allLessons(units).filter((l) => l.known && !finished(l));
+}
+
+/**
+ * The outline as this page has seen it change: a lesson read here since the outline was
+ * fetched has answered its "worth rereading", as the database will say once it is fetched
+ * again -- and the fetch after a lapse since says otherwise, as it should.
+ */
+export function readSince(units: readonly OutlineUnit[], ids: ReadonlySet<string>): OutlineUnit[] {
+  if (ids.size === 0) return [...units];
+  return units.map((u) => ({
+    ...u,
+    lessons: u.lessons.map((l) =>
+      ids.has(l.lessonId) && l.revisit ? { ...l, revisit: false } : l,
+    ),
+  }));
 }
 
 export function allLessons(units: readonly OutlineUnit[]): OutlineLesson[] {
@@ -445,7 +488,7 @@ export function lessonsLeft(units: readonly OutlineUnit[]): OutlineLesson[] {
  */
 export function nextLesson(units: readonly OutlineUnit[]): OutlineLesson | null {
   const lessons = allLessons(units);
-  return lessons.find((l) => l.revisit) ?? lessons.find((l) => wanted(l)) ?? null;
+  return lessons.find(toRevisit) ?? lessons.find((l) => wanted(l)) ?? null;
 }
 
 /** About ten minutes: the session the product is built around. */
@@ -466,7 +509,7 @@ export function planSession(
 ): OutlineLesson[] {
   const lessons = allLessons(units);
   const from = startId ? lessons.findIndex((l) => l.lessonId === startId) : -1;
-  const revisits = from >= 0 ? [] : lessons.filter((l) => l.revisit);
+  const revisits = from >= 0 ? [] : lessons.filter(toRevisit);
   const onward = (from >= 0 ? lessons.slice(from) : lessons).filter(
     (l, i) => ((from >= 0 && i === 0) || wanted(l)) && !revisits.includes(l),
   );

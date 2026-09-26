@@ -99,20 +99,22 @@ duplicate arrives.
 
 ## The screens
 
-- **After a lesson.** Done on a lesson opens its practice questions -- those the reader has
-  not yet shown they remember -- before the session goes on. Leaving them goes on.
+- **After a lesson.** Done on a lesson opens its questions that are due, then its practice
+  questions the reader has not yet shown they remember, before the session goes on. Leaving
+  them goes on.
 - **Checking what you know.** A course nobody has opened offers its placement questions
   first, until one of them is answered: a check left at its first question, or by a reload,
   is offered again, and one answered is not. A lesson whose every placement question was
-  answered right the first time, graded by the rule and without looking, is suggested as
-  known -- by the server's grade, which the suggestion waits for, a few seconds at most, and
-  says it is waiting. An answer without one -- queued offline, or not back in time -- counts
-  for nothing, and the result says so rather than "start from the beginning", with a way to
-  check again. The reader chooses
-  whether to skip the suggested lessons, and a skip is an ordinary `lesson_skipped`. A retry
-  never counts, and nor does a question reported or withdrawn during the check.
-- **Review.** The course's review questions, not yet demonstrated first, from the course page
-  or the end of a session.
+  answered right the first time, graded by the rule and without looking, is known by the
+  study Delta ([`study-adaptation.md`](./study-adaptation.md)), which leaves it out of
+  sittings while the reader remembers it; the result lists what the course now knows, once
+  it has been read again with the answers in, and waits for the server's grades a few
+  seconds at most, saying it is waiting. An answer without one -- queued offline, or not
+  back in time -- counts for nothing, and the result says so rather than "start from the
+  beginning", with a way to check again. A retry never counts, and nor does a question
+  reported or withdrawn during the check.
+- **Review.** The questions due, soonest first -- and when none is, the course's review
+  questions, not yet demonstrated first -- from the course page or the end of a session.
 - **Each question** says whether it was right in words, shows the right answer and why a
   chosen wrong option was wrong, then the question's explanation, and offers another try. A
   right answer that proves nothing -- hinted, or judged by the reader -- says it is practice,

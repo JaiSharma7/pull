@@ -4741,6 +4741,7 @@ export type Database = {
           due_at: string
           known: boolean
           lapsed: boolean
+          lapsed_at: string
           retrievability: number
         }[]
       }
@@ -4765,6 +4766,7 @@ export type Database = {
       study_course_outline: {
         Args: { p_course_id: string }
         Returns: {
+          faded: boolean
           first_shown_at: string
           generation_id: string
           known: boolean
@@ -4788,6 +4790,7 @@ export type Database = {
           authored_by: string
           demonstrated_at: string
           difficulty: number
+          due: boolean
           due_at: string
           first_shown_at: string
           generation_id: string

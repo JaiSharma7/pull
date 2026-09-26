@@ -45,6 +45,7 @@ const PURPOSE_LABEL: Record<StudyQuestion['purpose'], string> = {
 export function StudyQuestionCard({
   question,
   label,
+  purposeLabel,
   onAnswer,
   onJudging,
   onHintOpen,
@@ -57,6 +58,8 @@ export function StudyQuestionCard({
   question: StudyQuestion;
   /** Where the question sits, e.g. "Question 2 of 3". */
   label: string;
+  /** What the run is, when it is not what the question was written for: a review. */
+  purposeLabel?: string;
   onAnswer: (answer: SubmittedAnswer) => void;
   /**
    * Judging a short answer shows the course's answer before the reader says whether they had
@@ -211,7 +214,7 @@ export function StudyQuestionCard({
     // the question twice on the way in.
     <section className="stack study-q">
       <p className="meta">
-        {PURPOSE_LABEL[question.purpose]} · {label}
+        {purposeLabel ?? PURPOSE_LABEL[question.purpose]} · {label}
         {attempt > 0 ? ' · another try' : ''}
       </p>
       <h2 id={promptId} ref={promptRef} className="study-q__prompt" tabIndex={-1}>

@@ -55,16 +55,24 @@ grant select on public.study_claim_memory to authenticated, service_role;
  * for each answer it records; nothing else writes the memory.
  *
  *   an answer that proves recall   a success. Stability grows as `grade_recall`'s good does,
- *                                  2 + (1 - difficulty) times, on the first success, after a
- *                                  lapse, or once the claim was due -- a stability had passed
- *                                  since its last success. Before then, answering again is
- *                                  repetition, not spacing, and stability stays: a proof every
- *                                  few hours cannot compound it into years.
- *   a wrong deterministic answer   a lapse: stability to 0.35 of itself (at least half a day),
- *   to a model-written question    difficulty up 0.15. It takes knowledge away at once.
- *   the reader's own "not had",    no evidence to schedule by, but word that the claim is not
- *   or a wrong answer to their     remembered now: it takes knowledge away as a lapse does,
- *   own version                    and leaves stability and difficulty as they were.
+ *                                  2 + (1 - difficulty) times, on the first success, or once
+ *                                  the claim was due -- a stability had passed since its last
+ *                                  success. Before then, answering again is repetition, not
+ *                                  spacing, and stability stays: a proof every few hours cannot
+ *                                  compound it into years. Not "after a lapse" as well: a
+ *                                  lapse that scores has cut stability already, so the claim
+ *                                  comes due again soon; one that does not score would have
+ *                                  let each "not had" prime the next success to multiply it.
+ *   a wrong answer that scores     a lapse: stability to 0.35 of itself (at least half a day),
+ *                                  difficulty up 0.15. It takes knowledge away at once. It
+ *                                  scores where a right answer would have proved: graded
+ *                                  deterministically, to a question the model wrote, validated
+ *                                  when answered and now, on validated claims.
+ *   any other wrong answer, and    no evidence to schedule by -- the reader's own judgement or
+ *   the reader's own "not had"     version, or a key they have said is wrong -- but word that
+ *                                  the claim is not remembered now: it takes knowledge away as
+ *                                  a lapse does, and leaves stability and difficulty as they
+ *                                  were.
  *   anything else                  nothing. A right self-grade, and a right answer that is
  *                                  hinted, to the reader's own version or to a question held
  *                                  back, is practice.
@@ -77,8 +85,8 @@ set search_path = ''
 as $fn$
 declare
   e       public.study_answer_events%rowtype;
-  v_model boolean;
   proves  boolean;
+  scores  boolean;
   c       uuid;
   m       public.study_claim_memory%rowtype;
 begin
@@ -86,26 +94,37 @@ begin
   if not found then
     return;
   end if;
-  select i.authored_by = 'model' into v_model from public.study_items i where i.id = e.item_id;
-
-  -- The reader's own judgement, or their own version: never proof, but "not had" is still
-  -- word that they do not remember it now. A claim tested only by short answers -- which a
-  -- wrong typed answer can only reach self-graded -- could otherwise never be un-known.
-  if e.grading <> 'deterministic' or not coalesce(v_model, false) then
-    if e.correct then
+  if e.correct then
+    -- A right answer moves the memory only as proof.
+    if not public.study_answer_proves_recall(e.id) then
       return;
     end if;
+    proves := true;
+    scores := true;
+  else
+    -- A wrong one scores where a right one would have proved, hint or none: the proof rule
+    -- without its first two clauses.
+    proves := false;
+    scores := e.grading = 'deterministic'
+      and public.study_item_status_at(e.item_id, e.answered_at) = 'validated'
+      and exists (select 1 from public.study_items i
+                  where i.id = e.item_id and i.status = 'validated' and i.authored_by = 'model')
+      and not exists (select 1 from public.study_item_claims ic
+                      join public.study_claims cl on cl.id = ic.claim_id
+                      where ic.item_id = e.item_id and cl.status <> 'validated');
+  end if;
+
+  -- The reader's own judgement or version, or a key they have disputed: never evidence to
+  -- schedule by, but "not had" is still word that they do not remember it now. A claim
+  -- tested only by short answers -- which a wrong typed answer can only reach self-graded --
+  -- could otherwise never be un-known.
+  if not scores then
     for c in select ic.claim_id from public.study_item_claims ic where ic.item_id = e.item_id loop
       insert into public.study_claim_memory as t (owner_id, claim_id, last_outcome, last_answered_at)
       values (e.owner_id, c, 'lapse', e.answered_at)
       on conflict (owner_id, claim_id) do update
         set last_outcome = 'lapse', last_answered_at = excluded.last_answered_at;
     end loop;
-    return;
-  end if;
-
-  proves := public.study_answer_proves_recall(e.id);
-  if not proves and e.correct then
     return;
   end if;
 
@@ -124,7 +143,7 @@ begin
     end if;
 
     if proves then
-      if m.last_success_at is null or m.last_outcome = 'lapse'
+      if m.last_success_at is null
          or e.answered_at >= m.last_success_at + make_interval(secs => m.stability * 86400) then
         m.stability := least(730.0, m.stability * (2.0 + (1.0 - m.difficulty)));
       end if;
@@ -180,6 +199,8 @@ declare
   v_self     text;
   v_graded   jsonb;
   v_shown    boolean;
+  v_batch    uuid[];
+  v_locked   uuid[];
   v_event    public.study_answer_events%rowtype;
   it         public.study_items%rowtype;
   v_now      timestamptz;
@@ -203,40 +224,36 @@ begin
   -- courses and account, which take it before any row (20260925160000).
   perform pg_advisory_xact_lock(
     pg_catalog.hashtextextended('study_progress:' || uid::text, 0));
-  -- The claims the batch's questions test, key-shared in id order before the questions: the
-  -- memory's foreign key key-shares each as the answer moves it, and a claim report locks
-  -- the claim before its questions. Taken after the questions, that was a circle.
-  perform 1
-  from public.study_claims c
-  where c.owner_id = uid
-    and c.id in (select ic.claim_id
-                 from public.study_item_claims ic
-                 join public.study_items i on i.id = ic.item_id
-                 where i.owner_id = uid
-                   and i.status <> 'draft'
-                   and i.id in (select (a.value ->> 'itemId')::uuid
-                                from jsonb_array_elements(p_answers) as a
-                                where jsonb_typeof(a.value) = 'object'
-                                  and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid')))
-  order by c.id
-  for key share;
-
-  -- The batch's questions, share-locked in id order before any is read, as a claim report
-  -- and a correction lock them (see below). The stamp share-locks each as it is recorded, and
-  -- in the batch's own order that deadlocked with either. Every id the loop below will read,
-  -- in any form a uuid is written in -- a stricter test left some to be locked in the batch's
-  -- order after all -- and never a draft: a draft is refused unshown and never locked, and
-  -- validation takes drafts in its own order.
-  perform 1
+  -- The batch's questions, as 20260925200000 takes them: every id the loop below will read,
+  -- in any form a uuid is written in, and never a draft, which validation takes in its own
+  -- order. Read once, so the claims and the questions below are locked for the same set: a
+  -- draft validated between the two would have its questions locked and its claims not.
+  select coalesce(array_agg(i.id), '{}') into v_batch
   from public.study_items i
   where i.owner_id = uid
     and i.status <> 'draft'
     and i.id in (select (a.value ->> 'itemId')::uuid
                  from jsonb_array_elements(p_answers) as a
                  where jsonb_typeof(a.value) = 'object'
-                   and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid'))
-  order by i.id
-  for share;
+                   and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid'));
+  -- The claims they test, key-shared in id order before the questions: the memory's foreign
+  -- key key-shares each as the answer moves it, and a claim report locks the claim before its
+  -- questions. Taken after the questions, that was a circle.
+  perform 1
+  from public.study_claims c
+  where c.owner_id = uid
+    and c.id in (select ic.claim_id from public.study_item_claims ic
+                 where ic.item_id = any(v_batch))
+  order by c.id
+  for key share;
+  -- Then the questions, share-locked in id order before any is read, as a claim report and a
+  -- correction lock them. An id the loop finds that is not among them -- a draft validated
+  -- since -- is refused unshown, as it was when the batch began, rather than locked late.
+  select coalesce(array_agg(l.id), '{}') into v_locked
+  from (select i.id from public.study_items i
+        where i.id = any(v_batch) and i.owner_id = uid
+        order by i.id
+        for share) as l;
 
   -- The time once the locks are held, not when the call began: a call that waited across
   -- midnight counts today's answers, not yesterday's.
@@ -291,9 +308,11 @@ begin
         'index', ord - 1, 'clientEventId', v_client, 'reason', 'not_found');
       continue;
     end if;
-    -- A question a learner could have been shown: validated at some point.
-    v_shown := exists (select 1 from public.study_status_log s
-                       where s.item_id = it.id and s.owner_id = uid and s.to_status = 'validated');
+    -- A question a learner could have been shown: validated at some point, and not a draft
+    -- when the batch took its locks.
+    v_shown := it.id = any(v_locked)
+      and exists (select 1 from public.study_status_log s
+                  where s.item_id = it.id and s.owner_id = uid and s.to_status = 'validated');
     if not v_shown then
       refused := refused || jsonb_build_object(
         'index', ord - 1, 'clientEventId', v_client, 'reason', 'not_shown');
@@ -314,16 +333,13 @@ begin
       continue;
     end if;
 
-    -- Hinted when the reader says so, or when an answer recorded in the last half hour
-    -- showed the right one: a wrong answer's feedback does, and so does judging your own,
-    -- which is done against the course's answer. To this question, in any of its versions --
-    -- or to any other question on an idea this one tests: the feedback states the idea, and
-    -- a second question on it asked straight after is answered from that, not from memory.
+    -- Hinted as 20260925200000 says: by the reader, or by a wrong, a self-graded or a
+    -- looked-at answer in the last half hour to this question or one on an idea it tests.
     v_hinted := coalesce((ev ->> 'hinted')::boolean, false)
       or exists (select 1 from public.study_answer_events e
                  join public.study_items v on v.id = e.item_id
                  where e.owner_id = uid
-                   and (not e.correct or e.grading = 'self')
+                   and (not e.correct or e.grading = 'self' or e.looked)
                    and e.answered_at > v_since
                    and (v.lineage_id = it.lineage_id
                         or exists (select 1 from public.study_item_claims p
@@ -332,9 +348,10 @@ begin
 
     begin
       insert into public.study_answer_events
-        (owner_id, item_id, client_event_id, correct, hinted, grading, response)
+        (owner_id, item_id, client_event_id, correct, hinted, looked, grading, response)
       values
         (uid, it.id, v_client, (v_graded ->> 'correct')::boolean, v_hinted,
+         coalesce((ev ->> 'hinted')::boolean, false),
          v_graded ->> 'grading', v_graded ->> 'response')
       returning * into v_event;
       recorded := recorded + 1;
@@ -369,12 +386,16 @@ $fn$;
  *                    (re-read through `study_answer_proves_recall`, so a report or withdrawal
  *                    since takes it away); and retrievability at `p_at` is above the feed
  *                    Delta's floor, `known_retrievability_floor()`, compared as the feed does
- *   retrievability   0.9 ^ (days since the last success / stability); null before one
+ *   retrievability   0.9 ^ (days since the last success / stability); null before one.
+ *                    Days are counted to at most a thousand stabilities, which is 0 in all
+ *                    but name, so no moment asked about takes the power out of range
  *   due_at           when retrievability falls to 0.9 -- one stability after the last success
- *                    -- or the last answer's time after a lapse; null before any answer
- *   lapsed           the last answer to it was wrong, and a question on it can still be
- *                    answered to clear that: with every one withdrawn, "worth rereading"
- *                    would never go
+ *                    -- or, after a lapse, half an hour after it: before then any answer to it
+ *                    is hinted (20260925200000) and could not clear it; null before any answer
+ *   lapsed           the last answer to it was wrong, and a question on it can still clear
+ *                    that: one the model wrote, and validated. The reader's own versions never
+ *                    prove, so with only those left "worth rereading" would never go
+ *   lapsed_at        when it lapsed, while it is lapsed
  *
  * The current generation is looked up once, not once per claim the reader owns.
  */
@@ -384,7 +405,8 @@ returns table (
   known          boolean,
   retrievability double precision,
   due_at         timestamptz,
-  lapsed         boolean
+  lapsed         boolean,
+  lapsed_at      timestamptz
 )
 language sql
 stable
@@ -394,21 +416,29 @@ as $fn$
   select c.id,
          coalesce(m.last_outcome = 'success'
                   and (p_at is null or m.last_success_at <= p_at)
-                  and public.retrievability(m.stability::real, m.last_success_at, at.t)
+                  and public.retrievability(m.stability::real, m.last_success_at, r.t)
                       > public.known_retrievability_floor()
                   and public.study_answer_proves_recall(m.last_success_id), false),
          case when m.last_success_at is not null and (p_at is null or m.last_success_at <= p_at)
-              then public.retrievability(m.stability::real, m.last_success_at, at.t) end,
-         case when m.last_outcome = 'lapse' then m.last_answered_at
+              then public.retrievability(m.stability::real, m.last_success_at, r.t) end,
+         case when m.last_outcome = 'lapse' then m.last_answered_at + interval '30 minutes'
               when m.last_success_at is not null
               then m.last_success_at + make_interval(secs => m.stability * 86400) end,
-         coalesce(m.last_outcome = 'lapse', false)
-           and exists (select 1 from public.study_item_claims ic
-                       join public.study_items i on i.id = ic.item_id
-                       where ic.claim_id = c.id and i.status = 'validated')
+         lapse.held,
+         case when lapse.held then m.last_answered_at end
   from public.study_claims c
   cross join at
   left join public.study_claim_memory m on m.claim_id = c.id and m.owner_id = c.owner_id
+  cross join lateral (
+    select least(at.t, m.last_success_at + make_interval(secs => m.stability * 86400 * 1000)) as t
+  ) as r
+  cross join lateral (
+    select coalesce(m.last_outcome = 'lapse', false)
+           and exists (select 1 from public.study_item_claims ic
+                       join public.study_items i on i.id = ic.item_id
+                       where ic.claim_id = c.id and i.status = 'validated'
+                         and i.authored_by = 'model') as held
+  ) as lapse
   where c.generation_id = (select public.study_course_generation(p_course_id))
     and c.status = 'validated'
 $fn$;
@@ -421,7 +451,19 @@ grant execute on function public.study_claim_knowledge(uuid, timestamptz)
 
 drop function public.study_course_outline(uuid);
 
-/* As 20260925130000, with `known` and `revisit` from the study Delta. */
+/*
+ * As 20260925130000, with the study Delta's word on each lesson:
+ *
+ *   known     every claim any version of it cited is known: a reader's revision can add to
+ *             what the lesson must be known by, never take away from it, or re-citing a
+ *             proven claim would make it known unstudied. A claim held back counts as not
+ *             known; one withdrawn for good is no longer part of it.
+ *   revisit   read, and a claim this version teaches lapsed since it was last read -- by the
+ *             server's clock, as the lapse is timed. Reading it again answers that, so a
+ *             sitting does not bring it back over and over; the claim stays due for review.
+ *   faded     not known, not to revisit, and every claim was once proven: known before, and
+ *             time has worn it, which the outline says rather than dropping it silently.
+ */
 create function public.study_course_outline(p_course_id uuid)
 returns table (
   generation_id   uuid,
@@ -438,7 +480,8 @@ returns table (
   first_shown_at  timestamptz,
   read_at         timestamptz,
   known           boolean,
-  revisit         boolean
+  revisit         boolean,
+  faded           boolean
 )
 language sql
 stable
@@ -460,6 +503,7 @@ as $fn$
     select l.id as lesson_id,
            min(e.occurred_at) filter (where e.kind = 'lesson_shown') as shown_at,
            min(e.occurred_at) filter (where e.kind = 'lesson_read') as read_at,
+           max(e.recorded_at) filter (where e.kind = 'lesson_read') as reread_at,
            bool_or(e.kind = 'lesson_skipped') as skipped
     from lessons l
     join public.study_lessons v on v.lineage_id = l.lineage_id
@@ -467,18 +511,18 @@ as $fn$
     group by l.id
   ),
   knowledge as (select * from public.study_claim_knowledge(p_course_id)),
-  -- Known when the lesson teaches at least one validated claim and every one is known;
-  -- worth revisiting when the reader's last answer on any of them was wrong. Every claim any
-  -- version of the lesson cited: a reader's revision can add to what the lesson must be known
-  -- by, never take away from it, or re-citing a proven claim would make it known unstudied.
+  -- See above. `knowledge` has only the validated claims, so a claim held back joins as
+  -- unknown rather than dropping out of the lesson and leaving the rest to call it known.
   taught as (
     select l.id as lesson_id,
-           bool_and(k.known) as known,
-           bool_or(k.lapsed) as revisit
+           bool_and(coalesce(k.known, false)) as known,
+           bool_and(k.retrievability is not null) as proven,
+           max(k.lapsed_at) filter (where lc.lesson_id = l.id and k.lapsed) as lapsed_at
     from lessons l
     join public.study_lessons v on v.lineage_id = l.lineage_id
     join public.study_lesson_claims lc on lc.lesson_id = v.id
-    join knowledge k on k.claim_id = lc.claim_id
+    join public.study_claims c on c.id = lc.claim_id and c.status <> 'retired'
+    left join knowledge k on k.claim_id = lc.claim_id
     group by l.id
   )
   select l.generation_id,
@@ -500,7 +544,9 @@ as $fn$
          seen.shown_at,
          seen.read_at,
          coalesce(taught.known, false),
-         coalesce(taught.revisit, false)
+         coalesce(taught.lapsed_at > seen.reread_at, false),
+         coalesce(taught.proven and not taught.known
+                  and (taught.lapsed_at > seen.reread_at) is not true, false)
   from lessons l
   left join seen on seen.lesson_id = l.id
   left join taught on taught.lesson_id = l.id
@@ -512,7 +558,12 @@ grant execute on function public.study_course_outline(uuid) to authenticated;
 
 drop function public.study_course_questions(uuid);
 
-/* As 20260925150000, with `due_at`: `due` is a column, not a state, as promised. */
+/*
+ * As 20260925150000, with when a question is due and whether it is now: a column, not a
+ * state, as promised. By the server's clock, which the lapse was timed by, not the device's.
+ * Only a question the model wrote is ever due: the reader's own versions never prove, so
+ * answering one could clear nothing.
+ */
 create function public.study_course_questions(p_course_id uuid)
 returns table (
   generation_id    uuid,
@@ -527,7 +578,8 @@ returns table (
   first_shown_at   timestamptz,
   last_answered_at timestamptz,
   demonstrated_at  timestamptz,
-  due_at           timestamptz
+  due_at           timestamptz,
+  due              boolean
 )
 language sql
 stable
@@ -584,6 +636,7 @@ as $fn$
     from public.study_item_claims ic
     join public.study_claim_knowledge(p_course_id) k on k.claim_id = ic.claim_id
     where ic.item_id in (select answered.item_id from answered)
+      and ic.item_id in (select items.id from items where items.authored_by = 'model')
     group by ic.item_id
   )
   select i.generation_id,
@@ -601,7 +654,8 @@ as $fn$
          shown.shown_at,
          answered.last_answered_at,
          demonstrated.demonstrated_at,
-         due.due_at
+         due.due_at,
+         coalesce(due.due_at <= now(), false)
   from items i
   -- Only a lesson the outline shows: a question whose lesson is held back (reported, or
   -- quarantined) reads as course-level until the lesson returns.

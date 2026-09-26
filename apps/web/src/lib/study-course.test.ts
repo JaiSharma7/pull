@@ -12,12 +12,14 @@ import {
   courseSelectionProblem,
   courseStatus,
   courseTitle,
+  knownUnread,
   lessonLabel,
   lessonStateLabel,
   newerPreparationComing,
   newerPreparationFailed,
   lessonsLeft,
   nextLesson,
+  readSince,
   passageWindow,
   planSession,
   planSkipped,
@@ -30,6 +32,7 @@ import {
   skippedLessons,
   type CourseSummary,
   type LessonContent,
+  type OutlineLesson,
   type OutlineUnit,
   planLessons,
   planAfterCorrection,
@@ -630,6 +633,7 @@ describe('the study Delta in a session', () => {
     readAt: null,
     known: false,
     revisit: false,
+    faded: false,
     ...extra,
   });
   const units: OutlineUnit[] = [
@@ -643,15 +647,55 @@ describe('the study Delta in a session', () => {
 
   it('revisits first, leaves known lessons out, and keeps a lesson the reader opens', () => {
     expect(nextLesson(units)?.lessonId).toBe('d');
+    // Start and Continue plan from no lesson: every lesson to revisit, then onward.
     expect(planSession(units).map((l) => l.lessonId)).toEqual(['d', 'c']);
+    expect(planSession(units, null, 60).map((l) => l.lessonId)).toEqual(['d', 'c']);
     // Opened by the reader, a known lesson is read; the session still stops at the unit's end.
     expect(planSession(units, 'b').map((l) => l.lessonId)).toEqual(['b', 'c']);
+    // Two to revisit in one unit, and room for all: each once.
+    const twice: OutlineUnit[] = [
+      {
+        unitNo: 1,
+        title: 'One',
+        lessons: [
+          lesson('a', 1, { state: 'read', revisit: true }),
+          lesson('b', 1, { state: 'read', revisit: true }),
+          lesson('c', 1),
+        ],
+      },
+    ];
+    expect(planSession(twice, null, 60).map((l) => l.lessonId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('never sends a reader back to a lesson they have not read', () => {
+    // A wrong answer in the check, on a lesson in unit three: the course still starts at the
+    // start, and that lesson comes in its turn.
+    const early: OutlineUnit[] = [
+      { unitNo: 1, title: 'One', lessons: [lesson('a', 1)] },
+      { unitNo: 3, title: 'Three', lessons: [lesson('e', 3, { revisit: true })] },
+    ];
+    expect(nextLesson(early)?.lessonId).toBe('a');
+    expect(planSession(early).map((l) => l.lessonId)[0]).toBe('a');
+    expect(lessonLabel(early[1]!.lessons[0]!)).toBe('Not started');
   });
 
   it('says why in the outline', () => {
-    expect(lessonLabel({ state: 'read', known: false, revisit: true })).toBe('Worth rereading');
-    expect(lessonLabel({ state: 'not_seen', known: true, revisit: false })).toBe('You know this');
-    expect(lessonLabel({ state: 'read', known: true, revisit: false })).toBe('Read');
+    const says = (over: Partial<OutlineLesson>) => lessonLabel(lesson('x', 1, over));
+    expect(says({ state: 'read', revisit: true })).toBe('Worth rereading');
+    expect(says({ state: 'not_seen', known: true })).toBe('You know this');
+    expect(says({ state: 'skipped', known: true })).toBe('Skipped · you know this');
+    expect(says({ state: 'read', known: true })).toBe('Read');
+    expect(says({ state: 'not_seen', faded: true })).toBe('You knew this · time to refresh');
+    expect(says({ state: 'read', faded: true })).toBe('Read · time to refresh');
+    expect(says({ state: 'shown' })).toBe('Started');
+  });
+
+  it('answers "worth rereading" with a read on this page, until the course is read again', () => {
+    const answered = readSince(units, new Set(['d']));
+    expect(answered[1]!.lessons[0]!.revisit).toBe(false);
+    expect(nextLesson(answered)?.lessonId).toBe('c');
+    expect(readSince(units, new Set())).toEqual(units);
+    expect(knownUnread(units).map((l) => l.lessonId)).toEqual(['b']);
   });
 
   it('has nothing to plan when everything is known or finished', () => {

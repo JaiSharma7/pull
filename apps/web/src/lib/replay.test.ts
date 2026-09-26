@@ -253,8 +253,13 @@ describe('a queued study event', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('keeps a question’s answers in order, apart from other questions', () => {
-    expect(writeScope({ kind: 'study-answer', event: answer })).toBe('study-item:q1');
+  it('keeps every study answer in one order, and a lesson’s events in theirs', () => {
+    // An answer to another question on the same idea is hinted by, and moves the memory
+    // after, the one before it: they wait for each other.
+    expect(writeScope({ kind: 'study-answer', event: answer })).toBe('study-answers');
+    expect(writeScope({ kind: 'study-answer', event: { ...answer, itemId: 'q2' } })).toBe(
+      'study-answers',
+    );
     expect(writeScope({ kind: 'study-progress', event: progress })).toBe('study-lesson:l1');
     expect(
       writeScope({

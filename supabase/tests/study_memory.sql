@@ -341,14 +341,62 @@ begin
   end if;
   -- And a report of the claim itself: it leaves what the course can say it knows.
   rep := public.report_study_content('claim', c2, 'ambiguous', null);
-  if exists (select 1 from public.study_claim_knowledge(course) where claim_id = c2 and known) then
-    raise exception 'a proof survived a report of the claim it proved';
+  if exists (select 1 from public.study_claim_knowledge(course) where claim_id = c2) then
+    raise exception 'a claim held back by a report stayed in what the course says it knows';
   end if;
+  -- Held back, it is not known -- it does not drop out of a lesson and leave the rest to call
+  -- it known. A lesson that cites it is held back with it; one revised to leave it out still
+  -- counts it, as every claim any version cited. Probed, and undone.
+  begin
+    perform public.revise_study_lesson(l3, jsonb_build_object('claimIds', jsonb_build_array(c1)));
+    if (select known from public.study_course_outline(course) where lesson_key = 'l3')
+       is distinct from false then
+      raise exception 'a lesson read as known with a claim an earlier version cited held back';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
   perform public.dismiss_study_report(rep);
   if (select known from public.study_claim_knowledge(course) where claim_id = c2)
      is distinct from true then
     raise exception 'dismissing the claim''s report did not restore the proof';
   end if;
+  -- A claim withdrawn for good is no longer part of a lesson an earlier version of which cited
+  -- it: the lesson revised to leave it out is known by the rest. Probed, and undone.
+  begin
+    perform public.revise_study_lesson(l3, jsonb_build_object('claimIds', jsonb_build_array(c1)));
+    perform public.retire_study_content('claim', c2);
+    if (select known from public.study_course_outline(course) where lesson_key = 'l3')
+       is distinct from true then
+      raise exception 'a withdrawn claim still counted in a lesson that had left it out';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  -- No moment asked about is out of range.
+  perform count(*) from public.study_claim_knowledge(course, '294276-12-31T23:59:59Z');
+  -- Stability is capped at two years, and grows only once due. Probed, and undone.
+  begin
+    perform pg_temp.as_owner();
+    update public.study_claim_memory
+       set stability = 700, last_success_at = last_success_at - interval '800 days'
+     where claim_id = c1;
+    alter table public.study_answer_events disable trigger study_answer_events_are_final;
+    update public.study_answer_events set answered_at = clock_timestamp() - interval '31 minutes'
+    where owner_id = reader;
+    alter table public.study_answer_events enable trigger study_answer_events_are_final;
+    perform pg_temp.become_reader(reader);
+    r := pg_temp.answer(q3, '"restudying"');
+    if (select stability from public.study_claim_memory where claim_id = c1) <> 730 then
+      raise exception 'stability grew past its cap: %', r;
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  perform pg_temp.become_reader(reader);
 
   -- ---------------------------------------------------------------- a lapse
   -- A wrong answer to the reader's own version is word that they do not have it now, though
@@ -356,8 +404,13 @@ begin
   begin
     perform pg_temp.answer(q5_mine, '"memorised it"', 'incorrect');
     if (select known from public.study_course_outline(course) where lesson_id = l1)
-       is distinct from false then
-      raise exception 'a wrong answer to the reader''s own version left the lesson known';
+       is distinct from false
+       or (select row(last_outcome, stability, difficulty, lapses)::text
+           from public.study_claim_memory where claim_id = c1)
+          is distinct from row('lapse', st, 0.3, 0)::text then
+      raise exception 'a wrong answer to the reader''s own version left the lesson known, or '
+                      'moved more: %',
+        (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
     end if;
     raise exception using errcode = 'P0001', message = 'probe done';
   exception when raise_exception then
@@ -373,20 +426,118 @@ begin
     raise exception 'a self-graded "not had" did not take the knowledge away, or moved more: %',
       (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
   end if;
+  -- And it does not prime the next success to grow stability: a "not had" every day, then a
+  -- proof, compounded a claim the reader keeps missing into years. Probed, and undone.
+  begin
+    perform pg_temp.as_owner();
+    alter table public.study_answer_events disable trigger study_answer_events_are_final;
+    update public.study_answer_events set answered_at = clock_timestamp() - interval '31 minutes'
+    where owner_id = reader;
+    alter table public.study_answer_events enable trigger study_answer_events_are_final;
+    perform pg_temp.become_reader(reader);
+    r := pg_temp.answer(q3, '"restudying"');
+    if (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not true
+       or (select stability from public.study_claim_memory where claim_id = c1)
+          is distinct from st then
+      raise exception 'a proof after "not had" grew stability before the claim was due: %',
+        (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  perform pg_temp.become_reader(reader);
+  -- A wrong answer to a question the reader has said is wrong is not scored: word that they
+  -- do not have it, not evidence to schedule by. Probed, and undone.
+  begin
+    rep := public.report_study_content('item', q1, 'incorrect', null);
+    perform pg_temp.answer(q1, '"The restudy group"');
+    if (select row(last_outcome, lapses, difficulty)::text from public.study_claim_memory
+        where claim_id = c2) is distinct from row('lapse', 0, 0.3)::text then
+      raise exception 'a wrong answer to a question held back was scored: %',
+        (select to_jsonb(m) from public.study_claim_memory m where claim_id = c2);
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
   perform pg_temp.answer(q1, '"The restudy group"');
   if (select known from public.study_course_outline(course) where lesson_id = l2)
      is distinct from false
-     or (select revisit from public.study_course_outline(course) where lesson_id = l2)
-        is distinct from true
      or (select known from public.study_course_outline(course) where lesson_id = l3)
         is distinct from false
-     or (select due_at from public.study_course_questions(course) where item_id = q1)
-        > clock_timestamp()
      or (select row(lapses, stability, difficulty)::text from public.study_claim_memory
          where claim_id = c2) is distinct from row(1, 2.7 * 0.35, 0.3 + 0.15)::text then
     raise exception 'a wrong answer did not take the claim''s knowledge away at once: %',
       (select jsonb_agg(to_jsonb(o)) from public.study_course_outline(course) o);
   end if;
+  -- Worth rereading is a lesson read before the lapse: l1, read above, whose claim the "not
+  -- had" lapsed -- not l2, never read, which a sitting reaches in its turn. l2 was known
+  -- once, and says so.
+  if (select string_agg(lesson_key || '=' || revisit::text || '/' || faded::text, ','
+                        order by lesson_position)
+      from public.study_course_outline(course)) is distinct from 'l1=true/false,l2=false/true,l3=false/true' then
+    raise exception 'revisit and faded are %',
+      (select string_agg(lesson_key || '=' || revisit::text || '/' || faded::text, ','
+                         order by lesson_position)
+       from public.study_course_outline(course));
+  end if;
+  -- Due half an hour after the lapse, when an answer can clear it -- not before, when every
+  -- answer to it is hinted.
+  if (select row(due, due_at)::text from public.study_course_questions(course) where item_id = q1)
+     is distinct from (select row(false, last_answered_at + interval '30 minutes')::text
+                       from public.study_claim_memory where claim_id = c2) then
+    raise exception 'a question on a lapsed claim was due before an answer could clear it: %',
+      (select to_jsonb(q) from public.study_course_questions(course) q where item_id = q1);
+  end if;
+  -- The reader's own version is never due: answering it could clear nothing.
+  if (select due_at from public.study_course_questions(course) where item_id = q5_mine)
+     is not null then
+    raise exception 'the reader''s own version of a question was due';
+  end if;
+  -- A lapse cuts stability to no less than half a day. Probed, and undone.
+  begin
+    perform pg_temp.as_owner();
+    update public.study_claim_memory set stability = 1.0 where claim_id = c2;
+    perform pg_temp.become_reader(reader);
+    perform pg_temp.answer(q1, '"Neither group"');
+    if (select stability from public.study_claim_memory where claim_id = c2) <> 0.5 then
+      raise exception 'a lapse cut stability below half a day';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  perform pg_temp.become_reader(reader);
+  -- Reading the lesson again answers "worth rereading"; the claim stays due. Probed, and
+  -- undone.
+  begin
+    perform public.record_study_progress(jsonb_build_array(
+      jsonb_build_object('clientEventId', extensions.gen_random_uuid(), 'kind', 'lesson_read',
+                         'lessonId', l1)));
+    if (select revisit from public.study_course_outline(course) where lesson_id = l1)
+       is distinct from false
+       or (select lapsed from public.study_claim_knowledge(course) where claim_id = c1)
+          is distinct from true then
+      raise exception 'reading a lesson again did not answer "worth rereading"';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  -- Only a question the model wrote can clear a lapse: with the reader's own versions of
+  -- every question on it left -- q5 is theirs already -- it would never go. Probed, and
+  -- undone.
+  begin
+    perform public.revise_study_item(q3, '{"prompt": "What won at five minutes?"}');
+    if (select revisit from public.study_course_outline(course) where lesson_id = l1)
+       is distinct from false then
+      raise exception 'a lapse held only by the reader''s own versions read as worth rereading';
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
   -- The retry that follows it is hinted, so it cannot give the knowledge back.
   r := pg_temp.answer(q1, '"The recall test group"');
   if (r -> 'results' -> 0 ->> 'hinted')::boolean is not true
@@ -400,8 +551,8 @@ begin
   -- With every question on a lapsed claim withdrawn, nothing could ever clear "worth
   -- rereading", so it goes. Probed, and undone.
   begin
-    perform public.retire_study_content('item', q1);
-    if (select revisit from public.study_course_outline(course) where lesson_id = l2)
+    perform public.retire_study_content('item', q3);
+    if (select revisit from public.study_course_outline(course) where lesson_id = l1)
        is distinct from false then
       raise exception 'a lapse with no question left to clear it still read as worth rereading';
     end if;

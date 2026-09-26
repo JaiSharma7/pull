@@ -256,7 +256,12 @@ export function CoursePractice({
               ? 'This question is no longer in your course, so the answer was not kept.'
               : sent === 'failed'
                 ? 'This answer could not be saved.'
-                : null;
+                : // The screen said "Right"; the server says it follows an answer that showed
+                  // this one's, on the same idea, so it counts toward nothing. Said, or the
+                  // reader cannot tell it from one that did.
+                  result?.correct && result.hinted && !sub.hinted
+                  ? 'Right, but you saw the answer on this idea less than half an hour ago, so it is practice, not proof.'
+                  : null;
       if (said) setNote(said);
     });
     sending.current.add(sent);
@@ -429,6 +434,7 @@ export function CoursePractice({
           });
         }}
         nextBusy={finishing}
+        purposeLabel={mode === 'review' ? 'Review' : undefined}
         onHintOpen={() => loadHint(current)}
         onNext={next}
         nextLabel={index + 1 < questions.length ? 'Next question' : doneLabel}

@@ -240,14 +240,16 @@ export function writeScope(write: PendingWrite): string {
     case 'stash-create':
     case 'stash-delete':
       return `stash:${write.stashId}`;
-    // Per question: a retry is recorded as hinted only when it follows the wrong answer
-    // it retried, so a question's answers keep their order. A lesson's events likewise.
+    // A lesson's events keep their order, and a question's shown event its own.
     case 'study-progress':
       return write.event.kind === 'item_shown'
         ? `study-item:${write.event.itemId}`
         : `study-lesson:${write.event.lessonId}`;
+    // Every study answer in one order, not a question's: an answer is hinted by a wrong one
+    // to any question on the same idea, and the memory of each idea moves in the order the
+    // answers arrive. One held back must hold back those after it.
     case 'study-answer':
-      return `study-item:${write.event.itemId}`;
+      return 'study-answers';
   }
   /*
    * Unreachable for any `PendingWrite`, and the `never` is what proves it: a

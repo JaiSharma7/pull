@@ -29,6 +29,7 @@ import {
   lessonRevision,
   newerPreparationComing,
   newerPreparationFailed,
+  knownUnread,
   lessonsLeft,
   nextLesson,
   draftUnsaved,
@@ -38,7 +39,9 @@ import {
   planSession,
   planSkipped,
   preparationRefusal,
+  readSince,
   reportRefusal,
+  toRevisit,
   type CourseSummary,
   type LessonClaim,
   type LessonContent,
@@ -68,8 +71,10 @@ import {
 } from '../lib/study-course-api.js';
 import {
   dueQuestions,
-  knownLessons,
+  lessonPractice,
   placementOffered,
+  questionsOf,
+  reviewQueue,
   type QuestionEntry,
 } from '../lib/study-practice.js';
 import { sendProgress } from '../lib/study-sync.js';
@@ -102,7 +107,14 @@ type View =
    * whether any answer is still without the server's grade -- queued offline, or not back in
    * time -- which suggests nothing either way.
    */
-  | { kind: 'placed'; known: string[]; unchecked: boolean };
+  | {
+      kind: 'placed';
+      /** The lessons the check asked about. */
+      tested: string[];
+      unchecked: boolean;
+      /** The reads of the course so far: what the check found is said once the next is in. */
+      after: number;
+    };
 
 /**
  * Where focus goes after a control that replaced itself is gone, and how many times the
@@ -132,6 +144,10 @@ export function Course({
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // How many times the course has been read, for a screen that waits for the next.
+  const [loads, setLoads] = useState(0);
+  // Lessons read on this page since the outline was read: "worth rereading" is answered.
+  const [rereads, setRereads] = useState<ReadonlySet<string>>(() => new Set());
   const [view, setView] = useState<View>({ kind: 'overview' });
   const [lesson, setLesson] = useState<LessonContent | null>(null);
   const [lessonError, setLessonError] = useState<string | null>(null);
@@ -214,6 +230,8 @@ export function Course({
       setUnits(outline);
       setHeld(heldBack);
       setQuestions(questionList);
+      setRereads(new Set());
+      setLoads((n) => n + 1);
       setMissing(false);
       setError(null);
       setSettled(true);
@@ -310,7 +328,7 @@ export function Course({
   useEffect(() => onVoicesChanged(() => setLocalVoice(localVoiceURI())), []);
 
   // ---------------------------------------------------------------- progress
-  const shownUnits = applyProgress(units, recorded);
+  const shownUnits = readSince(applyProgress(units, recorded), rereads);
 
   /*
    * Every event is sent with its own client id, at once. One that cannot reach the server,
@@ -321,6 +339,7 @@ export function Course({
   const send = useCallback(
     (kind: LessonProgressKind, lessonId: string) => {
       setRecorded((r) => [...r, { kind, lessonId }]);
+      if (kind === 'lesson_read') setRereads((ids) => new Set(ids).add(lessonId));
       void sendProgress(userId, {
         clientEventId: mutationId(),
         kind,
@@ -625,6 +644,7 @@ export function Course({
     window.scrollTo(0, 0);
   };
 
+  /** From a lesson the reader opened, or -- null -- where the course would have them go on. */
   const startSession = (from: OutlineLesson | null) =>
     begin(planLessons(shownUnits, planSession(shownUnits, from?.lessonId ?? null)));
 
@@ -672,20 +692,13 @@ export function Course({
       view.index + 1 < view.plan.length
         ? { ...view, index: view.index + 1 }
         : { kind: 'stop', plan: view.plan };
-    // A lesson read is practised before the session goes on: its own questions, those the
-    // reader has not yet shown they remember. Not offline, where the questions cannot open
-    // and practice was a screen that loaded for seconds and then only said so: the session
-    // goes on, and the questions are there next time.
+    // A lesson read is practised before the session goes on: its questions that are due,
+    // then those the reader has not yet shown they remember (`lessonPractice`). Not offline,
+    // where the questions cannot open and practice was a screen that loaded for seconds and
+    // then only said so: the session goes on, and the questions are there next time.
     const practice =
       kind === 'lesson_read' && shown && navigator.onLine
-        ? questions
-            .filter(
-              (q) =>
-                q.lessonId === currentId &&
-                q.purpose === 'practice' &&
-                q.state !== 'recall_demonstrated',
-            )
-            .map((q) => q.itemId)
+        ? lessonPractice(questions, currentId)
         : [];
     setView(
       practice.length > 0
@@ -705,25 +718,11 @@ export function Course({
   };
 
   /** The course's questions of one purpose, those not yet demonstrated first. */
-  const questionsFor = (purpose: QuestionEntry['purpose']) => {
-    const of = questions.filter((q) => q.purpose === purpose);
-    return [
-      ...of.filter((q) => q.state !== 'recall_demonstrated'),
-      ...of.filter((q) => q.state === 'recall_demonstrated'),
-    ].map((q) => q.itemId);
-  };
-
-  /**
-   * What a review asks: the questions due now -- a wrong answer's at once, the rest as their
-   * claims' recall falls to 0.9 -- and, when none is due, the course's review questions.
-   */
-  const reviewItems = () => {
-    const due = dueQuestions(questions, new Date()).map((q) => q.itemId);
-    return due.length > 0 ? due : questionsFor('review');
-  };
+  const questionsFor = (purpose: QuestionEntry['purpose']) =>
+    questionsOf(questions, purpose).map((q) => q.itemId);
 
   const startPractice = (mode: 'placement' | 'review') => {
-    const itemIds = mode === 'review' ? reviewItems() : questionsFor(mode);
+    const itemIds = mode === 'review' ? reviewQueue(questions) : questionsFor(mode);
     if (itemIds.length === 0) return;
     leaveLesson();
     setNotice(null);
@@ -736,20 +735,6 @@ export function Course({
       then: { kind: 'overview' },
     });
     window.scrollTo(0, 0);
-  };
-
-  /** Skip the lessons a placement check suggested, as the reader chose to. */
-  const skipKnown = (lessonIds: readonly string[]) => {
-    for (const id of lessonIds) send('lesson_skipped', id);
-    setNotice({
-      text:
-        lessonIds.length === 1
-          ? 'Skipped one lesson you already know. It stays in the outline if you want it.'
-          : `Skipped ${lessonIds.length} lessons you already know. They stay in the outline if you want them.`,
-      undo: null,
-    });
-    setView({ kind: 'overview' });
-    focusAfter('course-notice');
   };
 
   const toggleListen = () => {
@@ -1038,11 +1023,9 @@ export function Course({
           if (view.mode === 'placement') {
             setView({
               kind: 'placed',
-              known: knownLessons(
-                first,
-                lessons.map((l) => l.lessonId),
-              ),
+              tested: [...new Set(first.flatMap((a) => (a.lessonId === null ? [] : [a.lessonId])))],
               unchecked: first.some((a) => !a.confirmed),
+              after: loads,
             });
             focusAfter('course-placed-title');
           } else {
@@ -1059,22 +1042,34 @@ export function Course({
   }
 
   if (view.kind === 'placed') {
-    const lessonById = new Map(lessons.map((l) => [l.lessonId, l]));
-    const known = view.known
-      .map((id) => lessonById.get(id))
-      .filter((l): l is OutlineLesson => l !== undefined);
+    // What the check found is what the course now says the reader knows: the same rule that
+    // leaves lessons out of sittings, read once the course has been read again with these
+    // answers in it -- not a second rule of the screen's own that could say otherwise.
+    const reading = loads <= view.after;
+    const tested = new Set(view.tested);
+    const known = reading ? [] : lessons.filter((l) => tested.has(l.lessonId) && l.known);
+    const one = known.length === 1;
     return (
       <section className="stack measure course">
         <div className="course__bar">{back}</div>
         <p className="meta">What you already know</p>
-        {known.length > 0 ? (
+        {reading ? (
           <>
             <h1 className="display" tabIndex={-1} id="course-placed-title">
-              You may already know {known.length === 1 ? 'one lesson' : `${known.length} lessons`}.
+              Checking your answers…
+            </h1>
+            <p role="status">Reading the course again with your answers in it.</p>
+          </>
+        ) : known.length > 0 ? (
+          <>
+            <h1 className="display" tabIndex={-1} id="course-placed-title">
+              You already know {one ? 'one lesson' : `${known.length} lessons`}.
             </h1>
             <p>
-              You answered every check question for these without help. Skipping them leaves them
-              out of your sittings; they stay in the outline if you want them later.
+              Your answers showed you remember what {one ? 'it teaches' : 'they teach'}, so your
+              sittings leave {one ? 'it' : 'them'} out while you do.{' '}
+              {one ? 'It stays' : 'They stay'} in the outline: open {one ? 'it' : 'any'} to read it
+              anyway.
             </p>
             <ul className="course__covered">
               {known.map((l) => (
@@ -1087,18 +1082,11 @@ export function Course({
                 among these.
               </p>
             )}
-            <div className="course__actions">
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => skipKnown(known.map((l) => l.lessonId))}
-              >
-                Skip {known.length === 1 ? 'it' : 'them'}
+            <p>
+              <button type="button" className="btn btn--primary" onClick={toOverview}>
+                Back to the course
               </button>
-              <button type="button" className="btn" onClick={toOverview}>
-                Read everything
-              </button>
-            </div>
+            </p>
           </>
         ) : view.unchecked ? (
           // Said as what it is: answers without a grade suggest nothing, and "you know none of
@@ -1131,8 +1119,8 @@ export function Course({
               Start from the beginning.
             </h1>
             <p>
-              The check did not show any lesson you already know well enough to skip, so the course
-              starts at its first lesson.
+              The check did not show any lesson you already know, so the course starts at its first
+              lesson.
             </p>
             <p>
               <button type="button" className="btn btn--primary" onClick={toOverview}>
@@ -1146,6 +1134,10 @@ export function Course({
   }
 
   if (view.kind === 'session' && current) {
+    // A lesson back because the reader's last answer on it was wrong says so: it is read
+    // already, and the outline's word for it is not on this screen.
+    const outlined = allLessons(shownUnits).find((l) => l.lessonId === current.lessonId);
+    const revisiting = outlined !== undefined && toRevisit(outlined);
     // One primary control on the screen: while a fix form is open, its own button is it.
     const fixing = fix !== null || claimReport !== null;
     // Always drawn, above the lesson and below it, and filled only beside the control that
@@ -1178,6 +1170,7 @@ export function Course({
         </div>
         {noticeLine}
         {unsavedLine('top')}
+        {revisiting && <p className="meta">Worth rereading: your last answer on this was wrong.</p>}
         {lessonError && (
           <p className="remember__error" role="alert">
             {lessonError}
@@ -1409,12 +1402,13 @@ export function Course({
 
   const next = nextLesson(shownUnits);
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
-  const dueCount = dueQuestions(questions, new Date()).length;
+  const dueCount = dueQuestions(questions).length;
   const reviewCount = dueCount > 0 ? dueCount : questionsFor('review').length;
   const reviewLabel =
     dueCount > 0
-      ? `${dueCount === 1 ? 'One question is' : `${dueCount} questions are`} due for review`
+      ? `Review the ${dueCount === 1 ? 'question' : `${dueCount} questions`} due`
       : `Review questions (${reviewCount})`;
+  const leftOut = knownUnread(shownUnits).length;
   const placementCount = questionsFor('placement').length;
   // Offered until it is answered: answering changes no lesson's state, so the lessons alone
   // would offer it again and again; and a check only seen -- left at its first question, or
@@ -1442,8 +1436,9 @@ export function Course({
           covered={covered}
           remaining={remaining}
           skipped={skipped}
+          known={leftOut}
           onDone={toOverview}
-          onContinue={next ? () => startSession(next) : null}
+          onContinue={next ? () => startSession(null) : null}
         />
         {reviewCount > 0 && (
           <p>
@@ -1569,11 +1564,13 @@ export function Course({
                   <button
                     type="button"
                     className="btn btn--primary"
-                    onClick={() => startSession(next)}
+                    onClick={() => startSession(null)}
                   >
-                    {lessons.every((l) => l.state === 'not_seen')
-                      ? 'Start the course'
-                      : 'Continue where you left off'}
+                    {toRevisit(next)
+                      ? 'Reread what you got wrong'
+                      : lessons.every((l) => l.state === 'not_seen')
+                        ? 'Start the course'
+                        : 'Continue where you left off'}
                   </button>
                 ) : (
                   skipped > 0 && (
@@ -1591,7 +1588,9 @@ export function Course({
                     Check what you already know first
                   </button>
                 )}
-                {reviewCount > 0 && !untouched && (
+                {/* A question due is offered even on a course not yet started: the check's
+                    answers come due as any others do. */}
+                {(dueCount > 0 || (reviewCount > 0 && !untouched)) && (
                   <button type="button" className="btn" onClick={() => startPractice('review')}>
                     {reviewLabel}
                   </button>
@@ -1600,7 +1599,15 @@ export function Course({
               {untouched && placementFresh && (
                 <p>
                   {placementCount === 1 ? 'One question' : `${placementCount} questions`}, to find
-                  lessons you could skip. Nothing is skipped unless you choose to.
+                  lessons you already know. Sittings leave those out while your answers show you
+                  remember them; they stay in the outline.
+                </p>
+              )}
+              {leftOut > 0 && (
+                <p>
+                  {leftOut === 1
+                    ? 'One lesson is left out of your sittings because your answers show you know it. Open it below to read it anyway.'
+                    : `${leftOut} lessons are left out of your sittings because your answers show you know them. Open one below to read it anyway.`}
                 </p>
               )}
               <CourseOutline

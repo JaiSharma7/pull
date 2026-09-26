@@ -3,11 +3,13 @@ import { gradeStudyResponse, needsSelfGrade, studyFold } from './study-grade.js'
 import {
   choiceOptions,
   dueQuestions,
+  lessonPractice,
+  questionsOf,
+  reviewQueue,
   clozeParts,
   confirmFirst,
   firstAnswer,
   initialOrder,
-  knownLessons,
   matchingChoices,
   moveStep,
   placementOffered,
@@ -16,6 +18,7 @@ import {
   shapeQuestion,
   shapeQuestionEntries,
   whyChosenWrong,
+  type QuestionEntry,
   type StudyQuestion,
 } from './study-practice.js';
 
@@ -52,6 +55,15 @@ describe('shaping questions', () => {
   it('reads the question list, dropping what it cannot ask', () => {
     const entries = shapeQuestionEntries([
       { item_id: 'q1', lesson_id: null, purpose: 'review', kind: 'cloze', state: 'answered' },
+      {
+        item_id: 'q3',
+        lesson_id: 'l1',
+        purpose: 'practice',
+        kind: 'cloze',
+        state: 'answered',
+        due_at: '2026-09-25T11:00:00.123456+00:00',
+        due: true,
+      },
       { item_id: 'q2', kind: 'essay' },
       { kind: 'cloze' },
     ]);
@@ -64,6 +76,17 @@ describe('shaping questions', () => {
         state: 'answered',
         authoredBy: 'model',
         dueAt: null,
+        due: false,
+      },
+      {
+        itemId: 'q3',
+        lessonId: 'l1',
+        purpose: 'practice',
+        kind: 'cloze',
+        state: 'answered',
+        authoredBy: 'model',
+        dueAt: '2026-09-25T11:00:00.123456+00:00',
+        due: true,
       },
     ]);
   });
@@ -160,44 +183,6 @@ describe('grading, as the server grades', () => {
 });
 
 describe('placement', () => {
-  const a = (
-    itemId: string,
-    lessonId: string | null,
-    over: Partial<{
-      correct: boolean;
-      grading: 'deterministic' | 'self';
-      hinted: boolean;
-      confirmed: boolean;
-    }> = {},
-  ) => ({
-    itemId,
-    lessonId,
-    clientEventId: `e-${itemId}`,
-    correct: true,
-    grading: 'deterministic' as const,
-    hinted: false,
-    confirmed: true,
-    ...over,
-  });
-
-  it('suggests only lessons whose every placement question was checked right, unaided', () => {
-    const answers = [
-      a('p1', 'l1'),
-      a('p2', 'l1'),
-      a('p3', 'l2', { grading: 'self' }),
-      a('p4', 'l3', { hinted: true }),
-      a('p5', 'l4', { correct: false }),
-      a('p6', null),
-    ];
-    expect(knownLessons(answers, ['l4', 'l3', 'l2', 'l1', 'l5'])).toEqual(['l1']);
-  });
-
-  it('counts an answer only once the server has graded it', () => {
-    // Queued offline, or still on its way: the browser's grade alone suggests nothing.
-    expect(knownLessons([a('p1', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
-    expect(knownLessons([a('p1', 'l1'), a('p2', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
-  });
-
   it('keeps a first answer unconfirmed until its own event is graded', () => {
     const first = firstAnswer(
       { itemId: 'p1', lessonId: 'l1' },
@@ -280,27 +265,52 @@ describe('what the recorder answers', () => {
 });
 
 describe('delayed review', () => {
-  const entry = (itemId: string, dueAt: string | null) => ({
+  const entry = (
+    itemId: string,
+    dueAt: string | null,
+    over: Partial<QuestionEntry> = {},
+  ): QuestionEntry => ({
     itemId,
     lessonId: null,
-    purpose: 'practice' as const,
-    kind: 'cloze' as const,
-    state: 'answered' as const,
-    authoredBy: 'model' as const,
+    purpose: 'practice',
+    kind: 'cloze',
+    state: 'answered',
+    authoredBy: 'model',
     dueAt,
+    due: dueAt !== null,
+    ...over,
   });
 
-  it('asks what is due now, soonest first, and nothing never answered', () => {
-    const now = new Date('2026-09-25T12:00:00Z');
-    const due = dueQuestions(
-      [
-        entry('later', '2026-09-26T00:00:00Z'),
-        entry('never', null),
-        entry('second', '2026-09-25T11:00:00Z'),
-        entry('first', '2026-09-20T00:00:00Z'),
-      ],
-      now,
-    );
+  it('asks what the server says is due, soonest first', () => {
+    const due = dueQuestions([
+      entry('later', '2026-09-26T00:00:00Z', { due: false }),
+      entry('never', null),
+      entry('second', '2026-09-25T11:00:00Z'),
+      entry('first', '2026-09-20T00:00:00Z'),
+    ]);
     expect(due.map((q) => q.itemId)).toEqual(['first', 'second']);
+  });
+
+  it('reviews what is due, and the review questions only when nothing is', () => {
+    const review = [
+      entry('r2', null, { purpose: 'review', state: 'recall_demonstrated' }),
+      entry('r1', null, { purpose: 'review' }),
+    ];
+    expect(reviewQueue([...review, entry('d1', '2026-09-20T00:00:00Z')])).toEqual(['d1']);
+    // Not yet demonstrated first.
+    expect(reviewQueue(review)).toEqual(['r1', 'r2']);
+    expect(questionsOf(review, 'review').map((q) => q.itemId)).toEqual(['r1', 'r2']);
+  });
+
+  it('practises a lesson just read with what is due on it, then what is not yet shown', () => {
+    const entries = [
+      entry('elsewhere', '2026-09-20T00:00:00Z', { lessonId: 'l2' }),
+      entry('shown', null, { lessonId: 'l1', state: 'recall_demonstrated' }),
+      // Demonstrated once, and due again: a lapse practice can clear.
+      entry('lapsed', '2026-09-24T00:00:00Z', { lessonId: 'l1', state: 'recall_demonstrated' }),
+      entry('fresh', null, { lessonId: 'l1', state: 'not_seen', due: false }),
+      entry('check', null, { lessonId: 'l1', purpose: 'placement', state: 'not_seen' }),
+    ];
+    expect(lessonPractice(entries, 'l1')).toEqual(['lapsed', 'fresh']);
   });
 });
