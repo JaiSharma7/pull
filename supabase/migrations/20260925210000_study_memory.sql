@@ -155,6 +155,8 @@ declare
   v_shown    boolean;
   v_event    public.study_answer_events%rowtype;
   it         public.study_items%rowtype;
+  v_now      timestamptz;
+  v_since    timestamptz;
   used       int;
   recorded   int := 0;
   duplicates int := 0;
@@ -174,11 +176,29 @@ begin
   -- courses and account, which take it before any row (20260925160000).
   perform pg_advisory_xact_lock(
     pg_catalog.hashtextextended('study_progress:' || uid::text, 0));
+  -- The time once the lock is held, not when the call began: a call that waited across
+  -- midnight counts today's answers, not yesterday's.
+  v_now := clock_timestamp();
+  v_since := v_now - retry_window;
+
+  -- The batch's questions, share-locked in id order before any is read, as a claim report
+  -- and a correction lock them (see below). The stamp share-locks each as it is recorded, and
+  -- in the batch's own order that deadlocked with either.
+  perform 1
+  from public.study_items i
+  where i.owner_id = uid
+    and i.id in (select (a.value ->> 'itemId')::uuid
+                 from jsonb_array_elements(p_answers) as a
+                 where jsonb_typeof(a.value) = 'object'
+                   and a.value ->> 'itemId'
+                       ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+  order by i.id
+  for share;
 
   select count(*) into used
   from public.study_answer_events e
   where e.owner_id = uid
-    and e.answered_at >= date_trunc('day', (now() at time zone 'utc')) at time zone 'utc';
+    and e.answered_at >= date_trunc('day', v_now, 'UTC');
 
   for ev, ord in select value, ordinality from jsonb_array_elements(p_answers) with ordinality loop
     v_client := null;
@@ -246,13 +266,15 @@ begin
       continue;
     end if;
 
-    -- Hinted when the reader says so, or when a wrong answer to this question -- any version
-    -- of it -- was recorded in the last half hour: its feedback showed the right one.
+    -- Hinted when the reader says so, or when an answer to this question -- any version of
+    -- it -- recorded in the last half hour showed the right one: a wrong answer's feedback
+    -- does, and so does judging your own, which is done against the course's answer.
     v_hinted := coalesce((ev ->> 'hinted')::boolean, false)
       or exists (select 1 from public.study_answer_events e
                  join public.study_items v on v.id = e.item_id
                  where e.owner_id = uid and v.lineage_id = it.lineage_id
-                   and not e.correct and e.answered_at > clock_timestamp() - retry_window);
+                   and (not e.correct or e.grading = 'self')
+                   and e.answered_at > v_since);
 
     begin
       insert into public.study_answer_events
