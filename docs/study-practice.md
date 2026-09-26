@@ -70,9 +70,11 @@ that the course can check.
 
 **Hinted.** An answer is hinted when the reader says so -- the screen marks it when they
 opened the passage behind the question before answering, and on every try after the first,
-whose feedback showed the answer -- or when a wrong or a self-graded answer to the same
-question, in any of its versions, was recorded in the half hour before: the feedback on the
-one, and the course's answer the other was judged against, showed the right one. A hinted
+whose feedback showed the answer -- or when a wrong or a self-graded answer was recorded in
+the half hour before, to the same question in any of its versions or to another question on
+a claim it tests: the feedback on the one, and the course's answer the other was judged
+against, showed the right one, and a second question on the same idea asked straight after
+is answered from that rather than from memory. A hinted
 answer is recorded and never proof. So a retry is practice, whatever order its answers reach
 the server in. A reader who leaves while judging their own answer has seen the course's; it
 is recorded as not had, so the next answer to it is practice too -- whether they leave inside

@@ -28,9 +28,9 @@
 --
 -- Hinted: the reader says so when they looked before answering or are trying again, and the
 -- server adds its own rule -- an answer within thirty minutes of a wrong or a self-graded
--- answer to the same question (any of its versions) is hinted, because the feedback on the
--- one, and the course's answer the other is judged against, showed the right one. A retry is
--- practice, not proof.
+-- answer to the same question (any of its versions), or to another question on a claim it
+-- tests, is hinted, because the feedback on the one, and the course's answer the other is
+-- judged against, showed the right one. A retry is practice, not proof.
 --
 -- The recorder share-locks a batch's questions in id order, and `revise_study_lesson`
 -- (20260925100000) and `retire_study_content` (20260925060000), which are pushed, are
@@ -205,24 +205,27 @@ begin
   -- courses and account, which take it before any row (20260925160000).
   perform pg_advisory_xact_lock(
     pg_catalog.hashtextextended('study_progress:' || uid::text, 0));
-  -- The time once the lock is held, not when the call began: a call that waited across
-  -- midnight counts today's answers, not yesterday's.
-  v_now := clock_timestamp();
-  v_since := v_now - retry_window;
-
   -- The batch's questions, share-locked in id order before any is read, as a claim report
   -- and a correction lock them (see below). The stamp share-locks each as it is recorded, and
-  -- in the batch's own order that deadlocked with either.
+  -- in the batch's own order that deadlocked with either. Every id the loop below will read,
+  -- in any form a uuid is written in -- a stricter test left some to be locked in the batch's
+  -- order after all -- and never a draft: a draft is refused unshown and never locked, and
+  -- validation takes drafts in its own order.
   perform 1
   from public.study_items i
   where i.owner_id = uid
+    and i.status <> 'draft'
     and i.id in (select (a.value ->> 'itemId')::uuid
                  from jsonb_array_elements(p_answers) as a
                  where jsonb_typeof(a.value) = 'object'
-                   and a.value ->> 'itemId'
-                       ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+                   and pg_catalog.pg_input_is_valid(a.value ->> 'itemId', 'uuid'))
   order by i.id
   for share;
+
+  -- The time once the locks are held, not when the call began: a call that waited across
+  -- midnight counts today's answers, not yesterday's.
+  v_now := clock_timestamp();
+  v_since := v_now - retry_window;
 
   select count(*) into used
   from public.study_answer_events e
@@ -295,15 +298,21 @@ begin
       continue;
     end if;
 
-    -- Hinted when the reader says so, or when an answer to this question -- any version of
-    -- it -- recorded in the last half hour showed the right one: a wrong answer's feedback
-    -- does, and so does judging your own, which is done against the course's answer.
+    -- Hinted when the reader says so, or when an answer recorded in the last half hour
+    -- showed the right one: a wrong answer's feedback does, and so does judging your own,
+    -- which is done against the course's answer. To this question, in any of its versions --
+    -- or to any other question on an idea this one tests: the feedback states the idea, and
+    -- a second question on it asked straight after is answered from that, not from memory.
     v_hinted := coalesce((ev ->> 'hinted')::boolean, false)
       or exists (select 1 from public.study_answer_events e
                  join public.study_items v on v.id = e.item_id
-                 where e.owner_id = uid and v.lineage_id = it.lineage_id
+                 where e.owner_id = uid
                    and (not e.correct or e.grading = 'self')
-                   and e.answered_at > v_since);
+                   and e.answered_at > v_since
+                   and (v.lineage_id = it.lineage_id
+                        or exists (select 1 from public.study_item_claims p
+                                   join public.study_item_claims h on h.claim_id = p.claim_id
+                                   where p.item_id = e.item_id and h.item_id = it.id)));
 
     begin
       insert into public.study_answer_events
