@@ -78,8 +78,14 @@ is answered from that rather than from memory. A hinted
 answer is recorded and never proof. So a retry is practice, whatever order its answers reach
 the server in. A reader who leaves while judging their own answer has seen the course's; it
 is recorded as not had, so the next answer to it is practice too -- whether they leave inside
-the app or the page closes: the answer is held on the device when judging starts, let go when
-they judge, and otherwise sent, as not had, before their next answer.
+the app or the page closes: the answer is held on the device when judging starts, and sent as
+not had when they leave practice, or -- a page closed -- before their next answer anywhere.
+The hold is the page's own: each page holds a Web Lock for its life, and another page, or the
+shell's drain, takes a hold only from a page whose lock is free, so nothing sends an answer
+out from under a reader still judging it. The judgement is sent under the hold's own event
+id, and replaces the hold until it is recorded or queued, so the attempt is one answer to the
+server whatever races -- and a page closed straight after judging still sends it, as judged.
+A hold is sent only while its reader is signed in; it waits through a sign-out for them.
 
 **Proof** is `study_answer_proves_recall`, unchanged: right, unhinted, graded
 deterministically, to a model-written question that was validated when it was answered and
@@ -92,10 +98,13 @@ duplicate arrives.
 - **After a lesson.** Done on a lesson opens its practice questions -- those the reader has
   not yet shown they remember -- before the session goes on. Leaving them goes on.
 - **Checking what you know.** A course nobody has opened offers its placement questions
-  first, once: after they have been shown, it does not offer them again. A lesson whose every
-  placement question was answered right the first time, graded by the rule and without
-  looking, is suggested as known -- by the server's grade, which the suggestion waits for; an
-  answer that could only be queued has none, and counts for nothing. The reader chooses
+  first, until one of them is answered: a check left at its first question, or by a reload,
+  is offered again, and one answered is not. A lesson whose every placement question was
+  answered right the first time, graded by the rule and without looking, is suggested as
+  known -- by the server's grade, which the suggestion waits for, a few seconds at most, and
+  says it is waiting. An answer without one -- queued offline, or not back in time -- counts
+  for nothing, and the result says so rather than "start from the beginning", with a way to
+  check again. The reader chooses
   whether to skip the suggested lessons, and a skip is an ordinary `lesson_skipped`. A retry
   never counts, and nor does a question reported or withdrawn during the check.
 - **Review.** The course's review questions, not yet demonstrated first, from the course page

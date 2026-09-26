@@ -12,6 +12,7 @@
  */
 import { queueMutation } from './offline.js';
 import { isPermanentFailure } from './rpc-error.js';
+import { getCurrentUserId } from './supabase.js';
 import type { ProgressEvent } from './study-course.js';
 import { recordAnswers, recordProgress } from './study-course-api.js';
 import type { AnswerEvent, AnswerResult } from './study-practice.js';
@@ -77,14 +78,42 @@ export async function sendAnswer(userId: string, event: AnswerEvent): Promise<An
  * An answer shown for judging and not yet judged. Judging a short answer shows the course's
  * answer, so a reader who leaves then has seen it, and the next answer to that question is
  * practice, not proof -- which the server can only know from an answer on record. It is held
- * here when judging starts and let go when the reader judges; if the reader leaves instead --
- * inside the app, or by closing or reloading the page -- it is sent as not had, before any
- * other answer of theirs. In local storage, keyed by reader, because it must outlive the page;
- * it holds what they typed, as a queued answer does, and is cleared with their account.
+ * here when judging starts, holds the judgement once the reader judges, and is let go when
+ * that is recorded or queued; if the reader leaves before judging --
+ * inside the app, or by closing or reloading the page -- it is sent as not had. In local
+ * storage, because it must outlive the page; it holds what they typed, as a queued answer
+ * does, and waits through a sign-out for the same reader.
+ *
+ * Held per page, not per reader: a flush elsewhere -- the shell's drain, another tab -- must
+ * not send a hold whose page is still judging, which recorded the attempt twice, and two
+ * tabs judging at once must not let go of each other's. Each page holds a Web Lock for its
+ * life, and a hold is taken only from a page whose lock is free: a page that is gone. Its own
+ * page takes it only when the reader leaves practice. And the reader's judgement is sent with
+ * the hold's own event id, so whatever races, the attempt is recorded once.
  */
-const judgingKey = (userId: string) => `wap:study-judging:${userId}`;
+const PAGE =
+  typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const JUDGING = 'wap:study-judging:';
+const judgingKey = (userId: string, page = PAGE) => `${JUDGING}${userId}:${page}`;
+const pageLock = (page: string) => `wap.judging.${page}`;
+
+let pageLocked = false;
+function holdPageLock(): void {
+  const locks = globalThis.navigator?.locks;
+  if (pageLocked || !locks) return;
+  pageLocked = true;
+  // Never released while the page lives; the browser releases it when the page goes.
+  void locks
+    .request(pageLock(PAGE), () => new Promise<void>(() => undefined))
+    .catch(() => {
+      pageLocked = false;
+    });
+}
 
 export function holdJudging(userId: string, event: AnswerEvent): void {
+  holdPageLock();
   try {
     localStorage.setItem(judgingKey(userId), JSON.stringify(event));
   } catch {
@@ -92,19 +121,59 @@ export function holdJudging(userId: string, event: AnswerEvent): void {
   }
 }
 
-export function releaseJudging(userId: string): void {
+/**
+ * Let go of this page's hold -- only the one sent as `clientEventId`, when given, so an answer
+ * recorded late does not let go of the hold of the question after it.
+ */
+export function releaseJudging(userId: string, clientEventId?: string): void {
   try {
-    localStorage.removeItem(judgingKey(userId));
+    const key = judgingKey(userId);
+    if (clientEventId !== undefined) {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return;
+      const held: unknown = JSON.parse(raw);
+      if (
+        typeof held !== 'object' ||
+        held === null ||
+        (held as { clientEventId?: unknown }).clientEventId !== clientEventId
+      )
+        return;
+    }
+    localStorage.removeItem(key);
   } catch {
     /* as above */
   }
 }
 
-function takeJudging(userId: string): AnswerEvent | null {
+/** Every page's hold of this reader's, for an account being deleted. */
+export function releaseAllJudging(userId: string): void {
+  for (const key of judgingKeys(userId)) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* as above */
+    }
+  }
+}
+
+function judgingKeys(userId: string): string[] {
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(`${JUDGING}${userId}:`)) keys.push(key);
+    }
+  } catch {
+    /* no storage */
+  }
+  return keys;
+}
+
+function takeJudging(key: string): AnswerEvent | null {
   let raw: string | null;
   try {
-    raw = localStorage.getItem(judgingKey(userId));
-    localStorage.removeItem(judgingKey(userId));
+    raw = localStorage.getItem(key);
+    localStorage.removeItem(key);
   } catch {
     return null;
   }
@@ -132,8 +201,29 @@ function takeJudging(userId: string): AnswerEvent | null {
   }
 }
 
-/** Record an answer left unjudged, as not had. Taken before it is sent, so it goes once. */
-export async function flushJudging(userId: string): Promise<void> {
-  const held = takeJudging(userId);
-  if (held) await sendAnswer(userId, held);
+/**
+ * Record the answers this reader left unjudged, as not had: every page's that is gone, and
+ * this page's own when `own` -- the reader leaving practice. Only for the reader signed in:
+ * sent under someone else's session it was refused and lost, and it is theirs to send when
+ * they are back. Each is taken before it is sent, so it goes once.
+ */
+export async function flushJudging(userId: string, { own = false } = {}): Promise<void> {
+  if (getCurrentUserId() !== userId) return;
+  const locks = globalThis.navigator?.locks;
+  for (const key of judgingKeys(userId)) {
+    const page = key.slice(`${JUDGING}${userId}:`.length);
+    const send = async () => {
+      const held = takeJudging(key);
+      if (held) await sendAnswer(userId, held);
+    };
+    if (page === PAGE) {
+      if (own) await send();
+    } else if (locks) {
+      await locks.request(pageLock(page), { ifAvailable: true }, async (lock) => {
+        if (lock) await send();
+      });
+    } else {
+      await send();
+    }
+  }
 }

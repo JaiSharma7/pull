@@ -50,6 +50,7 @@ export function StudyQuestionCard({
   onHintOpen,
   onNext,
   nextLabel = 'Next',
+  nextBusy = false,
   renderHint,
   renderFixes,
 }: {
@@ -67,6 +68,8 @@ export function StudyQuestionCard({
   onHintOpen?: () => void;
   onNext: () => void;
   nextLabel?: string;
+  /** Going on is under way -- the run waiting for its answers -- and the button says so. */
+  nextBusy?: boolean;
   /** The passages the question rests on; opening them before answering makes it hinted. */
   renderHint?: () => ReactNode;
   /** Report or withdraw the question. */
@@ -204,7 +207,9 @@ export function StudyQuestionCard({
   const promptId = `${id}-prompt`;
 
   return (
-    <section className="stack study-q" aria-labelledby={promptId}>
+    // Not a named region: the prompt is its heading already, and a region named by it read
+    // the question twice on the way in.
+    <section className="stack study-q">
       <p className="meta">
         {PURPOSE_LABEL[question.purpose]} · {label}
         {attempt > 0 ? ' · another try' : ''}
@@ -219,8 +224,8 @@ export function StudyQuestionCard({
       {(question.kind === 'multiple_choice' ||
         question.kind === 'comparison' ||
         question.kind === 'application') && (
-        <fieldset className="study-q__options" disabled={!answering}>
-          <legend className="sr-only">{question.prompt}</legend>
+        // Named by the prompt it answers, rather than by a hidden copy of it.
+        <fieldset className="study-q__options" disabled={!answering} aria-labelledby={promptId}>
           {choiceOptions(question).map((option, i) => (
             <label key={`${option}-${i}`} className="study-q__option">
               <input
@@ -444,7 +449,14 @@ export function StudyQuestionCard({
                 Try again
               </button>
             )}
-            <button type="button" className="btn btn--primary" onClick={onNext}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              aria-disabled={nextBusy}
+              onClick={() => {
+                if (!nextBusy) onNext();
+              }}
+            >
               {nextLabel}
             </button>
           </div>

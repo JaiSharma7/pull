@@ -182,6 +182,55 @@ export interface PlacementAnswer {
 }
 
 /**
+ * What a first answer records: the browser's grade for now, unconfirmed, under the answer's
+ * own event.
+ */
+export function firstAnswer(
+  q: Pick<StudyQuestion, 'itemId' | 'lessonId'>,
+  answer: { correct: boolean; grading: 'deterministic' | 'self'; hinted: boolean },
+  clientEventId: string,
+): PlacementAnswer {
+  return {
+    itemId: q.itemId,
+    lessonId: q.lessonId,
+    clientEventId,
+    correct: answer.correct,
+    grading: answer.grading,
+    hinted: answer.hinted,
+    confirmed: false,
+  };
+}
+
+/**
+ * A first answer once the server has graded it: its grade kept, and hinted if either said
+ * so. Only its own event's grade -- a retry's is another answer's, and changes nothing.
+ */
+export function confirmFirst(kept: PlacementAnswer, result: AnswerResult): PlacementAnswer {
+  if (result.clientEventId !== kept.clientEventId) return kept;
+  return {
+    ...kept,
+    correct: result.correct,
+    grading: result.grading,
+    hinted: kept.hinted || result.hinted,
+    confirmed: true,
+  };
+}
+
+/**
+ * Whether a course offers its placement check: it has one, and none of it has been answered.
+ * Keyed on an answer rather than on being shown, so a check left at its first question -- or
+ * by a reload -- is offered again, and one answered is not offered for ever.
+ */
+export function placementOffered(
+  entries: readonly Pick<QuestionEntry, 'purpose' | 'state'>[],
+): boolean {
+  const placement = entries.filter((q) => q.purpose === 'placement');
+  return (
+    placement.length > 0 && placement.every((q) => q.state === 'not_seen' || q.state === 'shown')
+  );
+}
+
+/**
  * The lessons a placement check suggests the reader already knows: every placement question
  * of the lesson answered right, graded by the rule rather than by the reader, and without a
  * hint. A lesson with no placement question is never suggested -- nothing was checked -- and

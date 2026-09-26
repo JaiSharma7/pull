@@ -19,7 +19,7 @@ import { fetchAnkiDeck } from '../lib/export-api.js';
 import { toAnkiTsv } from '../lib/export-formats.js';
 import { exportFilename } from '../lib/export-rows.js';
 import { clearPending } from '../lib/offline.js';
-import { releaseJudging } from '../lib/study-sync.js';
+import { releaseAllJudging } from '../lib/study-sync.js';
 import { supabase } from '../lib/supabase.js';
 
 /**
@@ -716,7 +716,7 @@ export function DeleteAccountDialog({
       // Writes queued for an account that is gone can never be sent, and a queued answer
       // holds what the reader typed. Before the page is left, which would cut it short.
       await clearPending(userId);
-      releaseJudging(userId);
+      releaseAllJudging(userId);
       await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
       window.location.assign('/');
     } catch (error) {

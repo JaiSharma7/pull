@@ -25,7 +25,12 @@ import {
   reportContent,
   retireContent,
 } from '../lib/study-course-api.js';
-import type { PlacementAnswer, StudyQuestion } from '../lib/study-practice.js';
+import {
+  confirmFirst,
+  firstAnswer,
+  type PlacementAnswer,
+  type StudyQuestion,
+} from '../lib/study-practice.js';
 import {
   flushJudging,
   holdJudging,
@@ -36,6 +41,9 @@ import {
 import { mutationId } from '../lib/submission.js';
 
 export type PracticeMode = 'practice' | 'placement' | 'review';
+
+/** How long finishing waits for answers still on their way before it goes on without them. */
+const FINISH_WAIT_MS = 8000;
 
 export function CoursePractice({
   userId,
@@ -66,6 +74,10 @@ export function CoursePractice({
   const shown = useRef(new Set<string>());
   // Answers on their way: a placement run's suggestion waits for the server's grades.
   const sending = useRef(new Set<Promise<unknown>>());
+  // The event id of the answer held while its reader judges it: the judgement is sent under
+  // it, so a hold sent meanwhile and the judgement are one answer to the server.
+  const heldId = useRef<string | null>(null);
+  const fixPanel = useRef<HTMLDetailsElement>(null);
   const [finishing, setFinishing] = useState(false);
   const alive = useRef(true);
   useEffect(() => {
@@ -85,7 +97,7 @@ export function CoursePractice({
   useEffect(() => {
     void flushJudging(userId);
     return () => {
-      void flushJudging(userId);
+      void flushJudging(userId, { own: true });
     };
   }, [userId]);
 
@@ -115,6 +127,16 @@ export function CoursePractice({
   useEffect(() => {
     if (error) document.getElementById('practice-error')?.focus();
   }, [error]);
+  // A run emptied by reports and withdrawals says so where focus is, rather than leaving it on
+  // the page when the last question goes.
+  const empty = questions !== null && current === null;
+  useEffect(() => {
+    if (empty) document.getElementById('practice-empty')?.focus();
+  }, [empty]);
+  // Withdrawing asks first, and the question it asks is where focus goes.
+  useEffect(() => {
+    if (fix === 'withdraw') document.getElementById('practice-withdraw-warning')?.focus();
+  }, [fix]);
   useEffect(() => {
     latest.current = { questions, index };
   }, [questions, index]);
@@ -137,8 +159,13 @@ export function CoursePractice({
     if (finishing) return;
     setFinishing(true);
     // What a first answer shows is the server's grade, so the answers still on their way are
-    // waited for; one that could only be queued never has one, and never counts.
-    void Promise.allSettled([...sending.current]).then(() => {
+    // waited for -- a while, and said: one that never comes has no grade, and counts for
+    // nothing either way.
+    if (sending.current.size > 0) setNote('Waiting for your answers to be recorded…');
+    void Promise.race([
+      Promise.allSettled([...sending.current]),
+      new Promise((resolve) => setTimeout(resolve, FINISH_WAIT_MS)),
+    ]).then(() => {
       if (alive.current) onDone([...first.current.values()]);
     });
   };
@@ -170,46 +197,47 @@ export function CoursePractice({
     if (where === at) {
       setFix(null);
       setFixError(null);
+      // Reported while being judged: the reader said the question is wrong, so it is not
+      // recorded as not had.
+      releaseJudging(userId);
+      heldId.current = null;
     }
     setNote(message);
     setQuestions(rest);
-    const now = where < at ? at - 1 : at;
-    setIndex(now);
-    if (now >= rest.length) finish();
+    // Past the last question, the run says there are none left -- with the note beside it --
+    // rather than ending before the reader has heard why.
+    setIndex(where < at ? at - 1 : at);
   };
 
   const answer = (q: StudyQuestion, sub: SubmittedAnswer) => {
+    // A judgement is sent under its hold's id, and replaces the hold until it is recorded or
+    // queued: a page closed in between still sends it -- as judged, and as the same answer.
+    const held = sub.selfGrade ? heldId.current : null;
+    heldId.current = null;
     const event = {
-      clientEventId: mutationId(),
+      clientEventId: held ?? mutationId(),
       itemId: q.itemId,
       response: sub.response,
       hinted: sub.hinted,
       ...(sub.selfGrade ? { selfGrade: sub.selfGrade } : {}),
     };
+    if (held) holdJudging(userId, event);
     if (!first.current.has(q.itemId)) {
-      first.current.set(q.itemId, {
-        itemId: q.itemId,
-        lessonId: q.lessonId,
-        clientEventId: event.clientEventId,
-        correct: sub.graded.correct,
-        grading: sub.graded.grading,
-        hinted: sub.hinted,
-        confirmed: false,
-      });
+      first.current.set(
+        q.itemId,
+        firstAnswer(
+          q,
+          { correct: sub.graded.correct, grading: sub.graded.grading, hinted: sub.hinted },
+          event.clientEventId,
+        ),
+      );
     }
     const sent = sendAnswer(userId, event).then(({ sent, result }) => {
+      if (held) releaseJudging(userId, held);
       // The server's grade is the one kept, and a first answer counts only once it has one --
       // its own, not a retry's.
       const kept = first.current.get(q.itemId);
-      if (result && kept && kept.clientEventId === result.clientEventId) {
-        first.current.set(q.itemId, {
-          ...kept,
-          correct: result.correct,
-          grading: result.grading,
-          hinted: kept.hinted || result.hinted,
-          confirmed: true,
-        });
-      }
+      if (result && kept) first.current.set(q.itemId, confirmFirst(kept, result));
       // Said only when there is something to say: an answer recorded as expected is silent,
       // and clearing the line then wiped whatever it said meanwhile -- a report's "Reported".
       const said =
@@ -252,12 +280,15 @@ export function CoursePractice({
     return <LessonSources claims={claims} />;
   };
 
-  const failed = (e: unknown) =>
-    setFixError(
-      isOfflineFailure(e)
-        ? 'That has not reached your account — you look offline.'
-        : (reportRefusal(sqlState(e)) ?? asSentence(e instanceof Error ? e.message : String(e))),
-    );
+  // Said beside the form while its panel is open; folded meanwhile, in the note line, which
+  // is always there to say it.
+  const failed = (e: unknown) => {
+    const why = isOfflineFailure(e)
+      ? 'That has not reached your account — you look offline.'
+      : (reportRefusal(sqlState(e)) ?? asSentence(e instanceof Error ? e.message : String(e)));
+    if (fixPanel.current?.open) setFixError(why);
+    else setNote(why);
+  };
 
   const report = async (q: StudyQuestion, reason: ReportReason, text: string | null) => {
     if (working) return;
@@ -312,7 +343,8 @@ export function CoursePractice({
       <section className="stack measure course">
         <div className="course__bar">{leave}</div>
         {title}
-        <p className="remember__error" role="alert" id="practice-error" tabIndex={-1}>
+        {/* Focused when it appears, which says it; an alert as well said it twice. */}
+        <p className="remember__error" id="practice-error" tabIndex={-1}>
           {error}
         </p>
         {/* After a lesson the questions are a detour: going on is the way forward. */}
@@ -343,7 +375,9 @@ export function CoursePractice({
         <div className="course__bar">{leave}</div>
         {title}
         {noteLine}
-        <p>There are no questions to ask here any more.</p>
+        <p id="practice-empty" tabIndex={-1}>
+          There are no questions to ask here any more.
+        </p>
         <p>
           <button
             type="button"
@@ -376,16 +410,18 @@ export function CoursePractice({
         label={`Question ${index + 1} of ${questions.length}`}
         onAnswer={(sub) => answer(current, sub)}
         onJudging={(held) => {
-          if (held === null) releaseJudging(userId);
-          else
-            holdJudging(userId, {
-              clientEventId: mutationId(),
-              itemId: current.itemId,
-              response: held.response,
-              selfGrade: 'incorrect',
-              ...(held.hinted ? { hinted: true } : {}),
-            });
+          // Judged: `answer` takes the hold over.
+          if (held === null) return;
+          heldId.current = mutationId();
+          holdJudging(userId, {
+            clientEventId: heldId.current,
+            itemId: current.itemId,
+            response: held.response,
+            selfGrade: 'incorrect',
+            ...(held.hinted ? { hinted: true } : {}),
+          });
         }}
+        nextBusy={finishing}
         onHintOpen={() => loadHint(current)}
         onNext={next}
         nextLabel={index + 1 < questions.length ? 'Next question' : doneLabel}
@@ -394,6 +430,7 @@ export function CoursePractice({
           // Not controlled: Cancel closes a form, not the section the reader opened, and
           // focus goes back to its summary rather than to the page.
           <details
+            ref={fixPanel}
             className="course__sources course__fix"
             onToggle={(e) => {
               if (!(e.currentTarget as HTMLDetailsElement).open) {
@@ -424,7 +461,7 @@ export function CoursePractice({
             )}
             {fix === 'withdraw' && (
               <div className="stack course__fix-form">
-                <p>
+                <p id="practice-withdraw-warning" tabIndex={-1}>
                   Withdrawing this question takes it out of the course for good. Reporting it
                   instead holds it back until you decide.
                 </p>

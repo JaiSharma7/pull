@@ -3,10 +3,13 @@ import { gradeStudyResponse, needsSelfGrade, studyFold } from './study-grade.js'
 import {
   choiceOptions,
   clozeParts,
+  confirmFirst,
+  firstAnswer,
   initialOrder,
   knownLessons,
   matchingChoices,
   moveStep,
+  placementOffered,
   rightAnswer,
   shapeAnswersRecorded,
   shapeQuestion,
@@ -191,6 +194,50 @@ describe('placement', () => {
     // Queued offline, or still on its way: the browser's grade alone suggests nothing.
     expect(knownLessons([a('p1', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
     expect(knownLessons([a('p1', 'l1'), a('p2', 'l1', { confirmed: false })], ['l1'])).toEqual([]);
+  });
+
+  it('keeps a first answer unconfirmed until its own event is graded', () => {
+    const first = firstAnswer(
+      { itemId: 'p1', lessonId: 'l1' },
+      { correct: true, grading: 'deterministic', hinted: false },
+      'e1',
+    );
+    expect(first).toMatchObject({ clientEventId: 'e1', correct: true, confirmed: false });
+    const graded = (clientEventId: string, over: object = {}) => ({
+      clientEventId,
+      itemId: 'p1',
+      correct: false,
+      grading: 'deterministic' as const,
+      hinted: true,
+      provesRecall: false,
+      ...over,
+    });
+    // A retry's grade is another answer's.
+    expect(confirmFirst(first, graded('e2'))).toBe(first);
+    // Its own: the server's grade wins, and hinted if either said so.
+    expect(confirmFirst(first, graded('e1'))).toMatchObject({
+      correct: false,
+      hinted: true,
+      confirmed: true,
+    });
+    const hintedHere = { ...first, hinted: true };
+    expect(confirmFirst(hintedHere, graded('e1', { correct: true, hinted: false }))).toMatchObject({
+      correct: true,
+      hinted: true,
+      confirmed: true,
+    });
+  });
+
+  it('offers the check until one of its questions is answered', () => {
+    const q = (purpose: 'placement' | 'practice', state: string) =>
+      ({ purpose, state }) as Parameters<typeof placementOffered>[0][number];
+    expect(placementOffered([])).toBe(false);
+    expect(placementOffered([q('practice', 'not_seen')])).toBe(false);
+    expect(placementOffered([q('placement', 'not_seen'), q('practice', 'answered')])).toBe(true);
+    // Left at its first question, or by a reload: offered again.
+    expect(placementOffered([q('placement', 'shown'), q('placement', 'not_seen')])).toBe(true);
+    expect(placementOffered([q('placement', 'shown'), q('placement', 'answered')])).toBe(false);
+    expect(placementOffered([q('placement', 'recall_demonstrated')])).toBe(false);
   });
 });
 

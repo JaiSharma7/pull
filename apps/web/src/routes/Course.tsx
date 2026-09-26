@@ -65,7 +65,7 @@ import {
   type HeldBack,
   type ReportTarget,
 } from '../lib/study-course-api.js';
-import { knownLessons, type QuestionEntry } from '../lib/study-practice.js';
+import { knownLessons, placementOffered, type QuestionEntry } from '../lib/study-practice.js';
 import { sendProgress } from '../lib/study-sync.js';
 import { mutationId } from '../lib/submission.js';
 
@@ -91,8 +91,12 @@ type View =
       /** Where the reader goes when the questions are done: on in the session, or back. */
       then: View;
     }
-  /** What a placement check found: the lessons it suggests the reader already knows. */
-  | { kind: 'placed'; known: string[] };
+  /**
+   * What a placement check found: the lessons it suggests the reader already knows, and
+   * whether any answer is still without the server's grade -- queued offline, or not back in
+   * time -- which suggests nothing either way.
+   */
+  | { kind: 'placed'; known: string[]; unchecked: boolean };
 
 /**
  * Where focus goes after a control that replaced itself is gone, and how many times the
@@ -1023,6 +1027,7 @@ export function Course({
                 first,
                 lessons.map((l) => l.lessonId),
               ),
+              unchecked: first.some((a) => !a.confirmed),
             });
             focusAfter('course-placed-title');
           } else {
@@ -1061,6 +1066,12 @@ export function Course({
                 <li key={l.lessonId}>{l.title}</li>
               ))}
             </ul>
+            {view.unchecked && (
+              <p>
+                Some of your answers have not been checked yet, so the lessons they test are not
+                among these.
+              </p>
+            )}
             <div className="course__actions">
               <button
                 type="button"
@@ -1071,6 +1082,31 @@ export function Course({
               </button>
               <button type="button" className="btn" onClick={toOverview}>
                 Read everything
+              </button>
+            </div>
+          </>
+        ) : view.unchecked ? (
+          // Said as what it is: answers without a grade suggest nothing, and "you know none of
+          // it" would be false.
+          <>
+            <h1 className="display" tabIndex={-1} id="course-placed-title">
+              Your answers have not been checked yet.
+            </h1>
+            <p>
+              The check needs the grades your account gives them to suggest anything, and they have
+              not come back — you may be offline. Check again once you are connected, or start at
+              the first lesson.
+            </p>
+            <div className="course__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => startPractice('placement')}
+              >
+                Check again
+              </button>
+              <button type="button" className="btn" onClick={toOverview}>
+                Back to the course
               </button>
             </div>
           </>
@@ -1360,11 +1396,10 @@ export function Course({
   const skipped = lessons.filter((l) => l.state === 'skipped').length;
   const reviewCount = questionsFor('review').length;
   const placementCount = questionsFor('placement').length;
-  // Offered once: after a check has run, its questions are no longer unseen, and answering
-  // them changes no lesson's state -- so the lessons alone would offer it again and again.
-  const placementFresh =
-    placementCount > 0 &&
-    questions.filter((q) => q.purpose === 'placement').every((q) => q.state === 'not_seen');
+  // Offered until it is answered: answering changes no lesson's state, so the lessons alone
+  // would offer it again and again; and a check only seen -- left at its first question, or
+  // by a reload -- is offered again (`placementOffered`).
+  const placementFresh = placementOffered(questions);
 
   if (view.kind === 'stop') {
     // What this sitting read, from the lessons it planned and the reads it recorded -- not
