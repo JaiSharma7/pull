@@ -47,8 +47,10 @@ stored, as for the feed.
 
 ## What the reader sees
 
-- **Known lessons** read "You know this" in the outline and are left out of sessions. They
-  stay in the outline, and opening one reads it like any other.
+- **Known lessons** are left out of sessions. One not yet read -- known from a placement check
+  or from review -- reads "You know this" in the outline; one already read still reads
+  "Read", which says as much. They stay in the outline, and opening one reads it like any
+  other.
 - **Lessons to revisit** -- one of their claims was last answered wrong -- read "Worth
   rereading" and come first in the next session.
 - **Due questions.** A question is due once answered, when the first claim it tests is due:
