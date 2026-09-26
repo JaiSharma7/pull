@@ -54,14 +54,27 @@ export interface AnswerSent {
   result: AnswerResult | null;
 }
 
+/** An answer as the offline queue keeps it: with its course, so it waits in that course's order. */
+const answerWrite = (event: AnswerEvent, courseId?: string) => ({
+  kind: 'study-answer' as const,
+  event,
+  ...(courseId ? { courseId } : {}),
+});
+
 export async function sendAnswer(
   userId: string,
   event: AnswerEvent,
   courseId?: string,
 ): Promise<AnswerSent> {
-  const write = { kind: 'study-answer' as const, event, ...(courseId ? { courseId } : {}) };
-  // An answer left unjudged goes first, so the one after it is judged as following it.
-  await flushJudging(userId);
+  const write = answerWrite(event, courseId);
+  // An answer left unjudged goes first, so the one after it is judged as following it -- and
+  // when it had to wait in the queue, this one waits behind it rather than overtaking it:
+  // the hint the server derives from it is timed as answers arrive.
+  const behind = await flushJudging(userId);
+  if (behind) {
+    const queued = await queueMutation(userId, write);
+    return { sent: queued ? behind : 'failed', result: null };
+  }
   try {
     const recorded = await recordAnswers([event]);
     const result = recorded.results[0] ?? null;
@@ -202,19 +215,20 @@ function remove(key: string): void {
  * Hold an answer for this page. A different answer already held here -- a judgement still on
  * its way when the next question went to judging, or one a sign-out left unsent -- is sent
  * first rather than overwritten: the server keeps one answer per event id, so a judgement
- * that did land is not recorded twice.
+ * that did land is not recorded twice. The course goes with it, so a hold sent or queued
+ * later keeps its place among that course's answers (`writeScope`).
  */
-export function holdJudging(userId: string, event: AnswerEvent): void {
+export function holdJudging(userId: string, event: AnswerEvent, courseId?: string): void {
   keepPageAlive();
   const key = judgingKey(userId);
   const displaced = parseHold(read(key));
-  if (displaced && displaced.clientEventId !== event.clientEventId) {
+  if (displaced && displaced.event.clientEventId !== event.clientEventId) {
     // Under someone else's session it would be refused and lost: queued, it waits for its
     // reader, as their other answers do.
-    if (getCurrentUserId() === userId) void sendAnswer(userId, displaced);
-    else void queueMutation(userId, { kind: 'study-answer', event: displaced });
+    if (getCurrentUserId() === userId) void sendHold(userId, displaced);
+    else void queueMutation(userId, answerWrite(displaced.event, displaced.courseId));
   }
-  write(key, { ...event, heldAt: Date.now() });
+  write(key, { ...event, heldAt: Date.now(), ...(courseId ? { courseId } : {}) });
 }
 
 /**
@@ -223,7 +237,9 @@ export function holdJudging(userId: string, event: AnswerEvent): void {
  */
 export function releaseJudging(userId: string, clientEventId?: string): void {
   const key = judgingKey(userId);
-  if (clientEventId !== undefined && parseHold(read(key))?.clientEventId !== clientEventId) return;
+  if (clientEventId !== undefined && parseHold(read(key))?.event.clientEventId !== clientEventId) {
+    return;
+  }
   remove(key);
 }
 
@@ -247,10 +263,18 @@ function judgingKeys(userId: string): string[] {
   return [...keys];
 }
 
-function parseHold(raw: string | null): AnswerEvent | null {
+/** A held answer, and the course it was given in, when the page said. */
+interface Held {
+  event: AnswerEvent;
+  courseId?: string;
+}
+
+const sendHold = (userId: string, held: Held) => sendAnswer(userId, held.event, held.courseId);
+
+function parseHold(raw: string | null): Held | null {
   if (raw === null) return null;
   try {
-    const held = JSON.parse(raw) as Partial<AnswerEvent> | null;
+    const held = JSON.parse(raw) as (Partial<AnswerEvent> & { courseId?: unknown }) | null;
     if (
       !held ||
       typeof held.clientEventId !== 'string' ||
@@ -261,11 +285,14 @@ function parseHold(raw: string | null): AnswerEvent | null {
       return null;
     }
     return {
-      clientEventId: held.clientEventId,
-      itemId: held.itemId,
-      response: held.response,
-      selfGrade: held.selfGrade,
-      ...(held.hinted === true ? { hinted: true } : {}),
+      event: {
+        clientEventId: held.clientEventId,
+        itemId: held.itemId,
+        response: held.response,
+        selfGrade: held.selfGrade,
+        ...(held.hinted === true ? { hinted: true } : {}),
+      },
+      ...(typeof held.courseId === 'string' && held.courseId ? { courseId: held.courseId } : {}),
     };
   } catch {
     return null;
@@ -283,7 +310,7 @@ function stale(raw: string | null): boolean {
 }
 
 /** Taken as it is read, so it goes once. */
-function takeJudging(key: string): AnswerEvent | null {
+function takeJudging(key: string): Held | null {
   const held = parseHold(read(key));
   remove(key);
   return held;
@@ -293,22 +320,31 @@ function takeJudging(key: string): AnswerEvent | null {
  * Record the answers this reader left held: every page's that is gone, and this page's own
  * when `own` -- the reader leaving practice -- as judged, or as not had. Only for the reader
  * signed in, asked again before each: sent under someone else's session it was refused and
- * lost, and it is theirs to send when they are back.
+ * lost, and it is theirs to send when they are back. Says whether one had to wait in the
+ * queue instead -- `full` when the day's record is -- so an answer after it can wait too.
  */
-export async function flushJudging(userId: string, { own = false } = {}): Promise<void> {
+export async function flushJudging(
+  userId: string,
+  { own = false } = {},
+): Promise<'queued' | 'full' | null> {
   const signedIn = () => getCurrentUserId() === userId;
-  if (!signedIn()) return;
+  if (!signedIn()) return null;
+  let behind: 'queued' | 'full' | null = null;
+  const note = ({ sent }: AnswerSent) => {
+    if (sent === 'full') behind = 'full';
+    else if (sent === 'queued') behind ??= 'queued';
+  };
   // This page's own is taken before anything is waited on: a practice run begun meanwhile
   // holds its own answer under the same key.
   const ours = own ? takeJudging(judgingKey(userId)) : null;
-  if (ours) await sendAnswer(userId, ours);
+  if (ours) note(await sendHold(userId, ours));
   const locks = globalThis.navigator?.locks;
   for (const key of judgingKeys(userId)) {
     if (key === judgingKey(userId)) continue;
     const send = async () => {
       if (!signedIn()) return;
       const held = takeJudging(key);
-      if (held) await sendAnswer(userId, held);
+      if (held) note(await sendHold(userId, held));
     };
     if (locks) {
       const page = key.slice(`${JUDGING}${userId}:`.length);
@@ -319,4 +355,5 @@ export async function flushJudging(userId: string, { own = false } = {}): Promis
       await send();
     }
   }
+  return behind;
 }

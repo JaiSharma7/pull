@@ -19,6 +19,7 @@ import {
   newerPreparationFailed,
   lessonsLeft,
   nextLesson,
+  keepRereads,
   readSince,
   passageWindow,
   planSession,
@@ -717,6 +718,18 @@ describe('the study Delta in a session', () => {
       },
     ];
     expect(readSince(two, new Set(['a']))[0]!.lessons.map((l) => l.revisit)).toEqual([false, true]);
+  });
+
+  it('keeps a reread on its way or recorded since the fetch began, and drops one before it', () => {
+    const reads = new Map<string, number | null>([
+      ['sending', null],
+      ['before', 999],
+      ['at', 1000],
+      ['after', 1001],
+    ]);
+    expect([...keepRereads(reads, 1000).keys()]).toEqual(['sending', 'at', 'after']);
+    // A fresh map: the page's state is replaced, not changed under it.
+    expect(keepRereads(reads, 0)).not.toBe(reads);
   });
 
   it('counts the lessons left out as known, not those already finished', () => {

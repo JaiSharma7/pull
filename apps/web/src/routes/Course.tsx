@@ -39,6 +39,7 @@ import {
   planSession,
   planSkipped,
   preparationRefusal,
+  keepRereads,
   readSince,
   reportRefusal,
   toRevisit,
@@ -203,7 +204,6 @@ export function Course({
     view.kind !== 'placed' ? null : loads.count <= view.after ? 'reading' : 'settled';
   useEffect(() => {
     if (placedPhase === 'settled') focusAfter('course-placed-title');
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusAfter only writes a ref
   }, [placedPhase]);
   useEffect(() => {
     const next = focusNext.current;
@@ -243,10 +243,7 @@ export function Course({
       setUnits(outline);
       setHeld(heldBack);
       setQuestions(questionList);
-      setRereads(
-        (reads) =>
-          new Map([...reads].filter(([, recorded]) => recorded === null || recorded >= started)),
-      );
+      setRereads((reads) => keepRereads(reads, started));
       setLoads((l) => ({ count: l.count + 1, failed: false }));
       setMissing(false);
       setError(null);
@@ -1102,6 +1099,8 @@ export function Course({
                 onClick={() => {
                   setView({ ...view, after: loads.count });
                   setAttempt((n) => n + 1);
+                  // The button goes with this state: the "checking" heading takes focus.
+                  focusAfter('course-placed-title');
                 }}
               >
                 Try again

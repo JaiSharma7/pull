@@ -60,11 +60,13 @@ grant select on public.study_claim_memory to authenticated, service_role;
  *                                  stability had passed since the last. Before then, answering
  *                                  again is repetition, not spacing, and stability stays: a
  *                                  proof every few hours cannot compound it into years. And a
- *                                  proof after a lapse -- scored or the reader's own "not had"
- *                                  -- is relearning, not spacing: it restores knowledge and
- *                                  leaves stability as the lapse left it, or a reader missing
- *                                  a claim at every due review, and proving it half an hour
- *                                  later, would be sent past it for years.
+ *                                  proof after a lapse of a claim once proven -- scored or the
+ *                                  reader's own "not had" -- is relearning, not spacing: it
+ *                                  restores knowledge and leaves stability as the lapse left
+ *                                  it, or a reader missing a claim at every due review, and
+ *                                  proving it half an hour later, would be sent past it for
+ *                                  years. A claim never proven grows on its first success,
+ *                                  lapse or none: there is nothing yet to relearn.
  *   a wrong answer that scores     a lapse: stability to 0.35 of itself (at least half a day),
  *                                  difficulty up 0.15. It takes knowledge away at once. It
  *                                  scores where a right answer would have proved: graded

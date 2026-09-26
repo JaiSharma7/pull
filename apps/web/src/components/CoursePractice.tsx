@@ -231,7 +231,7 @@ export function CoursePractice({
       hinted: sub.hinted,
       ...(sub.selfGrade ? { selfGrade: sub.selfGrade } : {}),
     };
-    if (held) holdJudging(userId, event);
+    if (held) holdJudging(userId, event, courseId);
     if (!first.current.has(q.itemId)) {
       first.current.set(
         q.itemId,
@@ -428,13 +428,17 @@ export function CoursePractice({
           // Judged: `answer` takes the hold over.
           if (held === null) return;
           heldId.current = mutationId();
-          holdJudging(userId, {
-            clientEventId: heldId.current,
-            itemId: current.itemId,
-            response: held.response,
-            selfGrade: 'incorrect',
-            ...(held.hinted ? { hinted: true } : {}),
-          });
+          holdJudging(
+            userId,
+            {
+              clientEventId: heldId.current,
+              itemId: current.itemId,
+              response: held.response,
+              selfGrade: 'incorrect',
+              ...(held.hinted ? { hinted: true } : {}),
+            },
+            courseId,
+          );
         }}
         nextBusy={finishing}
         purposeLabel={mode === 'review' ? 'Review' : mode === 'practice' ? 'Practice' : undefined}

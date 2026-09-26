@@ -459,6 +459,19 @@ export function knownUnread(units: readonly OutlineUnit[]): OutlineLesson[] {
 }
 
 /**
+ * The rereads that still stand once the outline is fetched again, begun at `started`: one on
+ * its way (null) or recorded since the fetch began, which the fetch may predate. One recorded
+ * before is in what was fetched, and that says whether a lapse since has made the lesson
+ * worth rereading again -- keeping it would hide that.
+ */
+export function keepRereads(
+  reads: ReadonlyMap<string, number | null>,
+  started: number,
+): Map<string, number | null> {
+  return new Map([...reads].filter(([, recorded]) => recorded === null || recorded >= started));
+}
+
+/**
  * The outline as this page has seen it change: a lesson read here since the outline was
  * fetched has answered its "worth rereading", as the database will say once it is fetched
  * again -- and the fetch after a lapse since says otherwise, as it should.

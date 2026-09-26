@@ -114,6 +114,8 @@ declare
   rep      uuid;
   r        jsonb;
   st       double precision;
+  st0      double precision;
+  dif      double precision;
   lsa      timestamptz;
   x        uuid := extensions.gen_random_uuid();
   n        int;
@@ -334,6 +336,33 @@ begin
     raise exception 'a duplicate answer moved the memory again';
   end if;
 
+  -- A claim never proven grows on its first success, even after a scored lapse: there is no
+  -- stability yet to relearn to. c2's first answer is wrong; half an hour on, it is proven.
+  -- Probed, and undone.
+  begin
+    perform pg_temp.answer(q1, '"The restudy group"');
+    select stability, difficulty into st0, dif from public.study_claim_memory where claim_id = c2;
+    perform pg_temp.as_owner();
+    alter table public.study_answer_events disable trigger study_answer_events_are_final;
+    update public.study_answer_events set answered_at = clock_timestamp() - interval '31 minutes'
+    where owner_id = reader;
+    alter table public.study_answer_events enable trigger study_answer_events_are_final;
+    perform pg_temp.become_reader(reader);
+    r := pg_temp.answer(q1, '"The recall test group"');
+    if (r -> 'results' -> 0 ->> 'provesRecall')::boolean is not true
+       or (select stability from public.study_claim_memory where claim_id = c2)
+          is distinct from least(730.0, st0 * (2.0 + (1.0 - dif)))
+       or (select known from public.study_claim_knowledge(course) where claim_id = c2)
+          is distinct from true then
+      raise exception 'a first success after a scored lapse did not grow stability: %',
+        (select to_jsonb(m) from public.study_claim_memory m where claim_id = c2);
+    end if;
+    raise exception using errcode = 'P0001', message = 'probe done';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'probe done' then raise; end if;
+  end;
+  perform pg_temp.become_reader(reader);
+
   r := pg_temp.answer(q1, '"The recall test group"');
   if (select string_agg(known::text, ',' order by lesson_position)
       from public.study_course_outline(course)) is distinct from 'true,true,true' then
@@ -484,6 +513,14 @@ begin
       raise exception 'a proof after a lapse at the due review grew stability: %',
         (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
     end if;
+    -- Relearnt: known again, and not due until a stability on.
+    if (select known from public.study_claim_knowledge(course) where claim_id = c1)
+       is distinct from true
+       or (select due from public.study_course_questions(course) where item_id = q3)
+          is distinct from false then
+      raise exception 'a proof after a lapse did not bring the claim back: %',
+        (select to_jsonb(m) from public.study_claim_memory m where claim_id = c1);
+    end if;
     raise exception using errcode = 'P0001', message = 'probe done';
   exception when raise_exception then
     if sqlerrm is distinct from 'probe done' then raise; end if;
@@ -550,6 +587,13 @@ begin
           is distinct from 2.7 * 0.35 then
       raise exception 'a proof after a scored lapse grew stability: %',
         (select to_jsonb(m) from public.study_claim_memory m where claim_id = c2);
+    end if;
+    if (select known from public.study_course_outline(course) where lesson_id = l2)
+       is distinct from true
+       or (select due from public.study_course_questions(course) where item_id = q1)
+          is distinct from false then
+      raise exception 'a proof after a scored lapse did not bring the lesson back: %',
+        (select jsonb_agg(to_jsonb(o)) from public.study_course_outline(course) o);
     end if;
     raise exception using errcode = 'P0001', message = 'probe done';
   exception when raise_exception then

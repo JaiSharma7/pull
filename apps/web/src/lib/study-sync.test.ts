@@ -127,8 +127,30 @@ describe('sendAnswer', () => {
       refused: [{ index: 0, clientEventId: 'e1', reason: 'limit' }],
       results: [],
     });
-    expect((await sendAnswer('u1', event())).sent).toBe('full');
+    expect((await sendAnswer('u1', event(), 'c1')).sent).toBe('full');
     expect(api.queueMutation).toHaveBeenCalledOnce();
+    expect(api.queueMutation).toHaveBeenCalledWith('u1', {
+      kind: 'study-answer',
+      event: event(),
+      courseId: 'c1',
+    });
+  });
+
+  it('queues an answer with its course, so it waits in that course’s order', async () => {
+    api.recordAnswers.mockRejectedValueOnce(pgError('57014'));
+    expect((await sendAnswer('u1', event(), 'c1')).sent).toBe('queued');
+    expect(api.queueMutation).toHaveBeenCalledWith('u1', {
+      kind: 'study-answer',
+      event: event(),
+      courseId: 'c1',
+    });
+    // Without one, as the queue has always kept it.
+    api.recordAnswers.mockRejectedValueOnce(pgError('57014'));
+    await sendAnswer('u1', event('e2'));
+    expect(api.queueMutation).toHaveBeenLastCalledWith('u1', {
+      kind: 'study-answer',
+      event: event('e2'),
+    });
   });
 
   it('drops an answer to a question that is gone', async () => {
@@ -209,6 +231,39 @@ describe('an answer left unjudged', () => {
     heldLocks.delete('wap.judging.alive');
     await flushJudging('u1');
     expect(sentIds()).toEqual(['gone', 'held']);
+  });
+
+  it('is waited behind when it has to wait, not overtaken by the next answer', async () => {
+    holdElsewhere('u1', 'gone', { ...held, courseId: 'c1' });
+    api.recordAnswers.mockRejectedValueOnce(pgError('57014'));
+    const out = await sendAnswer('u1', event('next'), 'c1');
+    // The hold went to the server and had to wait; the next answer did not go at all.
+    expect(sentIds()).toEqual(['held']);
+    expect(out).toEqual({ sent: 'queued', result: null });
+    expect((api.queueMutation.mock.calls as unknown[][]).map((c) => c[1])).toEqual([
+      { kind: 'study-answer', event: held, courseId: 'c1' },
+      { kind: 'study-answer', event: event('next'), courseId: 'c1' },
+    ]);
+  });
+
+  it('keeps its course, sent or queued', async () => {
+    holdJudging('u1', held, 'c1');
+    api.recordAnswers.mockRejectedValueOnce(pgError('57014'));
+    await flushJudging('u1', { own: true });
+    expect(api.queueMutation).toHaveBeenCalledWith('u1', {
+      kind: 'study-answer',
+      event: held,
+      courseId: 'c1',
+    });
+    // Displaced while someone else is signed in: queued for its reader, course and all.
+    holdJudging('u1', held, 'c1');
+    session.current = 'u2';
+    holdJudging('u1', { ...held, clientEventId: 'next' }, 'c1');
+    expect(api.queueMutation).toHaveBeenLastCalledWith('u1', {
+      kind: 'study-answer',
+      event: held,
+      courseId: 'c1',
+    });
   });
 
   it('is let go by its own judgement, and not by another answer’s', async () => {

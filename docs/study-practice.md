@@ -112,8 +112,10 @@ duplicate arrives.
   it has been read again with the answers in, and waits for the server's grades a few
   seconds at most, saying it is waiting. An answer without one -- queued offline, or not
   back in time -- counts for nothing, and the result says so rather than "start from the
-  beginning", with a way to check again. A retry never counts, and nor does a question
-  reported or withdrawn during the check.
+  beginning", with a way to check again. When the course cannot be read again -- offline,
+  say -- the result says the answers could not be read back yet, and offers to try again or
+  go back to the course, rather than calling them unchecked. A retry never counts, and nor
+  does a question reported or withdrawn during the check.
 - **Review.** The questions due, soonest first -- and when none is, the course's review
   questions, not yet demonstrated first -- from the course page or the end of a session.
 - **Each question** says whether it was right in words, shows the right answer and why a
