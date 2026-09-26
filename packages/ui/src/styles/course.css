@@ -123,13 +123,20 @@
   margin-top: var(--space-4);
 }
 
-/* A course's controls wait while a change is on its way, and look it, as `.btn:disabled`
-   does. `aria-disabled` rather than `disabled`, so the pressed button keeps focus; scoped to
-   the course, because Review and the interrupt use it on answers whose verdict must keep its
-   contrast. */
+/* A course's controls wait while a change is on its way, and look it. `aria-disabled` rather
+   than `disabled`, so the pressed button keeps focus -- and a control that keeps focus keeps
+   the contrast floors, so this recolours with tokens that meet them rather than fading, as
+   `.btn:disabled` does to controls that leave the tab order. The focus ring is untouched.
+   Scoped to the course, because Review and the interrupt use `aria-disabled` on answers
+   styled their own way. */
 .course .btn[aria-disabled='true'] {
-  opacity: 0.45;
+  color: var(--text-faint);
   cursor: not-allowed;
+}
+
+.course .btn--primary[aria-disabled='true'] {
+  background: transparent;
+  color: var(--accent);
 }
 
 .course__lesson-heading {

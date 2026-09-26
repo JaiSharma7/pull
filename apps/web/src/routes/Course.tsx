@@ -73,6 +73,9 @@ const PREPARING_POLL_MS = 15_000;
 /** The player's id for a lesson read aloud; never a Pull's id. */
 const lessonTrackId = (lessonId: string) => `study-lesson:${lessonId}`;
 
+/** One of a lesson's fix forms: its report, correction or withdrawal, or a claim's report. */
+type FixForm = 'report' | 'correct' | 'withdraw' | `claim:${string}`;
+
 type View =
   | { kind: 'overview' }
   | { kind: 'session'; plan: PlannedLesson[]; index: number }
@@ -120,6 +123,8 @@ export function Course({
   const [consent, setConsent] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  // Which form's change is on its way: every form waits, and only this one says so.
+  const [inFlight, setInFlight] = useState<FixForm | null>(null);
   const [armed, setArmed] = useState(false);
   const [deleted, setDeleted] = useState(false);
   // Fixing the lesson on screen: which form is open, and a claim being reported.
@@ -263,10 +268,14 @@ export function Course({
   }, [lesson]);
   // And which of its fix forms is open, for the same reason: a failure is said on the form
   // that sent it only while that form is still there to say it.
-  const openForm = useRef<string | null>(null);
+  const openForm = useRef<FixForm | null>(null);
   useEffect(() => {
     openForm.current = claimReport !== null ? `claim:${claimReport}` : fix;
   }, [claimReport, fix]);
+  // The two sections the forms live in. Folding one closes it at once, but says so in a
+  // `toggle` event a task later; a failure landing in between reads the section, not the state.
+  const sourcesSection = useRef<HTMLDetailsElement>(null);
+  const fixSection = useRef<HTMLDetailsElement>(null);
 
   // A lesson is the reader's own material, so it is read only by a voice on this device;
   // voices arrive after the page does, so the answer is read again when they change.
@@ -423,7 +432,7 @@ export function Course({
    */
   const fixFailed = (
     lessonId: string,
-    form: string,
+    form: FixForm,
     what: string,
     e: unknown,
     refusal: string | null,
@@ -431,11 +440,25 @@ export function Course({
     const why = isOfflineFailure(e)
       ? 'That has not reached your account — you look offline. Try again when you reconnect.'
       : (refusal ?? asSentence(e instanceof Error ? e.message : String(e)));
-    if (onScreen.current === lessonId && openForm.current === form) {
+    const section = form.startsWith('claim:') ? sourcesSection.current : fixSection.current;
+    if (onScreen.current === lessonId && openForm.current === form && section?.open === true) {
       setFixError(why);
       return;
     }
     setNotice({ text: `${what} ${why}`, undo: null });
+  };
+
+  /** A change from one of the lesson's forms sets off. */
+  const sendFrom = (form: FixForm) => {
+    setWorking(true);
+    setInFlight(form);
+    setFixError(null);
+    // A failure the notice said earlier is old news once the reader tries again.
+    setNotice((n) => (n !== null && n.undo === null ? null : n));
+  };
+  const fixSettled = () => {
+    setWorking(false);
+    setInFlight(null);
   };
 
   const report = async (
@@ -446,8 +469,7 @@ export function Course({
   ) => {
     if (working || !lesson) return;
     const from = lesson;
-    setWorking(true);
-    setFixError(null);
+    sendFrom(kind === 'lesson' ? 'report' : `claim:${id}`);
     try {
       await reportContent(kind, id, reason, note);
       setNotice({
@@ -471,15 +493,14 @@ export function Course({
         reportRefusal(sqlState(e)),
       );
     } finally {
-      setWorking(false);
+      fixSettled();
     }
   };
 
   const withdraw = async () => {
     if (working || !lesson) return;
     const from = lesson;
-    setWorking(true);
-    setFixError(null);
+    sendFrom('withdraw');
     try {
       await retireContent('lesson', lesson.lessonId);
       setNotice({
@@ -497,7 +518,7 @@ export function Course({
         reportRefusal(sqlState(e)),
       );
     } finally {
-      setWorking(false);
+      fixSettled();
     }
   };
 
@@ -511,8 +532,7 @@ export function Course({
     const oldId = lesson.lessonId;
     const oldTitle = lesson.title;
     const unitNo = current.unitNo;
-    setWorking(true);
-    setFixError(null);
+    sendFrom('correct');
     try {
       const newId = await reviseLesson(oldId, revision);
       // The new version takes the old one's place in the session. The reader's place in
@@ -546,7 +566,7 @@ export function Course({
         correctionRefusal(sqlState(e), sqlDetail(e)),
       );
     } finally {
-      setWorking(false);
+      fixSettled();
     }
   };
 
@@ -985,6 +1005,7 @@ export function Course({
                 </p>
               ))}
             <details
+              ref={sourcesSection}
               className="course__sources"
               onToggle={(e) => {
                 if (!(e.currentTarget as HTMLDetailsElement).open) setClaimReport(null);
@@ -999,6 +1020,7 @@ export function Course({
                     <ReportForm
                       kind="claim"
                       working={working}
+                      sending={inFlight === `claim:${claim.claimId}`}
                       error={fixError}
                       onSubmit={(reason, note) => void report('claim', claim.claimId, reason, note)}
                       onCancel={() => cancelFix(`claim-report-${claim.claimId}`)}
@@ -1024,6 +1046,7 @@ export function Course({
                 the section closes its form (a correction is kept in `draft`), so Done is the
                 screen's primary control again. */}
             <details
+              ref={fixSection}
               className="course__sources course__fix"
               onToggle={(e) => {
                 if (!(e.currentTarget as HTMLDetailsElement).open) {
@@ -1086,6 +1109,7 @@ export function Course({
                 <ReportForm
                   kind="lesson"
                   working={working}
+                  sending={inFlight === 'report'}
                   error={fixError}
                   onSubmit={(reason, note) => void report('lesson', lesson.lessonId, reason, note)}
                   onCancel={() => cancelFix('course-fix-summary')}
@@ -1100,6 +1124,7 @@ export function Course({
                       : lessonDraft(lesson, current.unitTitle)
                   }
                   working={working}
+                  sending={inFlight === 'correct'}
                   error={fixError}
                   onDraft={(value) => {
                     setDraft({ lessonId: lesson.lessonId, value });
@@ -1131,12 +1156,17 @@ export function Course({
                       aria-disabled={working}
                       onClick={() => void withdraw()}
                     >
-                      {working ? 'Withdrawing…' : 'Withdraw the lesson'}
+                      {inFlight === 'withdraw' ? 'Withdrawing…' : 'Withdraw the lesson'}
                     </button>
                     <button
                       type="button"
                       className="btn btn--plain"
-                      onClick={() => cancelFix('course-fix-summary')}
+                      aria-disabled={working}
+                      onClick={() => {
+                        // As Cancel waits: kept under a withdrawal on its way, the lesson
+                        // looked kept and was then withdrawn for good.
+                        if (!working) cancelFix('course-fix-summary');
+                      }}
                     >
                       Keep it
                     </button>
@@ -1413,6 +1443,7 @@ export function Course({
             id="course-delete"
             type="button"
             className="btn btn--plain"
+            aria-disabled={working}
             onClick={() => void remove()}
           >
             Delete this course

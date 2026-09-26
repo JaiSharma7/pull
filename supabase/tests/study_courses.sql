@@ -728,7 +728,11 @@ begin
   begin
     perform public.regenerate_study_course(course_a, extensions.gen_random_uuid(), true);
     raise exception 'a regeneration was accepted while a course queued yesterday awaits';
-  exception when object_not_in_prerequisite_state then null;
+  exception when object_not_in_prerequisite_state then
+    get stacked diagnostics d = pg_exception_detail;
+    if d is distinct from 'preparing' then
+      raise exception 'a regeneration refused while a course queued yesterday awaits said %', d;
+    end if;
   end;
   perform pg_temp.as_owner();
   update public.study_generations set created_at = now() - interval '1 hour' where id = gen_1;
@@ -740,6 +744,10 @@ begin
   -- that refuses everything, and undone by the probe's own exception.
   perform pg_temp.as_owner();
   begin
+    -- Anyone else's stranded courses are set aside for the probe, so it sees only its own.
+    update public.generation_jobs set status = 'running'
+    where id in (select g.job_id from public.study_generations g
+                 where g.text_status = 'pending' and g.assembled_at is not null);
     create or replace function public.validate_study_course(p_job_id uuid)
     returns jsonb
     language plpgsql
@@ -756,8 +764,10 @@ begin
     )
     insert into public.study_generations
       (owner_id, job_id, goal, processing_consent_at, course_id, created_at, assembled_at)
+    -- Queued two days ago and saved two hours ago: within its day only as the day is counted
+    -- from saving.
     select reader_a, j.id, 'Stranded first', now(), course_a,
-           now() - interval '3 hours', now() - interval '2 hours'
+           now() - interval '2 days', now() - interval '2 hours'
     from j
     returning id into probe_a;
     with j as (
@@ -796,6 +806,18 @@ begin
         where g.id in (probe_a, probe_b, probe_s) and g.validation_tried_at is not null)
        is distinct from 'Stranded first,Stranded second' then
       raise exception 'a refused course was taken again before one never tried';
+    end if;
+    -- Among those tried, the least recently tried goes first.
+    update public.study_generations set validation_tried_at = now() - interval '1 hour'
+    where id = probe_a;
+    update public.study_generations set validation_tried_at = now() - interval '2 hours'
+    where id = probe_b;
+    perform public.validate_stranded_study_courses(p_limit => 1);
+    if (select validation_tried_at from public.study_generations where id = probe_b)
+         is distinct from now()
+       or (select validation_tried_at from public.study_generations where id = probe_a)
+         is distinct from now() - interval '1 hour' then
+      raise exception 'the sweep did not take the least recently tried course first';
     end if;
     -- Past its day, a course waits while any within theirs remain, and is taken after.
     perform public.validate_stranded_study_courses(p_limit => 1);

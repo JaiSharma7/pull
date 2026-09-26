@@ -31,12 +31,16 @@ function Problem({ text }: { text: string | null }) {
 export function ReportForm({
   kind,
   working,
+  sending = working,
   error,
   onSubmit,
   onCancel,
 }: {
   kind: ReportKind;
+  /** A change to the course is on its way, from this form or another: nothing here acts. */
   working: boolean;
+  /** This form's own report is the one on its way. */
+  sending?: boolean;
   error: string | null;
   onSubmit: (reason: ReportReason, note: string | null) => void;
   onCancel: () => void;
@@ -102,7 +106,7 @@ export function ReportForm({
       <Problem text={local ?? error} />
       <div className="course__actions">
         <button type="button" className="btn btn--primary" aria-disabled={working} onClick={submit}>
-          {working ? 'Sending…' : 'Send the report'}
+          {sending ? 'Sending…' : 'Send the report'}
         </button>
         {/* Waits for a change on its way, as the screen's other ways out do: a form closed
             under its own request had nowhere to say that it failed. */}
@@ -138,6 +142,7 @@ export function LessonCorrectionForm({
   initial,
   draft,
   working,
+  sending = working,
   error,
   onDraft,
   onSave,
@@ -150,7 +155,10 @@ export function LessonCorrectionForm({
    * report a claim, or by folding the section -- does not throw the typing away.
    */
   draft: LessonDraft;
+  /** A change to the course is on its way, from this form or another: nothing here acts. */
   working: boolean;
+  /** This form's own correction is the one on its way. */
+  sending?: boolean;
   error: string | null;
   onDraft: (draft: LessonDraft) => void;
   onSave: (draft: LessonDraft) => void;
@@ -207,7 +215,7 @@ export function LessonCorrectionForm({
       <Problem text={local ?? error} />
       <div className="course__actions">
         <button type="button" className="btn btn--primary" aria-disabled={working} onClick={save}>
-          {working ? 'Saving…' : 'Save the correction'}
+          {sending ? 'Saving…' : 'Save the correction'}
         </button>
         {/* Waits for a change on its way, as the screen's other ways out do: a form closed
             under its own request had nowhere to say that it failed. */}
